@@ -15,7 +15,10 @@ export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const url = new URL(request.url);
 
-		// 1. Serve the Main Web Application
+		// =========================================================
+		// MAIN APPLICATION
+		// =========================================================
+
 		if (request.method === "GET" && url.pathname === "/") {
 			return new Response(createHTML(), {
 				status: 200,
@@ -25,7 +28,10 @@ export default {
 			});
 		}
 
-		// 2. AI Image Generation API Route
+		// =========================================================
+		// AI IMAGE GENERATION
+		// =========================================================
+
 		const match = url.pathname.match(/^\/image\/(\d+)$/);
 
 		if (request.method === "GET" && match) {
@@ -45,11 +51,9 @@ export default {
 				);
 			}
 
-			const prompt = prompts[index];
-
 			try {
 				const result = await env.AI.run(MODEL, {
-					prompt,
+					prompt: prompts[index],
 				});
 
 				return new Response(result as ReadableStream, {
@@ -80,7 +84,15 @@ export default {
 	},
 } satisfies ExportedHandler<Env>;
 
-function json(data: unknown, status = 200): Response {
+
+// =============================================================
+// JSON HELPER
+// =============================================================
+
+function json(
+	data: unknown,
+	status = 200
+): Response {
 	return new Response(JSON.stringify(data), {
 		status,
 		headers: {
@@ -89,27 +101,34 @@ function json(data: unknown, status = 200): Response {
 	});
 }
 
-/*
- * ============================================================
- * FRONTEND HTML + MP4 COMPILER ENGINE
- * ============================================================
- */
+
+// =============================================================
+// FRONTEND
+// =============================================================
 
 function createHTML(): string {
 	return `
 <!DOCTYPE html>
+
 <html lang="en">
 
 <head>
+
 	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+	<meta
+		name="viewport"
+		content="width=device-width, initial-scale=1.0"
+	>
 
 	<title>AI Ghibli Video & MP4 Studio</title>
 
-	<!-- MP4 Muxer -->
+
 	<script src="https://unpkg.com/mp4-muxer@5.1.3/build/mp4-muxer.js"></script>
 
+
 	<style>
+
 		:root {
 			--bg: #0f1115;
 			--card: #181b20;
@@ -126,7 +145,10 @@ function createHTML(): string {
 		body {
 			background: var(--bg);
 			color: var(--text);
-			font-family: system-ui, -apple-system, sans-serif;
+			font-family:
+				system-ui,
+				-apple-system,
+				sans-serif;
 			padding: 20px;
 		}
 
@@ -168,7 +190,9 @@ function createHTML(): string {
 			display: flex;
 			align-items: center;
 			justify-content: center;
-			box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+			box-shadow:
+				0 10px 30px
+				rgba(0, 0, 0, 0.5);
 		}
 
 		canvas {
@@ -203,7 +227,9 @@ function createHTML(): string {
 			font-weight: bold;
 			border-radius: 8px;
 			cursor: pointer;
-			transition: transform 0.1s, opacity 0.2s;
+			transition:
+				transform 0.1s,
+				opacity 0.2s;
 			display: inline-flex;
 			align-items: center;
 			gap: 8px;
@@ -263,10 +289,11 @@ function createHTML(): string {
 
 		.gallery {
 			display: grid;
-			grid-template-columns: repeat(
-				auto-fill,
-				minmax(280px, 1fr)
-			);
+			grid-template-columns:
+				repeat(
+					auto-fill,
+					minmax(280px, 1fr)
+				);
 			gap: 16px;
 		}
 
@@ -365,21 +392,32 @@ function createHTML(): string {
 		.card.in-video .toggle-btn {
 			background: #ef4444;
 		}
+
 	</style>
+
 </head>
+
 
 <body>
 
+
 	<div class="header">
-		<h1>🎬 Cloudflare AI Video Studio</h1>
+
+		<h1>
+			🎬 Cloudflare AI Video Studio
+		</h1>
 
 		<p>
-			Generates AI scenes and compiles them into an
-			extremely slow cinematic-panning MP4.
+			Generates AI scenes and creates
+			slow cinematic MP4 videos.
 		</p>
+
 	</div>
 
-	<!-- VIDEO STUDIO -->
+
+	<!-- ======================================================
+	     VIDEO STUDIO
+	     ====================================================== -->
 
 	<div class="studio">
 
@@ -389,7 +427,8 @@ function createHTML(): string {
 				class="overlay-text"
 				id="canvas-placeholder"
 			>
-				Preview will render here during MP4 compilation...
+				Preview will render here
+				during MP4 compilation...
 			</span>
 
 			<canvas
@@ -400,15 +439,19 @@ function createHTML(): string {
 
 		</div>
 
+
 		<div
 			class="progress-bar-container"
 			id="progress-container"
 		>
+
 			<div
 				class="progress-bar"
 				id="progress-bar"
 			></div>
+
 		</div>
+
 
 		<div
 			class="status-text"
@@ -417,9 +460,11 @@ function createHTML(): string {
 			Compiling video...
 		</div>
 
+
 		<div class="controls">
 
 			<label class="upload-btn">
+
 				📁 Upload Custom Image
 
 				<input
@@ -428,34 +473,49 @@ function createHTML(): string {
 					accept="image/*"
 					multiple
 				>
+
 			</label>
+
 
 			<button
 				id="render-btn"
 				onclick="generateMP4()"
 			>
+
 				🎞️ Render & Download MP4 Video
+
 			</button>
 
 		</div>
 
 	</div>
 
-	<!-- STORYBOARD -->
 
 	<h2>
+
 		Storyboard Queue
-		(<span id="queue-count">0</span> images ready)
+		(
+		<span id="queue-count">0</span>
+		images ready
+		)
+
 	</h2>
+
 
 	<div
 		id="gallery"
 		class="gallery"
 	></div>
 
+
 <script>
 
-	const prompts = ${JSON.stringify(prompts)};
+	// =========================================================
+	// DATA
+	// =========================================================
+
+	const prompts =
+		${JSON.stringify(prompts)};
 
 	const gallery =
 		document.getElementById("gallery");
@@ -463,17 +523,12 @@ function createHTML(): string {
 	const queueCountEl =
 		document.getElementById("queue-count");
 
-	/*
-	 * Holds images selected for video production.
-	 */
 	const activeSlides = [];
 
 
-	/*
-	 * =========================================================
-	 * CREATE STORYBOARD CARDS
-	 * =========================================================
-	 */
+	// =========================================================
+	// CREATE AI CARDS
+	// =========================================================
 
 	prompts.forEach((prompt, index) => {
 
@@ -482,7 +537,8 @@ function createHTML(): string {
 
 		card.className = "card";
 
-		card.id = \`card-\${index}\`;
+		card.id =
+			\`card-\${index}\`;
 
 		card.innerHTML = \`
 
@@ -490,18 +546,29 @@ function createHTML(): string {
 				class="image-container"
 				id="container-\${index}"
 			>
+
 				<div class="loading">
+
 					<div class="spinner"></div>
-					Generating AI Scene \${index + 1}...
+
+					Generating AI Scene
+					\${index + 1}...
+
 				</div>
+
 			</div>
+
 
 			<div
 				class="prompt"
 				title="\${prompt}"
 			>
-				\${index + 1}. \${prompt}
+
+				\${index + 1}.
+				\${prompt}
+
 			</div>
+
 
 			<div class="card-actions">
 
@@ -514,6 +581,7 @@ function createHTML(): string {
 					AI Generated
 				</span>
 
+
 				<button
 					class="toggle-btn"
 					id="btn-\${index}"
@@ -524,17 +592,16 @@ function createHTML(): string {
 				</button>
 
 			</div>
+
 		\`;
 
 		gallery.appendChild(card);
 	});
 
 
-	/*
-	 * =========================================================
-	 * FETCH AI IMAGE
-	 * =========================================================
-	 */
+	// =========================================================
+	// FETCH AI IMAGE
+	// =========================================================
 
 	async function fetchAIImage(index) {
 
@@ -562,7 +629,7 @@ function createHTML(): string {
 
 			if (!response.ok) {
 				throw new Error(
-					"Failed to generate image"
+					"Image generation failed"
 				);
 			}
 
@@ -583,26 +650,42 @@ function createHTML(): string {
 
 			container.appendChild(img);
 
-			const slideObj = {
-				id: \`ai-\${index}\`,
-				img: img,
-				cardId: \`card-\${index}\`
-			};
 
-			activeSlides.push(slideObj);
+			activeSlides.push({
 
-			card.classList.add("in-video");
+				id:
+					\`ai-\${index}\`,
+
+				img:
+					img,
+
+				cardId:
+					\`card-\${index}\`
+
+			});
+
+
+			card.classList.add(
+				"in-video"
+			);
 
 			btn.textContent =
 				"Remove from Video";
 
-			btn.disabled = false;
+			btn.disabled =
+				false;
 
 			updateQueueCount();
 
-		} catch (e) {
+		}
+		catch (error) {
+
+			console.error(
+				error
+			);
 
 			container.innerHTML = \`
+
 				<div
 					style="
 						color:#ef4444;
@@ -611,116 +694,186 @@ function createHTML(): string {
 				>
 					Generation Failed
 				</div>
+
 			\`;
 		}
 	}
 
 
 	/*
-	 * Generate all AI images.
+	 * Generate AI images.
 	 */
 
-	prompts.forEach((_, i) =>
-		fetchAIImage(i)
+	prompts.forEach(
+		(_, index) =>
+			fetchAIImage(index)
 	);
 
 
-	/*
-	 * =========================================================
-	 * CUSTOM IMAGE UPLOAD
-	 * =========================================================
-	 */
+	// =========================================================
+	// CUSTOM IMAGE UPLOAD
+	// =========================================================
 
 	document
 		.getElementById("file-upload")
 		.addEventListener(
 			"change",
-			async (e) => {
+			async (event) => {
 
 				const files =
-					Array.from(e.target.files);
+					Array.from(
+						event.target.files
+					);
 
-				for (const file of files) {
 
-					const url =
-						URL.createObjectURL(file);
+				for (
+					const file of files
+				) {
 
-					const img =
-						new Image();
+					try {
 
-					img.src = url;
+						const url =
+							URL.createObjectURL(
+								file
+							);
 
-					await img.decode();
+						const img =
+							new Image();
 
-					const customId =
-						"custom-" +
-						Date.now() +
-						Math.random();
+						img.src =
+							url;
 
-					const card =
-						document.createElement("div");
+						await img.decode();
 
-					card.className =
-						"card in-video";
 
-					card.id = customId;
+						const customId =
+							"custom-" +
+							Date.now() +
+							"-" +
+							Math.random()
+								.toString(36)
+								.substring(2);
 
-					card.innerHTML = \`
 
-						<div class="badge">
-							Custom Upload
-						</div>
+						const card =
+							document.createElement(
+								"div"
+							);
 
-						<div class="image-container">
-							<img src="\${url}">
-						</div>
 
-						<div class="prompt">
-							\${file.name}
-						</div>
+						card.className =
+							"card in-video";
 
-						<div class="card-actions">
+						card.id =
+							customId;
 
-							<span
-								style="
-									font-size:0.75rem;
-									color:#10b981;
-								"
-							>
-								Ready
-							</span>
 
-							<button
-								class="toggle-btn"
-								onclick="removeCustomSlide(
-									'\${customId}'
-								)"
-							>
-								Remove
-							</button>
+						card.innerHTML = \`
 
-						</div>
-					\`;
+							<div class="badge">
+								Custom Upload
+							</div>
 
-					gallery.prepend(card);
 
-					activeSlides.unshift({
-						id: customId,
-						img: img,
-						cardId: customId
-					});
+							<div class="image-container">
 
-					updateQueueCount();
+								<img src="\${url}">
+
+							</div>
+
+
+							<div class="prompt">
+								\${escapeHTML(file.name)}
+							</div>
+
+
+							<div class="card-actions">
+
+								<span
+									style="
+										font-size:0.75rem;
+										color:#10b981;
+									"
+								>
+									Ready
+								</span>
+
+
+								<button
+									class="toggle-btn"
+									onclick="removeCustomSlide(
+										'\${customId}'
+									)"
+								>
+									Remove
+								</button>
+
+							</div>
+
+						\`;
+
+
+						gallery.prepend(card);
+
+
+						activeSlides.unshift({
+
+							id:
+								customId,
+
+							img:
+								img,
+
+							cardId:
+								customId
+
+						});
+
+
+						updateQueueCount();
+
+					}
+					catch (error) {
+
+						console.error(
+							"Upload error:",
+							error
+						);
+
+					}
 				}
+
+
+				/*
+				 * Reset input so the same
+				 * files can be selected again.
+				 */
+
+				event.target.value = "";
+
 			}
 		);
 
 
-	/*
-	 * =========================================================
-	 * TOGGLE AI SLIDE
-	 * =========================================================
-	 */
+	// =========================================================
+	// HTML ESCAPE
+	// =========================================================
+
+	function escapeHTML(value) {
+
+		return value
+			.replaceAll("&", "&amp;")
+			.replaceAll("<", "&lt;")
+			.replaceAll(">", "&gt;")
+			.replaceAll('"', "&quot;")
+			.replaceAll("'", "&#039;");
+
+	}
+
+
+	// =========================================================
+	// TOGGLE AI SLIDE
+	// =========================================================
 
 	function toggleSlide(index) {
 
@@ -728,22 +881,29 @@ function createHTML(): string {
 			\`card-\${index}\`;
 
 		const card =
-			document.getElementById(cardId);
+			document.getElementById(
+				cardId
+			);
 
 		const btn =
 			document.getElementById(
 				\`btn-\${index}\`
 			);
 
-		const existingIdx =
+		const existingIndex =
 			activeSlides.findIndex(
-				s => s.cardId === cardId
+				s =>
+					s.cardId ===
+					cardId
 			);
 
-		if (existingIdx > -1) {
+
+		if (
+			existingIndex > -1
+		) {
 
 			activeSlides.splice(
-				existingIdx,
+				existingIndex,
 				1
 			);
 
@@ -754,16 +914,32 @@ function createHTML(): string {
 			btn.textContent =
 				"Add to Video";
 
-		} else {
+		}
+		else {
 
 			const img =
-				card.querySelector("img");
+				card.querySelector(
+					"img"
+				);
+
+			if (!img) {
+				return;
+			}
+
 
 			activeSlides.push({
-				id: \`ai-\${index}\`,
-				img: img,
-				cardId: cardId
+
+				id:
+					\`ai-\${index}\`,
+
+				img:
+					img,
+
+				cardId:
+					cardId
+
 			});
+
 
 			card.classList.add(
 				"in-video"
@@ -773,62 +949,91 @@ function createHTML(): string {
 				"Remove from Video";
 		}
 
+
 		updateQueueCount();
 	}
 
 
-	/*
-	 * =========================================================
-	 * REMOVE CUSTOM IMAGE
-	 * =========================================================
-	 */
+	// =========================================================
+	// REMOVE CUSTOM IMAGE
+	// =========================================================
 
 	function removeCustomSlide(id) {
 
-		const idx =
+		const index =
 			activeSlides.findIndex(
-				s => s.id === id
+				s =>
+					s.id === id
 			);
 
-		if (idx > -1) {
-			activeSlides.splice(idx, 1);
+
+		if (
+			index > -1
+		) {
+
+			const slide =
+				activeSlides[index];
+
+			/*
+			 * Release uploaded image
+			 * object URL.
+			 */
+
+			if (
+				slide.img &&
+				slide.img.src.startsWith(
+					"blob:"
+				)
+			) {
+
+				URL.revokeObjectURL(
+					slide.img.src
+				);
+
+			}
+
+
+			activeSlides.splice(
+				index,
+				1
+			);
 		}
+
 
 		const element =
 			document.getElementById(id);
+
 
 		if (element) {
 			element.remove();
 		}
 
+
 		updateQueueCount();
 	}
 
 
-	/*
-	 * =========================================================
-	 * UPDATE QUEUE
-	 * =========================================================
-	 */
+	// =========================================================
+	// QUEUE COUNT
+	// =========================================================
 
 	function updateQueueCount() {
 
 		queueCountEl.textContent =
 			activeSlides.length;
+
 	}
 
 
-	/*
-	 * =========================================================
-	 * MP4 VIDEO COMPILATION
-	 *
-	 * EXTREMELY SLOW CINEMATIC KEN BURNS ENGINE
-	 * =========================================================
-	 */
+	// =========================================================
+	// MP4 GENERATOR
+	// =========================================================
 
 	async function generateMP4() {
 
-		if (activeSlides.length === 0) {
+		if (
+			activeSlides.length === 0
+		) {
 
 			alert(
 				"Please wait for images to generate or upload your own!"
@@ -838,10 +1043,13 @@ function createHTML(): string {
 		}
 
 
-		if (typeof VideoEncoder === "undefined") {
+		if (
+			typeof VideoEncoder ===
+			"undefined"
+		) {
 
 			alert(
-				"Your browser does not support WebCodecs API (VideoEncoder). Please use modern Chrome, Edge, or Safari."
+				"Your browser does not support WebCodecs API. Please use modern Chrome, Edge, or Safari."
 			);
 
 			return;
@@ -879,10 +1087,16 @@ function createHTML(): string {
 			);
 
 		const ctx =
-			canvas.getContext("2d");
+			canvas.getContext(
+				"2d",
+				{
+					alpha: false
+				}
+			);
 
 
-		renderBtn.disabled = true;
+		renderBtn.disabled =
+			true;
 
 		placeholder.style.display =
 			"none";
@@ -893,16 +1107,13 @@ function createHTML(): string {
 		statusText.style.display =
 			"block";
 
+		progressBar.style.width =
+			"0%";
 
-		/*
-		 * =====================================================
-		 * VIDEO SETTINGS
-		 * =====================================================
-		 *
-		 * Every image = EXACTLY 5 seconds.
-		 *
-		 * 30 FPS x 5 seconds = 150 frames/image.
-		 */
+
+		// =====================================================
+		// VIDEO SETTINGS
+		// =====================================================
 
 		const WIDTH = 1280;
 
@@ -910,21 +1121,24 @@ function createHTML(): string {
 
 		const FPS = 30;
 
+		/*
+		 * EXACTLY 5 SECONDS PER IMAGE.
+		 */
+
 		const SECONDS_PER_SLIDE = 5;
 
 		const FRAMES_PER_SLIDE =
-			FPS * SECONDS_PER_SLIDE;
+			FPS *
+			SECONDS_PER_SLIDE;
 
 		const TOTAL_FRAMES =
 			activeSlides.length *
 			FRAMES_PER_SLIDE;
 
 
-		/*
-		 * =====================================================
-		 * MP4 MUXER
-		 * =====================================================
-		 */
+		// =====================================================
+		// MP4 MUXER
+		// =====================================================
 
 		const muxer =
 			new Mp4Muxer.Muxer({
@@ -933,9 +1147,15 @@ function createHTML(): string {
 					new Mp4Muxer.ArrayBufferTarget(),
 
 				video: {
-					codec: "avc",
-					width: WIDTH,
-					height: HEIGHT
+
+					codec:
+						"avc",
+
+					width:
+						WIDTH,
+
+					height:
+						HEIGHT
 				},
 
 				fastStart:
@@ -943,361 +1163,189 @@ function createHTML(): string {
 			});
 
 
-		/*
-		 * =====================================================
-		 * VIDEO ENCODER
-		 * =====================================================
-		 */
+		// =====================================================
+		// VIDEO ENCODER
+		// =====================================================
+
+		let encoderError =
+			null;
+
 
 		const videoEncoder =
 			new VideoEncoder({
 
-				output: (chunk, meta) => {
+				output:
+					(chunk, meta) => {
 
-					muxer.addVideoChunk(
-						chunk,
-						meta
-					);
-				},
+						muxer.addVideoChunk(
+							chunk,
+							meta
+						);
 
-				error: (e) => {
+					},
 
-					console.error(
-						"VideoEncoder error:",
-						e
-					);
-				}
+				error:
+					(error) => {
+
+						console.error(
+							"VideoEncoder error:",
+							error
+						);
+
+						encoderError =
+							error;
+
+					}
+
 			});
 
 
 		videoEncoder.configure({
 
-			codec: "avc1.4d002a",
+			codec:
+				"avc1.4d002a",
 
-			width: WIDTH,
+			width:
+				WIDTH,
 
-			height: HEIGHT,
+			height:
+				HEIGHT,
 
-			bitrate: 5_000_000,
+			bitrate:
+				5_000_000,
 
-			framerate: FPS
+			framerate:
+				FPS
+
 		});
 
 
+		// =====================================================
+		// ENCODER BACKPRESSURE
+		// =====================================================
+
 		/*
-		 * =====================================================
-		 * EXTREMELY SLOW ANIMATION
-		 * =====================================================
+		 * Never allow the browser to accumulate
+		 * hundreds of unprocessed VideoFrames.
 		 */
 
+		const MAX_ENCODE_QUEUE = 12;
+
+
+		async function waitForEncoder() {
+
+			while (
+				videoEncoder.encodeQueueSize >
+				MAX_ENCODE_QUEUE
+			) {
+
+				await new Promise(
+					resolve =>
+						setTimeout(
+							resolve,
+							8
+						)
+				);
+
+			}
+
+
+			if (encoderError) {
+
+				throw encoderError;
+
+			}
+
+		}
+
+
+		// =====================================================
+		// CAMERA EFFECTS
+		// =====================================================
+
 		const effects = [
+
 			"slide-left",
+
 			"slide-right",
+
 			"slide-down",
+
 			"zoom-in"
+
 		];
+
 
 		let currentFrame = 0;
 
 
-		/*
-		 * =====================================================
-		 * PROCESS EVERY IMAGE
-		 * =====================================================
-		 */
+		try {
 
-		for (
-			let i = 0;
-			i < activeSlides.length;
-			i++
-		) {
-
-			const img =
-				activeSlides[i].img;
-
-			const effect =
-				effects[
-					i % effects.length
-				];
-
-
-			/*
-			 * 150 frames = 5 seconds at 30 FPS.
-			 */
+			// =================================================
+			// PROCESS EVERY IMAGE
+			// =================================================
 
 			for (
-				let f = 0;
-				f < FRAMES_PER_SLIDE;
-				f++
+				let i = 0;
+				i < activeSlides.length;
+				i++
 			) {
 
-				/*
-				 * Progress:
-				 *
-				 * 0 = beginning
-				 * 1 = end
-				 */
-				const p =
-					f /
-					(FRAMES_PER_SLIDE - 1);
+				const img =
+					activeSlides[i].img;
 
 
-				/*
-				 * Smooth ease-in-out.
-				 *
-				 * The image starts very slowly,
-				 * gradually moves,
-				 * then slows down again.
-				 */
-				const ease =
-					p * p * (3 - 2 * p);
+				const effect =
+					effects[
+						i %
+						effects.length
+					];
 
 
-				/*
-				 * Clear canvas.
-				 */
-				ctx.fillStyle =
-					"#000";
+				// =============================================
+				// PROCESS 150 FRAMES = 5 SECONDS
+				// =============================================
 
-				ctx.fillRect(
-					0,
-					0,
-					WIDTH,
-					HEIGHT
-				);
-
-
-				/*
-				 * =================================================
-				 * EXTREMELY SUBTLE KEN BURNS
-				 * =================================================
-				 *
-				 * Original:
-				 * 1.15x zoom
-				 *
-				 * New:
-				 * 1.035x zoom
-				 *
-				 * This dramatically reduces the visible movement.
-				 */
-
-				const zoomScale =
-					1.035;
-
-
-				const drawWidth =
-					WIDTH * zoomScale;
-
-				const drawHeight =
-					HEIGHT * zoomScale;
-
-
-				const overflowX =
-					drawWidth - WIDTH;
-
-				const overflowY =
-					drawHeight - HEIGHT;
-
-
-				/*
-				 * Only use 10% of available movement.
-				 *
-				 * This creates a very subtle
-				 * cinematic camera drift.
-				 */
-				const movementX =
-					overflowX * 0.10;
-
-				const movementY =
-					overflowY * 0.10;
-
-
-				let dx = 0;
-
-				let dy = 0;
-
-				let dw =
-					drawWidth;
-
-				let dh =
-					drawHeight;
-
-
-				/*
-				 * =================================================
-				 * SLOW PAN LEFT
-				 * =================================================
-				 */
-
-				if (effect === "slide-left") {
-
-					dx =
-						-movementX * ease;
-
-					dy =
-						-overflowY / 2;
-				}
-
-
-				/*
-				 * =================================================
-				 * SLOW PAN RIGHT
-				 * =================================================
-				 */
-
-				else if (
-					effect === "slide-right"
+				for (
+					let f = 0;
+					f < FRAMES_PER_SLIDE;
+					f++
 				) {
 
-					dx =
-						-movementX +
-						(movementX * ease);
+					/*
+					 * Animation progress.
+					 */
 
-					dy =
-						-overflowY / 2;
-				}
-
-
-				/*
-				 * =================================================
-				 * SLOW PAN DOWN
-				 * =================================================
-				 */
-
-				else if (
-					effect === "slide-down"
-				) {
-
-					dx =
-						-overflowX / 2;
-
-					dy =
-						-movementY * ease;
-				}
-
-
-				/*
-				 * =================================================
-				 * ULTRA-SLOW ZOOM
-				 * =================================================
-				 *
-				 * Only moves from 1.025x to 1.035x.
-				 */
-
-				else if (
-					effect === "zoom-in"
-				) {
-
-					const currentScale =
-						1.025 +
-						(ease * 0.010);
-
-
-					dw =
-						WIDTH *
-						currentScale;
-
-					dh =
-						HEIGHT *
-						currentScale;
-
-
-					dx =
-						(WIDTH - dw) / 2;
-
-					dy =
-						(HEIGHT - dh) / 2;
-				}
-
-
-				/*
-				 * =================================================
-				 * DRAW IMAGE
-				 * =================================================
-				 */
-
-				ctx.drawImage(
-					img,
-					dx,
-					dy,
-					dw,
-					dh
-				);
-
-
-				/*
-				 * =================================================
-				 * GENTLE TRANSITION FADE
-				 * =================================================
-				 *
-				 * 0.35 second fade.
-				 */
-
-				const FADE_FRAMES =
-					Math.round(
-						FPS * 0.35
-					);
-
-
-				/*
-				 * Fade IN
-				 */
-
-				if (
-					f < FADE_FRAMES
-				) {
-
-					const fadeProgress =
-						f / FADE_FRAMES;
-
-
-					ctx.fillStyle =
-						\`rgba(
-							0,
-							0,
-							0,
-							\${1 - fadeProgress}
-						)\`;
-
-
-					ctx.fillRect(
-						0,
-						0,
-						WIDTH,
-						HEIGHT
-					);
-				}
-
-
-				/*
-				 * Fade OUT
-				 */
-
-				else if (
-					f >
-					FRAMES_PER_SLIDE -
-					FADE_FRAMES
-				) {
-
-					const fadeProgress =
+					const p =
+						f /
 						(
-							f -
-							(
-								FRAMES_PER_SLIDE -
-								FADE_FRAMES
-							)
-						) /
-						FADE_FRAMES;
+							FRAMES_PER_SLIDE -
+							1
+						);
 
+
+					/*
+					 * Smoothstep.
+					 *
+					 * Makes the camera movement
+					 * start gently and finish gently.
+					 */
+
+					const ease =
+						p *
+						p *
+						(
+							3 -
+							2 * p
+						);
+
+
+					// =========================================
+					// CANVAS
+					// =========================================
 
 					ctx.fillStyle =
-						\`rgba(
-							0,
-							0,
-							0,
-							\${fadeProgress}
-						)\`;
-
+						"#000";
 
 					ctx.fillRect(
 						0,
@@ -1305,183 +1353,542 @@ function createHTML(): string {
 						WIDTH,
 						HEIGHT
 					);
-				}
 
 
-				/*
-				 * =================================================
-				 * CREATE VIDEO FRAME
-				 * =================================================
-				 *
-				 * WebCodecs timestamps are microseconds.
-				 */
+					// =========================================
+					// CAMERA
+					// =========================================
 
-				const timestamp =
-					(
-						currentFrame *
-						1_000_000
-					) /
-					FPS;
+					const zoomScale =
+						1.15;
 
 
-				const frame =
-					new VideoFrame(
-						canvas,
+					const drawWidth =
+						WIDTH *
+						zoomScale;
+
+
+					const drawHeight =
+						HEIGHT *
+						zoomScale;
+
+
+					const overflowX =
+						drawWidth -
+						WIDTH;
+
+
+					const overflowY =
+						drawHeight -
+						HEIGHT;
+
+
+					/*
+					 * Use 65% of the available
+					 * camera movement.
+					 *
+					 * This makes the pan clearly
+					 * visible over 5 seconds.
+					 */
+
+					const movementX =
+						overflowX *
+						0.65;
+
+
+					const movementY =
+						overflowY *
+						0.65;
+
+
+					let dx = 0;
+
+					let dy = 0;
+
+					let dw =
+						drawWidth;
+
+					let dh =
+						drawHeight;
+
+
+					// =========================================
+					// PAN LEFT
+					// =========================================
+
+					if (
+						effect ===
+						"slide-left"
+					) {
+
+						dx =
+							-movementX *
+							ease;
+
+
+						dy =
+							-overflowY /
+							2;
+
+					}
+
+
+					// =========================================
+					// PAN RIGHT
+					// =========================================
+
+					else if (
+						effect ===
+						"slide-right"
+					) {
+
+						dx =
+							-movementX +
+							(
+								movementX *
+								ease
+							);
+
+
+						dy =
+							-overflowY /
+							2;
+
+					}
+
+
+					// =========================================
+					// PAN DOWN
+					// =========================================
+
+					else if (
+						effect ===
+						"slide-down"
+					) {
+
+						dx =
+							-overflowX /
+							2;
+
+
+						dy =
+							-movementY *
+							ease;
+
+					}
+
+
+					// =========================================
+					// SLOW ZOOM
+					// =========================================
+
+					else if (
+						effect ===
+						"zoom-in"
+					) {
+
+						const currentScale =
+							1.03 +
+							(
+								ease *
+								0.07
+							);
+
+
+						dw =
+							WIDTH *
+							currentScale;
+
+
+						dh =
+							HEIGHT *
+							currentScale;
+
+
+						dx =
+							(
+								WIDTH -
+								dw
+							) / 2;
+
+
+						dy =
+							(
+								HEIGHT -
+								dh
+							) / 2;
+
+					}
+
+
+					// =========================================
+					// OPACITY FADE
+					// =========================================
+
+					const FADE_SECONDS = 1;
+
+					const FADE_FRAMES =
+						Math.round(
+							FPS *
+							FADE_SECONDS
+						);
+
+
+					let opacity = 1;
+
+
+					/*
+					 * FADE IN
+					 *
+					 * The image starts transparent
+					 * and gradually becomes visible.
+					 */
+
+					if (
+						f <
+						FADE_FRAMES
+					) {
+
+						const fadeP =
+							f /
+							FADE_FRAMES;
+
+
+						const fadeEase =
+							fadeP *
+							fadeP *
+							(
+								3 -
+								2 * fadeP
+							);
+
+
+						opacity =
+							fadeEase;
+
+					}
+
+
+					/*
+					 * FADE OUT
+					 *
+					 * The image gradually becomes
+					 * transparent.
+					 */
+
+					else if (
+						f >=
+						FRAMES_PER_SLIDE -
+						FADE_FRAMES
+					) {
+
+						const fadeP =
+							(
+								f -
+								(
+									FRAMES_PER_SLIDE -
+									FADE_FRAMES
+								)
+							) /
+							FADE_FRAMES;
+
+
+						const fadeEase =
+							fadeP *
+							fadeP *
+							(
+								3 -
+								2 * fadeP
+							);
+
+
+						opacity =
+							1 -
+							fadeEase;
+
+					}
+
+
+					// =========================================
+					// DRAW IMAGE WITH OPACITY
+					// =========================================
+
+					ctx.save();
+
+					ctx.globalAlpha =
+						opacity;
+
+
+					ctx.drawImage(
+						img,
+						dx,
+						dy,
+						dw,
+						dh
+					);
+
+
+					ctx.restore();
+
+
+					// =========================================
+					// VIDEO FRAME
+					// =========================================
+
+					const timestamp =
+						(
+							currentFrame *
+							1_000_000
+						) /
+						FPS;
+
+
+					const frame =
+						new VideoFrame(
+							canvas,
+							{
+								timestamp
+							}
+						);
+
+
+					// =========================================
+					// ENCODE
+					// =========================================
+
+					videoEncoder.encode(
+						frame,
 						{
-							timestamp
+							keyFrame:
+								currentFrame %
+								(FPS * 2) ===
+								0
 						}
 					);
 
 
+					/*
+					 * Release frame immediately.
+					 */
+
+					frame.close();
+
+
+					currentFrame++;
+
+
+					// =========================================
+					// BACKPRESSURE
+					// =========================================
+
+					await waitForEncoder();
+
+
+					// =========================================
+					// PROGRESS
+					// =========================================
+
+					if (
+						currentFrame %
+						15 ===
+						0
+					) {
+
+						const percent =
+							Math.round(
+								(
+									currentFrame /
+									TOTAL_FRAMES
+								) *
+								100
+							);
+
+
+						progressBar.style.width =
+							percent +
+							"%";
+
+
+						statusText.textContent =
+							\`Rendering image \${i + 1}/\${activeSlides.length} — \${percent}%\`;
+
+
+						/*
+						 * Give the browser a chance
+						 * to update the UI.
+						 */
+
+						await new Promise(
+							resolve =>
+								setTimeout(
+									resolve,
+									0
+								)
+						);
+
+					}
+
+				}
+
+
 				/*
-				 * Keyframe every 2 seconds.
+				 * Let encoder catch up
+				 * before starting next image.
 				 */
 
-				videoEncoder.encode(
-					frame,
+				await waitForEncoder();
+
+
+				statusText.textContent =
+					\`Completed image \${i + 1} of \${activeSlides.length}\`;
+
+			}
+
+
+			// =================================================
+			// FINALIZE ENCODER
+			// =================================================
+
+			statusText.textContent =
+				"Finalizing MP4 file...";
+
+
+			await videoEncoder.flush();
+
+
+			if (encoderError) {
+				throw encoderError;
+			}
+
+
+			// =================================================
+			// FINALIZE MP4
+			// =================================================
+
+			muxer.finalize();
+
+
+			const buffer =
+				muxer.target.buffer;
+
+
+			const blob =
+				new Blob(
+					[buffer],
 					{
-						keyFrame:
-							currentFrame %
-							(FPS * 2) === 0
+						type:
+							"video/mp4"
 					}
 				);
 
 
-				frame.close();
+			// =================================================
+			// DOWNLOAD
+			// =================================================
+
+			const downloadURL =
+				URL.createObjectURL(
+					blob
+				);
 
 
-				currentFrame++;
+			const a =
+				document.createElement(
+					"a"
+				);
 
 
-				/*
-				 * =================================================
-				 * UPDATE PROGRESS
-				 * =================================================
-				 */
-
-				if (
-					currentFrame % 10 === 0
-				) {
-
-					const percent =
-						Math.round(
-							(
-								currentFrame /
-								TOTAL_FRAMES
-							) * 100
-						);
+			a.href =
+				downloadURL;
 
 
-					progressBar.style.width =
-						percent + "%";
+			a.download =
+				\`Ghibli_Story_\${Date.now()}.mp4\`;
 
 
-					statusText.textContent =
-						\`Rendering Frame \${currentFrame} / \${TOTAL_FRAMES} (\${percent}%)\`;
+			document.body.appendChild(a);
+
+			a.click();
+
+			a.remove();
 
 
-					/*
-					 * Give browser a chance to
-					 * update the interface.
-					 */
+			setTimeout(
+				() => {
 
-					await new Promise(
-						r =>
-							setTimeout(
-								r,
-								1
-							)
+					URL.revokeObjectURL(
+						downloadURL
 					);
-				}
-			}
-		}
 
-
-		/*
-		 * =====================================================
-		 * FINALIZE VIDEO
-		 * =====================================================
-		 */
-
-		statusText.textContent =
-			"Finalizing MP4 file...";
-
-
-		await videoEncoder.flush();
-
-
-		muxer.finalize();
-
-
-		/*
-		 * =====================================================
-		 * CREATE MP4 DOWNLOAD
-		 * =====================================================
-		 */
-
-		const buffer =
-			muxer.target.buffer;
-
-
-		const blob =
-			new Blob(
-				[buffer],
-				{
-					type: "video/mp4"
-				}
+				},
+				2000
 			);
 
 
-		const url =
-			URL.createObjectURL(blob);
+			progressBar.style.width =
+				"100%";
 
 
-		const a =
-			document.createElement("a");
+			statusText.textContent =
+				"✅ MP4 Downloaded!";
+
+		}
+		catch (error) {
+
+			console.error(
+				"MP4 rendering failed:",
+				error
+			);
 
 
-		a.href = url;
-
-		a.download =
-			\`Ghibli_Story_\${Date.now()}.mp4\`;
+			statusText.textContent =
+				"❌ Video rendering failed.";
 
 
-		a.click();
+			alert(
+				"Video rendering failed. Try reducing the number of images or closing other browser tabs."
+			);
+
+		}
+		finally {
+
+			/*
+			 * Always clean up encoder.
+			 */
+
+			if (
+				videoEncoder.state !==
+				"closed"
+			) {
+
+				try {
+
+					videoEncoder.close();
+
+				}
+				catch (error) {
+
+					console.warn(
+						"Encoder cleanup error:",
+						error
+					);
+
+				}
+
+			}
 
 
-		/*
-		 * Give browser time to start
-		 * download before revoking URL.
-		 */
+			renderBtn.disabled =
+				false;
 
-		setTimeout(
-			() =>
-				URL.revokeObjectURL(url),
-			1000
-		);
+		}
 
-
-		/*
-		 * =====================================================
-		 * RESET UI
-		 * =====================================================
-		 */
-
-		statusText.textContent =
-			"✅ MP4 Downloaded!";
-
-
-		progressBar.style.width =
-			"100%";
-
-
-		renderBtn.disabled =
-			false;
 	}
 
 </script>
 
 </body>
+
 </html>
 `;
 }
