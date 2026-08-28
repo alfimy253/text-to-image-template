@@ -12,76 +12,130 @@ const prompts = [
 ];
 
 export default {
-	async fetch(request: Request, env: Env): Promise<Response> {
-		const url = new URL(request.url);
+	async fetch(
+		request: Request,
+		env: Env
+	): Promise<Response> {
 
-		// =========================================================
+		const url =
+			new URL(request.url);
+
+
+		// =====================================================
 		// MAIN APPLICATION
-		// =========================================================
+		// =====================================================
 
-		if (request.method === "GET" && url.pathname === "/") {
-			return new Response(createHTML(), {
-				status: 200,
-				headers: {
-					"Content-Type": "text/html; charset=UTF-8",
-				},
-			});
+		if (
+			request.method === "GET" &&
+			url.pathname === "/"
+		) {
+
+			return new Response(
+				createHTML(),
+				{
+					status: 200,
+
+					headers: {
+						"Content-Type":
+							"text/html; charset=UTF-8"
+					}
+				}
+			);
 		}
 
-		// =========================================================
+
+		// =====================================================
 		// AI IMAGE GENERATION
-		// =========================================================
+		// =====================================================
 
-		const match = url.pathname.match(/^\/image\/(\d+)$/);
+		const match =
+			url.pathname.match(
+				/^\/image\/(\d+)$/
+			);
 
-		if (request.method === "GET" && match) {
-			const index = Number(match[1]);
+
+		if (
+			request.method === "GET" &&
+			match
+		) {
+
+			const index =
+				Number(match[1]);
+
 
 			if (
 				!Number.isInteger(index) ||
 				index < 0 ||
 				index >= prompts.length
 			) {
+
 				return json(
 					{
 						success: false,
-						error: "Invalid image index",
+						error:
+							"Invalid image index"
 					},
 					400
 				);
 			}
 
-			try {
-				const result = await env.AI.run(MODEL, {
-					prompt: prompts[index],
-				});
 
-				return new Response(result as ReadableStream, {
-					status: 200,
-					headers: {
-						"Content-Type": "image/png",
-						"Cache-Control": "no-store",
-						"X-Image-Index": String(index),
-					},
-				});
-			} catch (error) {
+			try {
+
+				const result =
+					await env.AI.run(
+						MODEL,
+						{
+							prompt:
+								prompts[index]
+						}
+					);
+
+
+				return new Response(
+					result as ReadableStream,
+					{
+						status: 200,
+
+						headers: {
+							"Content-Type":
+								"image/png",
+
+							"Cache-Control":
+								"no-store",
+
+							"X-Image-Index":
+								String(index)
+						}
+					}
+				);
+
+			}
+			catch (error) {
+
 				return json(
 					{
 						success: false,
+
 						error:
 							error instanceof Error
 								? error.message
-								: String(error),
+								: String(error)
 					},
 					500
 				);
 			}
 		}
 
-		return new Response("Not Found", {
-			status: 404,
-		});
-	},
+
+		return new Response(
+			"Not Found",
+			{
+				status: 404
+			}
+		);
+	}
+
 } satisfies ExportedHandler<Env>;
 
 
@@ -93,12 +147,18 @@ function json(
 	data: unknown,
 	status = 200
 ): Response {
-	return new Response(JSON.stringify(data), {
-		status,
-		headers: {
-			"Content-Type": "application/json",
-		},
-	});
+
+	return new Response(
+		JSON.stringify(data),
+		{
+			status,
+
+			headers: {
+				"Content-Type":
+					"application/json"
+			}
+		}
+	);
 }
 
 
@@ -107,6 +167,7 @@ function json(
 // =============================================================
 
 function createHTML(): string {
+
 	return `
 <!DOCTYPE html>
 
@@ -121,7 +182,9 @@ function createHTML(): string {
 		content="width=device-width, initial-scale=1.0"
 	>
 
-	<title>AI Ghibli Video & MP4 Studio</title>
+	<title>
+		AI Ghibli Video & MP4 Studio
+	</title>
 
 
 	<script src="https://unpkg.com/mp4-muxer@5.1.3/build/mp4-muxer.js"></script>
@@ -136,261 +199,575 @@ function createHTML(): string {
 			--text: #f3f4f6;
 		}
 
+
 		* {
 			box-sizing: border-box;
 			margin: 0;
 			padding: 0;
 		}
 
+
 		body {
-			background: var(--bg);
-			color: var(--text);
+
+			background:
+				var(--bg);
+
+			color:
+				var(--text);
+
 			font-family:
 				system-ui,
 				-apple-system,
 				sans-serif;
-			padding: 20px;
+
+			padding:
+				20px;
 		}
+
 
 		.header {
-			text-align: center;
-			margin-bottom: 25px;
+
+			text-align:
+				center;
+
+			margin-bottom:
+				25px;
 		}
+
 
 		.header h1 {
-			font-size: 2rem;
-			color: var(--accent);
-			margin-bottom: 8px;
+
+			font-size:
+				2rem;
+
+			color:
+				var(--accent);
+
+			margin-bottom:
+				8px;
 		}
+
 
 		.header p {
-			color: #9ca3af;
-			font-size: 0.95rem;
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.95rem;
 		}
+
 
 		.studio {
-			max-width: 900px;
-			margin: 0 auto 40px auto;
-			background: var(--card);
-			border: 1px solid #2e3440;
-			border-radius: 12px;
-			padding: 20px;
-			display: flex;
-			flex-direction: column;
-			align-items: center;
+
+			max-width:
+				900px;
+
+			margin:
+				0 auto 40px auto;
+
+			background:
+				var(--card);
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				12px;
+
+			padding:
+				20px;
+
+			display:
+				flex;
+
+			flex-direction:
+				column;
+
+			align-items:
+				center;
 		}
+
 
 		.canvas-container {
-			width: 100%;
-			aspect-ratio: 16 / 9;
-			background: #000;
-			border-radius: 8px;
-			overflow: hidden;
-			position: relative;
-			display: flex;
-			align-items: center;
-			justify-content: center;
+
+			width:
+				100%;
+
+			aspect-ratio:
+				16 / 9;
+
+			background:
+				#000;
+
+			border-radius:
+				8px;
+
+			overflow:
+				hidden;
+
+			position:
+				relative;
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			justify-content:
+				center;
+
 			box-shadow:
 				0 10px 30px
-				rgba(0, 0, 0, 0.5);
+				rgba(0,0,0,0.5);
 		}
+
 
 		canvas {
-			width: 100%;
-			height: 100%;
-			object-fit: contain;
+
+			width:
+				100%;
+
+			height:
+				100%;
+
+			object-fit:
+				contain;
 		}
+
 
 		.overlay-text {
-			position: absolute;
-			color: #6b7280;
-			font-size: 1.2rem;
-			pointer-events: none;
+
+			position:
+				absolute;
+
+			color:
+				#6b7280;
+
+			font-size:
+				1.2rem;
+
+			pointer-events:
+				none;
 		}
 
+
 		.controls {
-			display: flex;
-			gap: 15px;
-			margin-top: 20px;
-			width: 100%;
-			justify-content: center;
-			flex-wrap: wrap;
+
+			display:
+				flex;
+
+			gap:
+				15px;
+
+			margin-top:
+				20px;
+
+			width:
+				100%;
+
+			justify-content:
+				center;
+
+			flex-wrap:
+				wrap;
 		}
+
 
 		button,
 		.upload-btn {
-			background: var(--accent);
-			color: #000;
-			border: none;
-			padding: 12px 24px;
-			font-size: 1rem;
-			font-weight: bold;
-			border-radius: 8px;
-			cursor: pointer;
+
+			background:
+				var(--accent);
+
+			color:
+				#000;
+
+			border:
+				none;
+
+			padding:
+				12px 24px;
+
+			font-size:
+				1rem;
+
+			font-weight:
+				bold;
+
+			border-radius:
+				8px;
+
+			cursor:
+				pointer;
+
 			transition:
 				transform 0.1s,
 				opacity 0.2s;
-			display: inline-flex;
-			align-items: center;
-			gap: 8px;
+
+			display:
+				inline-flex;
+
+			align-items:
+				center;
+
+			gap:
+				8px;
 		}
+
 
 		button:hover,
 		.upload-btn:hover {
-			opacity: 0.9;
-			transform: translateY(-1px);
+
+			opacity:
+				0.9;
+
+			transform:
+				translateY(-1px);
 		}
+
 
 		button:disabled {
-			background: #374151;
-			color: #9ca3af;
-			cursor: not-allowed;
-			transform: none;
+
+			background:
+				#374151;
+
+			color:
+				#9ca3af;
+
+			cursor:
+				not-allowed;
+
+			transform:
+				none;
 		}
 
+
 		.upload-btn {
-			background: #2563eb;
-			color: white;
+
+			background:
+				#2563eb;
+
+			color:
+				white;
 		}
+
 
 		input[type="file"] {
 			display: none;
 		}
 
+
 		.progress-bar-container {
-			width: 100%;
-			background: #2e3440;
-			height: 10px;
-			border-radius: 5px;
-			margin-top: 15px;
-			overflow: hidden;
-			display: none;
+
+			width:
+				100%;
+
+			background:
+				#2e3440;
+
+			height:
+				10px;
+
+			border-radius:
+				5px;
+
+			margin-top:
+				15px;
+
+			overflow:
+				hidden;
+
+			display:
+				none;
 		}
+
 
 		.progress-bar {
-			width: 0%;
-			height: 100%;
-			background: #10b981;
-			transition: width 0.1s;
+
+			width:
+				0%;
+
+			height:
+				100%;
+
+			background:
+				#10b981;
+
+			transition:
+				width 0.1s;
 		}
+
 
 		.status-text {
-			margin-top: 8px;
-			font-size: 0.85rem;
-			color: #10b981;
-			display: none;
+
+			margin-top:
+				8px;
+
+			font-size:
+				0.85rem;
+
+			color:
+				#10b981;
+
+			display:
+				none;
 		}
+
 
 		h2 {
-			margin-bottom: 15px;
-			border-bottom: 1px solid #2e3440;
-			padding-bottom: 10px;
+
+			margin-bottom:
+				15px;
+
+			border-bottom:
+				1px solid #2e3440;
+
+			padding-bottom:
+				10px;
 		}
 
+
 		.gallery {
-			display: grid;
+
+			display:
+				grid;
+
 			grid-template-columns:
 				repeat(
 					auto-fill,
 					minmax(280px, 1fr)
 				);
-			gap: 16px;
+
+			gap:
+				16px;
 		}
+
 
 		.card {
-			background: var(--card);
-			border: 2px solid transparent;
-			border-radius: 10px;
-			padding: 10px;
-			transition: border-color 0.2s;
-			position: relative;
+
+			background:
+				var(--card);
+
+			border:
+				2px solid transparent;
+
+			border-radius:
+				10px;
+
+			padding:
+				10px;
+
+			transition:
+				border-color 0.2s;
+
+			position:
+				relative;
 		}
+
 
 		.card.in-video {
-			border-color: var(--accent);
+
+			border-color:
+				var(--accent);
 		}
+
 
 		.badge {
-			position: absolute;
-			top: 18px;
-			right: 18px;
-			background: var(--accent);
-			color: #000;
-			font-size: 0.75rem;
-			font-weight: bold;
-			padding: 3px 8px;
-			border-radius: 12px;
-			z-index: 10;
+
+			position:
+				absolute;
+
+			top:
+				18px;
+
+			right:
+				18px;
+
+			background:
+				var(--accent);
+
+			color:
+				#000;
+
+			font-size:
+				0.75rem;
+
+			font-weight:
+				bold;
+
+			padding:
+				3px 8px;
+
+			border-radius:
+				12px;
+
+			z-index:
+				10;
 		}
+
 
 		.image-container {
-			width: 100%;
-			aspect-ratio: 16 / 9;
-			background: #0f1115;
-			border-radius: 6px;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			overflow: hidden;
+
+			width:
+				100%;
+
+			aspect-ratio:
+				16 / 9;
+
+			background:
+				#0f1115;
+
+			border-radius:
+				6px;
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			justify-content:
+				center;
+
+			overflow:
+				hidden;
 		}
+
 
 		.image-container img {
-			width: 100%;
-			height: 100%;
-			object-fit: cover;
+
+			width:
+				100%;
+
+			height:
+				100%;
+
+			object-fit:
+				cover;
 		}
+
 
 		.loading {
-			color: #6b7280;
-			font-size: 0.85rem;
-			display: flex;
-			flex-direction: column;
-			align-items: center;
-			gap: 8px;
+
+			color:
+				#6b7280;
+
+			font-size:
+				0.85rem;
+
+			display:
+				flex;
+
+			flex-direction:
+				column;
+
+			align-items:
+				center;
+
+			gap:
+				8px;
 		}
+
 
 		.spinner {
-			width: 20px;
-			height: 20px;
-			border: 2px solid #374151;
-			border-top-color: var(--accent);
-			border-radius: 50%;
-			animation: spin 1s linear infinite;
+
+			width:
+				20px;
+
+			height:
+				20px;
+
+			border:
+				2px solid #374151;
+
+			border-top-color:
+				var(--accent);
+
+			border-radius:
+				50%;
+
+			animation:
+				spin 1s linear infinite;
 		}
+
 
 		@keyframes spin {
+
 			to {
-				transform: rotate(360deg);
+				transform:
+					rotate(360deg);
 			}
+
 		}
+
 
 		.prompt {
-			margin-top: 8px;
-			font-size: 0.8rem;
-			color: #9ca3af;
-			line-height: 1.4;
-			display: -webkit-box;
-			-webkit-line-clamp: 2;
-			-webkit-box-orient: vertical;
-			overflow: hidden;
+
+			margin-top:
+				8px;
+
+			font-size:
+				0.8rem;
+
+			color:
+				#9ca3af;
+
+			line-height:
+				1.4;
+
+			display:
+				-webkit-box;
+
+			-webkit-line-clamp:
+				2;
+
+			-webkit-box-orient:
+				vertical;
+
+			overflow:
+				hidden;
 		}
+
 
 		.card-actions {
-			margin-top: 10px;
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
+
+			margin-top:
+				10px;
+
+			display:
+				flex;
+
+			justify-content:
+				space-between;
+
+			align-items:
+				center;
 		}
+
 
 		.toggle-btn {
-			background: #374151;
-			color: white;
-			padding: 6px 12px;
-			font-size: 0.8rem;
+
+			background:
+				#374151;
+
+			color:
+				white;
+
+			padding:
+				6px 12px;
+
+			font-size:
+				0.8rem;
 		}
 
-		.card.in-video .toggle-btn {
-			background: #ef4444;
+
+		.card.in-video
+		.toggle-btn {
+
+			background:
+				#ef4444;
 		}
 
 	</style>
@@ -430,6 +807,7 @@ function createHTML(): string {
 				Preview will render here
 				during MP4 compilation...
 			</span>
+
 
 			<canvas
 				id="video-canvas"
@@ -491,11 +869,17 @@ function createHTML(): string {
 	</div>
 
 
+	<!-- ======================================================
+	     STORYBOARD
+	     ====================================================== -->
+
 	<h2>
 
 		Storyboard Queue
 		(
-		<span id="queue-count">0</span>
+		<span id="queue-count">
+			0
+		</span>
 		images ready
 		)
 
@@ -517,11 +901,22 @@ function createHTML(): string {
 	const prompts =
 		${JSON.stringify(prompts)};
 
+
 	const gallery =
-		document.getElementById("gallery");
+		document.getElementById(
+			"gallery"
+		);
+
 
 	const queueCountEl =
-		document.getElementById("queue-count");
+		document.getElementById(
+			"queue-count"
+		);
+
+
+	/*
+	 * Images selected for the video.
+	 */
 
 	const activeSlides = [];
 
@@ -530,73 +925,85 @@ function createHTML(): string {
 	// CREATE AI CARDS
 	// =========================================================
 
-	prompts.forEach((prompt, index) => {
+	prompts.forEach(
+		(prompt, index) => {
 
-		const card =
-			document.createElement("div");
+			const card =
+				document.createElement(
+					"div"
+				);
 
-		card.className = "card";
 
-		card.id =
-			\`card-\${index}\`;
+			card.className =
+				"card";
 
-		card.innerHTML = \`
 
-			<div
-				class="image-container"
-				id="container-\${index}"
-			>
+			card.id =
+				\`card-\${index}\`;
 
-				<div class="loading">
 
-					<div class="spinner"></div>
+			card.innerHTML = \`
 
-					Generating AI Scene
-					\${index + 1}...
+				<div
+					class="image-container"
+					id="container-\${index}"
+				>
+
+					<div class="loading">
+
+						<div class="spinner"></div>
+
+						Generating AI Scene
+						\${index + 1}...
+
+					</div>
 
 				</div>
 
-			</div>
 
-
-			<div
-				class="prompt"
-				title="\${prompt}"
-			>
-
-				\${index + 1}.
-				\${prompt}
-
-			</div>
-
-
-			<div class="card-actions">
-
-				<span
-					style="
-						font-size:0.75rem;
-						color:#6b7280;
-					"
+				<div
+					class="prompt"
+					title="\${escapeHTML(prompt)}"
 				>
-					AI Generated
-				</span>
+
+					\${index + 1}.
+					\${escapeHTML(prompt)}
+
+				</div>
 
 
-				<button
-					class="toggle-btn"
-					id="btn-\${index}"
-					disabled
-					onclick="toggleSlide(\${index})"
-				>
-					Loading...
-				</button>
+				<div class="card-actions">
 
-			</div>
+					<span
+						style="
+							font-size:0.75rem;
+							color:#6b7280;
+						"
+					>
+						AI Generated
+					</span>
 
-		\`;
 
-		gallery.appendChild(card);
-	});
+					<button
+						class="toggle-btn"
+						id="btn-\${index}"
+						disabled
+						onclick="toggleSlide(\${index})"
+					>
+						Loading...
+					</button>
+
+				</div>
+
+			\`;
+
+
+			gallery.appendChild(
+				card
+			);
+
+		}
+	);
 
 
 	// =========================================================
@@ -610,15 +1017,18 @@ function createHTML(): string {
 				\`container-\${index}\`
 			);
 
+
 		const btn =
 			document.getElementById(
 				\`btn-\${index}\`
 			);
 
+
 		const card =
 			document.getElementById(
 				\`card-\${index}\`
 			);
+
 
 		try {
 
@@ -627,28 +1037,44 @@ function createHTML(): string {
 					\`/image/\${index}\`
 				);
 
+
 			if (!response.ok) {
+
 				throw new Error(
 					"Image generation failed"
 				);
+
 			}
+
 
 			const blob =
 				await response.blob();
 
-			const url =
-				URL.createObjectURL(blob);
+
+			const imageURL =
+				URL.createObjectURL(
+					blob
+				);
+
 
 			const img =
 				new Image();
 
-			img.src = url;
+
+			img.src =
+				imageURL;
+
 
 			await img.decode();
 
-			container.innerHTML = "";
 
-			container.appendChild(img);
+			container.innerHTML =
+				"";
+
+
+			container.appendChild(
+				img
+			);
 
 
 			activeSlides.push({
@@ -669,11 +1095,14 @@ function createHTML(): string {
 				"in-video"
 			);
 
+
 			btn.textContent =
 				"Remove from Video";
 
+
 			btn.disabled =
 				false;
+
 
 			updateQueueCount();
 
@@ -683,6 +1112,7 @@ function createHTML(): string {
 			console.error(
 				error
 			);
+
 
 			container.innerHTML = \`
 
@@ -696,17 +1126,22 @@ function createHTML(): string {
 				</div>
 
 			\`;
+
 		}
+
 	}
 
 
 	/*
-	 * Generate AI images.
+	 * Start AI image generation.
 	 */
 
 	prompts.forEach(
-		(_, index) =>
-			fetchAIImage(index)
+		(_, index) => {
+
+			fetchAIImage(index);
+
+		}
 	);
 
 
@@ -715,7 +1150,9 @@ function createHTML(): string {
 	// =========================================================
 
 	document
-		.getElementById("file-upload")
+		.getElementById(
+			"file-upload"
+		)
 		.addEventListener(
 			"change",
 			async (event) => {
@@ -726,22 +1163,32 @@ function createHTML(): string {
 					);
 
 
+				/*
+				 * Process uploads one at a time.
+				 *
+				 * This prevents multiple large images
+				 * from being decoded simultaneously.
+				 */
+
 				for (
 					const file of files
 				) {
 
 					try {
 
-						const url =
+						const imageURL =
 							URL.createObjectURL(
 								file
 							);
 
+
 						const img =
 							new Image();
 
+
 						img.src =
-							url;
+							imageURL;
+
 
 						await img.decode();
 
@@ -764,6 +1211,7 @@ function createHTML(): string {
 						card.className =
 							"card in-video";
 
+
 						card.id =
 							customId;
 
@@ -775,15 +1223,23 @@ function createHTML(): string {
 							</div>
 
 
-							<div class="image-container">
+							<div
+								class="image-container"
+							>
 
-								<img src="\${url}">
+								<img
+									src="\${imageURL}"
+								>
 
 							</div>
 
 
 							<div class="prompt">
-								\${escapeHTML(file.name)}
+
+								\${escapeHTML(
+									file.name
+								)}
+
 							</div>
 
 
@@ -813,7 +1269,9 @@ function createHTML(): string {
 						\`;
 
 
-						gallery.prepend(card);
+						gallery.prepend(
+							card
+						);
 
 
 						activeSlides.unshift({
@@ -841,15 +1299,17 @@ function createHTML(): string {
 						);
 
 					}
+
 				}
 
 
 				/*
-				 * Reset input so the same
-				 * files can be selected again.
+				 * Allows the same file to be
+				 * selected again later.
 				 */
 
-				event.target.value = "";
+				event.target.value =
+					"";
 
 			}
 		);
@@ -861,12 +1321,32 @@ function createHTML(): string {
 
 	function escapeHTML(value) {
 
-		return value
-			.replaceAll("&", "&amp;")
-			.replaceAll("<", "&lt;")
-			.replaceAll(">", "&gt;")
-			.replaceAll('"', "&quot;")
-			.replaceAll("'", "&#039;");
+		return String(value)
+
+			.replaceAll(
+				"&",
+				"&amp;"
+			)
+
+			.replaceAll(
+				"<",
+				"&lt;"
+			)
+
+			.replaceAll(
+				">",
+				"&gt;"
+			)
+
+			.replaceAll(
+				'"',
+				"&quot;"
+			)
+
+			.replaceAll(
+				"'",
+				"&#039;"
+			);
 
 	}
 
@@ -880,15 +1360,18 @@ function createHTML(): string {
 		const cardId =
 			\`card-\${index}\`;
 
+
 		const card =
 			document.getElementById(
 				cardId
 			);
 
+
 		const btn =
 			document.getElementById(
 				\`btn-\${index}\`
 			);
+
 
 		const existingIndex =
 			activeSlides.findIndex(
@@ -907,9 +1390,11 @@ function createHTML(): string {
 				1
 			);
 
+
 			card.classList.remove(
 				"in-video"
 			);
+
 
 			btn.textContent =
 				"Add to Video";
@@ -921,6 +1406,7 @@ function createHTML(): string {
 				card.querySelector(
 					"img"
 				);
+
 
 			if (!img) {
 				return;
@@ -945,17 +1431,20 @@ function createHTML(): string {
 				"in-video"
 			);
 
+
 			btn.textContent =
 				"Remove from Video";
+
 		}
 
 
 		updateQueueCount();
+
 	}
 
 
 	// =========================================================
-	// REMOVE CUSTOM IMAGE
+	// REMOVE CUSTOM SLIDE
 	// =========================================================
 
 	function removeCustomSlide(id) {
@@ -974,9 +1463,10 @@ function createHTML(): string {
 			const slide =
 				activeSlides[index];
 
+
 			/*
-			 * Release uploaded image
-			 * object URL.
+			 * Release browser memory
+			 * for uploaded image.
 			 */
 
 			if (
@@ -997,11 +1487,14 @@ function createHTML(): string {
 				index,
 				1
 			);
+
 		}
 
 
 		const element =
-			document.getElementById(id);
+			document.getElementById(
+				id
+			);
 
 
 		if (element) {
@@ -1010,11 +1503,12 @@ function createHTML(): string {
 
 
 		updateQueueCount();
+
 	}
 
 
 	// =========================================================
-	// QUEUE COUNT
+	// UPDATE QUEUE COUNT
 	// =========================================================
 
 	function updateQueueCount() {
@@ -1026,7 +1520,7 @@ function createHTML(): string {
 
 
 	// =========================================================
-	// MP4 GENERATOR
+	// MP4 VIDEO GENERATOR
 	// =========================================================
 
 	async function generateMP4() {
@@ -1040,6 +1534,7 @@ function createHTML(): string {
 			);
 
 			return;
+
 		}
 
 
@@ -1049,10 +1544,11 @@ function createHTML(): string {
 		) {
 
 			alert(
-				"Your browser does not support WebCodecs API. Please use modern Chrome, Edge, or Safari."
+				"Your browser does not support WebCodecs. Please use modern Chrome, Edge, or Safari."
 			);
 
 			return;
+
 		}
 
 
@@ -1061,30 +1557,36 @@ function createHTML(): string {
 				"render-btn"
 			);
 
+
 		const progressContainer =
 			document.getElementById(
 				"progress-container"
 			);
+
 
 		const progressBar =
 			document.getElementById(
 				"progress-bar"
 			);
 
+
 		const statusText =
 			document.getElementById(
 				"status-text"
 			);
+
 
 		const placeholder =
 			document.getElementById(
 				"canvas-placeholder"
 			);
 
+
 		const canvas =
 			document.getElementById(
 				"video-canvas"
 			);
+
 
 		const ctx =
 			canvas.getContext(
@@ -1098,14 +1600,18 @@ function createHTML(): string {
 		renderBtn.disabled =
 			true;
 
+
 		placeholder.style.display =
 			"none";
+
 
 		progressContainer.style.display =
 			"block";
 
+
 		statusText.style.display =
 			"block";
+
 
 		progressBar.style.width =
 			"0%";
@@ -1115,25 +1621,50 @@ function createHTML(): string {
 		// VIDEO SETTINGS
 		// =====================================================
 
-		const WIDTH = 1280;
+		const WIDTH =
+			1280;
 
-		const HEIGHT = 720;
 
-		const FPS = 30;
+		const HEIGHT =
+			720;
+
+
+		const FPS =
+			30;
+
 
 		/*
-		 * EXACTLY 5 SECONDS PER IMAGE.
+		 * EACH IMAGE LASTS 8 SECONDS.
+		 *
+		 * 30 FPS × 8 seconds
+		 * = 240 frames per image.
 		 */
 
-		const SECONDS_PER_SLIDE = 5;
+		const SECONDS_PER_SLIDE =
+			8;
+
 
 		const FRAMES_PER_SLIDE =
 			FPS *
 			SECONDS_PER_SLIDE;
 
+
 		const TOTAL_FRAMES =
 			activeSlides.length *
 			FRAMES_PER_SLIDE;
+
+
+		/*
+		 * Keyframes are deliberately
+		 * more than 7 seconds apart.
+		 *
+		 * This does NOT create visual
+		 * transitions.
+		 */
+
+		const KEYFRAME_INTERVAL =
+			FPS *
+			10;
 
 
 		// =====================================================
@@ -1156,10 +1687,12 @@ function createHTML(): string {
 
 					height:
 						HEIGHT
+
 				},
 
 				fastStart:
 					"in-memory"
+
 			});
 
 
@@ -1184,6 +1717,7 @@ function createHTML(): string {
 
 					},
 
+
 				error:
 					(error) => {
 
@@ -1191,6 +1725,7 @@ function createHTML(): string {
 							"VideoEncoder error:",
 							error
 						);
+
 
 						encoderError =
 							error;
@@ -1225,11 +1760,12 @@ function createHTML(): string {
 		// =====================================================
 
 		/*
-		 * Never allow the browser to accumulate
-		 * hundreds of unprocessed VideoFrames.
+		 * Prevents crashes when rendering
+		 * many images.
 		 */
 
-		const MAX_ENCODE_QUEUE = 12;
+		const MAX_ENCODE_QUEUE =
+			12;
 
 
 		async function waitForEncoder() {
@@ -1260,7 +1796,7 @@ function createHTML(): string {
 
 
 		// =====================================================
-		// CAMERA EFFECTS
+		// ANIMATION TYPES
 		// =====================================================
 
 		const effects = [
@@ -1276,13 +1812,14 @@ function createHTML(): string {
 		];
 
 
-		let currentFrame = 0;
+		let currentFrame =
+			0;
 
 
 		try {
 
 			// =================================================
-			// PROCESS EVERY IMAGE
+			// PROCESS EACH IMAGE
 			// =================================================
 
 			for (
@@ -1303,7 +1840,7 @@ function createHTML(): string {
 
 
 				// =============================================
-				// PROCESS 150 FRAMES = 5 SECONDS
+				// 8 SECONDS OF ANIMATION
 				// =============================================
 
 				for (
@@ -1313,7 +1850,7 @@ function createHTML(): string {
 				) {
 
 					/*
-					 * Animation progress.
+					 * Progress from 0 to 1.
 					 */
 
 					const p =
@@ -1325,10 +1862,7 @@ function createHTML(): string {
 
 
 					/*
-					 * Smoothstep.
-					 *
-					 * Makes the camera movement
-					 * start gently and finish gently.
+					 * Smooth camera movement.
 					 */
 
 					const ease =
@@ -1341,13 +1875,19 @@ function createHTML(): string {
 
 
 					// =========================================
-					// CANVAS
+					// CLEAR PREVIOUS FRAME
 					// =========================================
 
-					ctx.fillStyle =
-						"#000";
+					/*
+					 * Clear the previous image.
+					 *
+					 * This is NOT a transition.
+					 *
+					 * The next image is drawn immediately
+					 * over the cleared frame.
+					 */
 
-					ctx.fillRect(
+					ctx.clearRect(
 						0,
 						0,
 						WIDTH,
@@ -1356,8 +1896,14 @@ function createHTML(): string {
 
 
 					// =========================================
-					// CAMERA
+					// CAMERA SCALE
 					// =========================================
+
+					/*
+					 * 1.15x gives enough room
+					 * for panning without
+					 * showing empty edges.
+					 */
 
 					const zoomScale =
 						1.15;
@@ -1384,29 +1930,32 @@ function createHTML(): string {
 
 
 					/*
-					 * Use 65% of the available
-					 * camera movement.
-					 *
-					 * This makes the pan clearly
-					 * visible over 5 seconds.
+					 * Only use part of the available
+					 * movement so the camera remains
+					 * extremely slow and cinematic.
 					 */
 
 					const movementX =
 						overflowX *
-						0.65;
+						0.55;
 
 
 					const movementY =
 						overflowY *
-						0.65;
+						0.55;
 
 
-					let dx = 0;
+					let dx =
+						0;
 
-					let dy = 0;
+
+					let dy =
+						0;
+
 
 					let dw =
 						drawWidth;
+
 
 					let dh =
 						drawHeight;
@@ -1421,8 +1970,15 @@ function createHTML(): string {
 						"slide-left"
 					) {
 
+						/*
+						 * Start slightly toward
+						 * the right and slowly
+						 * travel left.
+						 */
+
 						dx =
-							-movementX *
+							0 -
+							movementX *
 							ease;
 
 
@@ -1479,7 +2035,7 @@ function createHTML(): string {
 
 
 					// =========================================
-					// SLOW ZOOM
+					// VERY SLOW ZOOM
 					// =========================================
 
 					else if (
@@ -1487,11 +2043,18 @@ function createHTML(): string {
 						"zoom-in"
 					) {
 
+						/*
+						 * Only 4% additional zoom
+						 * over the entire 8 seconds.
+						 *
+						 * This is deliberately subtle.
+						 */
+
 						const currentScale =
-							1.03 +
+							1.04 +
 							(
 								ease *
-								0.07
+								0.04
 							);
 
 
@@ -1509,114 +2072,37 @@ function createHTML(): string {
 							(
 								WIDTH -
 								dw
-							) / 2;
+							) /
+							2;
 
 
 						dy =
 							(
 								HEIGHT -
 								dh
-							) / 2;
-
-					}
-
-
-					// =========================================
-					// OPACITY FADE
-					// =========================================
-
-					const FADE_SECONDS = 1;
-
-					const FADE_FRAMES =
-						Math.round(
-							FPS *
-							FADE_SECONDS
-						);
-
-
-					let opacity = 1;
-
-
-					/*
-					 * FADE IN
-					 *
-					 * The image starts transparent
-					 * and gradually becomes visible.
-					 */
-
-					if (
-						f <
-						FADE_FRAMES
-					) {
-
-						const fadeP =
-							f /
-							FADE_FRAMES;
-
-
-						const fadeEase =
-							fadeP *
-							fadeP *
-							(
-								3 -
-								2 * fadeP
-							);
-
-
-						opacity =
-							fadeEase;
-
-					}
-
-
-					/*
-					 * FADE OUT
-					 *
-					 * The image gradually becomes
-					 * transparent.
-					 */
-
-					else if (
-						f >=
-						FRAMES_PER_SLIDE -
-						FADE_FRAMES
-					) {
-
-						const fadeP =
-							(
-								f -
-								(
-									FRAMES_PER_SLIDE -
-									FADE_FRAMES
-								)
 							) /
-							FADE_FRAMES;
-
-
-						const fadeEase =
-							fadeP *
-							fadeP *
-							(
-								3 -
-								2 * fadeP
-							);
-
-
-						opacity =
-							1 -
-							fadeEase;
+							2;
 
 					}
 
 
 					// =========================================
-					// DRAW IMAGE WITH OPACITY
+					// DRAW IMAGE
 					// =========================================
 
-					ctx.save();
+					/*
+					 * IMPORTANT:
+					 *
+					 * No fade.
+					 * No opacity.
+					 * No black overlay.
+					 * No transition.
+					 *
+					 * The image is fully opaque.
+					 */
 
 					ctx.globalAlpha =
-						opacity;
+						1;
 
 
 					ctx.drawImage(
@@ -1628,11 +2114,8 @@ function createHTML(): string {
 					);
 
 
-					ctx.restore();
-
-
 					// =========================================
-					// VIDEO FRAME
+					// CREATE VIDEO FRAME
 					// =========================================
 
 					const timestamp =
@@ -1647,7 +2130,8 @@ function createHTML(): string {
 						new VideoFrame(
 							canvas,
 							{
-								timestamp
+								timestamp:
+									timestamp
 							}
 						);
 
@@ -1659,16 +2143,27 @@ function createHTML(): string {
 					videoEncoder.encode(
 						frame,
 						{
+
+							/*
+							 * Keyframes occur every
+							 * 10 seconds.
+							 *
+							 * The visual image change
+							 * still occurs every 8 seconds.
+							 */
+
 							keyFrame:
 								currentFrame %
-								(FPS * 2) ===
+								KEYFRAME_INTERVAL ===
 								0
+
 						}
 					);
 
 
 					/*
-					 * Release frame immediately.
+					 * Immediately release
+					 * the VideoFrame.
 					 */
 
 					frame.close();
@@ -1714,7 +2209,7 @@ function createHTML(): string {
 
 
 						/*
-						 * Give the browser a chance
+						 * Give the browser time
 						 * to update the UI.
 						 */
 
@@ -1732,8 +2227,8 @@ function createHTML(): string {
 
 
 				/*
-				 * Let encoder catch up
-				 * before starting next image.
+				 * Make sure the encoder catches up
+				 * before processing another image.
 				 */
 
 				await waitForEncoder();
@@ -1746,7 +2241,7 @@ function createHTML(): string {
 
 
 			// =================================================
-			// FINALIZE ENCODER
+			// FLUSH ENCODER
 			// =================================================
 
 			statusText.textContent =
@@ -1757,7 +2252,9 @@ function createHTML(): string {
 
 
 			if (encoderError) {
+
 				throw encoderError;
+
 			}
 
 
@@ -1806,9 +2303,13 @@ function createHTML(): string {
 				\`Ghibli_Story_\${Date.now()}.mp4\`;
 
 
-			document.body.appendChild(a);
+			document.body.appendChild(
+				a
+			);
+
 
 			a.click();
+
 
 			a.remove();
 
@@ -1853,7 +2354,7 @@ function createHTML(): string {
 		finally {
 
 			/*
-			 * Always clean up encoder.
+			 * Always clean up the encoder.
 			 */
 
 			if (
