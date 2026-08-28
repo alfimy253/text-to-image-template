@@ -7,11 +7,6 @@ const MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0";
 const prompts = [
 	"Ghibli-inspired hand-painted anime scene of a young entrepreneur standing inside a tiny neighborhood shop before opening, warm morning sunlight entering through windows, shelves of products and simple checkout counter, gentle storytelling about what a business is, expressive character, hand-painted backgrounds, nostalgic cel animation texture, warm colors, no text, no logos, 16:9",
 	"1990s nostalgic Studio Ghibli-inspired anime scene of a small business owner handing a product to a smiling customer across a wooden counter, another customer waiting behind, warm human interaction showing exchange and trust, detailed hand-painted shop interior, soft nostalgic lighting, expressive faces, no text, no logos, 16:9",
-	"1990s nostalgic Studio Ghibli-inspired wide anime scene of a lively city street filled with a bakery, laundromat, restaurant, repair shop, convenience store and mobile shop, people moving between businesses, hand-painted backgrounds, nostalgic 1990s animation aesthetic, warm atmospheric light, no text, no logos, 16:9",
-	"1990s nostalgic Studio Ghibli-inspired anime scene of an entrepreneur watching customers struggle with heavy grocery bags while a delivery motorcycle passes outside, the entrepreneur suddenly realizing a business opportunity, expressive face, warm hand-painted city background, nostalgic animation texture, no text, 16:9",
-	"1990s nostalgic Studio Ghibli-inspired anime scene of a street food entrepreneur cooking burgers at a colorful roadside stall while a small line of hungry customers waits, steam rising from the grill, ingredients and cooking tools visible, charming hand-painted details, nostalgic warm lighting, no text, no logos, 16:9",
-	"1990s nostalgic Studio Ghibli-inspired anime scene of a customer carefully comparing several products on a shop shelf before choosing one, curious entrepreneur watching from nearby, expressive faces, detailed hand-painted supermarket interior, nostalgic 1990s cel animation, warm colors, no text, 16:9",
-	"1990s nostalgic Studio Ghibli-inspired fisher man on market, clean lines no distortion, 16:9"
 ];
 
 export default {
