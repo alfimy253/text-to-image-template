@@ -187,6 +187,27 @@ function createHTML(): string {
 	</title>
 
 
+	<!-- Oswald comes from Google Fonts.
+	     Bauhaus 93 and Bookman Old Style
+	     are common system fonts. -->
+
+	<link
+		rel="preconnect"
+		href="https://fonts.googleapis.com"
+	>
+
+	<link
+		rel="preconnect"
+		href="https://fonts.gstatic.com"
+		crossorigin
+	>
+
+	<link
+		href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&display=swap"
+		rel="stylesheet"
+	>
+
+
 	<script src="https://unpkg.com/mp4-muxer@5.1.3/build/mp4-muxer.js"></script>
 
 
@@ -604,6 +625,54 @@ function createHTML(): string {
 
 			cursor:
 				pointer;
+		}
+
+
+		.title-row {
+
+			display:
+				flex;
+
+			gap:
+				10px;
+
+			flex-wrap:
+				wrap;
+		}
+
+
+		.title-row input[type="text"] {
+
+			flex:
+				1 1 260px;
+
+			background:
+				#0f1115;
+
+			color:
+				var(--text);
+
+			border:
+				1px solid #374151;
+
+			border-radius:
+				8px;
+
+			padding:
+				10px 12px;
+
+			font-size:
+				0.9rem;
+
+			outline:
+				none;
+		}
+
+
+		.title-row input[type="text"]:focus {
+
+			border-color:
+				var(--accent);
 		}
 
 
@@ -1177,6 +1246,151 @@ function createHTML(): string {
 		</div>
 
 
+		<!-- ======================================================
+		     TITLE OVERLAY
+		     ====================================================== -->
+
+		<div class="audio-panel">
+
+			<div class="audio-title">
+				Video Title (top left)
+			</div>
+
+
+			<div class="title-row">
+
+				<input
+					type="text"
+					id="title-input"
+					placeholder="Enter your video title..."
+					maxlength="70"
+				>
+
+			</div>
+
+
+			<div class="audio-row">
+
+				<label class="quality-select">
+
+					Font
+
+					<select id="title-font">
+
+						<option value="oswald">
+							Oswald
+						</option>
+
+						<option value="bauhaus">
+							Bauhaus
+						</option>
+
+						<option value="bookman">
+							Bookman
+						</option>
+
+					</select>
+
+				</label>
+
+
+				<label class="quality-select">
+
+					Colour
+
+					<select id="title-color">
+
+						<option value="white">
+							White text
+						</option>
+
+						<option value="black">
+							Black text
+						</option>
+
+					</select>
+
+				</label>
+
+			</div>
+
+
+			<div class="audio-note">
+				Drawn straight onto every
+				frame 鈥� no background box
+				and no highlight.
+			</div>
+
+		</div>
+
+
+
+
+		<!-- ======================================================
+		     STICKER OVERLAY
+		     ====================================================== -->
+
+		<div class="audio-panel">
+
+			<div class="audio-title">
+				Sticker (bottom right)
+			</div>
+
+
+			<div class="audio-row">
+
+				<label class="quality-select">
+
+					Sticker
+
+					<select id="sticker-select">
+
+						<option
+							value="none"
+							selected
+						>
+							None
+						</option>
+
+						<option value="like">
+							馃憤 Like
+						</option>
+
+						<option value="love">
+							鉂わ笍 Love it
+						</option>
+
+						<option value="subscribe">
+							馃敂 Subscribe
+						</option>
+
+						<option
+							value="like-subscribe"
+						>
+							馃憤馃敂 Like &amp; Subscribe
+						</option>
+
+						<option value="watch">
+							馃幀 Watch Video
+						</option>
+
+					</select>
+
+				</label>
+
+			</div>
+
+
+			<div class="audio-note">
+				White sticker, 160px tall,
+				250px in from the right edge,
+				drawn on every frame to cover
+				a watermark.
+			</div>
+
+		</div>
+
+
 		<div
 			class="progress-bar-container"
 			id="progress-container"
@@ -1386,6 +1600,235 @@ function createHTML(): string {
 		document.getElementById(
 			"quality-select"
 		);
+
+
+	const titleInputEl =
+		document.getElementById(
+			"title-input"
+		);
+
+
+	const titleFontEl =
+		document.getElementById(
+			"title-font"
+		);
+
+
+	const titleColorEl =
+		document.getElementById(
+			"title-color"
+		);
+
+
+	const stickerSelectEl =
+		document.getElementById(
+			"sticker-select"
+		);
+
+
+	/*
+	 * Title overlay settings.
+	 *
+	 * The size is in canvas pixels, so 15
+	 * is 15 real pixels of the exported
+	 * video frame.
+	 */
+
+	const TITLE_FONT_SIZE =
+		15;
+
+
+	const TITLE_MARGIN =
+		24;
+
+
+	/*
+	 * Font choices for the dropdown.
+	 *
+	 * loadName is used to ask the browser
+	 * to fetch the web font.
+	 *
+	 * stack is what canvas draws with, and
+	 * includes fallbacks in case the font
+	 * is missing on the machine.
+	 */
+
+	const TITLE_FONTS = {
+
+		oswald: {
+
+			loadName:
+				"Oswald",
+
+			stack:
+				"'Oswald', 'Arial Narrow', sans-serif"
+
+		},
+
+		bauhaus: {
+
+			loadName:
+				"Bauhaus 93",
+
+			stack:
+				"'Bauhaus 93', 'Bauhaus', 'Futura', 'Century Gothic', sans-serif"
+
+		},
+
+		bookman: {
+
+			loadName:
+				"Bookman Old Style",
+
+			stack:
+				"'Bookman Old Style', 'Bookman', 'URW Bookman L', Georgia, serif"
+
+		}
+
+	};
+
+
+	function getTitleFont() {
+
+		return (
+			TITLE_FONTS[
+				titleFontEl.value
+			] ||
+			TITLE_FONTS.oswald
+		);
+
+	}
+
+
+	/*
+	 * Sticker geometry, in canvas pixels.
+	 *
+	 * RIGHT_GAP is how far the sticker sits
+	 * from the right edge (0 would touch
+	 * the right edge).
+	 *
+	 * BOTTOM_GAP is how far it sits from
+	 * the bottom edge (0 = bottom most).
+	 *
+	 * WIDTH of 0 means the sticker sizes
+	 * itself to fit the emoji and text.
+	 * Set it to a number (for example 250)
+	 * to force an exact width.
+	 */
+
+	const STICKER_HEIGHT =
+		160;
+
+
+	const STICKER_WIDTH =
+		0;
+
+
+	const STICKER_RIGHT_GAP =
+		250;
+
+
+	const STICKER_BOTTOM_GAP =
+		0;
+
+
+	const STICKER_PADDING =
+		22;
+
+
+	const STICKER_RADIUS =
+		26;
+
+
+	const STICKER_GAP =
+		16;
+
+
+	const STICKER_EMOJI_SIZE =
+		68;
+
+
+	const STICKER_TEXT_SIZE =
+		54;
+
+
+	/*
+	 * Colour emoji need their own font
+	 * stack, otherwise they can render as
+	 * empty boxes.
+	 */
+
+	const STICKER_EMOJI_FONT =
+		"'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Segoe UI Symbol', sans-serif";
+
+
+	/*
+	 * The five sticker presets.
+	 *
+	 * Each one is an emoji plus a short
+	 * label drawn on a white sticker.
+	 */
+
+	const STICKER_PRESETS = {
+
+		none:
+			null,
+
+		like: {
+			emoji:
+				"馃憤",
+			text:
+				"Like"
+		},
+
+		love: {
+			emoji:
+				"鉂わ笍",
+			text:
+				"Love it"
+		},
+
+		subscribe: {
+			emoji:
+				"馃敂",
+			text:
+				"Subscribe"
+		},
+
+		"like-subscribe": {
+			emoji:
+				"馃憤馃敂",
+			text:
+				"Like & Subscribe"
+		},
+
+		watch: {
+			emoji:
+				"馃幀",
+			text:
+				"Watch Video"
+		},
+
+		"watch-like-subscribe": {
+			emoji:
+				"馃幀馃憤馃敂",
+			text:
+				"Watch, Like & Subscribe"
+		}
+
+	};
+
+
+	function getSticker() {
+
+		return (
+			STICKER_PRESETS[
+				stickerSelectEl.value
+			] ||
+			null
+		);
+
+	}
 
 
 	/*
@@ -2934,6 +3377,394 @@ function createHTML(): string {
 
 
 	// =========================================================
+	// TITLE OVERLAY
+	// =========================================================
+
+	/*
+	 * A web font must be loaded before
+	 * canvas can draw with it, otherwise
+	 * the frame silently falls back to a
+	 * default font.
+	 */
+
+	async function loadTitleFont() {
+
+		const text =
+			titleInputEl.value.trim();
+
+
+		if (
+			!text ||
+			!document.fonts ||
+			!document.fonts.load
+		) {
+
+			return;
+
+		}
+
+
+		const font =
+			getTitleFont();
+
+
+		try {
+
+			await document.fonts.load(
+				"bold " +
+					TITLE_FONT_SIZE +
+					'px "' +
+					font.loadName +
+					'"'
+			);
+
+
+			await document.fonts.ready;
+
+		}
+		catch (error) {
+
+			console.warn(
+				"Font load failed:",
+				error
+			);
+
+		}
+
+	}
+
+
+	/*
+	 * Draws the title onto the current
+	 * frame, top left.
+	 *
+	 * Plain text only: no background box,
+	 * no highlight, no shadow.
+	 */
+
+	function drawTitle(context) {
+
+		const text =
+			titleInputEl.value.trim();
+
+
+		if (!text) {
+			return;
+		}
+
+
+		context.save();
+
+
+		context.font =
+			"bold " +
+			TITLE_FONT_SIZE +
+			"px " +
+			getTitleFont().stack;
+
+
+		context.textAlign =
+			"left";
+
+
+		context.textBaseline =
+			"top";
+
+
+		context.fillStyle =
+			titleColorEl.value ===
+			"black"
+				? "#000000"
+				: "#ffffff";
+
+
+		context.fillText(
+			text,
+			TITLE_MARGIN,
+			TITLE_MARGIN
+		);
+
+
+		context.restore();
+
+	}
+
+
+	// =========================================================
+	// STICKER OVERLAY
+	// =========================================================
+
+	/*
+	 * Rounded rectangle path.
+	 *
+	 * roundRect() is used when the browser
+	 * has it, with a manual fallback so
+	 * older browsers still get the shape.
+	 */
+
+	function stickerPath(
+		context,
+		x,
+		y,
+		width,
+		height,
+		radius
+	) {
+
+		context.beginPath();
+
+
+		if (context.roundRect) {
+
+			context.roundRect(
+				x,
+				y,
+				width,
+				height,
+				radius
+			);
+
+
+			return;
+
+		}
+
+
+		const r =
+			Math.min(
+				radius,
+				width / 2,
+				height / 2
+			);
+
+
+		context.moveTo(
+			x + r,
+			y
+		);
+
+
+		context.arcTo(
+			x + width,
+			y,
+			x + width,
+			y + height,
+			r
+		);
+
+
+		context.arcTo(
+			x + width,
+			y + height,
+			x,
+			y + height,
+			r
+		);
+
+
+		context.arcTo(
+			x,
+			y + height,
+			x,
+			y,
+			r
+		);
+
+
+		context.arcTo(
+			x,
+			y,
+			x + width,
+			y,
+			r
+		);
+
+
+		context.closePath();
+
+	}
+
+
+	/*
+	 * Draws the white sticker in the
+	 * bottom right corner.
+	 *
+	 * Used to cover a watermark.
+	 */
+
+	function drawSticker(
+		context,
+		width,
+		height
+	) {
+
+		const sticker =
+			getSticker();
+
+
+		if (!sticker) {
+			return;
+		}
+
+
+		context.save();
+
+
+		/*
+		 * Measure the text and the emoji so
+		 * the sticker is only as wide as it
+		 * needs to be.
+		 */
+
+		context.font =
+			"bold " +
+			STICKER_TEXT_SIZE +
+			"px " +
+			getTitleFont().stack;
+
+
+		const textWidth =
+			context.measureText(
+				sticker.text
+			).width;
+
+
+		context.font =
+			STICKER_EMOJI_SIZE +
+			"px " +
+			STICKER_EMOJI_FONT;
+
+
+		const emojiWidth =
+			context.measureText(
+				sticker.emoji
+			).width;
+
+
+		const contentWidth =
+			emojiWidth +
+			STICKER_GAP +
+			textWidth;
+
+
+		const boxWidth =
+			STICKER_WIDTH > 0
+				? STICKER_WIDTH
+				: STICKER_PADDING *
+						2 +
+					contentWidth;
+
+
+		const boxHeight =
+			STICKER_HEIGHT;
+
+
+		/*
+		 * Right edge sits STICKER_RIGHT_GAP
+		 * pixels in from the right of the
+		 * frame, bottom edge sits
+		 * STICKER_BOTTOM_GAP above the
+		 * bottom of the frame.
+		 */
+
+		const x =
+			width -
+			STICKER_RIGHT_GAP -
+			boxWidth;
+
+
+		const y =
+			height -
+			STICKER_BOTTOM_GAP -
+			boxHeight;
+
+
+		// =================================================
+		// WHITE BACKGROUND
+		// =================================================
+
+		context.fillStyle =
+			"#ffffff";
+
+
+		stickerPath(
+			context,
+			x,
+			y,
+			boxWidth,
+			boxHeight,
+			STICKER_RADIUS
+		);
+
+
+		context.fill();
+
+
+		// =================================================
+		// EMOJI AND TEXT
+		// =================================================
+
+		context.textAlign =
+			"left";
+
+
+		context.textBaseline =
+			"middle";
+
+
+		const middleY =
+			y +
+			boxHeight /
+				2;
+
+
+		let cursor =
+			x +
+			STICKER_PADDING;
+
+
+		context.font =
+			STICKER_EMOJI_SIZE +
+			"px " +
+			STICKER_EMOJI_FONT;
+
+
+		context.fillText(
+			sticker.emoji,
+			cursor,
+			middleY + 4
+		);
+
+
+		cursor +=
+			emojiWidth +
+			STICKER_GAP;
+
+
+		context.fillStyle =
+			"#111111";
+
+
+		context.font =
+			"bold " +
+			STICKER_TEXT_SIZE +
+			"px " +
+			getTitleFont().stack;
+
+
+		context.fillText(
+			sticker.text,
+			cursor,
+			middleY + 2
+		);
+
+
+		context.restore();
+
+	}
+
+
+	// =========================================================
 	// MP4 VIDEO GENERATOR
 	// =========================================================
 
@@ -3173,6 +4004,14 @@ function createHTML(): string {
 
 		canvas.height =
 			HEIGHT;
+
+
+		/*
+		 * The title font has to be ready
+		 * before the first frame is drawn.
+		 */
+
+		await loadTitleFont();
 
 
 		/*
@@ -3928,6 +4767,26 @@ function createHTML(): string {
 						dy,
 						dw,
 						dh
+					);
+
+
+					// =========================================
+					// TITLE OVERLAY
+					// =========================================
+
+					drawTitle(
+						ctx
+					);
+
+
+					// =========================================
+					// STICKER OVERLAY
+					// =========================================
+
+					drawSticker(
+						ctx,
+						WIDTH,
+						HEIGHT
 					);
 
 
