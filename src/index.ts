@@ -1308,6 +1308,10 @@ function createHTML(): string {
 							Black text
 						</option>
 
+						<option value="green">
+							Green text
+						</option>
+
 					</select>
 
 				</label>
@@ -1374,6 +1378,13 @@ function createHTML(): string {
 							馃幀 Watch Video
 						</option>
 
+						<option
+							value="watch-like-subscribe"
+						>
+							馃幀馃憤馃敂 Watch, Like
+							&amp; Subscribe
+						</option>
+
 					</select>
 
 				</label>
@@ -1382,10 +1393,12 @@ function createHTML(): string {
 
 
 			<div class="audio-note">
-				White sticker, 160px tall,
-				250px in from the right edge,
-				drawn on every frame to cover
-				a watermark.
+				White 200 脳 80 rectangle, square
+				corners, flush with the bottom
+				right corner and hanging 40px
+				past the right edge. Drawn on
+				every frame to cover a
+				watermark.
 			</div>
 
 		</div>
@@ -1635,7 +1648,7 @@ function createHTML(): string {
 	 */
 
 	const TITLE_FONT_SIZE =
-		15;
+		18;
 
 
 	const TITLE_MARGIN =
@@ -1703,17 +1716,20 @@ function createHTML(): string {
 	/*
 	 * Sticker geometry, in canvas pixels.
 	 *
-	 * RIGHT_GAP is how far the sticker sits
-	 * from the right edge (0 would touch
-	 * the right edge).
+	 * The rectangle is a fixed size and
+	 * sits flush in the bottom right
+	 * corner (RIGHT_GAP 0, BOTTOM_GAP 0).
 	 *
-	 * BOTTOM_GAP is how far it sits from
-	 * the bottom edge (0 = bottom most).
+	 * EXCEED_RIGHT pushes it past the
+	 * right edge so the corner is fully
+	 * covered.
 	 *
-	 * WIDTH of 0 means the sticker sizes
-	 * itself to fit the emoji and text.
-	 * Set it to a number (for example 250)
-	 * to force an exact width.
+	 * The sticker is square cornered, so
+	 * RADIUS stays 0.
+	 *
+	 * The emoji and text inside are scaled
+	 * down automatically to fit the part of
+	 * the rectangle that is on screen.
 	 */
 
 	const STICKER_HEIGHT =
@@ -1721,7 +1737,7 @@ function createHTML(): string {
 
 
 	const STICKER_WIDTH =
-		0;
+		200;
 
 
 	const STICKER_RIGHT_GAP =
@@ -1732,24 +1748,28 @@ function createHTML(): string {
 		0;
 
 
-	const STICKER_PADDING =
-		10;
+	const STICKER_EXCEED_RIGHT =
+		40;
 
 
 	const STICKER_RADIUS =
 		0;
 
 
+	const STICKER_PADDING =
+		12;
+
+
 	const STICKER_GAP =
-		1;
+		8;
 
 
 	const STICKER_EMOJI_SIZE =
-		28;
+		36;
 
 
 	const STICKER_TEXT_SIZE =
-		30;
+		28;
 
 
 	/*
@@ -1776,42 +1796,42 @@ function createHTML(): string {
 
 		like: {
 			emoji:
-				"馃憤",
+				"\u{1F44D}",
 			text:
 				"Like"
 		},
 
 		love: {
 			emoji:
-				"鉂わ笍",
+				"\u{2764}\u{FE0F}",
 			text:
 				"Love it"
 		},
 
 		subscribe: {
 			emoji:
-				"馃敂",
+				"\u{1F514}",
 			text:
 				"Subscribe"
 		},
 
 		"like-subscribe": {
 			emoji:
-				"馃憤馃敂",
+				"\u{1F44D}\u{1F514}",
 			text:
 				"Like & Subscribe"
 		},
 
 		watch: {
 			emoji:
-				"馃幀",
+				"\u{1F3AC}",
 			text:
 				"Watch Video"
 		},
 
 		"watch-like-subscribe": {
 			emoji:
-				"馃幀馃憤馃敂",
+				"\u{1F3AC}\u{1F44D}\u{1F514}",
 			text:
 				"Watch, Like & Subscribe"
 		}
@@ -3471,11 +3491,20 @@ function createHTML(): string {
 			"top";
 
 
+		/*
+		 * White, black or green.
+		 */
+
+		const colour =
+			titleColorEl.value;
+
+
 		context.fillStyle =
-			titleColorEl.value ===
-			"black"
+			colour === "black"
 				? "#000000"
-				: "#ffffff";
+				: colour === "green"
+					? "#22c55e"
+					: "#ffffff";
 
 
 		context.fillText(
@@ -3495,11 +3524,296 @@ function createHTML(): string {
 	// =========================================================
 
 	/*
-	 * Rounded rectangle path.
+	 * Emoji artwork.
 	 *
-	 * roundRect() is used when the browser
-	 * has it, with a manual fallback so
-	 * older browsers still get the shape.
+	 * Some systems have no colour emoji
+	 * font that canvas can use, which is
+	 * why the emoji showed in the page but
+	 * not in the video.
+	 *
+	 * The artwork is fetched as PNGs when
+	 * possible. If that fails the code
+	 * falls back to the system emoji font.
+	 */
+
+	let stickerEmojiImages =
+		null;
+
+
+	/*
+	 * Turns the emoji into the code points
+	 * used by the image file names.
+	 *
+	 * FE0F is the variation selector and
+	 * is not part of the file name.
+	 */
+
+	function emojiCodePoints(emoji) {
+
+		const points =
+			[];
+
+
+		for (
+			const character of emoji
+		) {
+
+			const point =
+				character.codePointAt(
+					0
+				);
+
+
+			if (
+				point !== 0xfe0f
+			) {
+
+				points.push(
+					point.toString(
+						16
+					)
+				);
+
+			}
+
+		}
+
+
+		return points;
+
+	}
+
+
+	function loadImage(src, timeoutMs) {
+
+		return new Promise(
+			(resolve, reject) => {
+
+				const image =
+					new Image();
+
+
+				/*
+				 * crossOrigin is required so the
+				 * canvas is not tainted, which
+				 * would make VideoFrame refuse
+				 * the frame.
+				 */
+
+				image.crossOrigin =
+					"anonymous";
+
+
+				const timer =
+					setTimeout(
+						() => {
+
+							reject(
+								new Error(
+									"Image timed out"
+								)
+							);
+
+						},
+						timeoutMs
+					);
+
+
+				image.onload =
+					() => {
+
+						clearTimeout(
+							timer
+						);
+
+						resolve(
+							image
+						);
+
+					};
+
+
+				image.onerror =
+					() => {
+
+						clearTimeout(
+							timer
+						);
+
+						reject(
+							new Error(
+								"Image failed"
+							)
+						);
+
+					};
+
+
+				image.src =
+					src;
+
+			}
+		);
+
+	}
+
+
+	async function loadStickerAssets() {
+
+		stickerEmojiImages =
+			null;
+
+
+		const sticker =
+			getSticker();
+
+
+		if (!sticker) {
+			return;
+		}
+
+
+		const points =
+			emojiCodePoints(
+				sticker.emoji
+			);
+
+
+		if (!points.length) {
+			return;
+		}
+
+
+		try {
+
+			const images =
+				await Promise.all(
+					points.map(
+						(point) =>
+							loadImage(
+								"https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.0.3/assets/72x72/" +
+									point +
+									".png",
+								8000
+							)
+					)
+				);
+
+
+			/*
+			 * Drawing a cross-origin image
+			 * that did not send CORS headers
+			 * taints the canvas and
+			 * VideoFrame would then throw.
+			 *
+			 * This test fails loudly so the
+			 * fallback is used instead.
+			 */
+
+			for (
+				const image of images
+			) {
+
+				const probe =
+					document.createElement(
+						"canvas"
+					);
+
+
+				probe.width =
+					1;
+
+				probe.height =
+					1;
+
+
+				const probeCtx =
+					probe.getContext(
+						"2d"
+					);
+
+
+				probeCtx.drawImage(
+					image,
+					0,
+					0,
+					1,
+					1
+				);
+
+
+				probeCtx.getImageData(
+					0,
+					0,
+					1,
+					1
+				);
+
+			}
+
+
+			stickerEmojiImages =
+				images;
+
+		}
+		catch (error) {
+
+			console.warn(
+				"Emoji images unavailable, using the system emoji font.",
+				error
+			);
+
+
+			stickerEmojiImages =
+				null;
+
+		}
+
+	}
+
+
+	/*
+	 * Width the emoji takes up, either as
+	 * images or as text.
+	 */
+
+	function measureEmoji(
+		context,
+		emojiSize,
+		sticker
+	) {
+
+		if (stickerEmojiImages) {
+
+			return (
+				emojiSize *
+				stickerEmojiImages.length
+			);
+
+		}
+
+
+		context.font =
+			emojiSize +
+			"px " +
+			STICKER_EMOJI_FONT;
+
+
+		return context.measureText(
+			sticker.emoji
+		).width;
+
+	}
+
+
+	/*
+	 * Rectangle path.
+	 *
+	 * roundRect() is used when available,
+	 * with a manual fallback for older
+	 * browsers. Radius is 0 for the
+	 * sticker, so this is a plain
+	 * rectangle.
 	 */
 
 	function stickerPath(
@@ -3514,7 +3828,10 @@ function createHTML(): string {
 		context.beginPath();
 
 
-		if (context.roundRect) {
+		if (
+			context.roundRect &&
+			radius > 0
+		) {
 
 			context.roundRect(
 				x,
@@ -3530,53 +3847,11 @@ function createHTML(): string {
 		}
 
 
-		const r =
-			Math.min(
-				radius,
-				width / 2,
-				height / 2
-			);
-
-
-		context.moveTo(
-			x + r,
-			y
-		);
-
-
-		context.arcTo(
-			x + width,
-			y,
-			x + width,
-			y + height,
-			r
-		);
-
-
-		context.arcTo(
-			x + width,
-			y + height,
-			x,
-			y + height,
-			r
-		);
-
-
-		context.arcTo(
-			x,
-			y + height,
+		context.rect(
 			x,
 			y,
-			r
-		);
-
-
-		context.arcTo(
-			x,
-			y,
-			x + width,
-			y,
-			r
+			width,
+			height
 		);
 
 
@@ -3586,11 +3861,220 @@ function createHTML(): string {
 
 
 	/*
-	 * Draws the white sticker in the
-	 * bottom right corner.
+	 * Draws the white rectangle in the
+	 * bottom right corner to cover a
+	 * watermark.
 	 *
-	 * Used to cover a watermark.
+	 * Fixed size, square corners, flush
+	 * with the bottom and hanging past
+	 * the right edge.
 	 */
+
+	/*
+	 * Works out how to draw the sticker
+	 * label.
+	 *
+	 * One line when it fits, otherwise two
+	 * evenly balanced lines, so the text
+	 * stays readable inside a small box.
+	 */
+
+	function layoutLabel(
+
+		context,
+
+		text,
+
+		stack,
+
+		maxWidth,
+
+		maxHeight,
+
+		startSize
+
+	) {
+
+		context.font =
+			"bold " +
+			startSize +
+			"px " +
+			stack;
+
+
+		const singleWidth =
+			context.measureText(
+				text
+			).width;
+
+
+		if (
+			singleWidth <=
+				maxWidth ||
+			maxWidth <= 0
+		) {
+
+			return {
+
+				lines:
+					[text],
+
+				size:
+					startSize,
+
+				lineHeight:
+					startSize *
+					1.2
+
+			};
+
+		}
+
+
+		const words =
+			text.split(
+				" "
+			);
+
+
+		let best =
+			null;
+
+
+		for (
+			let i = 1;
+			i < words.length;
+			i++
+		) {
+
+			const first =
+				words
+					.slice(0, i)
+					.join(" ");
+
+
+			const second =
+				words
+					.slice(i)
+					.join(" ");
+
+
+			const difference =
+				Math.abs(
+					first.length -
+						second.length
+				);
+
+
+			if (
+				!best ||
+				difference <
+					best.difference
+			) {
+
+				best = {
+
+					lines:
+						[
+							first,
+							second
+						],
+
+					difference:
+						difference
+
+				};
+
+			}
+
+		}
+
+
+		/*
+		 * A single word cannot be split, so
+		 * it is simply scaled down.
+		 */
+
+		if (!best) {
+
+			const size =
+				startSize *
+				(maxWidth /
+					singleWidth);
+
+
+			return {
+
+				lines:
+					[text],
+
+				size:
+					size,
+
+				lineHeight:
+					size *
+					1.2
+
+			};
+
+		}
+
+
+		context.font =
+			"bold " +
+			startSize +
+			"px " +
+			stack;
+
+
+		const widest =
+			Math.max(
+				context.measureText(
+					best.lines[0]
+				).width,
+				context.measureText(
+					best.lines[1]
+				).width
+			);
+
+
+		/*
+		 * Fit the width first, then make
+		 * sure both lines still fit the
+		 * height of the box.
+		 */
+
+		let size =
+			startSize *
+			(maxWidth /
+				widest);
+
+
+		size =
+			Math.min(
+				size,
+				maxHeight /
+					2 /
+					1.2
+			);
+
+
+		return {
+
+			lines:
+				best.lines,
+
+			size:
+				size,
+
+			lineHeight:
+				size *
+				1.2
+
+		};
+
+	}
+
 
 	function drawSticker(
 		context,
@@ -3610,49 +4094,8 @@ function createHTML(): string {
 		context.save();
 
 
-		/*
-		 * Measure the text and the emoji so
-		 * the sticker is only as wide as it
-		 * needs to be.
-		 */
-
-		context.font =
-			"bold " +
-			STICKER_TEXT_SIZE +
-			"px " +
-			getTitleFont().stack;
-
-
-		const textWidth =
-			context.measureText(
-				sticker.text
-			).width;
-
-
-		context.font =
-			STICKER_EMOJI_SIZE +
-			"px " +
-			STICKER_EMOJI_FONT;
-
-
-		const emojiWidth =
-			context.measureText(
-				sticker.emoji
-			).width;
-
-
-		const contentWidth =
-			emojiWidth +
-			STICKER_GAP +
-			textWidth;
-
-
 		const boxWidth =
-			STICKER_WIDTH > 0
-				? STICKER_WIDTH
-				: STICKER_PADDING *
-						2 +
-					contentWidth;
+			STICKER_WIDTH;
 
 
 		const boxHeight =
@@ -3660,17 +4103,16 @@ function createHTML(): string {
 
 
 		/*
-		 * Right edge sits STICKER_RIGHT_GAP
-		 * pixels in from the right of the
-		 * frame, bottom edge sits
-		 * STICKER_BOTTOM_GAP above the
-		 * bottom of the frame.
+		 * Flush to the bottom, and pushed
+		 * STICKER_EXCEED_RIGHT pixels past
+		 * the right edge so the corner is
+		 * fully covered.
 		 */
 
 		const x =
 			width -
-			STICKER_RIGHT_GAP -
-			boxWidth;
+			boxWidth +
+			STICKER_EXCEED_RIGHT;
 
 
 		const y =
@@ -3680,7 +4122,7 @@ function createHTML(): string {
 
 
 		// =================================================
-		// WHITE BACKGROUND
+		// WHITE RECTANGLE
 		// =================================================
 
 		context.fillStyle =
@@ -3698,6 +4140,123 @@ function createHTML(): string {
 
 
 		context.fill();
+
+
+		// =================================================
+		// FIT THE CONTENT INSIDE
+		// =================================================
+
+		/*
+		 * Only the part of the rectangle
+		 * that is on screen can hold the
+		 * emoji and the text.
+		 */
+
+		const visibleWidth =
+			boxWidth -
+			STICKER_EXCEED_RIGHT;
+
+
+		let padding =
+			STICKER_PADDING;
+
+
+		let gap =
+			STICKER_GAP;
+
+
+		let emojiSize =
+			STICKER_EMOJI_SIZE;
+
+
+		let textSize =
+			STICKER_TEXT_SIZE;
+
+
+		context.font =
+			"bold " +
+			textSize +
+			"px " +
+			getTitleFont().stack;
+
+
+		let textWidth =
+			context.measureText(
+				sticker.text
+			).width;
+
+
+		let emojiWidth =
+			measureEmoji(
+				context,
+				emojiSize,
+				sticker
+			);
+
+
+		const maxContent =
+			visibleWidth -
+			padding *
+				2;
+
+
+		/*
+		 * The emoji never take more than 45%
+		 * of the room, otherwise a long
+		 * label gets squeezed to nothing.
+		 */
+
+		const emojiBudget =
+			maxContent *
+			0.45;
+
+
+		if (
+			emojiWidth >
+				emojiBudget &&
+			emojiBudget > 0
+		) {
+
+			emojiSize *=
+				emojiBudget /
+				emojiWidth;
+
+
+			emojiWidth =
+				measureEmoji(
+					context,
+					emojiSize,
+					sticker
+				);
+
+		}
+
+
+		/*
+		 * Everything left over is for the
+		 * text.
+		 */
+
+		const textBudget =
+			Math.max(
+				0,
+				maxContent -
+					emojiWidth -
+					gap
+			);
+
+
+		const label =
+			layoutLabel(
+				context,
+				sticker.text,
+				getTitleFont().stack,
+				textBudget,
+				boxHeight -
+					padding *
+						2,
+				textSize
+			);
 
 
 		// =================================================
@@ -3720,25 +4279,59 @@ function createHTML(): string {
 
 		let cursor =
 			x +
-			STICKER_PADDING;
+			padding;
 
 
-		context.font =
-			STICKER_EMOJI_SIZE +
-			"px " +
-			STICKER_EMOJI_FONT;
+		if (stickerEmojiImages) {
+
+			for (
+				const image of stickerEmojiImages
+			) {
+
+				context.drawImage(
+					image,
+					cursor,
+					middleY -
+						emojiSize /
+							2,
+					emojiSize,
+					emojiSize
+				);
 
 
-		context.fillText(
-			sticker.emoji,
-			cursor,
-			middleY + 4
-		);
+				cursor +=
+					emojiSize;
+
+			}
+
+		}
+		else {
+
+			context.font =
+				emojiSize +
+				"px " +
+				STICKER_EMOJI_FONT;
+
+
+			context.fillStyle =
+				"#111111";
+
+
+			context.fillText(
+				sticker.emoji,
+				cursor,
+				middleY
+			);
+
+
+			cursor +=
+				emojiWidth;
+
+		}
 
 
 		cursor +=
-			emojiWidth +
-			STICKER_GAP;
+			gap;
 
 
 		context.fillStyle =
@@ -3747,15 +4340,36 @@ function createHTML(): string {
 
 		context.font =
 			"bold " +
-			STICKER_TEXT_SIZE +
+			label.size +
 			"px " +
 			getTitleFont().stack;
 
 
-		context.fillText(
-			sticker.text,
-			cursor,
-			middleY + 2
+		/*
+		 * Lines are centred as a block
+		 * around the middle of the box.
+		 */
+
+		const startY =
+			middleY -
+			(label.lines.length -
+				1) *
+				label.lineHeight /
+				2;
+
+
+		label.lines.forEach(
+			(line, index) => {
+
+				context.fillText(
+					line,
+					cursor,
+					startY +
+						index *
+							label.lineHeight
+				);
+
+			}
 		);
 
 
@@ -4007,11 +4621,15 @@ function createHTML(): string {
 
 
 		/*
-		 * The title font has to be ready
-		 * before the first frame is drawn.
+		 * The title font and the sticker
+		 * artwork have to be ready before
+		 * the first frame is drawn.
 		 */
 
 		await loadTitleFont();
+
+
+		await loadStickerAssets();
 
 
 		/*
