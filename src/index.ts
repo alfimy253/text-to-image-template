@@ -563,6 +563,50 @@ function createHTML(): string {
 		}
 
 
+		.quality-select {
+
+			display:
+				inline-flex;
+
+			align-items:
+				center;
+
+			gap:
+				8px;
+
+			font-size:
+				0.85rem;
+
+			color:
+				#9ca3af;
+		}
+
+
+		.quality-select select {
+
+			background:
+				#0f1115;
+
+			color:
+				var(--text);
+
+			border:
+				1px solid #374151;
+
+			border-radius:
+				8px;
+
+			padding:
+				10px 12px;
+
+			font-size:
+				0.85rem;
+
+			cursor:
+				pointer;
+		}
+
+
 		.controls {
 
 			display:
@@ -998,7 +1042,7 @@ function createHTML(): string {
 	<div class="header">
 
 		<h1>
-			🎬 Cloudflare AI Video Studio
+			馃幀 Cloudflare AI Video Studio
 		</h1>
 
 		<p>
@@ -1042,7 +1086,7 @@ function createHTML(): string {
 		<div class="audio-panel">
 
 			<div class="audio-title">
-				Audio Track — upload an MP3
+				Audio Track 鈥� upload an MP3
 				before rendering
 			</div>
 
@@ -1051,7 +1095,7 @@ function createHTML(): string {
 
 				<label class="upload-btn audio">
 
-					🎵 Upload MP3 Audio
+					馃幍 Upload MP3 Audio
 
 					<input
 						type="file"
@@ -1066,7 +1110,7 @@ function createHTML(): string {
 					class="audio-empty"
 					id="audio-empty"
 				>
-					No audio added —
+					No audio added 鈥�
 					the MP4 will be silent.
 				</div>
 
@@ -1104,7 +1148,7 @@ function createHTML(): string {
 						class="remove-audio-btn"
 						onclick="removeAudio()"
 					>
-						🗑 Remove Audio
+						馃棏 Remove Audio
 					</button>
 
 				</div>
@@ -1123,6 +1167,11 @@ function createHTML(): string {
 				>
 					(8s per image)
 				</span>
+
+				<span
+					id="estimate-size"
+					style="color:#6b7280;"
+				></span>
 			</div>
 
 		</div>
@@ -1153,7 +1202,7 @@ function createHTML(): string {
 
 			<label class="upload-btn">
 
-				📁 Upload Custom Image
+				馃搧 Upload Custom Image
 
 				<input
 					type="file"
@@ -1165,12 +1214,38 @@ function createHTML(): string {
 			</label>
 
 
+			<label class="quality-select">
+
+				Quality
+
+				<select id="quality-select">
+
+					<option value="low">
+						480p 路 Light (1.2 Mbps)
+					</option>
+
+					<option
+						value="balanced"
+						selected
+					>
+						720p 路 Balanced (2.5 Mbps)
+					</option>
+
+					<option value="high">
+						720p 路 High (5 Mbps)
+					</option>
+
+				</select>
+
+			</label>
+
+
 			<button
 				id="render-btn"
 				onclick="generateMP4()"
 			>
 
-				🎞️ Render & Download MP4 Video
+				馃帪锔� Render & Download MP4 Video
 
 			</button>
 
@@ -1301,6 +1376,79 @@ function createHTML(): string {
 		);
 
 
+	const estimateSizeEl =
+		document.getElementById(
+			"estimate-size"
+		);
+
+
+	const qualitySelectEl =
+		document.getElementById(
+			"quality-select"
+		);
+
+
+	/*
+	 * Video quality presets.
+	 *
+	 * Bitrate drives the file size, and
+	 * file size is exactly what crashes
+	 * the tab during finalization.
+	 *
+	 * 2.5 Mbps is already very clean for
+	 * slow panning stills at 720p.
+	 */
+
+	const QUALITY_PRESETS = {
+
+		low: {
+			width:
+				854,
+			height:
+				480,
+			videoBitrate:
+				1_200_000,
+			audioBitrate:
+				128_000
+		},
+
+		balanced: {
+			width:
+				1280,
+			height:
+				720,
+			videoBitrate:
+				2_500_000,
+			audioBitrate:
+				160_000
+		},
+
+		high: {
+			width:
+				1280,
+			height:
+				720,
+			videoBitrate:
+				5_000_000,
+			audioBitrate:
+				192_000
+		}
+
+	};
+
+
+	function getQuality() {
+
+		return (
+			QUALITY_PRESETS[
+				qualitySelectEl.value
+			] ||
+			QUALITY_PRESETS.balanced
+		);
+
+	}
+
+
 	/*
 	 * Minimum length of a single slide.
 	 *
@@ -1340,6 +1488,30 @@ function createHTML(): string {
 			":" +
 			String(seconds)
 				.padStart(2, "0")
+		);
+
+	}
+
+
+	function formatBytes(bytes) {
+
+		if (bytes < 1024) {
+			return bytes + " B";
+		}
+
+
+		if (bytes < 1024 * 1024) {
+			return (
+				Math.round(bytes / 1024) +
+				" KB"
+			);
+		}
+
+
+		return (
+			(bytes / 1024 / 1024).toFixed(
+				1
+			) + " MB"
 		);
 
 	}
@@ -1391,7 +1563,7 @@ function createHTML(): string {
 		}
 
 
-		return 14;
+		return 8;
 
 	}
 
@@ -1422,7 +1594,7 @@ function createHTML(): string {
 		) {
 
 			estimateSourceEl.textContent =
-				"(fit to audio — " +
+				"(fit to audio 鈥� " +
 				secondsPerSlide.toFixed(1) +
 				"s per image)";
 
@@ -1433,6 +1605,37 @@ function createHTML(): string {
 				"(8s per image)";
 
 		}
+
+
+		/*
+		 * Rough output size so the user can
+		 * see the memory cost before hitting
+		 * the render button.
+		 */
+
+		const quality =
+			getQuality();
+
+
+		const audioBitrate =
+			currentAudio
+				? quality.audioBitrate
+				: 0;
+
+
+		const bytes =
+			(totalSeconds *
+				(
+					quality.videoBitrate +
+					audioBitrate
+				)) /
+			8;
+
+
+		estimateSizeEl.textContent =
+			"路 approx. " +
+			formatBytes(bytes) +
+			" file";
 
 	}
 
@@ -1586,6 +1789,17 @@ function createHTML(): string {
 	// =========================================================
 	// REMOVE AUDIO
 	// =========================================================
+
+	/*
+	 * Changing quality changes the
+	 * estimated file size.
+	 */
+
+	qualitySelectEl.addEventListener(
+		"change",
+		updateDurationEstimate
+	);
+
 
 	function removeAudio() {
 
@@ -2235,27 +2449,146 @@ function createHTML(): string {
 
 
 	// =========================================================
-	// BUILD LOOPED / TRIMMED PCM
+	// FILL ONE BLOCK OF PCM
 	// =========================================================
 
 	/*
-	 * Fills exactly targetSeconds of audio.
+	 * Fills a single small block of
+	 * interleaved 16-bit PCM, which is the
+	 * format WebCodecs AudioData accepts
+	 * as "s16".
 	 *
-	 * Audio shorter than the video is looped.
-	 * Audio longer than the video is trimmed.
+	 * Audio shorter than the video loops.
+	 * Audio longer than the video is cut.
 	 *
-	 * Output is interleaved 16-bit PCM,
-	 * which is the format WebCodecs
-	 * AudioData accepts as "s16".
+	 * Blocks are filled one at a time so a
+	 * long soundtrack never has to exist
+	 * in memory all at once.
 	 */
 
-	function buildTrackPCM(
-		audioBuffer,
-		targetSeconds,
+	function fillPCMBlock(
+
+		channels,
+
+		sourceFrames,
+
+		block,
+
+		startFrame,
+
+		frames,
+
 		numberOfChannels
+
 	) {
 
-		const sourceChannels = [];
+		for (
+			let i = 0;
+			i < frames;
+			i++
+		) {
+
+			/*
+			 * Loop back to the start of the
+			 * track when it runs out.
+			 */
+
+			const sourceIndex =
+				(startFrame + i) %
+				sourceFrames;
+
+
+			for (
+				let c = 0;
+				c < numberOfChannels;
+				c++
+			) {
+
+				const channel =
+					Math.min(
+						c,
+						channels.length - 1
+					);
+
+
+				let value =
+					channels[channel][
+						sourceIndex
+					];
+
+
+				/*
+				 * Clamp before converting
+				 * to integer samples.
+				 */
+
+				if (value > 1) {
+					value = 1;
+				}
+				else if (value < -1) {
+					value = -1;
+				}
+
+
+				block[
+					i * numberOfChannels + c
+				] =
+					value < 0
+						? value * 0x8000
+						: value * 0x7fff;
+
+			}
+
+		}
+
+	}
+
+
+	// =========================================================
+	// ENCODE MP3 -> AAC
+	// =========================================================
+
+	/*
+	 * Decodes are already done. This converts
+	 * the AudioBuffer into AAC chunks that
+	 * mp4-muxer can write into the MP4.
+	 *
+	 * Returns the chunk list plus the track
+	 * settings needed by the muxer.
+	 */
+
+	async function encodeAudioTrack(
+		audioBuffer,
+		targetSeconds,
+		bitrate,
+		onProgress
+	) {
+
+		const sampleRate =
+			audioBuffer.sampleRate;
+
+
+		/*
+		 * AAC supports up to 2 channels.
+		 */
+
+		const numberOfChannels =
+			Math.min(
+				2,
+				audioBuffer.numberOfChannels
+			);
+
+
+		/*
+		 * AAC works on 1024 sample blocks.
+		 */
+
+		const FRAMES_PER_CHUNK =
+			1024;
+
+
+		const sourceChannels =
+			[];
 
 
 		for (
@@ -2282,135 +2615,24 @@ function createHTML(): string {
 				1,
 				Math.round(
 					targetSeconds *
-						audioBuffer.sampleRate
+						sampleRate
 				)
 			);
 
 
-		const pcm =
+		/*
+		 * One reused block.
+		 *
+		 * Only 1024 frames are alive at any
+		 * moment instead of an entire
+		 * multi-minute track.
+		 */
+
+		const block =
 			new Int16Array(
-				totalFrames *
+				FRAMES_PER_CHUNK *
 					numberOfChannels
 			);
-
-
-		for (
-			let i = 0;
-			i < totalFrames;
-			i++
-		) {
-
-			/*
-			 * Loop back to the start of the
-			 * track when it runs out.
-			 */
-
-			const sourceIndex =
-				i % sourceFrames;
-
-
-			for (
-				let c = 0;
-				c < numberOfChannels;
-				c++
-			) {
-
-				const channel =
-					Math.min(
-						c,
-						sourceChannels.length - 1
-					);
-
-
-				let value =
-					sourceChannels[channel][
-						sourceIndex
-					];
-
-
-				/*
-				 * Clamp before converting
-				 * to integer samples.
-				 */
-
-				if (value > 1) {
-					value = 1;
-				}
-				else if (value < -1) {
-					value = -1;
-				}
-
-
-				pcm[
-					i * numberOfChannels + c
-				] =
-					value < 0
-						? value * 0x8000
-						: value * 0x7fff;
-
-			}
-
-		}
-
-
-		return pcm;
-
-	}
-
-
-	// =========================================================
-	// ENCODE MP3 -> AAC
-	// =========================================================
-
-	/*
-	 * Decodes are already done. This converts
-	 * the AudioBuffer into AAC chunks that
-	 * mp4-muxer can write into the MP4.
-	 *
-	 * Returns the chunk list plus the track
-	 * settings needed by the muxer.
-	 */
-
-	async function encodeAudioTrack(
-		audioBuffer,
-		targetSeconds,
-		onProgress
-	) {
-
-		const sampleRate =
-			audioBuffer.sampleRate;
-
-
-		/*
-		 * AAC supports up to 2 channels.
-		 */
-
-		const numberOfChannels =
-			Math.min(
-				2,
-				audioBuffer.numberOfChannels
-			);
-
-
-		const pcm =
-			buildTrackPCM(
-				audioBuffer,
-				targetSeconds,
-				numberOfChannels
-			);
-
-
-		const totalFrames =
-			pcm.length /
-			numberOfChannels;
-
-
-		/*
-		 * AAC works on 1024 sample blocks.
-		 */
-
-		const FRAMES_PER_CHUNK =
-			1024;
 
 
 		const chunks = [];
@@ -2485,7 +2707,7 @@ function createHTML(): string {
 				numberOfChannels,
 
 			bitrate:
-				192_000
+				bitrate
 
 		});
 
@@ -2513,15 +2735,31 @@ function createHTML(): string {
 
 
 				/*
-				 * slice() copies the block so
-				 * WebCodecs owns its own memory.
+				 * Fill the reused block with
+				 * the audio that belongs at
+				 * this position of the track.
 				 */
 
-				const block =
-					pcm.slice(
-						offset *
-							numberOfChannels,
-						(offset + frames) *
+				fillPCMBlock(
+					sourceChannels,
+					sourceFrames,
+					block,
+					offset,
+					frames,
+					numberOfChannels
+				);
+
+
+				/*
+				 * slice() hands WebCodecs its
+				 * own copy, sized to the exact
+				 * number of frames.
+				 */
+
+				const chunkData =
+					block.slice(
+						0,
+						frames *
 							numberOfChannels
 					);
 
@@ -2545,7 +2783,7 @@ function createHTML(): string {
 							timestamp,
 
 						data:
-							block
+							chunkData
 
 					});
 
@@ -2728,6 +2966,116 @@ function createHTML(): string {
 		}
 
 
+		// =====================================================
+		// CHOOSE WHERE THE MP4 IS WRITTEN
+		// =====================================================
+
+		/*
+		 * This is the fix for the crash.
+		 *
+		 * Building the whole MP4 in memory
+		 * and then copying it again into a
+		 * Blob is what killed the tab on
+		 * long videos.
+		 *
+		 * Chrome and Edge can stream the
+		 * file straight to disk instead, so
+		 * memory stays flat no matter how
+		 * long the video is.
+		 *
+		 * The save dialog is opened first,
+		 * while the click still counts as a
+		 * user gesture.
+		 */
+
+		const fileName =
+			\`Ghibli_Story_\${Date.now()}.mp4\`;
+
+
+		let fileStream =
+			null;
+
+
+		if (
+			typeof window.showSaveFilePicker ===
+			"function"
+		) {
+
+			try {
+
+				const handle =
+					await window.showSaveFilePicker(
+						{
+
+							suggestedName:
+								fileName,
+
+							types: [
+								{
+									description:
+										"MP4 video",
+
+									accept: {
+										"video/mp4": [
+											".mp4"
+										]
+									}
+								}
+							]
+
+						}
+					);
+
+
+				fileStream =
+					await handle.createWritable();
+
+			}
+			catch (error) {
+
+				/*
+				 * The user closed the dialog.
+				 */
+
+				if (
+					error &&
+					error.name ===
+						"AbortError"
+				) {
+
+					return;
+
+				}
+
+
+				/*
+				 * Anything else falls back to
+				 * building the file in memory.
+				 */
+
+				console.warn(
+					"Save-to-disk unavailable:",
+					error
+				);
+
+
+				fileStream =
+					null;
+
+			}
+
+		}
+
+
+		/*
+		 * True when the file is streamed to
+		 * disk instead of held in RAM.
+		 */
+
+		const streamingToFile =
+			fileStream !== null;
+
+
 		const renderBtn =
 			document.getElementById(
 				"render-btn"
@@ -2797,16 +3145,34 @@ function createHTML(): string {
 		// VIDEO SETTINGS
 		// =====================================================
 
+		const quality =
+			getQuality();
+
+
 		const WIDTH =
-			1280;
+			quality.width;
 
 
 		const HEIGHT =
-			720;
+			quality.height;
 
 
 		const FPS =
 			30;
+
+
+		/*
+		 * The canvas must match the encoder
+		 * size or VideoFrame and
+		 * VideoEncoder will disagree.
+		 */
+
+		canvas.width =
+			WIDTH;
+
+
+		canvas.height =
+			HEIGHT;
 
 
 		/*
@@ -2859,6 +3225,72 @@ function createHTML(): string {
 
 
 		// =====================================================
+		// MEMORY SAFETY NET
+		// =====================================================
+
+		/*
+		 * Only needed when the browser has
+		 * to build the file in memory.
+		 *
+		 * Streaming to disk has no such
+		 * limit, so this is skipped there.
+		 */
+
+		if (!streamingToFile) {
+
+			const audioBitrate =
+				currentAudio
+					? quality.audioBitrate
+					: 0;
+
+
+			const estimatedBytes =
+				(VIDEO_SECONDS *
+					(
+						quality.videoBitrate +
+						audioBitrate
+					)) /
+				8;
+
+
+			if (
+				estimatedBytes >
+				250 *
+					1024 *
+					1024
+			) {
+
+				const proceed =
+					confirm(
+						"This video will be about " +
+							formatBytes(
+								estimatedBytes
+							) +
+							" and has to be built in memory, because this browser cannot save straight to disk.\\n\\nThat may crash the tab. Continue anyway?"
+					);
+
+
+				if (!proceed) {
+
+					renderBtn.disabled =
+						false;
+
+					progressContainer.style.display =
+						"none";
+
+					statusText.style.display =
+						"none";
+
+					return;
+
+				}
+
+			}
+
+		}
+
+
+		// =====================================================
 		// ENCODE THE AUDIO TRACK FIRST
 		// =====================================================
 
@@ -2902,6 +3334,7 @@ function createHTML(): string {
 						await encodeAudioTrack(
 							currentAudio.buffer,
 							VIDEO_SECONDS,
+							quality.audioBitrate,
 							(fraction) => {
 
 								/*
@@ -2969,10 +3402,32 @@ function createHTML(): string {
 		// MP4 MUXER
 		// =====================================================
 
+		/*
+		 * fastStart is false on purpose.
+		 *
+		 * "in-memory" makes the muxer hold
+		 * every media chunk until finalize,
+		 * which is what pushed the tab over
+		 * the memory limit. Writing the
+		 * metadata at the end uses the least
+		 * memory and the file still plays
+		 * normally once downloaded.
+		 */
+
 		const muxerConfig = {
 
 			target:
-				new Mp4Muxer.ArrayBufferTarget(),
+				streamingToFile
+					? new Mp4Muxer.FileSystemWritableFileStreamTarget(
+							fileStream,
+							{
+								chunkSize:
+									8 *
+										1024 *
+										1024
+							}
+						)
+					: new Mp4Muxer.ArrayBufferTarget(),
 
 			video: {
 
@@ -2988,7 +3443,7 @@ function createHTML(): string {
 			},
 
 			fastStart:
-				"in-memory"
+				false
 
 		};
 
@@ -3109,7 +3564,7 @@ function createHTML(): string {
 				HEIGHT,
 
 			bitrate:
-				5_000_000,
+				quality.videoBitrate,
 
 			framerate:
 				FPS
@@ -3588,7 +4043,7 @@ function createHTML(): string {
 
 
 						statusText.textContent =
-							\`Rendering image \${i + 1}/\${activeSlides.length} — \${percent}%\`;
+							\`Rendering image \${i + 1}/\${activeSlides.length} 鈥� \${percent}%\`;
 
 
 						/*
@@ -3657,65 +4112,84 @@ function createHTML(): string {
 			muxer.finalize();
 
 
-			const buffer =
-				muxer.target.buffer;
-
-
-			const blob =
-				new Blob(
-					[buffer],
-					{
-						type:
-							"video/mp4"
-					}
-				);
-
-
 			// =================================================
-			// DOWNLOAD
+			// SAVE OR DOWNLOAD
 			// =================================================
 
-			const downloadURL =
-				URL.createObjectURL(
-					blob
-				);
+			if (streamingToFile) {
+
+				/*
+				 * Closing the stream is what
+				 * flushes the finished file to
+				 * disk.
+				 */
+
+				await fileStream.close();
 
 
-			const a =
-				document.createElement(
-					"a"
-				);
+				fileStream =
+					null;
+
+			}
+			else {
+
+				const buffer =
+					muxer.target.buffer;
 
 
-			a.href =
-				downloadURL;
-
-
-			a.download =
-				\`Ghibli_Story_\${Date.now()}.mp4\`;
-
-
-			document.body.appendChild(
-				a
-			);
-
-
-			a.click();
-
-
-			a.remove();
-
-
-			setTimeout(
-				() => {
-
-					URL.revokeObjectURL(
-						downloadURL
+				const blob =
+					new Blob(
+						[buffer],
+						{
+							type:
+								"video/mp4"
+						}
 					);
 
-				},
-				2000
-			);
+
+				const downloadURL =
+					URL.createObjectURL(
+						blob
+					);
+
+
+				const a =
+					document.createElement(
+						"a"
+					);
+
+
+				a.href =
+					downloadURL;
+
+
+				a.download =
+					fileName;
+
+
+				document.body.appendChild(
+					a
+				);
+
+
+				a.click();
+
+
+				a.remove();
+
+
+				setTimeout(
+					() => {
+
+						URL.revokeObjectURL(
+							downloadURL
+						);
+
+					},
+					2000
+				);
+
+			}
 
 
 			progressBar.style.width =
@@ -3723,9 +4197,13 @@ function createHTML(): string {
 
 
 			statusText.textContent =
-				audioTrack
-					? "✅ MP4 Downloaded with audio!"
-					: "✅ MP4 Downloaded!";
+				streamingToFile
+					? audioTrack
+						? "鉁� MP4 saved to disk with audio!"
+						: "鉁� MP4 saved to disk!"
+					: audioTrack
+						? "鉁� MP4 Downloaded with audio!"
+						: "鉁� MP4 Downloaded!";
 
 		}
 		catch (error) {
@@ -3737,7 +4215,7 @@ function createHTML(): string {
 
 
 			statusText.textContent =
-				"❌ Video rendering failed.";
+				"鉂� Video rendering failed.";
 
 
 			alert(
@@ -3773,6 +4251,31 @@ function createHTML(): string {
 			}
 
 
+			/*
+			 * A failed render must release the
+			 * file handle, otherwise the
+			 * partial file stays locked.
+			 */
+
+			if (fileStream) {
+
+				try {
+
+					await fileStream.abort();
+
+				}
+				catch (error) {
+
+					console.warn(
+						"File stream cleanup error:",
+						error
+					);
+
+				}
+
+			}
+
+
 			renderBtn.disabled =
 				false;
 
@@ -3787,4 +4290,3 @@ function createHTML(): string {
 </html>
 `;
 }
-
