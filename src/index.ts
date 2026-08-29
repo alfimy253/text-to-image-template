@@ -1717,7 +1717,7 @@ function createHTML(): string {
 	 */
 
 	const STICKER_HEIGHT =
-		160;
+		80;
 
 
 	const STICKER_WIDTH =
@@ -1725,7 +1725,7 @@ function createHTML(): string {
 
 
 	const STICKER_RIGHT_GAP =
-		250;
+		0;
 
 
 	const STICKER_BOTTOM_GAP =
@@ -1733,23 +1733,23 @@ function createHTML(): string {
 
 
 	const STICKER_PADDING =
-		22;
+		10;
 
 
 	const STICKER_RADIUS =
-		26;
+		0;
 
 
 	const STICKER_GAP =
-		16;
+		1;
 
 
 	const STICKER_EMOJI_SIZE =
-		68;
+		28;
 
 
 	const STICKER_TEXT_SIZE =
-		54;
+		30;
 
 
 	/*
