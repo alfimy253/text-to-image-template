@@ -353,6 +353,216 @@ function createHTML(): string {
 		}
 
 
+		/* =================================================
+		   AUDIO PANEL
+		   ================================================= */
+
+		.audio-panel {
+
+			width:
+				100%;
+
+			margin-top:
+				18px;
+
+			background:
+				#14171c;
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				10px;
+
+			padding:
+				16px;
+
+			display:
+				flex;
+
+			flex-direction:
+				column;
+
+			gap:
+				12px;
+		}
+
+
+		.audio-title {
+
+			font-size:
+				0.78rem;
+
+			letter-spacing:
+				0.08em;
+
+			text-transform:
+				uppercase;
+
+			color:
+				#9ca3af;
+		}
+
+
+		.audio-row {
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			gap:
+				12px;
+
+			flex-wrap:
+				wrap;
+		}
+
+
+		.audio-empty {
+
+			font-size:
+				0.85rem;
+
+			color:
+				#6b7280;
+		}
+
+
+		.audio-details {
+
+			display:
+				flex;
+
+			flex-direction:
+				column;
+
+			gap:
+				10px;
+		}
+
+
+		.audio-name {
+
+			font-size:
+				0.9rem;
+
+			color:
+				var(--text);
+
+			word-break:
+				break-all;
+		}
+
+
+		.audio-name span {
+
+			color:
+				#10b981;
+
+			font-weight:
+				bold;
+		}
+
+
+		.audio-panel audio {
+
+			width:
+				100%;
+
+			height:
+				38px;
+		}
+
+
+		.audio-actions {
+
+			display:
+				flex;
+
+			justify-content:
+				space-between;
+
+			align-items:
+				center;
+
+			gap:
+				12px;
+
+			flex-wrap:
+				wrap;
+		}
+
+
+		.audio-note {
+
+			font-size:
+				0.78rem;
+
+			color:
+				#6b7280;
+		}
+
+
+		.remove-audio-btn {
+
+			background:
+				#ef4444;
+
+			color:
+				#fff;
+
+			border:
+				none;
+
+			padding:
+				8px 14px;
+
+			font-size:
+				0.8rem;
+
+			font-weight:
+				bold;
+
+			border-radius:
+				8px;
+
+			cursor:
+				pointer;
+		}
+
+
+		.remove-audio-btn:hover {
+
+			opacity:
+				0.9;
+		}
+
+
+		.estimate {
+
+			font-size:
+				0.82rem;
+
+			color:
+				#9ca3af;
+
+			border-top:
+				1px dashed #2e3440;
+
+			padding-top:
+				10px;
+		}
+
+
+		.estimate b {
+
+			color:
+				var(--accent);
+		}
+
+
 		.controls {
 
 			display:
@@ -451,6 +661,13 @@ function createHTML(): string {
 
 			color:
 				white;
+		}
+
+
+		.upload-btn.audio {
+
+			background:
+				#7c3aed;
 		}
 
 
@@ -785,8 +1002,8 @@ function createHTML(): string {
 		</h1>
 
 		<p>
-			Generates AI scenes and creates
-			slow cinematic MP4 videos.
+			Generates AI scenes, adds your MP3
+			soundtrack, and exports a cinematic MP4.
 		</p>
 
 	</div>
@@ -814,6 +1031,99 @@ function createHTML(): string {
 				width="1280"
 				height="720"
 			></canvas>
+
+		</div>
+
+
+		<!-- ======================================================
+		     AUDIO TRACK (MP3)
+		     ====================================================== -->
+
+		<div class="audio-panel">
+
+			<div class="audio-title">
+				Audio Track — upload an MP3
+				before rendering
+			</div>
+
+
+			<div class="audio-row">
+
+				<label class="upload-btn audio">
+
+					🎵 Upload MP3 Audio
+
+					<input
+						type="file"
+						id="audio-upload"
+						accept=".mp3,audio/mpeg,audio/mp3,audio/*"
+					>
+
+				</label>
+
+
+				<div
+					class="audio-empty"
+					id="audio-empty"
+				>
+					No audio added —
+					the MP4 will be silent.
+				</div>
+
+			</div>
+
+
+			<div
+				class="audio-details"
+				id="audio-details"
+				style="display:none;"
+			>
+
+				<div
+					class="audio-name"
+					id="audio-name"
+				></div>
+
+
+				<audio
+					id="audio-preview"
+					controls
+				></audio>
+
+
+				<div class="audio-actions">
+
+					<span class="audio-note">
+						Slideshow timing will stretch
+						to match this track.
+					</span>
+
+
+					<button
+						type="button"
+						class="remove-audio-btn"
+						onclick="removeAudio()"
+					>
+						🗑 Remove Audio
+					</button>
+
+				</div>
+
+			</div>
+
+
+			<div class="estimate">
+				Estimated video length:
+				<b id="estimate-value">
+					0s
+				</b>
+				<span
+					id="estimate-source"
+					style="color:#6b7280;"
+				>
+					(8s per image)
+				</span>
+			</div>
 
 		</div>
 
@@ -919,6 +1229,402 @@ function createHTML(): string {
 	 */
 
 	const activeSlides = [];
+
+
+	// =========================================================
+	// AUDIO TRACK STATE
+	// =========================================================
+
+	/*
+	 * Holds the decoded MP3 that will be
+	 * muxed into the final MP4.
+	 *
+	 * currentAudio = {
+	 *   name     : string,
+	 *   duration : number (seconds),
+	 *   buffer   : AudioBuffer,
+	 *   url      : blob URL for the preview player
+	 * }
+	 */
+
+	let currentAudio = null;
+
+
+	/*
+	 * Created lazily because some browsers
+	 * warn when an AudioContext is created
+	 * before a user gesture.
+	 */
+
+	let audioContext = null;
+
+
+	const audioUploadEl =
+		document.getElementById(
+			"audio-upload"
+		);
+
+
+	const audioDetailsEl =
+		document.getElementById(
+			"audio-details"
+		);
+
+
+	const audioEmptyEl =
+		document.getElementById(
+			"audio-empty"
+		);
+
+
+	const audioNameEl =
+		document.getElementById(
+			"audio-name"
+		);
+
+
+	const audioPreviewEl =
+		document.getElementById(
+			"audio-preview"
+		);
+
+
+	const estimateValueEl =
+		document.getElementById(
+			"estimate-value"
+		);
+
+
+	const estimateSourceEl =
+		document.getElementById(
+			"estimate-source"
+		);
+
+
+	/*
+	 * Minimum length of a single slide.
+	 *
+	 * Prevents a very short song being
+	 * spread over a huge number of images.
+	 */
+
+	const MIN_SECONDS_PER_SLIDE =
+		1.5;
+
+
+	// =========================================================
+	// AUDIO HELPERS
+	// =========================================================
+
+	function formatSeconds(value) {
+
+		const total =
+			Math.max(
+				0,
+				Math.round(value)
+			);
+
+
+		const minutes =
+			Math.floor(
+				total / 60
+			);
+
+
+		const seconds =
+			total % 60;
+
+
+		return (
+			minutes +
+			":" +
+			String(seconds)
+				.padStart(2, "0")
+		);
+
+	}
+
+
+	function getAudioContext() {
+
+		if (!audioContext) {
+
+			const Context =
+				window.AudioContext ||
+				window.webkitAudioContext;
+
+
+			audioContext =
+				new Context();
+
+		}
+
+
+		return audioContext;
+
+	}
+
+
+	/*
+	 * How long each image stays on screen.
+	 *
+	 * With audio   : audio length / image count,
+	 *                so the video ends exactly
+	 *                with the track.
+	 *
+	 * Without audio: the original 8 seconds.
+	 */
+
+	function getSecondsPerSlide() {
+
+		if (
+			currentAudio &&
+			activeSlides.length > 0
+		) {
+
+			return Math.max(
+				MIN_SECONDS_PER_SLIDE,
+				currentAudio.duration /
+					activeSlides.length
+			);
+
+		}
+
+
+		return 8;
+
+	}
+
+
+	function updateDurationEstimate() {
+
+		const secondsPerSlide =
+			getSecondsPerSlide();
+
+
+		const totalSeconds =
+			secondsPerSlide *
+			activeSlides.length;
+
+
+		estimateValueEl.textContent =
+			formatSeconds(
+				totalSeconds
+			) +
+			" (" +
+			totalSeconds.toFixed(1) +
+			"s)";
+
+
+		if (
+			currentAudio &&
+			activeSlides.length > 0
+		) {
+
+			estimateSourceEl.textContent =
+				"(fit to audio — " +
+				secondsPerSlide.toFixed(1) +
+				"s per image)";
+
+		}
+		else {
+
+			estimateSourceEl.textContent =
+				"(8s per image)";
+
+		}
+
+	}
+
+
+	// =========================================================
+	// MP3 UPLOAD + DECODE
+	// =========================================================
+
+	audioUploadEl.addEventListener(
+		"change",
+		async (event) => {
+
+			const file =
+				event.target.files &&
+				event.target.files[0];
+
+
+			/*
+			 * Allows the same file to be
+			 * selected again later.
+			 */
+
+			event.target.value =
+				"";
+
+
+			if (!file) {
+				return;
+			}
+
+
+			try {
+
+				const arrayBuffer =
+					await file.arrayBuffer();
+
+
+				const context =
+					getAudioContext();
+
+
+				/*
+				 * slice(0) is required because
+				 * decodeAudioData detaches the
+				 * ArrayBuffer it is given.
+				 */
+
+				const decoded =
+					await context.decodeAudioData(
+						arrayBuffer.slice(0)
+					);
+
+
+				/*
+				 * Release the previous preview
+				 * URL before replacing it.
+				 */
+
+				if (
+					currentAudio &&
+					currentAudio.url
+				) {
+
+					URL.revokeObjectURL(
+						currentAudio.url
+					);
+
+				}
+
+
+				currentAudio = {
+
+					name:
+						file.name,
+
+					duration:
+						decoded.duration,
+
+					buffer:
+						decoded,
+
+					url:
+						URL.createObjectURL(
+							file
+						)
+
+				};
+
+
+				audioNameEl.textContent =
+					"";
+
+
+				audioNameEl.appendChild(
+					document.createTextNode(
+						file.name + "  "
+					)
+				);
+
+
+				const durationSpan =
+					document.createElement(
+						"span"
+					);
+
+
+				durationSpan.textContent =
+					formatSeconds(
+						decoded.duration
+					);
+
+
+				audioNameEl.appendChild(
+					durationSpan
+				);
+
+
+				audioPreviewEl.src =
+					currentAudio.url;
+
+
+				audioDetailsEl.style.display =
+					"flex";
+
+
+				audioEmptyEl.style.display =
+					"none";
+
+
+				updateDurationEstimate();
+
+			}
+			catch (error) {
+
+				console.error(
+					"Audio decode failed:",
+					error
+				);
+
+
+				alert(
+					"Could not read that audio file. Please upload a valid MP3."
+				);
+
+			}
+
+		}
+	);
+
+
+	// =========================================================
+	// REMOVE AUDIO
+	// =========================================================
+
+	function removeAudio() {
+
+		if (
+			currentAudio &&
+			currentAudio.url
+		) {
+
+			URL.revokeObjectURL(
+				currentAudio.url
+			);
+
+		}
+
+
+		currentAudio =
+			null;
+
+
+		audioPreviewEl.pause();
+
+		audioPreviewEl.removeAttribute(
+			"src"
+		);
+
+		audioPreviewEl.load();
+
+
+		audioDetailsEl.style.display =
+			"none";
+
+
+		audioEmptyEl.style.display =
+			"block";
+
+
+		updateDurationEstimate();
+
+	}
 
 
 	// =========================================================
@@ -1516,6 +2222,476 @@ function createHTML(): string {
 		queueCountEl.textContent =
 			activeSlides.length;
 
+
+		/*
+		 * Slide timing depends on the
+		 * number of images when audio
+		 * is present.
+		 */
+
+		updateDurationEstimate();
+
+	}
+
+
+	// =========================================================
+	// BUILD LOOPED / TRIMMED PCM
+	// =========================================================
+
+	/*
+	 * Fills exactly targetSeconds of audio.
+	 *
+	 * Audio shorter than the video is looped.
+	 * Audio longer than the video is trimmed.
+	 *
+	 * Output is interleaved 16-bit PCM,
+	 * which is the format WebCodecs
+	 * AudioData accepts as "s16".
+	 */
+
+	function buildTrackPCM(
+		audioBuffer,
+		targetSeconds,
+		numberOfChannels
+	) {
+
+		const sourceChannels = [];
+
+
+		for (
+			let c = 0;
+			c < audioBuffer.numberOfChannels;
+			c++
+		) {
+
+			sourceChannels.push(
+				audioBuffer.getChannelData(
+					c
+				)
+			);
+
+		}
+
+
+		const sourceFrames =
+			audioBuffer.length;
+
+
+		const totalFrames =
+			Math.max(
+				1,
+				Math.round(
+					targetSeconds *
+						audioBuffer.sampleRate
+				)
+			);
+
+
+		const pcm =
+			new Int16Array(
+				totalFrames *
+					numberOfChannels
+			);
+
+
+		for (
+			let i = 0;
+			i < totalFrames;
+			i++
+		) {
+
+			/*
+			 * Loop back to the start of the
+			 * track when it runs out.
+			 */
+
+			const sourceIndex =
+				i % sourceFrames;
+
+
+			for (
+				let c = 0;
+				c < numberOfChannels;
+				c++
+			) {
+
+				const channel =
+					Math.min(
+						c,
+						sourceChannels.length - 1
+					);
+
+
+				let value =
+					sourceChannels[channel][
+						sourceIndex
+					];
+
+
+				/*
+				 * Clamp before converting
+				 * to integer samples.
+				 */
+
+				if (value > 1) {
+					value = 1;
+				}
+				else if (value < -1) {
+					value = -1;
+				}
+
+
+				pcm[
+					i * numberOfChannels + c
+				] =
+					value < 0
+						? value * 0x8000
+						: value * 0x7fff;
+
+			}
+
+		}
+
+
+		return pcm;
+
+	}
+
+
+	// =========================================================
+	// ENCODE MP3 -> AAC
+	// =========================================================
+
+	/*
+	 * Decodes are already done. This converts
+	 * the AudioBuffer into AAC chunks that
+	 * mp4-muxer can write into the MP4.
+	 *
+	 * Returns the chunk list plus the track
+	 * settings needed by the muxer.
+	 */
+
+	async function encodeAudioTrack(
+		audioBuffer,
+		targetSeconds,
+		onProgress
+	) {
+
+		const sampleRate =
+			audioBuffer.sampleRate;
+
+
+		/*
+		 * AAC supports up to 2 channels.
+		 */
+
+		const numberOfChannels =
+			Math.min(
+				2,
+				audioBuffer.numberOfChannels
+			);
+
+
+		const pcm =
+			buildTrackPCM(
+				audioBuffer,
+				targetSeconds,
+				numberOfChannels
+			);
+
+
+		const totalFrames =
+			pcm.length /
+			numberOfChannels;
+
+
+		/*
+		 * AAC works on 1024 sample blocks.
+		 */
+
+		const FRAMES_PER_CHUNK =
+			1024;
+
+
+		const chunks = [];
+
+
+		/*
+		 * Timestamps of the chunks, in the
+		 * order they were encoded, so each
+		 * encoded chunk can be matched with
+		 * the position it belongs to.
+		 */
+
+		const pendingTimestamps =
+			[];
+
+
+		let encoderError =
+			null;
+
+
+		const audioEncoder =
+			new AudioEncoder({
+
+				output:
+					(chunk, meta) => {
+
+						const timestamp =
+							pendingTimestamps
+								.length
+								? pendingTimestamps.shift()
+								: 0;
+
+
+						chunks.push({
+							chunk:
+								chunk,
+							meta:
+								meta,
+							timestamp:
+								timestamp
+						});
+
+					},
+
+
+				error:
+					(error) => {
+
+						console.error(
+							"AudioEncoder error:",
+							error
+						);
+
+
+						encoderError =
+							error;
+
+					}
+
+			});
+
+
+		audioEncoder.configure({
+
+			codec:
+				"mp4a.40.2",
+
+			sampleRate:
+				sampleRate,
+
+			numberOfChannels:
+				numberOfChannels,
+
+			bitrate:
+				192_000
+
+		});
+
+
+		let offset =
+			0;
+
+
+		let timestamp =
+			0;
+
+
+		try {
+
+			while (
+				offset < totalFrames
+			) {
+
+				const frames =
+					Math.min(
+						FRAMES_PER_CHUNK,
+						totalFrames -
+							offset
+					);
+
+
+				/*
+				 * slice() copies the block so
+				 * WebCodecs owns its own memory.
+				 */
+
+				const block =
+					pcm.slice(
+						offset *
+							numberOfChannels,
+						(offset + frames) *
+							numberOfChannels
+					);
+
+
+				const audioData =
+					new AudioData({
+
+						format:
+							"s16",
+
+						sampleRate:
+							sampleRate,
+
+						numberOfFrames:
+							frames,
+
+						numberOfChannels:
+							numberOfChannels,
+
+						timestamp:
+							timestamp,
+
+						data:
+							block
+
+					});
+
+
+				pendingTimestamps.push(
+					timestamp
+				);
+
+
+				audioEncoder.encode(
+					audioData
+				);
+
+
+				audioData.close();
+
+
+				offset +=
+					frames;
+
+
+				timestamp +=
+					Math.round(
+						(frames *
+							1_000_000) /
+							sampleRate
+					);
+
+
+				/*
+				 * Backpressure.
+				 */
+
+				while (
+					audioEncoder.encodeQueueSize >
+					40
+				) {
+
+					await new Promise(
+						resolve =>
+							setTimeout(
+								resolve,
+								8
+							)
+					);
+
+				}
+
+
+				if (encoderError) {
+					throw encoderError;
+				}
+
+
+				if (
+					onProgress &&
+					offset %
+						(FRAMES_PER_CHUNK *
+							25) ===
+						0
+				) {
+
+					onProgress(
+						offset /
+							totalFrames
+					);
+
+				}
+
+
+				/*
+				 * Keep the page responsive.
+				 */
+
+				if (
+					offset %
+						(FRAMES_PER_CHUNK *
+							25) ===
+						0
+				) {
+
+					await new Promise(
+						resolve =>
+							setTimeout(
+								resolve,
+								0
+							)
+					);
+
+				}
+
+			}
+
+
+			if (onProgress) {
+				onProgress(1);
+			}
+
+
+			await audioEncoder.flush();
+
+
+			if (encoderError) {
+				throw encoderError;
+			}
+
+		}
+		finally {
+
+			if (
+				audioEncoder.state !==
+				"closed"
+			) {
+
+				try {
+
+					audioEncoder.close();
+
+				}
+				catch (error) {
+
+					console.warn(
+						"Audio encoder cleanup error:",
+						error
+					);
+
+				}
+
+			}
+
+		}
+
+
+		return {
+
+			chunks:
+				chunks,
+
+			sampleRate:
+				sampleRate,
+
+			numberOfChannels:
+				numberOfChannels
+
+		};
+
 	}
 
 
@@ -1634,19 +2810,24 @@ function createHTML(): string {
 
 
 		/*
-		 * EACH IMAGE LASTS 8 SECONDS.
-		 *
-		 * 30 FPS × 8 seconds
-		 * = 240 frames per image.
+		 * Each image lasts 8 seconds by
+		 * default, or the audio length
+		 * divided by the image count when
+		 * an MP3 has been uploaded.
 		 */
 
 		const SECONDS_PER_SLIDE =
-			8;
+			getSecondsPerSlide();
 
 
 		const FRAMES_PER_SLIDE =
-			FPS *
-			SECONDS_PER_SLIDE;
+			Math.max(
+				1,
+				Math.round(
+					FPS *
+						SECONDS_PER_SLIDE
+				)
+			);
 
 
 		const TOTAL_FRAMES =
@@ -1667,33 +2848,214 @@ function createHTML(): string {
 			10;
 
 
+		/*
+		 * Exact length of the finished
+		 * video, used to size the audio.
+		 */
+
+		const VIDEO_SECONDS =
+			TOTAL_FRAMES /
+			FPS;
+
+
+		// =====================================================
+		// ENCODE THE AUDIO TRACK FIRST
+		// =====================================================
+
+		/*
+		 * The audio is encoded before the
+		 * muxer is created so that the
+		 * muxer only declares an audio
+		 * track when there is real AAC
+		 * data to write.
+		 */
+
+		let audioChunks =
+			[];
+
+
+		let audioTrack =
+			null;
+
+
+		if (currentAudio) {
+
+			if (
+				typeof AudioEncoder ===
+				"undefined"
+			) {
+
+				alert(
+					"Your browser cannot encode audio (WebCodecs AudioEncoder missing). Rendering a silent video."
+				);
+
+			}
+			else {
+
+				try {
+
+					statusText.textContent =
+						"Encoding audio track...";
+
+
+					const encoded =
+						await encodeAudioTrack(
+							currentAudio.buffer,
+							VIDEO_SECONDS,
+							(fraction) => {
+
+								/*
+								 * Audio owns the first
+								 * 25% of the bar.
+								 */
+
+								progressBar.style.width =
+									Math.round(
+										fraction *
+											25
+									) +
+									"%";
+
+							}
+						);
+
+
+					audioChunks =
+						encoded.chunks;
+
+
+					audioTrack = {
+
+						codec:
+							"aac",
+
+						sampleRate:
+							encoded.sampleRate,
+
+						numberOfChannels:
+							encoded.numberOfChannels
+
+					};
+
+				}
+				catch (error) {
+
+					console.error(
+						"Audio encoding failed:",
+						error
+					);
+
+
+					alert(
+						"Audio could not be encoded. Rendering a silent video."
+					);
+
+
+					audioChunks =
+						[];
+
+
+					audioTrack =
+						null;
+
+				}
+
+			}
+
+		}
+
+
 		// =====================================================
 		// MP4 MUXER
 		// =====================================================
 
+		const muxerConfig = {
+
+			target:
+				new Mp4Muxer.ArrayBufferTarget(),
+
+			video: {
+
+				codec:
+					"avc",
+
+				width:
+					WIDTH,
+
+				height:
+					HEIGHT
+
+			},
+
+			fastStart:
+				"in-memory"
+
+		};
+
+
+		/*
+		 * Only add the audio track when
+		 * AAC chunks exist.
+		 */
+
+		if (audioTrack) {
+
+			muxerConfig.audio =
+				audioTrack;
+
+		}
+
+
 		const muxer =
-			new Mp4Muxer.Muxer({
+			new Mp4Muxer.Muxer(
+				muxerConfig
+			);
 
-				target:
-					new Mp4Muxer.ArrayBufferTarget(),
 
-				video: {
+		// =====================================================
+		// AUDIO / VIDEO INTERLEAVING
+		// =====================================================
 
-					codec:
-						"avc",
+		/*
+		 * Audio chunks are written together
+		 * with the video frames that share
+		 * their timestamp, which keeps the
+		 * MP4 properly interleaved.
+		 */
 
-					width:
-						WIDTH,
+		let audioIndex =
+			0;
 
-					height:
-						HEIGHT
 
-				},
+		function flushAudioUpTo(
+			timestampMicroseconds
+		) {
 
-				fastStart:
-					"in-memory"
+			while (
+				audioIndex <
+					audioChunks.length &&
+				audioChunks[audioIndex]
+					.timestamp <=
+					timestampMicroseconds
+			) {
 
-			});
+				const item =
+					audioChunks[
+						audioIndex
+					];
+
+
+				muxer.addAudioChunk(
+					item.chunk,
+					item.meta
+				);
+
+
+				audioIndex++;
+
+			}
+
+		}
 
 
 		// =====================================================
@@ -1840,7 +3202,7 @@ function createHTML(): string {
 
 
 				// =============================================
-				// 8 SECONDS OF ANIMATION
+				// ANIMATED DURATION PER IMAGE
 				// =============================================
 
 				for (
@@ -2045,7 +3407,7 @@ function createHTML(): string {
 
 						/*
 						 * Only 4% additional zoom
-						 * over the entire 8 seconds.
+						 * over the entire slide.
 						 *
 						 * This is deliberately subtle.
 						 */
@@ -2149,7 +3511,8 @@ function createHTML(): string {
 							 * 10 seconds.
 							 *
 							 * The visual image change
-							 * still occurs every 8 seconds.
+							 * still occurs at the end
+							 * of each slide.
 							 */
 
 							keyFrame:
@@ -2167,6 +3530,15 @@ function createHTML(): string {
 					 */
 
 					frame.close();
+
+
+					// =========================================
+					// WRITE MATCHING AUDIO
+					// =========================================
+
+					flushAudioUpTo(
+						timestamp
+					);
 
 
 					currentFrame++;
@@ -2189,13 +3561,24 @@ function createHTML(): string {
 						0
 					) {
 
+						const fraction =
+							currentFrame /
+							TOTAL_FRAMES;
+
+
+						/*
+						 * Audio used the first 25%
+						 * of the bar when present.
+						 */
+
 						const percent =
 							Math.round(
-								(
-									currentFrame /
-									TOTAL_FRAMES
-								) *
-								100
+								audioTrack
+									? 25 +
+										fraction *
+											75
+									: fraction *
+											100
 							);
 
 
@@ -2256,6 +3639,15 @@ function createHTML(): string {
 				throw encoderError;
 
 			}
+
+
+			// =================================================
+			// WRITE ANY REMAINING AUDIO
+			// =================================================
+
+			flushAudioUpTo(
+				Number.POSITIVE_INFINITY
+			);
 
 
 			// =================================================
@@ -2331,7 +3723,9 @@ function createHTML(): string {
 
 
 			statusText.textContent =
-				"✅ MP4 Downloaded!";
+				audioTrack
+					? "✅ MP4 Downloaded with audio!"
+					: "✅ MP4 Downloaded!";
 
 		}
 		catch (error) {
