@@ -1723,11 +1723,11 @@ function createHTML() {
 	 */
 
 	const STICKER_HEIGHT =
-		80;
+		100;
 
 
 	const STICKER_WIDTH =
-		275;
+		355;
 
 
 	const STICKER_RIGHT_GAP =
@@ -1759,7 +1759,7 @@ function createHTML() {
 
 
 	const STICKER_TEXT_SIZE =
-		33;
+		29;
 
 
 	/*
