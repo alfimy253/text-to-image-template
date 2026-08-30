@@ -1723,11 +1723,11 @@ function createHTML() {
 	 */
 
 	const STICKER_HEIGHT =
-		125;
+		165;
 
 
 	const STICKER_WIDTH =
-		450;
+		475;
 
 
 	const STICKER_RIGHT_GAP =
@@ -1747,7 +1747,7 @@ function createHTML() {
 
 
 	const STICKER_PADDING =
-		8;
+		17;
 
 
 	const STICKER_GAP =
@@ -1788,42 +1788,42 @@ function createHTML() {
 			emoji:
 				"\u{1F44D}",
 			text:
-				" Like"
+				"Like"
 		},
 
 		love: {
 			emoji:
 				"\u{2764}\u{FE0F}",
 			text:
-				" Love it"
+				"Love it"
 		},
 
 		subscribe: {
 			emoji:
 				"\u{1F514}",
 			text:
-				" Subscribe"
+				"Subscribe"
 		},
 
 		"like-subscribe": {
 			emoji:
 				"\u{1F44D}\u{1F514}",
 			text:
-				" Like & Subscribe"
+				"Like & Subscribe"
 		},
 
 		watch: {
 			emoji:
 				"\u{1F3AC}",
 			text:
-				" Watch Video"
+				"Watch Video"
 		},
 
 		"watch-like-subscribe": {
 			emoji:
 				"\u{1F3AC}\u{1F44D}\u{1F514}",
 			text:
-				" Watch, Like & Subscribe"
+				"Watch, Like & Subscribe"
 		}
 
 	};
@@ -4370,7 +4370,7 @@ function createHTML() {
 		// =================================================
 
 		context.textAlign =
-			"center";
+			"left";
 
 
 		context.textBaseline =
