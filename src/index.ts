@@ -1755,11 +1755,11 @@ function createHTML() {
 
 
 	const STICKER_EMOJI_SIZE =
-		36;
+		38;
 
 
 	const STICKER_TEXT_SIZE =
-		28;
+		33;
 
 
 	/*
