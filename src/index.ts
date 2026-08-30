@@ -1755,7 +1755,7 @@ function createHTML() {
 
 
 	const STICKER_EMOJI_SIZE =
-		26;
+		20;
 
 
 	const STICKER_TEXT_SIZE =
@@ -4370,7 +4370,7 @@ function createHTML() {
 		// =================================================
 
 		context.textAlign =
-			"left";
+			"center";
 
 
 		context.textBaseline =
