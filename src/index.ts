@@ -1747,7 +1747,7 @@ function createHTML() {
 
 
 	const STICKER_PADDING =
-		17;
+		11;
 
 
 	const STICKER_GAP =
@@ -1755,11 +1755,11 @@ function createHTML() {
 
 
 	const STICKER_EMOJI_SIZE =
-		33;
+		26;
 
 
 	const STICKER_TEXT_SIZE =
-		21;
+		17;
 
 
 	/*
