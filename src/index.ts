@@ -1,8 +1,4 @@
 
-interface Env {
-	AI: Ai;
-}
-
 const MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0";
 
 const prompts = [
@@ -12,10 +8,7 @@ const prompts = [
 ];
 
 export default {
-	async fetch(
-		request: Request,
-		env: Env
-	): Promise<Response> {
+	async fetch(request, env) {
 
 		const url =
 			new URL(request.url);
@@ -93,7 +86,7 @@ export default {
 
 
 				return new Response(
-					result as ReadableStream,
+					result,
 					{
 						status: 200,
 
@@ -136,17 +129,14 @@ export default {
 		);
 	}
 
-} satisfies ExportedHandler<Env>;
+};
 
 
 // =============================================================
 // JSON HELPER
 // =============================================================
 
-function json(
-	data: unknown,
-	status = 200
-): Response {
+function json(data, status = 200) {
 
 	return new Response(
 		JSON.stringify(data),
@@ -166,7 +156,7 @@ function json(
 // FRONTEND
 // =============================================================
 
-function createHTML(): string {
+function createHTML() {
 
 	return `
 <!DOCTYPE html>
@@ -1913,14 +1903,24 @@ function createHTML(): string {
 
 
 	/*
-	 * Minimum length of a single slide.
+	 * Length of a single slide.
 	 *
-	 * Prevents a very short song being
-	 * spread over a huge number of images.
+	 * Minimum and maximum are both 9, so
+	 * every image is on screen for exactly
+	 * 9 seconds.
+	 *
+	 * When the audio is longer than the
+	 * slideshow, the images start over from
+	 * the first one until the whole track
+	 * is covered.
 	 */
 
-	const MIN_SECONDS_PER_SLIDE =
-		1.5;
+	const SLIDE_SECONDS_MIN =
+		9;
+
+
+	const SLIDE_SECONDS_MAX =
+		9;
 
 
 	// =========================================================
@@ -2003,30 +2003,106 @@ function createHTML(): string {
 	/*
 	 * How long each image stays on screen.
 	 *
-	 * With audio   : audio length / image count,
-	 *                so the video ends exactly
-	 *                with the track.
-	 *
-	 * Without audio: the original 8 seconds.
+	 * Always 9 seconds, because the minimum
+	 * and the maximum are both 9.
 	 */
 
 	function getSecondsPerSlide() {
 
+		return Math.min(
+			SLIDE_SECONDS_MAX,
+			Math.max(
+				SLIDE_SECONDS_MIN,
+				currentAudio &&
+					activeSlides.length >
+						0
+					? currentAudio.duration /
+						activeSlides.length
+					: SLIDE_SECONDS_MIN
+			)
+		);
+
+	}
+
+
+	/*
+	 * The list of images that will actually
+	 * be rendered.
+	 *
+	 * Without audio this is just the
+	 * selected slides.
+	 *
+	 * With audio the selected slides are
+	 * repeated from the beginning as many
+	 * times as needed, until every second
+	 * of the track has an image under it.
+	 */
+
+	function getSlideSequence() {
+
+		const secondsPerSlide =
+			getSecondsPerSlide();
+
+
 		if (
-			currentAudio &&
-			activeSlides.length > 0
+			!currentAudio ||
+			activeSlides.length ===
+				0
 		) {
 
-			return Math.max(
-				MIN_SECONDS_PER_SLIDE,
-				currentAudio.duration /
-					activeSlides.length
-			);
+			return activeSlides.slice();
 
 		}
 
 
-		return 8;
+		const slidesNeeded =
+			Math.ceil(
+				currentAudio.duration /
+					secondsPerSlide
+			);
+
+
+		const sequence =
+			activeSlides.slice();
+
+
+		while (
+			sequence.length <
+			slidesNeeded
+		) {
+
+			for (
+				const slide of activeSlides
+			) {
+
+				/*
+				 * Added one slide at a time so
+				 * the video only runs as long
+				 * as it needs to, instead of
+				 * always adding a whole extra
+				 * round of images.
+				 */
+
+				if (
+					sequence.length >=
+					slidesNeeded
+				) {
+
+					break;
+
+				}
+
+
+				sequence.push(
+					slide
+				);
+
+			}
+
+		}
+
+
+		return sequence;
 
 	}
 
@@ -2039,7 +2115,8 @@ function createHTML(): string {
 
 		const totalSeconds =
 			secondsPerSlide *
-			activeSlides.length;
+			getSlideSequence()
+				.length;
 
 
 		estimateValueEl.textContent =
@@ -2051,21 +2128,29 @@ function createHTML(): string {
 			"s)";
 
 
+		const sequence =
+			getSlideSequence();
+
+
 		if (
 			currentAudio &&
 			activeSlides.length > 0
 		) {
 
 			estimateSourceEl.textContent =
-				"(fit to audio 鈥� " +
-				secondsPerSlide.toFixed(1) +
-				"s per image)";
+				"(" +
+				secondsPerSlide +
+				"s per image 鈥� images repeat " +
+				sequence.length +
+				"脳 to cover the audio)";
 
 		}
 		else {
 
 			estimateSourceEl.textContent =
-				"(8s per image)";
+				"(" +
+				secondsPerSlide +
+				"s per image)";
 
 		}
 
@@ -2921,8 +3006,12 @@ function createHTML(): string {
 	 * format WebCodecs AudioData accepts
 	 * as "s16".
 	 *
-	 * Audio shorter than the video loops.
 	 * Audio longer than the video is cut.
+	 *
+	 * If the video runs longer than the
+	 * track, the remainder is silence,
+	 * because the images are the part that
+	 * repeats, not the audio.
 	 *
 	 * Blocks are filled one at a time so a
 	 * long soundtrack never has to exist
@@ -2951,13 +3040,19 @@ function createHTML(): string {
 			i++
 		) {
 
+			const frameIndex =
+				startFrame +
+				i;
+
+
 			/*
-			 * Loop back to the start of the
-			 * track when it runs out.
+			 * Once past the end of the track
+			 * the block is filled with
+			 * silence.
 			 */
 
-			const sourceIndex =
-				(startFrame + i) %
+			const finished =
+				frameIndex >=
 				sourceFrames;
 
 
@@ -2967,29 +3062,40 @@ function createHTML(): string {
 				c++
 			) {
 
-				const channel =
-					Math.min(
-						c,
-						channels.length - 1
-					);
-
-
 				let value =
-					channels[channel][
-						sourceIndex
-					];
+					0;
 
 
-				/*
-				 * Clamp before converting
-				 * to integer samples.
-				 */
+				if (!finished) {
 
-				if (value > 1) {
-					value = 1;
-				}
-				else if (value < -1) {
-					value = -1;
+					const channel =
+						Math.min(
+							c,
+							channels.length -
+								1
+						);
+
+
+					value =
+						channels[channel][
+							frameIndex
+						];
+
+
+					/*
+					 * Clamp before converting
+					 * to integer samples.
+					 */
+
+					if (value > 1) {
+						value = 1;
+					}
+					else if (
+						value < -1
+					) {
+						value = -1;
+					}
+
 				}
 
 
@@ -4633,11 +4739,17 @@ function createHTML(): string {
 
 
 		/*
-		 * Each image lasts 8 seconds by
-		 * default, or the audio length
-		 * divided by the image count when
-		 * an MP3 has been uploaded.
+		 * Every image lasts 9 seconds.
+		 *
+		 * When the track is longer than the
+		 * selected slides, the slide list is
+		 * repeated from the start until the
+		 * whole track is covered.
 		 */
+
+		const slides =
+			getSlideSequence();
+
 
 		const SECONDS_PER_SLIDE =
 			getSecondsPerSlide();
@@ -4654,7 +4766,7 @@ function createHTML(): string {
 
 
 		const TOTAL_FRAMES =
-			activeSlides.length *
+			slides.length *
 			FRAMES_PER_SLIDE;
 
 
@@ -5098,12 +5210,12 @@ function createHTML(): string {
 
 			for (
 				let i = 0;
-				i < activeSlides.length;
+				i < slides.length;
 				i++
 			) {
 
 				const img =
-					activeSlides[i].img;
+					slides[i].img;
 
 
 				const effect =
@@ -5520,7 +5632,7 @@ function createHTML(): string {
 
 
 						statusText.textContent =
-							\`Rendering image \${i + 1}/\${activeSlides.length} 鈥� \${percent}%\`;
+							\`Rendering image \${i + 1}/\${slides.length} 鈥� \${percent}%\`;
 
 
 						/*
@@ -5550,7 +5662,7 @@ function createHTML(): string {
 
 
 				statusText.textContent =
-					\`Completed image \${i + 1} of \${activeSlides.length}\`;
+					\`Completed image \${i + 1} of \${slides.length}\`;
 
 			}
 
