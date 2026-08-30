@@ -1727,7 +1727,7 @@ function createHTML() {
 
 
 	const STICKER_WIDTH =
-		415;
+		425;
 
 
 	const STICKER_RIGHT_GAP =
@@ -1747,19 +1747,19 @@ function createHTML() {
 
 
 	const STICKER_PADDING =
-		11;
+		17;
 
 
 	const STICKER_GAP =
-		8;
-
-
-	const STICKER_EMOJI_SIZE =
 		20;
 
 
+	const STICKER_EMOJI_SIZE =
+		33;
+
+
 	const STICKER_TEXT_SIZE =
-		17;
+		22;
 
 
 	/*
@@ -4370,7 +4370,7 @@ function createHTML() {
 		// =================================================
 
 		context.textAlign =
-			"center";
+			"left";
 
 
 		context.textBaseline =
@@ -5878,4 +5878,4 @@ function createHTML() {
 
 </html>
 `;
-}
+			  }
