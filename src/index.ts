@@ -1727,7 +1727,7 @@ function createHTML() {
 
 
 	const STICKER_WIDTH =
-		200;
+		275;
 
 
 	const STICKER_RIGHT_GAP =
