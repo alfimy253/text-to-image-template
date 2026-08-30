@@ -1638,7 +1638,7 @@ function createHTML() {
 	 */
 
 	const TITLE_FONT_SIZE =
-		24;
+		22;
 
 
 	const TITLE_MARGIN =
@@ -1747,7 +1747,7 @@ function createHTML() {
 
 
 	const STICKER_PADDING =
-		12;
+		17;
 
 
 	const STICKER_GAP =
@@ -1755,11 +1755,11 @@ function createHTML() {
 
 
 	const STICKER_EMOJI_SIZE =
-		38;
+		33;
 
 
 	const STICKER_TEXT_SIZE =
-		29;
+		21;
 
 
 	/*
