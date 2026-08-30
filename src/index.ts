@@ -4370,7 +4370,7 @@ function createHTML() {
 		// =================================================
 
 		context.textAlign =
-			"left";
+			"center";
 
 
 		context.textBaseline =
