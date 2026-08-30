@@ -1638,7 +1638,7 @@ function createHTML() {
 	 */
 
 	const TITLE_FONT_SIZE =
-		18;
+		24;
 
 
 	const TITLE_MARGIN =
