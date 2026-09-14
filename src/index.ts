@@ -1090,7 +1090,339 @@ function createHTML() {
 				#ef4444;
 		}
 
-	</style>
+	
+		/* =================================================
+		   TIMESTAMP CAPTIONS (MAX 10)
+		   ================================================= */
+
+		.caption-head {
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			gap:
+				12px;
+
+			flex-wrap:
+				wrap;
+		}
+
+
+		.add-caption-btn {
+
+			background:
+				var(--accent);
+
+			color:
+				#000;
+
+			border:
+				none;
+
+			padding:
+				9px 16px;
+
+			font-size:
+				0.85rem;
+
+			font-weight:
+				bold;
+
+			border-radius:
+				8px;
+
+			cursor:
+				pointer;
+
+			display:
+				inline-flex;
+
+			align-items:
+				center;
+
+			gap:
+				6px;
+		}
+
+
+		.add-caption-btn:hover {
+
+			opacity:
+				0.9;
+		}
+
+
+		.add-caption-btn:disabled {
+
+			background:
+				#374151;
+
+			color:
+				#9ca3af;
+
+			cursor:
+				not-allowed;
+		}
+
+
+		.add-caption-btn .plus {
+
+			font-size:
+				1.1rem;
+
+			line-height:
+				1;
+		}
+
+
+		.caption-count {
+
+			font-size:
+				0.78rem;
+
+			color:
+				#6b7280;
+		}
+
+
+		#caption-rows {
+
+			display:
+				flex;
+
+			flex-direction:
+				column;
+
+			gap:
+				8px;
+		}
+
+
+		.caption-row {
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			gap:
+				10px;
+
+			background:
+				#0f1115;
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				8px;
+
+			padding:
+				10px 12px;
+
+			flex-wrap:
+				wrap;
+		}
+
+
+		.caption-time {
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			gap:
+				4px;
+
+			color:
+				#9ca3af;
+
+			font-weight:
+				bold;
+		}
+
+
+		.caption-time input {
+
+			width:
+				46px;
+
+			background:
+				#14171c;
+
+			color:
+				var(--text);
+
+			border:
+				1px solid #374151;
+
+			border-radius:
+				6px;
+
+			padding:
+				8px 6px;
+
+			font-size:
+				0.85rem;
+
+			text-align:
+				center;
+
+			outline:
+				none;
+		}
+
+
+		.caption-time input:focus {
+
+			border-color:
+				var(--accent);
+		}
+
+
+		.caption-text-wrap {
+
+			flex:
+				1 1 240px;
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			gap:
+				8px;
+		}
+
+
+		.caption-text {
+
+			flex:
+				1;
+
+			background:
+				#14171c;
+
+			color:
+				var(--text);
+
+			border:
+				1px solid #374151;
+
+			border-radius:
+				6px;
+
+			padding:
+				9px 12px;
+
+			font-size:
+				0.88rem;
+
+			outline:
+				none;
+		}
+
+
+		.caption-text:focus {
+
+			border-color:
+				var(--accent);
+		}
+
+
+		.caption-chars {
+
+			font-size:
+				0.72rem;
+
+			color:
+				#6b7280;
+
+			min-width:
+				34px;
+
+			text-align:
+				right;
+		}
+
+
+		.caption-remove {
+
+			background:
+				#ef4444;
+
+			color:
+				#fff;
+
+			border:
+				none;
+
+			width:
+				30px;
+
+			height:
+				30px;
+
+			border-radius:
+				8px;
+
+			font-size:
+				1rem;
+
+			font-weight:
+				bold;
+
+			cursor:
+				pointer;
+
+			line-height:
+				1;
+		}
+
+
+		.caption-remove:hover {
+
+			opacity:
+				0.9;
+		}
+
+
+		.caption-sample {
+
+			display:
+				inline-block;
+
+			background:
+				#ffffff;
+
+			color:
+				#000000;
+
+			font-family:
+				'Bookman Old Style',
+				'Bookman',
+				'URW Bookman L',
+				Georgia,
+				serif;
+
+			font-size:
+				17px;
+
+			padding:
+				5px 12px;
+
+			border-radius:
+				6px;
+		}
+
+</style>
 
 </head>
 
@@ -1394,6 +1726,61 @@ function createHTML() {
 		</div>
 
 
+
+		<!-- ======================================================
+		     TIMESTAMP CAPTIONS (MAX 10)
+		     ====================================================== -->
+
+		<div class="audio-panel">
+
+			<div class="caption-head">
+
+				<div class="audio-title" style="margin-bottom:0;">
+					Timestamp Captions
+				</div>
+
+				<button
+					type="button"
+					class="add-caption-btn"
+					id="add-caption-btn"
+					onclick="addCaptionRow()"
+				>
+					<span class="plus">+</span> Add Caption
+				</button>
+
+				<span
+					class="caption-count"
+					id="caption-count"
+				>
+					0/10
+				</span>
+
+			</div>
+
+			<div
+				id="caption-rows"
+			>
+			</div>
+
+			<div class="audio-note">
+				Each caption appears centred horizontally at 4/7 of the
+				height from the bottom, in 17px Bookman with black text on a
+				white highlight (max 40 characters). It stays on screen until
+				the next caption appears, or until the video ends.
+			</div>
+
+			<div
+				class="audio-note"
+				style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"
+			>
+				Preview:
+				<span class="caption-sample">
+					Sample caption text
+				</span>
+			</div>
+
+		</div>
+
 		<div
 			class="progress-bar-container"
 			id="progress-container"
@@ -1419,12 +1806,12 @@ function createHTML() {
 
 			<label class="upload-btn">
 
-				馃搧 Upload Custom Image
+				馃搧 Upload Image or GIF
 
 				<input
 					type="file"
 					id="file-upload"
-					accept="image/*"
+					accept="image/*,image/gif,.gif"
 					multiple
 				>
 
@@ -1837,6 +2224,515 @@ function createHTML() {
 			] ||
 			null
 		);
+
+	}
+
+
+	// =========================================================
+	// TIMESTAMP CAPTIONS (MAX 10)
+	// =========================================================
+
+	/*
+	 * Up to ten caption entries can be added with the plus
+	 * button. Each one has a timestamp in hour:minute:second
+	 * format plus a short text of max 40 characters.
+	 */
+
+	const MAX_CAPTIONS =
+		10;
+
+
+	const CAPTION_MAX_CHARS =
+		40;
+
+
+	const CAPTION_FONT_SIZE =
+		17;
+
+
+	const CAPTION_FONT_STACK =
+		"'Bookman Old Style', 'Bookman', 'URW Bookman L', Georgia, serif";
+
+
+	const captionRowsEl =
+		document.getElementById(
+			"caption-rows"
+		);
+
+
+	const captionCountEl =
+		document.getElementById(
+			"caption-count"
+		);
+
+
+	const addCaptionBtn =
+		document.getElementById(
+			"add-caption-btn"
+		);
+
+
+	/*
+	 * Adds one caption row. The plus button is disabled once
+	 * MAX_CAPTIONS rows exist.
+	 */
+
+	function addCaptionRow() {
+
+		if (
+			captionRowsEl.children.length >=
+				MAX_CAPTIONS
+		) {
+
+			return;
+
+		}
+
+
+		const row =
+			document.createElement(
+				"div"
+			);
+
+
+		row.className =
+			"caption-row";
+
+
+		row.innerHTML =
+			'<div class="caption-time">' +
+			'<input type="number" min="0" max="99" step="1" value="0" class="caption-hh" aria-label="Hours">' +
+			'<span>:</span>' +
+			'<input type="number" min="0" max="59" step="1" value="0" class="caption-mm" aria-label="Minutes">' +
+			'<span>:</span>' +
+			'<input type="number" min="0" max="59" step="1" value="0" class="caption-ss" aria-label="Seconds">' +
+			'</div>' +
+			'<div class="caption-text-wrap">' +
+			'<input type="text" class="caption-text" maxlength="' +
+				CAPTION_MAX_CHARS +
+			'" placeholder="Caption text (max ' +
+				CAPTION_MAX_CHARS +
+			' characters)">' +
+			'<span class="caption-chars">0/' +
+				CAPTION_MAX_CHARS +
+			'</span>' +
+			'</div>' +
+			'<button type="button" class="caption-remove" title="Remove caption" onclick="removeCaptionRow(this)">&times;</button>';
+
+
+		const textInput =
+			row.querySelector(
+				".caption-text"
+			);
+
+
+		textInput.addEventListener(
+			"input",
+			() => {
+
+				row.querySelector(
+					".caption-chars"
+				).textContent =
+					textInput.value.length +
+					"/" +
+					CAPTION_MAX_CHARS;
+
+			}
+		);
+
+
+		captionRowsEl.appendChild(
+			row
+		);
+
+
+		updateCaptionCount();
+
+	}
+
+
+	function removeCaptionRow(
+		button
+	) {
+
+		const row =
+			button.closest(
+				".caption-row"
+			);
+
+
+		if (row) {
+			row.remove();
+		}
+
+
+		updateCaptionCount();
+
+	}
+
+
+	function updateCaptionCount() {
+
+		const count =
+			captionRowsEl.children.length;
+
+
+		captionCountEl.textContent =
+			count +
+			"/" +
+			MAX_CAPTIONS;
+
+
+		addCaptionBtn.disabled =
+			count >=
+				MAX_CAPTIONS;
+
+	}
+
+
+	function clampInt(
+		value,
+		min,
+		max
+	) {
+
+		const n =
+			parseInt(
+				value,
+				10
+			);
+
+
+		if (
+			!Number.isFinite(
+				n
+			)
+		) {
+
+			return min;
+
+		}
+
+
+		return Math.min(
+			max,
+			Math.max(
+				min,
+				n
+			)
+		);
+
+	}
+
+
+	/*
+	 * Reads the visible rows into sorted caption objects.
+	 * Rows without text are ignored, and out of range hours,
+	 * minutes and seconds are clamped.
+	 */
+
+	function getCaptions() {
+
+		const captions =
+			[];
+
+
+		for (
+			const row of
+				captionRowsEl.children
+		) {
+
+			const text =
+				row.querySelector(
+					".caption-text"
+				).value.trim();
+
+
+			if (!text) {
+				continue;
+			}
+
+
+			const hours =
+				clampInt(
+					row.querySelector(
+						".caption-hh"
+					).value,
+					0,
+					99
+				);
+
+
+			const minutes =
+				clampInt(
+					row.querySelector(
+						".caption-mm"
+					).value,
+					0,
+					59
+				);
+
+
+			const seconds =
+				clampInt(
+					row.querySelector(
+						".caption-ss"
+					).value,
+					0,
+					59
+				);
+
+
+			captions.push(
+				{
+					text:
+						text.slice(
+							0,
+							CAPTION_MAX_CHARS
+					),
+
+					timeMs:
+						((hours * 60 + minutes) * 60 + seconds) * 1000
+				}
+			);
+
+		}
+
+
+		captions.sort(
+			(a, b) =>
+				a.timeMs -
+					b.timeMs
+		);
+
+
+		return captions;
+
+	}
+
+
+	/*
+	 * Warms up the Bookman font before the first frame is
+	 * drawn, so the canvas does not fall back to a default
+	 * font.
+	 */
+
+	async function loadCaptionFont() {
+
+		if (
+			!document.fonts ||
+			!document.fonts.load
+		) {
+
+			return;
+
+		}
+
+
+		try {
+
+			await document.fonts.load(
+				CAPTION_FONT_SIZE +
+				'px "Bookman Old Style"'
+			);
+
+		}
+		catch (error) {
+
+			console.warn(
+				"Caption font load failed:",
+				error
+			);
+
+		}
+
+	}
+
+
+	/*
+	 * Draws the active caption onto the current frame.
+	 *
+	 * Position: centred horizontally, at 4/7 of the frame
+	 * height measured from the bottom.
+	 *
+	 * Style: 17px Bookman, black text on a white highlight
+	 * box, max 40 characters.
+	 *
+	 * A caption is shown from its timestamp until the next
+	 * caption appears (or until the video ends).
+	 */
+
+	function drawCaptions(
+		context,
+		captions,
+		timestampMs,
+		width,
+		height
+	) {
+
+		if (
+			!captions.length
+		) {
+
+			return;
+
+		}
+
+
+		let active =
+			null;
+
+
+		for (
+			const caption of
+				captions
+		) {
+
+			if (
+				caption.timeMs <=
+					timestampMs
+			) {
+
+				active =
+					caption;
+
+			}
+			else {
+
+				break;
+
+			}
+
+		}
+
+
+		if (!active) {
+			return;
+		}
+
+
+		context.save();
+
+
+		context.font =
+			CAPTION_FONT_SIZE +
+			"px " +
+			CAPTION_FONT_STACK;
+
+
+		context.textAlign =
+			"center";
+
+
+		context.textBaseline =
+			"middle";
+
+
+		/*
+		 * Centre of the text: middle of the frame
+		 * horizontally, 4/7 of the height up from the
+		 * bottom.
+		 */
+
+		const x =
+			width / 2;
+
+
+		const y =
+			height -
+			(height * 4) / 7;
+
+
+		const textWidth =
+			context.measureText(
+				active.text
+			).width;
+
+
+		const padX =
+			10;
+
+
+		const padY =
+			6;
+
+
+		const boxWidth =
+			textWidth +
+			padX * 2;
+
+
+		const boxHeight =
+			CAPTION_FONT_SIZE +
+			padY * 2 +
+			4;
+
+
+		const boxX =
+			x - boxWidth / 2;
+
+
+		const boxY =
+			y - boxHeight / 2;
+
+
+		const radius =
+			6;
+
+
+		/*
+		 * White highlight behind the text.
+		 */
+
+		context.fillStyle =
+			"#ffffff";
+
+
+		context.beginPath();
+
+
+		if (context.roundRect) {
+
+			context.roundRect(
+				boxX,
+				boxY,
+				boxWidth,
+				boxHeight,
+				radius
+			);
+
+		}
+		else {
+
+			context.rect(
+				boxX,
+				boxY,
+				boxWidth,
+				boxHeight
+			);
+
+		}
+
+
+		context.fill();
+
+
+		/*
+		 * Black text on top.
+		 */
+
+		context.fillStyle =
+			"#000000";
+
+
+		context.fillText(
+			active.text,
+			x,
+			y
+		);
+
+
+		context.restore();
 
 	}
 
@@ -2742,18 +3638,115 @@ function createHTML() {
 						);
 
 
-						activeSlides.unshift({
+						/*
+						 * Build the slide entry first so GIFs can
+						 * attach their decoded animation frames
+						 * to it.
+						 */
 
-							id:
-								customId,
+						const slideEntry =
+							{
+								id:
+									customId,
 
-							img:
-								img,
+								img:
+									img,
 
-							cardId:
-								customId
+								cardId:
+									customId
 
-						});
+							};
+
+
+						/*
+						 * GIFs are decoded frame by frame, so the
+						 * MP4 contains the full animation instead
+						 * of only the first frame.
+						 */
+
+						if (
+							file.type ===
+								"image/gif" ||
+							/\.gif$/i.test(
+								file.name
+							)
+						) {
+
+							try {
+
+								const buffer =
+									await file.arrayBuffer();
+
+
+								slideEntry.type =
+									"gif";
+
+
+								slideEntry.gif =
+									buildGifSlideFrames(
+										parseGifBytes(
+											new Uint8Array(
+												buffer
+											)
+										)
+									);
+
+
+								const badgeEl =
+									card.querySelector(
+										".badge"
+									);
+
+
+								if (badgeEl) {
+
+									badgeEl.textContent =
+										"GIF";
+
+								}
+
+
+								const promptEl =
+									card.querySelector(
+										".prompt"
+									);
+
+
+								if (promptEl) {
+
+									promptEl.textContent =
+										file.name +
+										"  |  " +
+										slideEntry.gif.frameCount +
+										" frames, " +
+										(slideEntry.gif.loopMs / 1000).toFixed(
+											1
+										) +
+										"s loop";
+
+								}
+
+							}
+							catch (gifError) {
+
+								console.error(
+									"GIF decode failed:",
+									gifError
+								);
+
+
+								alert(
+									"Could not decode that GIF animation. It was added as a still image instead."
+								);
+
+							}
+
+						}
+
+
+						activeSlides.unshift(
+							slideEntry
+						);
 
 
 						updateQueueCount();
@@ -4484,6 +5477,1448 @@ function createHTML() {
 	}
 
 
+
+	// =========================================================
+	// GIF DECODER + FRAME COMPOSITOR
+	// =========================================================
+
+	/*
+	 * A small self-contained GIF87a/89a decoder.
+	 *
+	 * It parses the file, decodes the LZW image data and
+	 * composes every frame (including disposal methods and
+	 * interlacing) into ready-to-draw ImageData objects.
+	 *
+	 * The result is played back frame by frame while the MP4
+	 * is rendered, so a playing GIF becomes part of the
+	 * exported video exactly like the still images.
+	 */
+
+	/*
+	 * GIF LZW decompression.
+	 *
+	 * data        : concatenated image data sub-block bytes
+	 * minCodeSize : first byte after the (local) colour table
+	 * totalPixels : frame width * frame height
+	 *
+	 * Returns a Uint8Array of palette indices.
+	 */
+
+	function gifLzwDecode(
+		data,
+		minCodeSize,
+		totalPixels
+	) {
+
+		const clearCode =
+			1 << minCodeSize;
+
+
+		const endCode =
+			clearCode + 1;
+
+
+		let codeSize =
+			minCodeSize + 1;
+
+
+		let nextCode =
+			endCode + 1;
+
+
+		/*
+		 * Base codes (below clearCode) are literal pixel
+		 * indices, so the table only needs entries from
+		 * clearCode up.
+		 */
+
+		const table =
+			new Array(
+				4096
+			);
+
+
+		const out =
+			new Uint8Array(
+				totalPixels
+			);
+
+
+		let outPos =
+			0;
+
+
+		let cache =
+			0;
+
+
+		let cacheBits =
+			0;
+
+
+		let bytePos =
+			0;
+
+
+		function resetTable() {
+
+			nextCode =
+				endCode + 1;
+
+
+			codeSize =
+				minCodeSize + 1;
+
+		}
+
+
+		function readCode() {
+
+			while (
+				cacheBits <
+					codeSize
+			) {
+
+				if (
+					bytePos >=
+						data.length
+				) {
+
+					return -1;
+
+				}
+
+
+				cache |=
+					data[bytePos] <<
+						cacheBits;
+
+
+				bytePos++;
+
+
+				cacheBits +=
+					8;
+
+			}
+
+
+			const code =
+				cache &
+				((1 << codeSize) - 1);
+
+
+			cache >>>=
+				codeSize;
+
+
+			cacheBits -=
+				codeSize;
+
+
+			return code;
+
+		}
+
+
+		function emit(
+			seq
+		) {
+
+			for (
+				let i = 0;
+				i < seq.length;
+				i++
+			) {
+
+				if (
+					outPos >=
+						totalPixels
+				) {
+
+					return;
+
+				}
+
+
+				out[outPos++] =
+					seq[i];
+
+			}
+
+		}
+
+
+		let code =
+			readCode();
+
+
+		if (code < 0) {
+			throw new Error(
+				"Empty GIF image data"
+			);
+		}
+
+
+		if (code === clearCode) {
+			code = readCode();
+		}
+
+
+		if (
+			code < 0 ||
+			code === endCode
+		) {
+
+			return out;
+
+		}
+
+
+		if (code >= clearCode) {
+			throw new Error(
+				"Corrupt GIF LZW stream"
+			);
+		}
+
+
+		resetTable();
+
+
+		let prev =
+			[code];
+
+
+		emit(
+			prev
+		);
+
+
+		while (
+			outPos <
+				totalPixels
+		) {
+
+			code =
+				readCode();
+
+
+			if (code < 0) {
+				break;
+			}
+
+
+			if (
+				code ===
+					clearCode
+			) {
+
+				/*
+				 * Mid-stream clear: reset, then skip
+				 * any further consecutive clears.
+				 */
+
+				do {
+
+					resetTable();
+
+
+					code =
+						readCode();
+
+				}
+				while (
+					code ===
+						clearCode
+				);
+
+
+				if (
+					code < 0 ||
+					code ===
+						endCode
+				) {
+
+					break;
+
+				}
+
+
+				if (
+					code >=
+						clearCode
+				) {
+
+					throw new Error(
+						"Corrupt GIF LZW stream"
+					);
+
+				}
+
+
+				prev =
+					[code];
+
+
+				emit(
+					prev
+				);
+
+
+				continue;
+
+			}
+
+
+			if (
+				code ===
+					endCode
+			) {
+
+				break;
+
+			}
+
+
+			let seq;
+
+
+			if (
+				code <
+					clearCode
+			) {
+
+				seq =
+					[code];
+
+			}
+			else if (
+				code <
+					nextCode
+			) {
+
+				seq =
+					table[code];
+
+			}
+			else if (
+				code ===
+					nextCode
+			) {
+
+				/*
+				 * The KwKwK case: the encoder
+				 * references the very code that
+				 * is about to be added.
+				 */
+
+				seq =
+					prev.concat(
+						prev[0]
+					);
+
+			}
+
+
+			if (!seq) {
+				throw new Error(
+					"Corrupt GIF LZW stream"
+				);
+			}
+
+
+			if (
+				nextCode <
+					4096
+			) {
+
+				table[nextCode] =
+					prev.concat(
+						seq[0]
+					);
+
+
+				nextCode++;
+
+
+				if (
+					nextCode ===
+						(1 << codeSize) &&
+					codeSize <
+						12
+				) {
+
+					codeSize++;
+
+				}
+
+			}
+
+
+			emit(
+				seq
+			);
+
+
+			prev =
+				seq;
+
+		}
+
+
+		return out;
+
+	}
+
+
+	/*
+	 * Reorders the rows of an interlaced frame.
+	 *
+	 * Interlaced GIFs store their rows in four passes:
+	 * rows 0,8,16... then 4,12,20... then 2,6,10... then
+	 * 1,3,5...
+	 */
+
+	function gifDeinterlace(
+		pixels,
+		width,
+		height
+	) {
+
+		const out =
+			new Uint8Array(
+				pixels.length
+			);
+
+
+		const starts =
+			[0, 4, 2, 1];
+
+
+		const steps =
+			[8, 8, 4, 2];
+
+
+		let passRow =
+			0;
+
+
+		for (
+			let pass = 0;
+			pass < 4;
+			pass++
+		) {
+
+			for (
+				let row =
+					starts[pass];
+				row < height;
+				row += steps[pass]
+			) {
+
+				out.set(
+					pixels.subarray(
+						passRow * width,
+						(passRow + 1) * width
+					),
+					row * width
+				);
+
+
+				passRow++;
+
+			}
+
+		}
+
+
+		return out;
+
+	}
+
+
+	/*
+	 * Parses a GIF file into its frames.
+	 *
+	 * Returns
+	 *   {
+	 *     width, height,   // logical screen size
+	 *     frames: [
+	 *       {
+	 *         left, top, width, height,
+	 *         delayMs,
+	 *         disposal,          // 0-3
+	 *         transparent,       // boolean
+	 *         transparentIndex,  // -1 when none
+	 *         palette,           // [ [r,g,b], ... ]
+	 *         pixels              // Uint8Array of indices
+	 *       },
+	 *       ...
+	 *     ]
+	 *   }
+	 */
+
+	function parseGifBytes(
+		bytes
+	) {
+
+		if (
+			bytes.length <
+				13
+		) {
+
+			throw new Error(
+				"File is too small to be a GIF"
+			);
+
+		}
+
+
+		if (
+			bytes[0] !== 0x47 ||
+			bytes[1] !== 0x49 ||
+			bytes[2] !== 0x46
+		) {
+
+			throw new Error(
+				"Not a GIF file"
+			);
+
+		}
+
+
+		const width =
+			bytes[6] |
+			(bytes[7] << 8);
+
+
+		const height =
+			bytes[8] |
+			(bytes[9] << 8);
+
+
+		const screenPacked =
+			bytes[10];
+
+
+		const hasGct =
+			(screenPacked & 0x80) !== 0;
+
+
+		const gctEntries =
+			2 << (screenPacked & 0x07);
+
+
+		let offset =
+			13;
+
+
+		const globalPalette =
+			[];
+
+
+		if (hasGct) {
+
+			for (
+				let i = 0;
+				i < gctEntries;
+				i++
+			) {
+
+				globalPalette.push(
+					[
+						bytes[offset],
+						bytes[offset + 1],
+						bytes[offset + 2]
+					]
+				);
+
+
+				offset +=
+					3;
+
+			}
+
+		}
+
+
+		const frames =
+			[];
+
+
+		let pending =
+			null;
+
+
+		while (
+			offset <
+				bytes.length
+		) {
+
+			const block =
+				bytes[offset];
+
+
+			offset++;
+
+
+			/*
+			 * Trailer.
+			 */
+
+			if (block === 0x3B) {
+				break;
+			}
+
+
+			/*
+			 * Extension block.
+			 */
+
+			if (block === 0x21) {
+
+				const label =
+					bytes[offset];
+
+
+				offset++;
+
+
+				if (
+					label ===
+						0xF9
+				) {
+
+					/*
+					 * Graphic control extension.
+					 */
+
+					const subLength =
+						bytes[offset];
+
+
+					offset++;
+
+
+					const gcePacked =
+						bytes[offset];
+
+
+					const delayCs =
+						bytes[offset + 1] |
+						(bytes[offset + 2] << 8);
+
+
+					const transparentIndex =
+						bytes[offset + 3];
+
+
+					offset +=
+						subLength;
+
+
+					/*
+					 * A delay of 0 is invalid;
+					 * viewers use 10 cs (100ms).
+					 */
+
+					pending =
+						{
+							disposal:
+							(gcePacked >> 2) & 0x07,
+
+							delayMs:
+							(delayCs || 10) * 10,
+
+							transparent:
+							(gcePacked & 0x01) !== 0,
+
+							transparentIndex:
+								transparentIndex
+						};
+
+
+					offset++;
+
+				}
+				else {
+
+					/*
+					 * Comment, application (loop) or
+					 * plain text extension: skip all
+					 * of its sub-blocks.
+					 */
+
+					let subLength;
+
+
+					do {
+
+						subLength =
+							bytes[offset];
+
+
+						offset +=
+							1 + subLength;
+
+					}
+					while (
+						subLength !== 0
+					);
+
+				}
+
+
+				continue;
+
+			}
+
+
+			/*
+			 * Image descriptor.
+			 */
+
+			if (block === 0x2C) {
+
+				const left =
+					bytes[offset] |
+					(bytes[offset + 1] << 8);
+
+
+				const top =
+					bytes[offset + 2] |
+					(bytes[offset + 3] << 8);
+
+
+				const frameWidth =
+					bytes[offset + 4] |
+					(bytes[offset + 5] << 8);
+
+
+				const frameHeight =
+					bytes[offset + 6] |
+					(bytes[offset + 7] << 8);
+
+
+				const imagePacked =
+					bytes[offset + 8];
+
+
+				offset +=
+					9;
+
+
+				let palette =
+					globalPalette;
+
+
+				if (
+					(imagePacked & 0x80) !== 0
+				) {
+
+					const lctEntries =
+						2 <<
+						(imagePacked & 0x07);
+
+
+					palette =
+						[];
+
+
+					for (
+						let i = 0;
+						i < lctEntries;
+						i++
+					) {
+
+						palette.push(
+							[
+								bytes[offset],
+								bytes[offset + 1],
+								bytes[offset + 2]
+							]
+						);
+
+
+						offset +=
+							3;
+
+					}
+
+				}
+
+
+				const interlaced =
+					(imagePacked & 0x40) !== 0;
+
+
+				const minCodeSize =
+					bytes[offset];
+
+
+				offset++;
+
+
+				const chunks =
+					[];
+
+
+				let chunkLength;
+
+
+				do {
+
+					chunkLength =
+						bytes[offset];
+
+
+					offset++;
+
+
+					chunks.push(
+						bytes.subarray(
+							offset,
+							offset + chunkLength
+						)
+					);
+
+
+					offset +=
+						chunkLength;
+
+				}
+				while (
+					chunkLength !== 0
+				);
+
+
+				let dataLength =
+					0;
+
+
+				for (
+					const chunk of
+						chunks
+				) {
+
+					dataLength +=
+						chunk.length;
+
+				}
+
+
+				const data =
+					new Uint8Array(
+						dataLength
+					);
+
+
+				let dataOffset =
+					0;
+
+
+				for (
+					const chunk of
+						chunks
+				) {
+
+					data.set(
+						chunk,
+						dataOffset
+					);
+
+
+					dataOffset +=
+						chunk.length;
+
+				}
+
+
+				let indices =
+					gifLzwDecode(
+						data,
+						minCodeSize,
+						frameWidth *
+							frameHeight
+					);
+
+
+				if (interlaced) {
+
+					indices =
+						gifDeinterlace(
+							indices,
+							frameWidth,
+							frameHeight
+						);
+
+				}
+
+
+				frames.push(
+					{
+						left:
+							left,
+
+						top:
+							top,
+
+						width:
+							frameWidth,
+
+						height:
+							frameHeight,
+
+						delayMs:
+							pending
+								? pending.delayMs
+								: 100,
+
+						disposal:
+							pending
+								? pending.disposal
+								: 0,
+
+						transparent:
+							pending
+								? pending.transparent
+								: false,
+
+						transparentIndex:
+							pending
+								? pending.transparentIndex
+								: -1,
+
+						palette:
+							palette,
+
+						pixels:
+							indices
+					}
+				);
+
+
+				pending =
+					null;
+
+
+				continue;
+
+			}
+
+
+			/*
+			 * Unknown block: step one byte forward
+			 * so we cannot get stuck in an infinite
+			 * loop.
+			 */
+
+		}
+
+
+		if (
+			!frames.length
+		) {
+
+			throw new Error(
+				"GIF contains no image frames"
+			);
+
+		}
+
+
+		return {
+			width:
+				width,
+
+			height:
+				height,
+
+			backgroundIndex:
+				bytes[11],
+
+			globalPalette:
+				globalPalette,
+
+			frames:
+				frames
+		};
+
+	}
+
+
+	/*
+	 * Composes the parsed GIF into per-frame ImageData objects.
+	 *
+	 * Returns
+	 *   {
+	 *     width, height,     // (possibly downscaled) size
+	 *     frames: [ { data: ImageData, durationMs } ],
+	 *     startMs: [ ... ],  // frame start times within the loop
+	 *     loopMs,
+	 *     frameCount
+	 *   }
+	 */
+
+	function buildGifSlideFrames(
+		parsed
+	) {
+
+		const width =
+			parsed.width;
+
+
+		const height =
+			parsed.height;
+
+
+		const frames =
+			parsed.frames;
+
+
+		/*
+		 * Memory guard: every stored frame costs
+		 * width*height*4 bytes. Very large GIFs are
+		 * downscaled to stay under the budget.
+		 */
+
+		const BUDGET_BYTES =
+			120 * 1024 * 1024;
+
+
+		let scale =
+			1;
+
+
+		const rawBytes =
+			frames.length *
+			width *
+			height *
+			4;
+
+
+		if (rawBytes > BUDGET_BYTES) {
+
+			scale =
+				Math.sqrt(
+					BUDGET_BYTES /
+						rawBytes
+				);
+
+
+			scale =
+				Math.max(
+					0.15,
+					Math.min(
+						1,
+						scale
+					)
+				);
+
+		}
+
+
+		const outWidth =
+			Math.max(
+				2,
+				Math.round(
+					width * scale
+				)
+			);
+
+
+		const outHeight =
+			Math.max(
+				2,
+				Math.round(
+					height * scale
+				)
+			);
+
+
+		const composite =
+			document.createElement(
+				"canvas"
+			);
+
+
+		composite.width =
+			outWidth;
+
+
+		composite.height =
+			outHeight;
+
+
+		const compositeCtx =
+			composite.getContext(
+				"2d",
+				{
+					willReadFrequently: true
+				}
+			);
+
+
+		const patch =
+			document.createElement(
+				"canvas"
+			);
+
+
+		const patchCtx =
+			patch.getContext(
+				"2d"
+			);
+
+
+		let restoreBefore =
+			null;
+
+
+		const outFrames =
+			[];
+
+
+		const startMs =
+			[];
+
+
+		let loopMs =
+			0;
+
+
+		for (
+			const frame of
+				frames
+		) {
+
+			/*
+			 * Disposal 3 on the previous frame means
+			 * the canvas must be restored to the
+			 * state before that frame was drawn.
+			 */
+
+			if (restoreBefore) {
+
+				compositeCtx.putImageData(
+					restoreBefore,
+					0,
+					0
+				);
+
+
+				restoreBefore =
+					null;
+
+			}
+
+
+			/*
+			 * When this frame has disposal 3, remember
+			 * exactly this state (before the frame is
+			 * drawn). The canvas is restored to it when
+			 * the next frame arrives.
+			 */
+
+			if (
+				frame.disposal === 3
+			) {
+
+				restoreBefore =
+					compositeCtx.getImageData(
+						0,
+						0,
+						outWidth,
+						outHeight
+					);
+
+			}
+
+
+			/*
+			 * Map this frame's palette indices to
+			 * RGBA pixels.
+			 */
+
+			patch.width =
+				frame.width;
+
+
+			patch.height =
+				frame.height;
+
+
+			const imageData =
+				patchCtx.createImageData(
+					frame.width,
+					frame.height
+				);
+
+
+			const pixelsData =
+				imageData.data;
+
+
+			const indices =
+				frame.pixels;
+
+
+			for (
+				let i = 0;
+				i < indices.length;
+				i++
+			) {
+
+				const index =
+					indices[i];
+
+
+				const colour =
+					frame.palette[index] ||
+					[0, 0, 0];
+
+
+				const o =
+					i * 4;
+
+
+				pixelsData[o] =
+					colour[0];
+
+
+				pixelsData[o + 1] =
+					colour[1];
+
+
+				pixelsData[o + 2] =
+					colour[2];
+
+
+				pixelsData[o + 3] =
+					frame.transparent &&
+					index ===
+						frame.transparentIndex
+						? 0
+						: 255;
+
+			}
+
+
+			patchCtx.putImageData(
+				imageData,
+				0,
+				0
+			);
+
+
+			const dx =
+				Math.round(
+					frame.left * scale
+				);
+
+
+			const dy =
+				Math.round(
+					frame.top * scale
+				);
+
+
+			const dw =
+				Math.round(
+					frame.width * scale
+				);
+
+
+			const dh =
+				Math.round(
+					frame.height * scale
+				);
+
+
+			compositeCtx.drawImage(
+				patch,
+				0,
+				0,
+				frame.width,
+				frame.height,
+				dx,
+				dy,
+				dw,
+				dh
+			);
+
+
+			/*
+			 * Capture the canvas exactly as the
+			 * frame is displayed.
+			 */
+
+			outFrames.push(
+				{
+					data:
+						compositeCtx.getImageData(
+							0,
+							0,
+							outWidth,
+							outHeight
+						),
+
+					durationMs:
+						frame.delayMs
+				}
+			);
+
+
+			startMs.push(
+				loopMs
+			);
+
+
+			loopMs +=
+				frame.delayMs;
+
+
+			/*
+			 * Disposal 2 clears the frame's area back
+			 * to the background: transparent when the
+			 * frame has a transparent colour, otherwise
+			 * the solid screen background colour.
+			 */
+
+			if (
+				frame.disposal === 2
+			) {
+
+				if (
+					frame.transparent
+				) {
+
+					compositeCtx.clearRect(
+						dx,
+						dy,
+						dw,
+						dh
+					);
+
+				}
+				else {
+
+					const bg =
+						(parsed.globalPalette || [])[
+							parsed.backgroundIndex
+						] ||
+						[0, 0, 0];
+
+					compositeCtx.fillStyle =
+						'rgb(' +
+							bg[0] +
+							',' +
+							bg[1] +
+							',' +
+							bg[2] +
+						')';
+
+					compositeCtx.fillRect(
+						dx,
+						dy,
+						dw,
+						dh
+					);
+
+				}
+
+			}
+
+
+		}
+
+
+		return {
+
+			width:
+				outWidth,
+
+			height:
+				outHeight,
+
+			frames:
+				outFrames,
+
+			startMs:
+				startMs,
+
+			loopMs:
+				loopMs,
+
+			frameCount:
+				outFrames.length
+
+		};
+
+	}
+
+
+	/*
+	 * Binary search for the frame that is visible
+	 * at loopTimeMs.
+	 */
+
+	function gifFrameIndexAt(
+		gif,
+		loopTimeMs
+	) {
+
+		const starts =
+			gif.startMs;
+
+
+		let low =
+			0;
+
+
+		let high =
+			starts.length - 1;
+
+
+		let answer =
+			0;
+
+
+		while (
+			low <= high
+		) {
+
+			const mid =
+				(low + high) >> 1;
+
+
+			if (
+				starts[mid] <=
+					loopTimeMs
+			) {
+
+				answer =
+					mid;
+
+
+				low =
+					mid + 1;
+
+			}
+			else {
+
+				high =
+					mid - 1;
+
+			}
+
+		}
+
+
+		return answer;
+
+	}
+
 	// =========================================================
 	// MP4 VIDEO GENERATOR
 	// =========================================================
@@ -4672,6 +7107,33 @@ function createHTML() {
 			);
 
 
+		/*
+		 * Scratch canvas used to blit the current
+		 * frame of a GIF slide before it is drawn
+		 * into the video.
+		 */
+
+		const gifCanvas =
+			document.createElement(
+				"canvas"
+			);
+
+
+		const gifCtx =
+			gifCanvas.getContext(
+				"2d"
+			);
+
+
+		/*
+		 * Captions are parsed once here so the
+		 * per-frame loop stays cheap.
+		 */
+
+		const captions =
+			getCaptions();
+
+
 		renderBtn.disabled =
 			true;
 
@@ -4733,6 +7195,9 @@ function createHTML() {
 		 */
 
 		await loadTitleFont();
+
+
+		await loadCaptionFont();
 
 
 		await loadStickerAssets();
@@ -5214,8 +7679,84 @@ function createHTML() {
 				i++
 			) {
 
-				const img =
-					slides[i].img;
+				const slide =
+					slides[i];
+
+
+				/*
+				 * For GIF slides the drawn "image" is the
+				 * current animation frame, picked from the
+				 * decoded frames by the time inside the
+				 * slide. The GIF loops as often as the
+				 * slide stays on screen.
+				 */
+
+				let img =
+					slide.img;
+
+
+				if (
+					slide.type ===
+						"gif"
+				) {
+
+					const gif =
+						slide.gif;
+
+
+					const timeInSlideMs =
+						(f / FPS) *
+							1000;
+
+
+					const loopMs =
+						gif.loopMs > 0
+							? gif.loopMs
+							: 1;
+
+
+					const loopTimeMs =
+						timeInSlideMs %
+							loopMs;
+
+
+					const frameIndex =
+						gifFrameIndexAt(
+							gif,
+							loopTimeMs
+						);
+
+
+					if (
+						gifCanvas.width !==
+							gif.width ||
+						gifCanvas.height !==
+							gif.height
+					) {
+
+						gifCanvas.width =
+							gif.width;
+
+
+						gifCanvas.height =
+							gif.height;
+
+					}
+
+
+					gifCtx.putImageData(
+						gif.frames[
+							frameIndex
+						].data,
+						0,
+						0
+					);
+
+
+					img =
+						gifCanvas;
+
+				}
 
 
 				const effect =
@@ -5521,6 +8062,33 @@ function createHTML() {
 
 
 					// =========================================
+
+					// TIMESTAMP CAPTION OVERLAY
+
+					// =========================================
+
+
+					const frameTimeMs =
+						(currentFrame * 1000) /
+							FPS;
+
+
+					drawCaptions(
+
+						ctx,
+
+						captions,
+
+						frameTimeMs,
+
+						WIDTH,
+
+						HEIGHT
+
+					);
+
+
+					// =========================================
 					// CREATE VIDEO FRAME
 					// =========================================
 
@@ -5804,7 +8372,7 @@ function createHTML() {
 
 
 			statusText.textContent =
-				"鉂� Video rendering failed.";
+				"鈿� Video rendering failed.";
 
 
 			alert(
@@ -5878,4 +8446,4 @@ function createHTML() {
 
 </html>
 `;
-			  }
+					}
