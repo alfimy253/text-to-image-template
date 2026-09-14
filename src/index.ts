@@ -7684,48 +7684,29 @@ function createHTML() {
 
 
 				/*
-				 * For GIF slides the drawn "image" is the
-				 * current animation frame, picked from the
-				 * decoded frames by the time inside the
-				 * slide. The GIF loops as often as the
-				 * slide stays on screen.
+				 * GIF slides are drawn from their decoded
+				 * animation frames. The scratch canvas holds
+				 * the current frame; it is refreshed for
+				 * every video frame of the slide, below.
 				 */
 
 				let img =
 					slide.img;
 
 
-				if (
+				const gif =
 					slide.type ===
 						"gif"
-				) {
-
-					const gif =
-						slide.gif;
+						? slide.gif
+						: null;
 
 
-					const timeInSlideMs =
-						(f / FPS) *
-							1000;
+				if (gif) {
 
-
-					const loopMs =
-						gif.loopMs > 0
-							? gif.loopMs
-							: 1;
-
-
-					const loopTimeMs =
-						timeInSlideMs %
-							loopMs;
-
-
-					const frameIndex =
-						gifFrameIndexAt(
-							gif,
-							loopTimeMs
-						);
-
+					/*
+					 * Size the scratch canvas once per
+					 * slide.
+					 */
 
 					if (
 						gifCanvas.width !==
@@ -7742,19 +7723,6 @@ function createHTML() {
 							gif.height;
 
 					}
-
-
-					gifCtx.putImageData(
-						gif.frames[
-							frameIndex
-						].data,
-						0,
-						0
-					);
-
-
-					img =
-						gifCanvas;
 
 				}
 
@@ -7775,6 +7743,52 @@ function createHTML() {
 					f < FRAMES_PER_SLIDE;
 					f++
 				) {
+
+
+					/*
+					 * Pick the current frame of the GIF
+					 * animation for this video frame.
+					 */
+
+					if (gif) {
+
+						const timeInSlideMs =
+							(f / FPS) *
+								1000;
+
+
+						const loopMs =
+							gif.loopMs > 0
+								? gif.loopMs
+								: 1;
+
+
+						const loopTimeMs =
+							timeInSlideMs %
+								loopMs;
+
+
+						const frameIndex =
+							gifFrameIndexAt(
+								gif,
+								loopTimeMs
+							);
+
+
+						gifCtx.putImageData(
+							gif.frames[
+								frameIndex
+							].data,
+							0,
+							0
+						);
+
+
+						img =
+							gifCanvas;
+
+					}
+
 
 					/*
 					 * Progress from 0 to 1.
@@ -8376,7 +8390,9 @@ function createHTML() {
 
 
 			alert(
-				"Video rendering failed. Try reducing the number of images or closing other browser tabs."
+				"Video rendering failed: " +
+					(error.message || String(error)) +
+					"\n\nTry reducing the number of images or closing other browser tabs."
 			);
 
 		}
@@ -8446,4 +8462,4 @@ function createHTML() {
 
 </html>
 `;
-					}
+}
