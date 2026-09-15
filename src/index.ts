@@ -1486,13 +1486,12 @@ function createHTML() {
 
 				<label class="upload-btn audio">
 
-					🎵 Upload MP3 Audio (max 3 · 2 min each)
+					🎵 Upload MP3 Audio
 
 					<input
 						type="file"
 						id="audio-upload"
 						accept=".mp3,audio/mpeg,audio/mp3,audio/*"
-						multiple
 					>
 
 				</label>
@@ -1808,12 +1807,12 @@ function createHTML() {
 
 			<label class="upload-btn">
 
-				📁 Upload Image or GIF (max 25 · 5 GIF)
+				📁 Upload Image, GIF or MP4 (25 images · 5 GIF · 5 MP4)
 
 				<input
 					type="file"
 					id="file-upload"
-					accept="image/*,image/gif,.gif"
+					accept="image/*,image/gif,.gif,video/mp4,.mp4"
 					multiple
 				>
 
@@ -1931,30 +1930,20 @@ function createHTML() {
 	let currentAudio = null;
 
 
-	/*
-	 * The uploaded tracks, in the
-	 * order they were added. At most
-	 * MAX_AUDIO_FILES tracks, each at
-	 * most MAX_AUDIO_DURATION_S long.
-	 */
-	let audioQueue =
-		[];
-
-
-	const MAX_AUDIO_FILES =
-		3;
-
-
-	const MAX_AUDIO_DURATION_S =
-		120;
-
-
 	const MAX_GIF_UPLOADS =
 		5;
 
 
 	const MAX_IMAGE_UPLOADS =
 		25;
+
+
+	const MAX_MP4_UPLOADS =
+		5;
+
+
+	const MP4_MAX_DURATION_S =
+		60;
 
 
 	/*
@@ -3062,87 +3051,390 @@ function createHTML() {
 	 * of the track has an image under it.
 	 */
 
-	function getSlideSequence() {
-
-		const secondsPerSlide =
-			getSecondsPerSlide();
-
-
+		/*
+		 * Seconds a slide occupies in
+		 * the video: stills and GIFs
+		 * take SLIDE_SECONDS_MIN, MP4
+		 * clips play their full length.
+	 */
+	
+	
+	function slideDurationSec(
+		slide
+	) {
+	
+	
+		if (
+			slide._partialSec !=
+				null
+		) {
+	
+	
+			return slide._partialSec;
+	
+	
+		}
+	
+	
+		return slide.type ===
+			"mp4"
+		&& slide.duration >
+			0
+		? slide.duration
+		: SLIDE_SECONDS_MIN;
+	
+	
+	}
+	
+	
+	function framesForSlide(
+		slide,
+		fps
+	) {
+	
+	
+		return Math.max(
+			1,
+			Math.round(
+				fps *
+				slideDurationSec(
+					slide
+				)
+			)
+		);
+	
+	
+	}
+	
+	
+	/*
+		 * Seeks a clip to a time in
+		 * seconds.
+	 */
+	
+	
+	async function seekClipTo(
+		video,
+		timeSec
+	) {
+	
+	
+		if (
+			video.readyState >=
+				2 &&
+			Math.abs(
+				video.currentTime -
+				timeSec
+			) <
+				0.02
+		) {
+	
+	
+			return;
+	
+	
+		}
+	
+	
+		try {
+	
+	
+			video.currentTime =
+				timeSec;
+	
+	
+			await new Promise(
+				(resolve) => {
+					let done =
+						false;
+					const finish =
+						() => {
+							if (!done) {
+								done =
+									true;
+								video.removeEventListener(
+									"seeked",
+									finish
+								);
+								resolve();
+							}
+						};
+					video.addEventListener(
+						"seeked",
+						finish
+					);
+					setTimeout(
+						finish,
+						2000
+					);
+				}
+			);
+	
+	
+		}
+	
+	
+		catch (seekError) {
+	
+	
+			console.error(
+				"Clip seek failed:",
+				seekError
+			);
+	
+	
+		}
+	
+	
+	}
+	
+	
+	/*
+		 * Waits for the next presented
+		 * frame of a playing clip so
+		 * the export stays in real time.
+	 */
+	
+	
+	async function nextClipFrame(
+		video
+	) {
+	
+	
+		if (
+			typeof video.requestVideoFrameCallback ===
+				"function"
+		) {
+	
+	
+			await new Promise(
+				(resolve) => {
+					video.requestVideoFrameCallback(
+						resolve
+					);
+				}
+			);
+	
+	
+			return;
+	
+	
+		}
+	
+	
+			await new Promise(
+				(resolve) =>
+				setTimeout(
+					resolve,
+					34
+				)
+			);
+	
+	
+	}
+	
+	
+	/*
+		 * Restarts a clip silently for
+		 * frame capture.
+	 */
+	
+	
+	async function prepareClip(
+		video
+	) {
+	
+	
+		try {
+	
+	
+			video.pause();
+	
+	
+			await seekClipTo(
+				video,
+				0
+			);
+	
+	
+			video.muted =
+				true;
+	
+	
+			await video.play();
+	
+	
+		}
+	
+	
+		catch (playError) {
+	
+	
+			console.error(
+				"Clip play failed:",
+				playError
+			);
+	
+	
+		}
+	
+	
+	}
+		function getSlideSequence() {
+	
+	
 		if (
 			!currentAudio ||
 			activeSlides.length ===
 				0
 		) {
-
+	
+	
 			return activeSlides.slice();
-
+	
+	
 		}
-
-
-		const slidesNeeded =
-			Math.ceil(
-				currentAudio.duration /
-					secondsPerSlide
-			);
-
-
+	
+	
+		/*
+			 * The silent video repeats until
+			 * it covers the audio. The last
+			 * slide is trimmed so the video
+			 * ends with the audio.
+		 */
+	
+	
 		const sequence =
-			activeSlides.slice();
-
-
+			[];
+	
+	
+		let totalSeconds =
+			0;
+	
+	
+		let index =
+			0;
+	
+	
+		let guard =
+			0;
+	
+	
 		while (
-			sequence.length <
-			slidesNeeded
+			totalSeconds <
+				currentAudio.duration -
+					0.05
+			&&
+			guard <
+				10000
 		) {
-
-			for (
-				const slide of activeSlides
-			) {
-
-				/*
-				 * Added one slide at a time so
-				 * the video only runs as long
-				 * as it needs to, instead of
-				 * always adding a whole extra
-				 * round of images.
-				 */
-
-				if (
-					sequence.length >=
-					slidesNeeded
-				) {
-
-					break;
-
-				}
-
-
-				sequence.push(
-					slide
+	
+	
+			const base =
+				activeSlides[
+					index %
+					activeSlides.length
+				];
+	
+	
+			const slideSeconds =
+				slideDurationSec(
+					base
 				);
-
+	
+	
+			const remaining =
+				currentAudio.duration -
+				totalSeconds;
+	
+	
+			if (
+				remaining <
+				slideSeconds -
+					0.05
+			) {
+	
+	
+				const trimmed =
+					Object.assign(
+						{},
+						base
+					);
+	
+	
+				trimmed._partialSec =
+					remaining;
+	
+	
+				sequence.push(
+					trimmed
+				);
+	
+	
+				totalSeconds =
+					currentAudio.duration;
+	
+	
 			}
-
+	
+	
+			else {
+	
+	
+				sequence.push(
+					base
+				);
+	
+	
+				totalSeconds +=
+					slideSeconds;
+	
+	
+			}
+	
+	
+			index++;
+	
+	
+			guard++;
+	
+	
 		}
-
-
+	
+	
 		return sequence;
-
+	
 	}
 
 
 	function updateDurationEstimate() {
-
-		const secondsPerSlide =
-			getSecondsPerSlide();
-
-
+	
+	
+		/*
+			 * One pass of the silent video.
+			 * With audio the video repeats to
+			 * cover it, so the finished length
+			 * is the audio length.
+		 */
+	
+	
+		const passSeconds =
+			activeSlides.reduce(
+				(sum, slide) =>
+					sum +
+					slideDurationSec(
+						slide
+					),
+				0
+			);
+	
+	
 		const totalSeconds =
-			secondsPerSlide *
-			getSlideSequence()
-				.length;
-
-
+			currentAudio
+			? currentAudio.duration
+			: passSeconds;
+	
+	
 		estimateValueEl.textContent =
 			formatSeconds(
 				totalSeconds
@@ -3150,32 +3442,31 @@ function createHTML() {
 			" (" +
 			totalSeconds.toFixed(1) +
 			"s)";
-
-
-		const sequence =
-			getSlideSequence();
-
-
+	
+	
 		if (
 			currentAudio &&
-			activeSlides.length > 0
+			activeSlides.length >
+				0
 		) {
-
+	
+	
 			estimateSourceEl.textContent =
-				"(" +
-				secondsPerSlide +
-				"s per image — images repeat " +
-				sequence.length +
-				"× to cover the audio)";
-
+				"(video repeats to cover the " +
+				formatSeconds(
+					currentAudio.duration
+				) +
+				" audio)";
+	
+	
 		}
 		else {
-
+	
+	
 			estimateSourceEl.textContent =
-				"(" +
-				secondsPerSlide +
-				"s per image)";
-
+				"(9s per image or GIF · MP4 clips play in full)";
+	
+	
 		}
 
 
@@ -3216,483 +3507,26 @@ function createHTML() {
 	// MP3 UPLOAD + DECODE
 	// =========================================================
 
-		/*
-	 * Encodes an AudioBuffer as a 16-bit
-	 * WAV blob, so the preview player can
-	 * play all queued tracks back to
-	 * back.
-	 */
-
-	function audioBufferToWav(
-		buffer
-	) {
-
-		const numCh =
-			buffer.numberOfChannels;
-
-
-		const sampleRate =
-			buffer.sampleRate;
-
-
-		const samples =
-			buffer.length;
-
-
-		const blockAlign =
-			numCh * 2;
-
-
-		const dataSize =
-			samples * blockAlign;
-
-
-		const ab =
-			new ArrayBuffer(
-				44 +
-					dataSize
-			);
-
-
-		const view =
-			new DataView(
-				ab
-			);
-
-
-		const writeStr =
-			(off, str) => {
-
-				for (
-					let i = 0;
-					i < str.length;
-					i++
-				) {
-
-					view.setUint8(
-						off + i,
-						str.charCodeAt(
-							i
-						)
-					);
-
-				}
-
-			};
-
-
-		writeStr(
-			0,
-			"RIFF"
-		);
-
-		view.setUint32(
-			4,
-			36 + dataSize,
-			true
-		);
-
-		writeStr(
-			8,
-			"WAVE"
-		);
-
-		writeStr(
-			12,
-			"fmt "
-		);
-
-		view.setUint32(
-			16,
-			16,
-			true
-		);
-
-		view.setUint16(
-			20,
-			1,
-			true
-		);
-
-		view.setUint16(
-			22,
-			numCh,
-			true
-		);
-
-		view.setUint32(
-			24,
-			sampleRate,
-			true
-		);
-
-		view.setUint32(
-			28,
-			sampleRate *
-				blockAlign,
-			true
-		);
-
-		view.setUint16(
-			32,
-			blockAlign,
-			true
-		);
-
-		view.setUint16(
-			34,
-			16,
-			true
-		);
-
-		writeStr(
-			36,
-			"data"
-		);
-
-		view.setUint32(
-			40,
-			dataSize,
-			true
-		);
-
-
-		const channels =
-			[];
-
-
-		for (
-			let c = 0;
-			c < numCh;
-			c++
-		) {
-
-			channels.push(
-				buffer.getChannelData(
-					c
-				)
-			);
-
-		}
-
-
-		let off =
-			44;
-
-
-		for (
-			let i = 0;
-			i < samples;
-			i++
-		) {
-
-			for (
-				let c = 0;
-				c < numCh;
-				c++
-			) {
-
-				const v =
-					Math.max(
-						-1,
-						Math.min(
-							1,
-							channels[c][i]
-						)
-					);
-
-
-				view.setInt16(
-					off,
-					v < 0
-						? v * 0x8000
-						: v * 0x7FFF,
-					true
-				);
-
-
-				off +=
-					2;
-
-			}
-
-		}
-
-
-		return new Blob(
-			[ab],
-			{
-				type:
-					"audio/wav"
-			}
-		);
-
-	}
-
-
-	/*
-	 * Combines the queued tracks into
-	 * the single currentAudio object
-	 * used by the rest of the app. The
-	 * tracks play back to back in the
-	 * order they were added.
-	 */
-
-	function rebuildAudioTrack() {
-
-		/*
-		 * Release the previous combined
-		 * preview URL.
-		 */
-
-		if (
-			currentAudio &&
-			currentAudio.combinedUrl
-		) {
-
-			URL.revokeObjectURL(
-				currentAudio.combinedUrl
-			);
-
-		}
-
-
-		if (!audioQueue.length) {
-
-			currentAudio =
-				null;
-
-
-			audioPreviewEl.pause();
-
-
-			audioPreviewEl.removeAttribute(
-				"src"
-			);
-
-
-			audioPreviewEl.load();
-
-
-			audioDetailsEl.style.display =
-				"none";
-
-
-			audioEmptyEl.style.display =
-				"block";
-
-
-			updateDurationEstimate();
-
-
-			return;
-
-		}
-
-
-		const firstBuffer =
-			audioQueue[0].buffer;
-
-
-		const totalLength =
-			audioQueue.reduce(
-				(sum, track) =>
-					sum +
-					track.buffer.length,
-				0
-			);
-
-
-		const context =
-			getAudioContext();
-
-
-		const combined =
-			context.createBuffer(
-				firstBuffer.numberOfChannels,
-				totalLength,
-				firstBuffer.sampleRate
-			);
-
-
-		let offset =
-			0;
-
-
-		for (
-			const track of audioQueue
-		) {
-
-			for (
-				let c = 0;
-				c < combined.numberOfChannels;
-				c++
-			) {
-
-				combined.copyToChannel(
-					track.buffer.getChannelData(
-						c
-					),
-					c,
-					offset
-				);
-
-			}
-
-
-			offset +=
-				track.buffer.length;
-
-		}
-
-
-		const combinedUrl =
-			URL.createObjectURL(
-				audioBufferToWav(
-					combined
-				)
-			);
-
-
-		const name =
-			audioQueue.length === 1
-				? audioQueue[0].name
-				: audioQueue
-						.map(
-							(track) =>
-								track.name
-						)
-						.join(
-							"  +  "
-						);
-
-
-		const totalDuration =
-			audioQueue.reduce(
-				(sum, track) =>
-					sum +
-					track.duration,
-				0
-			);
-
-
-		currentAudio = {
-
-			name:
-				name,
-
-			duration:
-				totalDuration,
-
-			buffer:
-				combined,
-
-			url:
-				combinedUrl,
-
-			combinedUrl:
-				combinedUrl
-
-		};
-
-
-		audioNameEl.textContent =
-			"";
-
-
-		audioQueue.forEach(
-			(track, index) => {
-
-				if (index > 0) {
-
-					audioNameEl.appendChild(
-						document.createElement(
-							"br"
-						)
-					);
-
-				}
-
-
-				audioNameEl.appendChild(
-					document.createTextNode(
-						(index + 1) +
-							". " +
-							track.name +
-							"  " +
-							formatSeconds(
-								track.duration
-							)
-					)
-				);
-
-			}
-		);
-
-
-		audioPreviewEl.src =
-			combinedUrl;
-
-
-		audioDetailsEl.style.display =
-			"flex";
-
-
-		audioEmptyEl.style.display =
-			"none";
-
-
-		updateDurationEstimate();
-
-	}
-
-audioUploadEl.addEventListener(
-	"change",
-	async (event) => {
-
-		const files =
-			Array.from(
-				event.target.files
-			);
-
-
-		/*
-		 * Allows the same files to be
-		 * selected again later.
-		 */
-
-		event.target.value =
-			"";
-
-
-		if (!files.length) {
-			return;
-		}
-
-
-		for (
-			const file of files
-		) {
+	audioUploadEl.addEventListener(
+		"change",
+		async (event) => {
+
+			const file =
+				event.target.files &&
+				event.target.files[0];
 
 
 			/*
-			 * At most three tracks in
-			 * total.
+			 * Allows the same file to be
+			 * selected again later.
 			 */
 
-			if (
-				audioQueue.length >=
-					MAX_AUDIO_FILES
-			) {
+			event.target.value =
+				"";
 
-				alert(
-					"You can add at most " +
-						MAX_AUDIO_FILES +
-						" audio files. Remove one first."
-				);
 
-				break;
-
+			if (!file) {
+				return;
 			}
 
 
@@ -3719,51 +3553,82 @@ audioUploadEl.addEventListener(
 
 
 				/*
-				 * Each track is limited to
-				 * two minutes.
+				 * Release the previous preview
+				 * URL before replacing it.
 				 */
 
 				if (
-					decoded.duration >
-						MAX_AUDIO_DURATION_S
+					currentAudio &&
+					currentAudio.url
 				) {
 
-					alert(
-						'"' +
-							file.name +
-							'" is "' +
-							formatSeconds(
-								decoded.duration
-							) +
-							" long. Each audio file must be at most " +
-							formatSeconds(
-								MAX_AUDIO_DURATION_S
-							) +
-							"."
+					URL.revokeObjectURL(
+						currentAudio.url
 					);
-
-					continue;
 
 				}
 
 
-				audioQueue.push(
-					{
-						name:
-							file.name,
+				currentAudio = {
 
-						duration:
-							decoded.duration,
+					name:
+						file.name,
 
-						buffer:
-							decoded,
+					duration:
+						decoded.duration,
 
-						url:
-							URL.createObjectURL(
-								file
-							)
-					}
+					buffer:
+						decoded,
+
+					url:
+						URL.createObjectURL(
+							file
+						)
+
+				};
+
+
+				audioNameEl.textContent =
+					"";
+
+
+				audioNameEl.appendChild(
+					document.createTextNode(
+						file.name + "  "
+					)
 				);
+
+
+				const durationSpan =
+					document.createElement(
+						"span"
+					);
+
+
+				durationSpan.textContent =
+					formatSeconds(
+						decoded.duration
+					);
+
+
+				audioNameEl.appendChild(
+					durationSpan
+				);
+
+
+				audioPreviewEl.src =
+					currentAudio.url;
+
+
+				audioDetailsEl.style.display =
+					"flex";
+
+
+				audioEmptyEl.style.display =
+					"none";
+
+
+				updateDurationEstimate();
 
 			}
 			catch (error) {
@@ -3773,6 +3638,7 @@ audioUploadEl.addEventListener(
 					error
 				);
 
+
 				alert(
 					"Could not read that audio file. Please upload a valid MP3."
 				);
@@ -3780,12 +3646,7 @@ audioUploadEl.addEventListener(
 			}
 
 		}
-
-
-		rebuildAudioTrack();
-
-	}
-);
+	);
 
 
 	// =========================================================
@@ -3804,23 +3665,6 @@ audioUploadEl.addEventListener(
 
 
 	function removeAudio() {
-
-
-		/*
-		 * Drop every queued track and
-		 * release its blob URL.
-		 */
-		audioQueue.forEach(
-			(track) =>
-				URL.revokeObjectURL(
-					track.url
-				)
-		);
-
-
-		audioQueue =
-			[];
-
 
 		if (
 			currentAudio &&
@@ -4141,6 +3985,7 @@ audioUploadEl.addEventListener(
 						activeSlides.filter(
 							(slide) =>
 								slide.id &&
+									!slide.type &&
 									slide.id.startsWith(
 										"custom"
 								)
@@ -4167,8 +4012,16 @@ audioUploadEl.addEventListener(
 					}
 
 
+					const fileIsMp4 =
+						file.type ===
+							"video/mp4" ||
+							/\\.(mp4|m4v)$/i.test(
+								file.name
+							);
+
 					if (
 						!fileIsGif &&
+						!fileIsMp4 &&
 						uploadedImages >=
 							MAX_IMAGE_UPLOADS
 					) {
@@ -4178,6 +4031,32 @@ audioUploadEl.addEventListener(
 							"You can add at most " +
 								MAX_IMAGE_UPLOADS +
 								" images (jpg, png, jpeg)."
+						);
+
+
+						break;
+
+
+					}
+					const uploadedMp4s =
+						activeSlides.filter(
+							(slide) =>
+								slide.type ===
+									"mp4"
+						).length;
+
+
+					if (
+						fileIsMp4 &&
+						uploadedMp4s >=
+							MAX_MP4_UPLOADS
+					) {
+
+
+						alert(
+							"You can add at most " +
+								MAX_MP4_UPLOADS +
+								" MP4 clips."
 						);
 
 
@@ -4201,7 +4080,114 @@ audioUploadEl.addEventListener(
 							imageURL;
 
 
-						await img.decode();
+						/*
+							 * MP4 clips are probed with a
+							 * video element instead of
+							 * being decoded as images.
+						 */
+
+
+						let clipVideo =
+							null;
+
+
+						let clipDuration =
+							0;
+
+
+						if (fileIsMp4) {
+
+
+							const probed =
+								document.createElement(
+									"video"
+								);
+
+
+							probed.muted =
+								true;
+
+
+							probed.playsInline =
+								true;
+
+
+							probed.src =
+								imageURL;
+
+
+							await new Promise(
+								(resolve, reject) => {
+									probed.addEventListener(
+										"loadedmetadata",
+										resolve,
+										{
+											once:
+												true
+										}
+									);
+
+
+									probed.addEventListener(
+										"error",
+										reject,
+										{
+											once:
+												true
+										}
+									);
+								}
+							);
+
+
+							clipDuration =
+								probed.duration;
+
+
+							if (
+								clipDuration >
+									MP4_MAX_DURATION_S
+							) {
+
+
+								alert(
+									"'" +
+										file.name +
+										"' is " +
+										formatSeconds(
+											clipDuration
+										) +
+										" long. Each MP4 clip must be at most " +
+										formatSeconds(
+											MP4_MAX_DURATION_S
+										) +
+										"."
+								);
+
+
+								URL.revokeObjectURL(
+									imageURL
+								);
+
+
+								continue;
+
+
+							}
+
+
+							clipVideo =
+								probed;
+
+
+						}
+						else {
+
+
+							await img.decode();
+
+
+						}
 
 
 						const customId =
@@ -4310,6 +4296,94 @@ audioUploadEl.addEventListener(
 						 * MP4 contains the full animation instead
 						 * of only the first frame.
 						 */
+
+						/*
+							 * MP4 clips get a video
+							 * preview and play silently
+							 * in the export.
+						 */
+
+
+						if (fileIsMp4) {
+
+
+							const videoContainer =
+								card.querySelector(
+									".image-container"
+								);
+
+
+							videoContainer.innerHTML =
+								"";
+
+
+							clipVideo.loop =
+								true;
+
+
+							clipVideo.autoplay =
+								true;
+
+
+							videoContainer.appendChild(
+								clipVideo
+							);
+
+
+							const videoBadge =
+								card.querySelector(
+									".badge"
+								);
+
+
+							if (videoBadge) {
+
+
+								videoBadge.textContent =
+									"MP4";
+
+
+							}
+
+
+							const videoPrompt =
+								card.querySelector(
+									".prompt"
+								);
+
+
+							if (videoPrompt) {
+
+
+								videoPrompt.textContent =
+									file.name +
+									"  |  " +
+									formatSeconds(
+										clipDuration
+									) +
+									" clip";
+
+
+							}
+
+
+							slideEntry.type =
+								"mp4";
+
+
+							slideEntry.videoEl =
+								clipVideo;
+
+
+							slideEntry.duration =
+								clipDuration;
+
+
+							slideEntry.img =
+								clipVideo;
+
+
+						}
 
 						if (
 							file.type ===
@@ -7987,19 +8061,16 @@ audioUploadEl.addEventListener(
 			getSecondsPerSlide();
 
 
-		const FRAMES_PER_SLIDE =
-			Math.max(
-				1,
-				Math.round(
-					FPS *
-						SECONDS_PER_SLIDE
-				)
-			);
-
-
 		const TOTAL_FRAMES =
-			slides.length *
-			FRAMES_PER_SLIDE;
+			slides.reduce(
+				(sum, slide) =>
+					sum +
+					framesForSlide(
+						slide,
+						FPS
+					),
+				0
+			);
 
 
 		/*
@@ -8430,6 +8501,34 @@ audioUploadEl.addEventListener(
 		];
 
 
+		/*
+		 * Pause every clip preview; the
+		 * active clip is played while
+		 * its frames are captured.
+		 */
+
+
+		for (
+			const pauseSlide of slides
+		) {
+
+
+			if (
+				pauseSlide.type ===
+					"mp4" &&
+				pauseSlide.videoEl
+			) {
+
+
+				pauseSlide.videoEl.pause();
+
+
+			}
+
+
+		}
+
+
 		let currentFrame =
 			0;
 
@@ -8494,6 +8593,31 @@ audioUploadEl.addEventListener(
 				}
 
 
+				const frames =
+					framesForSlide(
+						slide,
+						FPS
+					);
+
+
+				let clipVideo =
+					slide.type ===
+						"mp4"
+					? slide.videoEl
+					: null;
+
+
+				if (clipVideo) {
+
+
+					await prepareClip(
+						clipVideo
+					);
+
+
+				}
+
+
 				const effect =
 					effects[
 						i %
@@ -8507,9 +8631,29 @@ audioUploadEl.addEventListener(
 
 				for (
 					let f = 0;
-					f < FRAMES_PER_SLIDE;
+					f < frames;
 					f++
 				) {
+
+
+					/*
+					 * Keep the clip in real time.
+					 */
+
+
+					if (
+						clipVideo &&
+						f >
+							0
+					) {
+
+
+						await nextClipFrame(
+							clipVideo
+						);
+
+
+					}
 
 
 					/*
@@ -8564,7 +8708,7 @@ audioUploadEl.addEventListener(
 					const p =
 						f /
 						(
-							FRAMES_PER_SLIDE -
+							frames -
 							1
 						);
 
@@ -9002,6 +9146,17 @@ audioUploadEl.addEventListener(
 				}
 
 
+				if (
+					clipVideo
+				) {
+
+
+					clipVideo.pause();
+
+
+				}
+
+
 				/*
 				 * Make sure the encoder catches up
 				 * before processing another image.
@@ -9012,6 +9167,50 @@ audioUploadEl.addEventListener(
 
 				statusText.textContent =
 					\`Completed image \${i + 1} of \${slides.length}\`;
+
+			}
+
+
+			/*
+			 * Resume the clip previews.
+			 */
+
+
+			for (
+				const resumeSlide of slides
+			) {
+
+
+				if (
+					resumeSlide.type ===
+						"mp4" &&
+					resumeSlide.videoEl
+				) {
+
+
+					try {
+
+
+						resumeSlide.videoEl.play();
+
+
+					}
+
+
+					catch (resumeError) {
+
+
+						console.error(
+							"Clip resume failed:",
+							resumeError
+						);
+
+
+					}
+
+
+				}
+
 
 			}
 
