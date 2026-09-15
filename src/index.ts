@@ -2112,6 +2112,15 @@ function createHTML() {
 	const STICKER_HEIGHT =
 		125;
 
+	/*
+	 * The sticker box must never be
+	 * taller than this, so it does not
+	 * look stretched when the video is
+	 * viewed in fullscreen.
+	 */
+	const STICKER_MAX_HEIGHT =
+		200;
+
 
 	const STICKER_WIDTH =
 		435;
@@ -2146,7 +2155,7 @@ function createHTML() {
 
 
 	const STICKER_TEXT_SIZE =
-		18;
+		12;
 
 
 	/*
@@ -5197,8 +5206,16 @@ function createHTML() {
 			STICKER_WIDTH;
 
 
+		/*
+		 * Capped so the box never looks
+		 * stretched, even when the video
+		 * is viewed in fullscreen.
+		 */
 		const boxHeight =
-			STICKER_HEIGHT;
+			Math.min(
+				STICKER_HEIGHT,
+				STICKER_MAX_HEIGHT
+			);
 
 
 		/*
@@ -5445,9 +5462,19 @@ function createHTML() {
 
 
 		/*
-		 * Lines are centred as a block
-		 * around the middle of the box.
+		 * The text lines are right aligned
+		 * against the visible right edge of
+		 * the box, while the emoji stay
+		 * left aligned.
 		 */
+		context.textAlign =
+			"right";
+
+		const textRight =
+			x +
+			boxWidth -
+				STICKER_EXCEED_RIGHT -
+				padding;
 
 		const startY =
 			middleY -
@@ -5462,7 +5489,7 @@ function createHTML() {
 
 				context.fillText(
 					line,
-					cursor,
+					textRight,
 					startY +
 						index *
 							label.lineHeight
@@ -8462,4 +8489,4 @@ function createHTML() {
 
 </html>
 `;
-				}
+			  }
