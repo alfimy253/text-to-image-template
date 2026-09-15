@@ -8392,7 +8392,7 @@ function createHTML() {
 			alert(
 				"Video rendering failed: " +
 					(error.message || String(error)) +
-					"\n\nTry reducing the number of images or closing other browser tabs."
+					"\\n\\nTry reducing the number of images or closing other browser tabs."
 			);
 
 		}
@@ -8462,4 +8462,4 @@ function createHTML() {
 
 </html>
 `;
-							}
+				}
