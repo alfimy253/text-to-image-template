@@ -1486,12 +1486,13 @@ function createHTML() {
 
 				<label class="upload-btn audio">
 
-					🎵 Upload MP3 Audio
+					🎵 Upload MP3 Audio (max 3 · 2 min each)
 
 					<input
 						type="file"
 						id="audio-upload"
 						accept=".mp3,audio/mpeg,audio/mp3,audio/*"
+						multiple
 					>
 
 				</label>
@@ -1807,7 +1808,7 @@ function createHTML() {
 
 			<label class="upload-btn">
 
-				📁 Upload Image or GIF
+				📁 Upload Image or GIF (max 25 · 5 GIF)
 
 				<input
 					type="file"
@@ -1928,6 +1929,32 @@ function createHTML() {
 	 */
 
 	let currentAudio = null;
+
+
+	/*
+	 * The uploaded tracks, in the
+	 * order they were added. At most
+	 * MAX_AUDIO_FILES tracks, each at
+	 * most MAX_AUDIO_DURATION_S long.
+	 */
+	let audioQueue =
+		[];
+
+
+	const MAX_AUDIO_FILES =
+		3;
+
+
+	const MAX_AUDIO_DURATION_S =
+		120;
+
+
+	const MAX_GIF_UPLOADS =
+		5;
+
+
+	const MAX_IMAGE_UPLOADS =
+		25;
 
 
 	/*
@@ -3189,26 +3216,483 @@ function createHTML() {
 	// MP3 UPLOAD + DECODE
 	// =========================================================
 
-	audioUploadEl.addEventListener(
-		"change",
-		async (event) => {
+		/*
+	 * Encodes an AudioBuffer as a 16-bit
+	 * WAV blob, so the preview player can
+	 * play all queued tracks back to
+	 * back.
+	 */
 
-			const file =
-				event.target.files &&
-				event.target.files[0];
+	function audioBufferToWav(
+		buffer
+	) {
+
+		const numCh =
+			buffer.numberOfChannels;
+
+
+		const sampleRate =
+			buffer.sampleRate;
+
+
+		const samples =
+			buffer.length;
+
+
+		const blockAlign =
+			numCh * 2;
+
+
+		const dataSize =
+			samples * blockAlign;
+
+
+		const ab =
+			new ArrayBuffer(
+				44 +
+					dataSize
+			);
+
+
+		const view =
+			new DataView(
+				ab
+			);
+
+
+		const writeStr =
+			(off, str) => {
+
+				for (
+					let i = 0;
+					i < str.length;
+					i++
+				) {
+
+					view.setUint8(
+						off + i,
+						str.charCodeAt(
+							i
+						)
+					);
+
+				}
+
+			};
+
+
+		writeStr(
+			0,
+			"RIFF"
+		);
+
+		view.setUint32(
+			4,
+			36 + dataSize,
+			true
+		);
+
+		writeStr(
+			8,
+			"WAVE"
+		);
+
+		writeStr(
+			12,
+			"fmt "
+		);
+
+		view.setUint32(
+			16,
+			16,
+			true
+		);
+
+		view.setUint16(
+			20,
+			1,
+			true
+		);
+
+		view.setUint16(
+			22,
+			numCh,
+			true
+		);
+
+		view.setUint32(
+			24,
+			sampleRate,
+			true
+		);
+
+		view.setUint32(
+			28,
+			sampleRate *
+				blockAlign,
+			true
+		);
+
+		view.setUint16(
+			32,
+			blockAlign,
+			true
+		);
+
+		view.setUint16(
+			34,
+			16,
+			true
+		);
+
+		writeStr(
+			36,
+			"data"
+		);
+
+		view.setUint32(
+			40,
+			dataSize,
+			true
+		);
+
+
+		const channels =
+			[];
+
+
+		for (
+			let c = 0;
+			c < numCh;
+			c++
+		) {
+
+			channels.push(
+				buffer.getChannelData(
+					c
+				)
+			);
+
+		}
+
+
+		let off =
+			44;
+
+
+		for (
+			let i = 0;
+			i < samples;
+			i++
+		) {
+
+			for (
+				let c = 0;
+				c < numCh;
+				c++
+			) {
+
+				const v =
+					Math.max(
+						-1,
+						Math.min(
+							1,
+							channels[c][i]
+						)
+					);
+
+
+				view.setInt16(
+					off,
+					v < 0
+						? v * 0x8000
+						: v * 0x7FFF,
+					true
+				);
+
+
+				off +=
+					2;
+
+			}
+
+		}
+
+
+		return new Blob(
+			[ab],
+			{
+				type:
+					"audio/wav"
+			}
+		);
+
+	}
+
+
+	/*
+	 * Combines the queued tracks into
+	 * the single currentAudio object
+	 * used by the rest of the app. The
+	 * tracks play back to back in the
+	 * order they were added.
+	 */
+
+	function rebuildAudioTrack() {
+
+		/*
+		 * Release the previous combined
+		 * preview URL.
+		 */
+
+		if (
+			currentAudio &&
+			currentAudio.combinedUrl
+		) {
+
+			URL.revokeObjectURL(
+				currentAudio.combinedUrl
+			);
+
+		}
+
+
+		if (!audioQueue.length) {
+
+			currentAudio =
+				null;
+
+
+			audioPreviewEl.pause();
+
+
+			audioPreviewEl.removeAttribute(
+				"src"
+			);
+
+
+			audioPreviewEl.load();
+
+
+			audioDetailsEl.style.display =
+				"none";
+
+
+			audioEmptyEl.style.display =
+				"block";
+
+
+			updateDurationEstimate();
+
+
+			return;
+
+		}
+
+
+		const firstBuffer =
+			audioQueue[0].buffer;
+
+
+		const totalLength =
+			audioQueue.reduce(
+				(sum, track) =>
+					sum +
+					track.buffer.length,
+				0
+			);
+
+
+		const context =
+			getAudioContext();
+
+
+		const combined =
+			context.createBuffer(
+				firstBuffer.numberOfChannels,
+				totalLength,
+				firstBuffer.sampleRate
+			);
+
+
+		let offset =
+			0;
+
+
+		for (
+			const track of audioQueue
+		) {
+
+			for (
+				let c = 0;
+				c < combined.numberOfChannels;
+				c++
+			) {
+
+				combined.copyToChannel(
+					track.buffer.getChannelData(
+						c
+					),
+					c,
+					offset
+				);
+
+			}
+
+
+			offset +=
+				track.buffer.length;
+
+		}
+
+
+		const combinedUrl =
+			URL.createObjectURL(
+				audioBufferToWav(
+					combined
+				)
+			);
+
+
+		const name =
+			audioQueue.length === 1
+				? audioQueue[0].name
+				: audioQueue
+						.map(
+							(track) =>
+								track.name
+						)
+						.join(
+							"  +  "
+						);
+
+
+		const totalDuration =
+			audioQueue.reduce(
+				(sum, track) =>
+					sum +
+					track.duration,
+				0
+			);
+
+
+		currentAudio = {
+
+			name:
+				name,
+
+			duration:
+				totalDuration,
+
+			buffer:
+				combined,
+
+			url:
+				combinedUrl,
+
+			combinedUrl:
+				combinedUrl
+
+		};
+
+
+		audioNameEl.textContent =
+			"";
+
+
+		audioQueue.forEach(
+			(track, index) => {
+
+				if (index > 0) {
+
+					audioNameEl.appendChild(
+						document.createElement(
+							"br"
+						)
+					);
+
+				}
+
+
+				audioNameEl.appendChild(
+					document.createTextNode(
+						(index + 1) +
+							". " +
+							track.name +
+							"  " +
+							formatSeconds(
+								track.duration
+							)
+					)
+				);
+
+			}
+		);
+
+
+		audioPreviewEl.src =
+			combinedUrl;
+
+
+		audioDetailsEl.style.display =
+			"flex";
+
+
+		audioEmptyEl.style.display =
+			"none";
+
+
+		updateDurationEstimate();
+
+	}
+
+audioUploadEl.addEventListener(
+	"change",
+	async (event) => {
+
+		const files =
+			Array.from(
+				event.target.files
+			);
+
+
+		/*
+		 * Allows the same files to be
+		 * selected again later.
+		 */
+
+		event.target.value =
+			"";
+
+
+		if (!files.length) {
+			return;
+		}
+
+
+		for (
+			const file of files
+		) {
 
 
 			/*
-			 * Allows the same file to be
-			 * selected again later.
+			 * At most three tracks in
+			 * total.
 			 */
 
-			event.target.value =
-				"";
+			if (
+				audioQueue.length >=
+					MAX_AUDIO_FILES
+			) {
 
+				alert(
+					"You can add at most " +
+						MAX_AUDIO_FILES +
+						" audio files. Remove one first."
+				);
 
-			if (!file) {
-				return;
+				break;
+
 			}
 
 
@@ -3235,82 +3719,51 @@ function createHTML() {
 
 
 				/*
-				 * Release the previous preview
-				 * URL before replacing it.
+				 * Each track is limited to
+				 * two minutes.
 				 */
 
 				if (
-					currentAudio &&
-					currentAudio.url
+					decoded.duration >
+						MAX_AUDIO_DURATION_S
 				) {
 
-					URL.revokeObjectURL(
-						currentAudio.url
+					alert(
+						'"' +
+							file.name +
+							'" is "' +
+							formatSeconds(
+								decoded.duration
+							) +
+							" long. Each audio file must be at most " +
+							formatSeconds(
+								MAX_AUDIO_DURATION_S
+							) +
+							"."
 					);
+
+					continue;
 
 				}
 
 
-				currentAudio = {
+				audioQueue.push(
+					{
+						name:
+							file.name,
 
-					name:
-						file.name,
+						duration:
+							decoded.duration,
 
-					duration:
-						decoded.duration,
+						buffer:
+							decoded,
 
-					buffer:
-						decoded,
-
-					url:
-						URL.createObjectURL(
-							file
-						)
-
-				};
-
-
-				audioNameEl.textContent =
-					"";
-
-
-				audioNameEl.appendChild(
-					document.createTextNode(
-						file.name + "  "
-					)
+						url:
+							URL.createObjectURL(
+								file
+							)
+					}
 				);
-
-
-				const durationSpan =
-					document.createElement(
-						"span"
-					);
-
-
-				durationSpan.textContent =
-					formatSeconds(
-						decoded.duration
-					);
-
-
-				audioNameEl.appendChild(
-					durationSpan
-				);
-
-
-				audioPreviewEl.src =
-					currentAudio.url;
-
-
-				audioDetailsEl.style.display =
-					"flex";
-
-
-				audioEmptyEl.style.display =
-					"none";
-
-
-				updateDurationEstimate();
 
 			}
 			catch (error) {
@@ -3320,7 +3773,6 @@ function createHTML() {
 					error
 				);
 
-
 				alert(
 					"Could not read that audio file. Please upload a valid MP3."
 				);
@@ -3328,7 +3780,12 @@ function createHTML() {
 			}
 
 		}
-	);
+
+
+		rebuildAudioTrack();
+
+	}
+);
 
 
 	// =========================================================
@@ -3347,6 +3804,23 @@ function createHTML() {
 
 
 	function removeAudio() {
+
+
+		/*
+		 * Drop every queued track and
+		 * release its blob URL.
+		 */
+		audioQueue.forEach(
+			(track) =>
+				URL.revokeObjectURL(
+					track.url
+				)
+		);
+
+
+		audioQueue =
+			[];
+
 
 		if (
 			currentAudio &&
@@ -3639,6 +4113,78 @@ function createHTML() {
 					const file of files
 				) {
 
+					/*
+						 * Upload limits: at most
+						 * MAX_GIF_UPLOADS GIFs and
+						 * MAX_IMAGE_UPLOADS still
+						 * images.
+					 */
+
+
+					const fileIsGif =
+						file.type ===
+							"image/gif" ||
+							/\.gif$/i.test(
+								file.name
+							);
+
+
+					const uploadedGifs =
+						activeSlides.filter(
+							(slide) =>
+								slide.type ===
+									"gif"
+						).length;
+
+
+					const uploadedImages =
+						activeSlides.filter(
+							(slide) =>
+								slide.id &&
+									slide.id.startsWith(
+										"custom"
+								)
+						).length;
+
+
+					if (
+						fileIsGif &&
+						uploadedGifs >=
+							MAX_GIF_UPLOADS
+					) {
+
+
+						alert(
+							"You can add at most " +
+								MAX_GIF_UPLOADS +
+								" GIFs."
+						);
+
+
+						break;
+
+
+					}
+
+
+					if (
+						!fileIsGif &&
+						uploadedImages >=
+							MAX_IMAGE_UPLOADS
+					) {
+
+
+						alert(
+							"You can add at most " +
+								MAX_IMAGE_UPLOADS +
+								" images (jpg, png, jpeg)."
+						);
+
+
+						break;
+
+
+					}
 					try {
 
 						const imageURL =
