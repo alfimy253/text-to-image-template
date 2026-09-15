@@ -2110,7 +2110,7 @@ function createHTML() {
 	 */
 
 	const STICKER_HEIGHT =
-		125;
+		110;
 
 	/*
 	 * The sticker box must never be
@@ -2119,7 +2119,7 @@ function createHTML() {
 	 * viewed in fullscreen.
 	 */
 	const STICKER_MAX_HEIGHT =
-		200;
+		170;
 
 
 	const STICKER_WIDTH =
@@ -2155,7 +2155,7 @@ function createHTML() {
 
 
 	const STICKER_TEXT_SIZE =
-		12;
+		14;
 
 
 	/*
@@ -2166,6 +2166,44 @@ function createHTML() {
 
 	const STICKER_EMOJI_FONT =
 		"'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Segoe UI Symbol', sans-serif";
+
+
+	/*
+	 * Every sticker always carries a
+	 * heart as its first icon.
+	 */
+	const STICKER_HEART =
+		"\u2764\uFE0F";
+
+
+	/*
+	 * The sticker's icon string: the
+	 * heart first, then the preset's
+	 * own emoji. Presets that already
+	 * start with a heart are not
+	 * doubled.
+	 */
+	function stickerEmojiString(
+		sticker
+	) {
+
+		if (
+			sticker.emoji.indexOf(
+				STICKER_HEART
+			) === 0
+		) {
+
+			return sticker.emoji;
+
+		}
+
+
+		return (
+			STICKER_HEART +
+				sticker.emoji
+		);
+
+	}
 
 
 	/*
@@ -4783,7 +4821,9 @@ function createHTML() {
 
 		const points =
 			emojiCodePoints(
-				sticker.emoji
+				stickerEmojiString(
+					sticker
+				)
 			);
 
 
@@ -4908,7 +4948,9 @@ function createHTML() {
 
 
 		return context.measureText(
-			sticker.emoji
+			stickerEmojiString(
+				sticker
+			)
 		).width;
 
 	}
@@ -5357,6 +5399,7 @@ function createHTML() {
 			Math.max(
 				0,
 				maxContent -
+					STICKER_EXCEED_RIGHT -
 					emojiWidth -
 					gap
 			);
@@ -5434,7 +5477,9 @@ function createHTML() {
 
 
 			context.fillText(
-				sticker.emoji,
+				stickerEmojiString(
+					sticker
+				),
 				cursor,
 				middleY
 			);
@@ -5462,19 +5507,27 @@ function createHTML() {
 
 
 		/*
-		 * The text lines are right aligned
-		 * against the visible right edge of
-		 * the box, while the emoji stay
-		 * left aligned.
+		 * The text lines are centred inside
+		 * the room left by the icons: from
+		 * just after the icons to the visible
+		 * right edge of the box.
 		 */
 		context.textAlign =
-			"right";
+			"center";
+
+		const textLeft =
+			cursor;
 
 		const textRight =
 			x +
 			boxWidth -
 				STICKER_EXCEED_RIGHT -
 				padding;
+
+		const textCenter =
+			(textLeft +
+				textRight) /
+				2;
 
 		const startY =
 			middleY -
@@ -5489,7 +5542,7 @@ function createHTML() {
 
 				context.fillText(
 					line,
-					textRight,
+					textCenter,
 					startY +
 						index *
 							label.lineHeight
