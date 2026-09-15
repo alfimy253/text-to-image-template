@@ -1433,7 +1433,7 @@ function createHTML() {
 	<div class="header">
 
 		<h1>
-			馃幀 Cloudflare AI Video Studio
+			🎬 Cloudflare AI Video Studio
 		</h1>
 
 		<p>
@@ -1477,7 +1477,7 @@ function createHTML() {
 		<div class="audio-panel">
 
 			<div class="audio-title">
-				Audio Track 鈥� upload an MP3
+				Audio Track — upload an MP3
 				before rendering
 			</div>
 
@@ -1486,7 +1486,7 @@ function createHTML() {
 
 				<label class="upload-btn audio">
 
-					馃幍 Upload MP3 Audio
+					🎵 Upload MP3 Audio
 
 					<input
 						type="file"
@@ -1501,7 +1501,7 @@ function createHTML() {
 					class="audio-empty"
 					id="audio-empty"
 				>
-					No audio added 鈥�
+					No audio added —
 					the MP4 will be silent.
 				</div>
 
@@ -1539,7 +1539,7 @@ function createHTML() {
 						class="remove-audio-btn"
 						onclick="removeAudio()"
 					>
-						馃棏 Remove Audio
+						🗑 Remove Audio
 					</button>
 
 				</div>
@@ -1643,7 +1643,7 @@ function createHTML() {
 
 			<div class="audio-note">
 				Drawn straight onto every
-				frame 鈥� no background box
+				frame — no background box
 				and no highlight.
 			</div>
 
@@ -1679,31 +1679,31 @@ function createHTML() {
 						</option>
 
 						<option value="like">
-							馃憤 Like
+							👍 Like
 						</option>
 
 						<option value="love">
-							鉂わ笍 Love it
+							❤️ Love it
 						</option>
 
 						<option value="subscribe">
-							馃敂 Subscribe
+							🔔 Subscribe
 						</option>
 
 						<option
 							value="like-subscribe"
 						>
-							馃憤馃敂 Like &amp; Subscribe
+							👍🔔 Like &amp; Subscribe
 						</option>
 
 						<option value="watch">
-							馃幀 Watch Video
+							🎬 Watch Video
 						</option>
 
 						<option
 							value="watch-like-subscribe"
 						>
-							馃幀馃憤馃敂 Watch, Like
+							🎬👍🔔 Watch, Like
 							&amp; Subscribe
 						</option>
 
@@ -1715,7 +1715,7 @@ function createHTML() {
 
 
 			<div class="audio-note">
-				White 200 脳 80 rectangle, square
+				White 200 × 80 rectangle, square
 				corners, flush with the bottom
 				right corner and hanging 40px
 				past the right edge. Drawn on
@@ -1806,7 +1806,7 @@ function createHTML() {
 
 			<label class="upload-btn">
 
-				馃搧 Upload Image or GIF
+				📁 Upload Image or GIF
 
 				<input
 					type="file"
@@ -1825,18 +1825,18 @@ function createHTML() {
 				<select id="quality-select">
 
 					<option value="low">
-						480p 路 Light (1.2 Mbps)
+						480p · Light (1.2 Mbps)
 					</option>
 
 					<option
 						value="balanced"
 						selected
 					>
-						720p 路 Balanced (2.5 Mbps)
+						720p · Balanced (2.5 Mbps)
 					</option>
 
 					<option value="high">
-						720p 路 High (5 Mbps)
+						720p · High (5 Mbps)
 					</option>
 
 				</select>
@@ -1849,7 +1849,7 @@ function createHTML() {
 				onclick="generateMP4()"
 			>
 
-				馃帪锔� Render & Download MP4 Video
+				🎞️ Render & Download MP4 Video
 
 			</button>
 
@@ -2110,7 +2110,7 @@ function createHTML() {
 	 */
 
 	const STICKER_HEIGHT =
-		110;
+		150;
 
 	/*
 	 * The sticker box must never be
@@ -2119,7 +2119,7 @@ function createHTML() {
 	 * viewed in fullscreen.
 	 */
 	const STICKER_MAX_HEIGHT =
-		170;
+		150;
 
 
 	const STICKER_WIDTH =
@@ -2150,12 +2150,24 @@ function createHTML() {
 		20;
 
 
+	const STICKER_ICON_GAP =
+		4;
+
+
 	const STICKER_EMOJI_SIZE =
 		33;
 
 
 	const STICKER_TEXT_SIZE =
+		16;
+
+
+	const STICKER_TEXT_MIN =
 		14;
+
+
+	const STICKER_TEXT_MAX =
+		16;
 
 
 	/*
@@ -2170,17 +2182,17 @@ function createHTML() {
 
 	/*
 	 * Every sticker always carries a
-	 * heart as its first icon.
+	 * fire as its first icon.
 	 */
-	const STICKER_HEART =
-		"\u2764\uFE0F";
+	const STICKER_FIRE =
+		"\u{1F525}";
 
 
 	/*
 	 * The sticker's icon string: the
-	 * heart first, then the preset's
+	 * fire first, then the preset's
 	 * own emoji. Presets that already
-	 * start with a heart are not
+	 * start with a fire are not
 	 * doubled.
 	 */
 	function stickerEmojiString(
@@ -2189,7 +2201,7 @@ function createHTML() {
 
 		if (
 			sticker.emoji.indexOf(
-				STICKER_HEART
+				STICKER_FIRE
 			) === 0
 		) {
 
@@ -2199,7 +2211,7 @@ function createHTML() {
 
 
 		return (
-			STICKER_HEART +
+			STICKER_FIRE +
 				sticker.emoji
 		);
 
@@ -2248,14 +2260,14 @@ function createHTML() {
 
 		watch: {
 			emoji:
-				"\u{1F3AC}",
+				"\u{1F525}",
 			text:
 				"Watch Video"
 		},
 
 		"watch-like-subscribe": {
 			emoji:
-				"\u{1F3AC}\u{1F44D}\u{1F514}",
+				"\u{1F525}\u{1F44D}\u{1F514}",
 			text:
 				"Watch, Like & Subscribe"
 		}
@@ -3083,9 +3095,9 @@ function createHTML() {
 			estimateSourceEl.textContent =
 				"(" +
 				secondsPerSlide +
-				"s per image 鈥� images repeat " +
+				"s per image — images repeat " +
 				sequence.length +
-				"脳 to cover the audio)";
+				"× to cover the audio)";
 
 		}
 		else {
@@ -3124,7 +3136,7 @@ function createHTML() {
 
 
 		estimateSizeEl.textContent =
-			"路 approx. " +
+			"· approx. " +
 			formatBytes(bytes) +
 			" file";
 
@@ -4931,14 +4943,45 @@ function createHTML() {
 		sticker
 	) {
 
-		if (stickerEmojiImages) {
 
-			return (
-				emojiSize *
-				stickerEmojiImages.length
+		const iconString =
+			stickerEmojiString(
+				sticker
 			);
 
+
+
+		const pointCount =
+			emojiCodePoints(
+				iconString
+			).length;
+
+
+
+		if (!pointCount) {
+
+
+
+			return 0;
+
+
 		}
+
+
+
+		if (stickerEmojiImages) {
+
+
+
+			return (
+				emojiSize * pointCount
+			) +
+			STICKER_ICON_GAP *
+				(pointCount - 1);
+
+
+		}
+
 
 
 		context.font =
@@ -4947,11 +4990,37 @@ function createHTML() {
 			STICKER_EMOJI_FONT;
 
 
-		return context.measureText(
-			stickerEmojiString(
-				sticker
-			)
-		).width;
+
+		let width =
+			0;
+
+
+
+		for (
+			const point of
+				emojiCodePoints(
+					iconString
+				)
+			) {
+
+
+			width +=
+				context.measureText(
+					String.fromCodePoint(
+						Number(
+							"0x" + point
+						)
+					)
+				).width +
+				STICKER_ICON_GAP;
+
+
+		}
+
+
+
+		return width - STICKER_ICON_GAP;
+
 
 	}
 
@@ -5359,35 +5428,10 @@ function createHTML() {
 
 
 		/*
-		 * The emoji never take more than 45%
-		 * of the room, otherwise a long
-		 * label gets squeezed to nothing.
+		 * The icons keep their fixed size;
+		 * the label wraps or shrinks instead
+		 * of squeezing the icons.
 		 */
-
-		const emojiBudget =
-			maxContent *
-			0.45;
-
-
-		if (
-			emojiWidth >
-				emojiBudget &&
-			emojiBudget > 0
-		) {
-
-			emojiSize *=
-				emojiBudget /
-				emojiWidth;
-
-
-			emojiWidth =
-				measureEmoji(
-					context,
-					emojiSize,
-					sticker
-				);
-
-		}
 
 
 		/*
@@ -5415,6 +5459,24 @@ function createHTML() {
 					padding *
 						2,
 				textSize
+			);
+
+
+
+		/*
+		 * The label font is clamped:
+		 * never below 14px, never above
+		 * 16px.
+		 */
+
+
+		label.size =
+			Math.max(
+				STICKER_TEXT_MIN,
+				Math.min(
+					STICKER_TEXT_MAX,
+					label.size
+				)
 			);
 
 
@@ -5459,7 +5521,8 @@ function createHTML() {
 
 
 				cursor +=
-					emojiSize;
+					emojiSize +
+						STICKER_ICON_GAP;
 
 			}
 
@@ -5476,17 +5539,52 @@ function createHTML() {
 				"#111111";
 
 
-			context.fillText(
-				stickerEmojiString(
-					sticker
-				),
-				cursor,
-				middleY
-			);
+
+			let iconCursor =
+				cursor;
 
 
-			cursor +=
-				emojiWidth;
+
+			for (
+				const point of
+					emojiCodePoints(
+						stickerEmojiString(
+							sticker
+						)
+					)
+			) {
+
+
+				const icon =
+					String.fromCodePoint(
+						Number(
+							"0x" + point
+						)
+					);
+
+
+
+				context.fillText(
+					icon,
+					iconCursor,
+					middleY
+				);
+
+
+
+				iconCursor +=
+					context.measureText(
+						icon
+					).width +
+					STICKER_ICON_GAP;
+
+
+			}
+
+
+
+			cursor =
+				iconCursor;
 
 		}
 
@@ -8294,7 +8392,7 @@ function createHTML() {
 
 
 						statusText.textContent =
-							\`Rendering image \${i + 1}/\${slides.length} 鈥� \${percent}%\`;
+							\`Rendering image \${i + 1}/\${slides.length} — \${percent}%\`;
 
 
 						/*
@@ -8450,11 +8548,11 @@ function createHTML() {
 			statusText.textContent =
 				streamingToFile
 					? audioTrack
-						? "鉁� MP4 saved to disk with audio!"
-						: "鉁� MP4 saved to disk!"
+						? "✓ MP4 saved to disk with audio!"
+						: "✓ MP4 saved to disk!"
 					: audioTrack
-						? "鉁� MP4 Downloaded with audio!"
-						: "鉁� MP4 Downloaded!";
+						? "✓ MP4 Downloaded with audio!"
+						: "✓ MP4 Downloaded!";
 
 		}
 		catch (error) {
@@ -8466,7 +8564,7 @@ function createHTML() {
 
 
 			statusText.textContent =
-				"鈿� Video rendering failed.";
+				"⚠ Video rendering failed.";
 
 
 			alert(
