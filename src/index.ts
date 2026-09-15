@@ -1766,7 +1766,8 @@ function createHTML() {
 				Each caption appears centred horizontally at 4/7 of the
 				height from the bottom, in 17px Bookman with black text on a
 				white highlight (max 40 characters). It stays on screen until
-				the next caption appears, or until the video ends.
+				the next caption appears. The last caption is capped
+				at 10 seconds on screen.
 			</div>
 
 			<div
@@ -2181,39 +2182,69 @@ function createHTML() {
 
 
 	/*
-	 * Every sticker always carries a
-	 * fire as its first icon.
+	 * Every sticker carries a fire as
+	 * its first icon and a heart as
+	 * its last icon.
 	 */
 	const STICKER_FIRE =
 		"\u{1F525}";
 
 
+	const STICKER_HEART =
+		"\u2764\uFE0F";
+
+
 	/*
-	 * The sticker's icon string: the
-	 * fire first, then the preset's
-	 * own emoji. Presets that already
-	 * start with a fire are not
-	 * doubled.
+	 * The sticker's icon string: fire
+	 * first, the preset's own emoji in
+	 * the middle, heart at the end.
+	 * Presets that already start with
+	 * a fire or end with a heart are
+	 * not doubled.
 	 */
 	function stickerEmojiString(
 		sticker
 	) {
 
+		let mid =
+			sticker.emoji;
+
+
 		if (
-			sticker.emoji.indexOf(
+			mid.indexOf(
 				STICKER_FIRE
 			) === 0
 		) {
 
-			return sticker.emoji;
+			mid =
+				mid.slice(
+					STICKER_FIRE.length
+				);
 
 		}
 
 
-		return (
+		let icons =
 			STICKER_FIRE +
-				sticker.emoji
-		);
+				mid;
+
+
+		if (
+			sticker.emoji.indexOf(
+				STICKER_HEART
+			) !==
+				sticker.emoji.length -
+					STICKER_HEART.length
+		) {
+
+			icons =
+				icons +
+				STICKER_HEART;
+
+		}
+
+
+		return icons;
 
 	}
 
@@ -2303,6 +2334,16 @@ function createHTML() {
 
 	const CAPTION_MAX_CHARS =
 		40;
+
+
+	/*
+	 * The last caption does not stay
+	 * on screen forever: it
+	 * disappears after this many
+	 * milliseconds.
+	 */
+	const CAPTION_MAX_VISIBLE_MS =
+		10000;
 
 
 	const CAPTION_FONT_SIZE =
@@ -2670,6 +2711,24 @@ function createHTML() {
 		}
 
 
+		/*
+		 * The last caption is capped:
+		 * after CAPTION_MAX_VISIBLE_MS
+		 * it no longer shows.
+		 */
+		if (
+			captions[captions.length - 1] ===
+				active &&
+			timestampMs -
+				active.timeMs >
+				CAPTION_MAX_VISIBLE_MS
+		) {
+
+			return;
+
+		}
+
+
 		context.save();
 
 
@@ -2735,12 +2794,10 @@ function createHTML() {
 			y - boxHeight / 2;
 
 
-		const radius =
-			6;
-
-
 		/*
-		 * White highlight behind the text.
+		 * White highlight behind the
+		 * text, with square corners
+		 * (no rounding).
 		 */
 
 		context.fillStyle =
@@ -2750,27 +2807,12 @@ function createHTML() {
 		context.beginPath();
 
 
-		if (context.roundRect) {
-
-			context.roundRect(
-				boxX,
-				boxY,
-				boxWidth,
-				boxHeight,
-				radius
-			);
-
-		}
-		else {
-
-			context.rect(
-				boxX,
-				boxY,
-				boxWidth,
-				boxHeight
-			);
-
-		}
+		context.rect(
+			boxX,
+			boxY,
+			boxWidth,
+			boxHeight
+		);
 
 
 		context.fill();
@@ -5318,14 +5360,15 @@ function createHTML() {
 
 
 		/*
-		 * Capped so the box never looks
-		 * stretched, even when the video
-		 * is viewed in fullscreen.
+		 * The box is always exactly one
+		 * fifth of the video height (min
+		 * and max are the same), so it
+		 * keeps the same share of the
+		 * frame at every quality.
 		 */
 		const boxHeight =
-			Math.min(
-				STICKER_HEIGHT,
-				STICKER_MAX_HEIGHT
+			Math.round(
+				height / 5
 			);
 
 
