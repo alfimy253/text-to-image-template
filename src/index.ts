@@ -194,6 +194,25 @@ export default {
 		}
 
 
+		// =====================================================
+		// USER AUTH API (KV-backed, max 7 users)
+		// GET  /api/session
+		// POST /api/login
+		// POST /api/signup
+		// POST /api/logout
+		// (requires the KV_BINDING namespace binding)
+		// =====================================================
+
+		const authResponse =
+			await handleAuthApi(
+				request,
+				url,
+				env
+			);
+
+		if (authResponse) {
+			return authResponse;
+		}
 		return new Response(
 			"Not Found",
 			{
@@ -209,19 +228,538 @@ export default {
 // JSON HELPER
 // =============================================================
 
-function json(data, status = 200) {
+function json(data, status = 200, setCookie = null) {
+
+	const headers = {
+		"Content-Type":
+			"application/json"
+	};
+
+	if (setCookie) {
+		headers["Set-Cookie"] =
+			setCookie;
+	}
 
 	return new Response(
 		JSON.stringify(data),
 		{
 			status,
 
-			headers: {
-				"Content-Type":
-					"application/json"
-			}
+			headers:
+				headers
 		}
 	);
+}
+
+
+// =============================================================
+// USER AUTH HELPERS (KV-backed, max 7 users)
+// =============================================================
+
+const AUTH_MAX_USERS =
+	7;
+
+
+function authToHex(bytes) {
+
+	return Array.from(
+		bytes
+	).map(
+		(b) =>
+			b.toString(16).padStart(2, "0")
+	).join(
+		""
+	);
+
+}
+
+
+function authFromHex(hex) {
+
+	const out = new Uint8Array(
+		hex.length / 2
+	);
+
+	for (let i = 0; i < out.length; i++) {
+		out[i] =
+			parseInt(
+				hex.substr(i * 2, 2),
+				16
+			);
+	}
+
+	return out;
+
+}
+
+
+async function authHashPassword(
+	password,
+	salt
+) {
+
+	const keyMaterial =
+		await crypto.subtle.importKey(
+			"raw",
+			new TextEncoder().encode(
+				password
+			),
+			"PBKDF2",
+			false,
+			["deriveBits"]
+		);
+
+	const bits =
+		await crypto.subtle.deriveBits(
+			{
+				name: "PBKDF2",
+
+				salt:
+					salt,
+
+				iterations:
+					120000,
+
+				hash: "SHA-256"
+			},
+			keyMaterial,
+			256
+		);
+
+	return authToHex(
+		new Uint8Array(
+			bits
+		)
+	);
+
+}
+
+
+function authSessionCookie(
+	token,
+	maxAge
+) {
+
+	return (
+		"yvs_session=" +
+		token +
+		"; HttpOnly; Path=/; SameSite=Strict; Max-Age=" +
+		maxAge
+	);
+
+}
+
+
+async function handleAuthApi(
+	request,
+	url,
+	env
+) {
+
+	const path =
+		url.pathname;
+
+	if (
+		path !== "/api/session" &&
+		path !== "/api/login" &&
+		path !== "/api/signup" &&
+		path !== "/api/logout"
+	) {
+		return null;
+	}
+
+	/*
+	 * KV not bound: the client detects
+	 * the 503 and keeps the app open
+	 * (no lock).
+	 */
+	if (!env.KV_BINDING) {
+		return json(
+			{
+				success: false,
+				error:
+					"User storage not configured (bind the KV namespace)"
+			},
+			503
+		);
+	}
+
+	try {
+
+		/*
+		 * Who am I?
+		 */
+		if (
+			path === "/api/session" &&
+			request.method === "GET"
+		) {
+
+			const cookie =
+				request.headers.get(
+					"Cookie"
+				) ||
+				"";
+
+			const match =
+				cookie.match(
+					/yvs_session=([a-f0-9]+)/
+				);
+
+			if (!match) {
+				return json(
+					{ authenticated: false },
+					401
+				);
+			}
+
+			const raw =
+				await env.KV_BINDING.get(
+					"session:" + match[1]
+				);
+
+			if (!raw) {
+				return json(
+					{ authenticated: false },
+					401
+				);
+			}
+
+			const session =
+				JSON.parse(
+					raw
+				);
+
+			return json(
+				{
+					authenticated: true,
+					user: {
+						username:
+							session.username
+					}
+				}
+			);
+
+		}
+
+		/*
+		 * Create an account (max 7).
+		 */
+		if (
+			path === "/api/signup" &&
+			request.method === "POST"
+		) {
+
+			const body =
+				await request.json().catch(
+					() => ({})
+				);
+
+			const username =
+				String(
+					body.username ||
+						""
+				).trim();
+
+			const password =
+				String(
+					body.password ||
+						""
+				);
+
+			if (
+				!/^[a-zA-Z0-9_]{3,20}$/.test(
+					username
+				)
+			) {
+				return json(
+					{
+						success: false,
+						error:
+							"Username: 3-20 letters, numbers or _"
+					},
+					400
+				);
+			}
+
+			if (
+				password.length <
+					6
+			) {
+				return json(
+					{
+						success: false,
+						error:
+							"Password must be at least 6 characters"
+					},
+					400
+				);
+			}
+
+			const list =
+				await env.KV_BINDING.list(
+					{ prefix: "user:" }
+				);
+
+			if (
+				list.keys.length >=
+					AUTH_MAX_USERS
+			) {
+				return json(
+					{
+						success: false,
+						error:
+							"Full: max " +
+							AUTH_MAX_USERS +
+							" users"
+					},
+					403
+				);
+			}
+
+			if (
+				await env.KV_BINDING.get(
+					"user:" +
+						username.toLowerCase()
+				)
+			) {
+				return json(
+					{
+						success: false,
+						error:
+							"Username already taken"
+					},
+					409
+				);
+			}
+
+			const salt =
+				crypto.getRandomValues(
+					new Uint8Array(16)
+				);
+
+			const hash =
+				await authHashPassword(
+					password,
+					salt
+				);
+
+			const user = {
+				username:
+					username,
+				salt:
+					authToHex(
+						salt
+					),
+				hash:
+					hash,
+				createdAt:
+					new Date().toISOString()
+			};
+
+			await env.KV_BINDING.put(
+				"user:" +
+					username.toLowerCase(),
+				JSON.stringify(
+					user
+				)
+			);
+
+			const token =
+				authToHex(
+					crypto.getRandomValues(
+						new Uint8Array(32)
+					)
+				);
+
+			await env.KV_BINDING.put(
+				"session:" + token,
+				JSON.stringify(
+					{
+						username:
+							username,
+						createdAt:
+							new Date().toISOString()
+					}
+				)
+			);
+
+			return json(
+				{
+					success: true,
+					user: {
+						username:
+							username
+					}
+				},
+				200,
+				authSessionCookie(
+					token,
+					30 * 24 * 3600
+				)
+			);
+
+		}
+
+		/*
+		 * Sign in.
+		 */
+		if (
+			path === "/api/login" &&
+			request.method === "POST"
+		) {
+
+			const body =
+				await request.json().catch(
+					() => ({})
+				);
+
+			const username =
+				String(
+					body.username ||
+						""
+				).trim().toLowerCase();
+
+			const password =
+				String(
+					body.password ||
+						""
+				);
+
+			const raw =
+				await env.KV_BINDING.get(
+					"user:" + username
+				);
+
+			if (!raw) {
+				return json(
+					{
+						success: false,
+						error:
+							"Invalid username or password"
+					},
+					401
+				);
+			}
+
+			const user =
+				JSON.parse(
+					raw
+				);
+
+			const hash =
+				await authHashPassword(
+					password,
+					authFromHex(
+						user.salt
+					)
+				);
+
+			if (hash !== user.hash) {
+				return json(
+					{
+						success: false,
+						error:
+							"Invalid username or password"
+					},
+					401
+				);
+			}
+
+			const token =
+				authToHex(
+					crypto.getRandomValues(
+						new Uint8Array(32)
+					)
+				);
+
+			await env.KV_BINDING.put(
+				"session:" + token,
+				JSON.stringify(
+					{
+						username:
+							user.username,
+						createdAt:
+							new Date().toISOString()
+					}
+				)
+			);
+
+			return json(
+				{
+					success: true,
+					user: {
+						username:
+							user.username
+					}
+				},
+				200,
+				authSessionCookie(
+					token,
+					30 * 24 * 3600
+				)
+			);
+
+		}
+
+		/*
+		 * Sign out.
+		 */
+		if (
+			path === "/api/logout" &&
+			request.method === "POST"
+		) {
+
+			const cookie =
+				request.headers.get(
+					"Cookie"
+				) ||
+				"";
+
+			const match =
+				cookie.match(
+					/yvs_session=([a-f0-9]+)/
+				);
+
+			if (match) {
+				await env.KV_BINDING.delete(
+					"session:" + match[1]
+				);
+			}
+
+			return json(
+				{ success: true },
+				200,
+				authSessionCookie(
+					"",
+					0
+				)
+			);
+
+		}
+
+		return json(
+			{
+				success: false,
+				error:
+					"Method not allowed"
+			},
+			405
+		);
+
+	}
+	catch (error) {
+		return json(
+			{
+				success: false,
+				error:
+					error instanceof Error
+						? error.message
+						: String(error)
+			},
+			500
+		);
+	}
+
 }
 
 
@@ -2527,6 +3065,407 @@ function createHTML() {
 				#f3f4f6;
 		}
 
+
+		/* =====================================================
+		   ROUND 13
+		   ===================================================== */
+
+		/*
+		 * Fix 1: all accordion dropdowns
+		 * and text fields adopt the
+		 * caption-input style, full width.
+		 */
+
+		.va-left input[type="text"],
+		.va-left select,
+		.va-ai-prompt {
+
+			width:
+				100%;
+
+			box-sizing:
+				border-box;
+
+			background:
+				#14171c;
+
+			color:
+				var(--text);
+
+			border:
+				1px solid #374151;
+
+			border-radius:
+				6px;
+
+			padding:
+				9px 12px;
+
+			font-size:
+				0.88rem;
+
+			outline:
+				none;
+		}
+
+
+		.va-left input[type="text"]:focus,
+		.va-left select:focus,
+		.va-ai-prompt:focus {
+
+			border-color:
+				#f59e0b;
+		}
+
+
+		/*
+		 * Font / Colour row: each label
+		 * takes half, the select fills
+		 * the rest of its label.
+		 */
+
+		.va-row .quality-select {
+
+			flex:
+				1 1 0;
+
+			min-width:
+				0;
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			gap:
+				8px;
+		}
+
+
+		.va-row .quality-select select {
+
+			flex:
+				1 1 0;
+
+			min-width:
+				0;
+		}
+
+
+		/*
+		 * Sticker / Quality are bare
+		 * selects carrying the
+		 * .quality-select class.
+		 */
+
+		select.quality-select {
+
+			display:
+				block;
+
+			width:
+				100%;
+		}
+
+
+		/*
+		 * Fix 4: the add-video button is
+		 * rectangular with a label.
+		 */
+
+		.bulk-toggle {
+
+			width:
+				auto;
+
+			height:
+				auto;
+
+			padding:
+				10px 16px;
+
+			border-radius:
+				8px;
+
+			font-size:
+				0.95rem;
+
+			font-weight:
+				700;
+		}
+
+
+		/*
+		 * Fix 5: sign-in / sign-up
+		 * overlay (KV-backed, max 7
+		 * users).
+		 */
+
+		.auth-overlay {
+
+			position:
+				fixed;
+
+			top:
+				0;
+
+			left:
+				0;
+
+			right:
+				0;
+
+			bottom:
+				0;
+
+			background:
+				rgba(0, 0, 0, 0.85);
+
+			display:
+				none;
+
+			align-items:
+				center;
+
+			justify-content:
+				center;
+
+			z-index:
+				150;
+		}
+
+
+		.auth-box {
+
+			background:
+				#181b20;
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				12px;
+
+			padding:
+				24px;
+
+			width:
+				90%;
+
+			max-width:
+				380px;
+		}
+
+
+		.auth-title {
+
+			font-size:
+				1.25rem;
+
+			font-weight:
+				700;
+
+			margin-bottom:
+				4px;
+		}
+
+
+		.auth-sub {
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.8rem;
+
+			margin-bottom:
+				14px;
+		}
+
+
+		.auth-error {
+
+			color:
+				#f87171;
+
+			font-size:
+				0.8rem;
+
+			min-height:
+				1.1em;
+
+			margin-bottom:
+				8px;
+		}
+
+
+		.auth-field {
+
+			margin-bottom:
+				12px;
+		}
+
+
+		.auth-field label {
+
+			display:
+				block;
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.78rem;
+
+			margin-bottom:
+				5px;
+		}
+
+
+		.auth-field input {
+
+			width:
+				100%;
+
+			box-sizing:
+				border-box;
+
+			background:
+				#14171c;
+
+			color:
+				var(--text);
+
+			border:
+				1px solid #374151;
+
+			border-radius:
+				6px;
+
+			padding:
+				9px 12px;
+
+			font-size:
+				0.88rem;
+
+			outline:
+				none;
+		}
+
+
+		.auth-field input:focus {
+
+			border-color:
+				#f59e0b;
+		}
+
+
+		.auth-submit {
+
+			width:
+				100%;
+
+			justify-content:
+				center;
+
+			margin-top:
+				4px;
+		}
+
+
+		.auth-switch {
+
+			background:
+				none;
+
+			border:
+				none;
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.8rem;
+
+			cursor:
+				pointer;
+
+			margin-top:
+				12px;
+
+			padding:
+				0;
+		}
+
+
+		.auth-switch:hover {
+
+			color:
+				#d1d5db;
+		}
+
+
+		.auth-badge {
+
+			display:
+				none;
+
+			align-items:
+				center;
+
+			gap:
+				10px;
+
+			margin-left:
+				auto;
+
+			font-size:
+				0.85rem;
+
+			color:
+				#d1d5db;
+		}
+
+
+		.auth-badge-name {
+
+			white-space:
+				nowrap;
+		}
+
+
+		.auth-logout {
+
+			background:
+				#374151;
+
+			color:
+				#e5e7eb;
+
+			border:
+				none;
+
+			border-radius:
+				6px;
+
+			padding:
+				6px 12px;
+
+			font-size:
+				0.78rem;
+
+			cursor:
+				pointer;
+		}
+
+
+		.auth-logout:hover {
+
+			background:
+				#4b5563;
+		}
+
 </style>
 
 </head>
@@ -2542,12 +3481,12 @@ function createHTML() {
 			id="bulk-toggle"
 			class="bulk-toggle"
 			onclick="addVideoAccordion()"
-			title="Add a video (up to 10)">+
+			title="Add a video (up to 10)">+ Add Video
 		</button>
 
 
 		<h1>
-			ðŸŽ¬ YouTube Vibe Studio
+			馃幀 YouTube Vibe Studio
 		</h1>
 
 		<p>
@@ -2562,7 +3501,7 @@ function createHTML() {
 		class="bulk-banner"
 		style="display:none"
 	>
-		âš ï¸ Bulk generation is in progress â€” do not
+		鈿狅笍 Bulk generation is in progress 鈥� do not
 		move or delete your image or MP4 files until
 		it finishes.
 	</div>
@@ -2601,7 +3540,7 @@ function createHTML() {
 		<div class="audio-panel">
 
 			<div class="audio-title">
-				Audio Track â€” upload an MP3
+				Audio Track 鈥� upload an MP3
 				before rendering
 			</div>
 
@@ -2610,7 +3549,7 @@ function createHTML() {
 
 				<label class="upload-btn audio">
 
-					ðŸŽµ Upload MP3 Audio
+					馃幍 Upload MP3 Audio
 
 					<input
 						type="file"
@@ -2625,7 +3564,7 @@ function createHTML() {
 					class="audio-empty"
 					id="audio-empty"
 				>
-					No audio added â€”
+					No audio added 鈥�
 					the MP4 will be silent.
 				</div>
 
@@ -2663,7 +3602,7 @@ function createHTML() {
 						class="remove-audio-btn"
 						onclick="removeAudio()"
 					>
-						ðŸ—‘ Remove Audio
+						馃棏 Remove Audio
 					</button>
 
 				</div>
@@ -2767,7 +3706,7 @@ function createHTML() {
 
 			<div class="audio-note">
 				Drawn straight onto every
-				frame â€” no background box
+				frame 鈥� no background box
 				and no highlight.
 			</div>
 
@@ -2803,31 +3742,31 @@ function createHTML() {
 						</option>
 
 						<option value="like">
-							ðŸ‘ Like
+							馃憤 Like
 						</option>
 
 						<option value="love">
-							â¤ï¸ Love it
+							鉂わ笍 Love it
 						</option>
 
 						<option value="subscribe">
-							ðŸ”” Subscribe
+							馃敂 Subscribe
 						</option>
 
 						<option
 							value="like-subscribe"
 						>
-							ðŸ‘ðŸ”” Like &amp; Subscribe
+							馃憤馃敂 Like &amp; Subscribe
 						</option>
 
 						<option value="watch">
-							ðŸŽ¬ Watch Video
+							馃幀 Watch Video
 						</option>
 
 						<option
 							value="watch-like-subscribe"
 						>
-							ðŸŽ¬ðŸ‘ðŸ”” Watch, Like
+							馃幀馃憤馃敂 Watch, Like
 							&amp; Subscribe
 						</option>
 
@@ -2839,7 +3778,7 @@ function createHTML() {
 
 
 			<div class="audio-note">
-				White 200 Ã— 80 rectangle, square
+				White 200 脳 80 rectangle, square
 				corners, flush with the bottom
 				right corner and hanging 40px
 				past the right edge. Drawn on
@@ -2935,8 +3874,8 @@ function createHTML() {
 				class="action-hint"
 				id="action-hint"
 			>
-				Click the red + button (top left) to add
-				a video, then press Generate.
+				Click the red Add Video button (top left),
+				then press Generate.
 			</span>
 		</div>
 
@@ -2950,7 +3889,7 @@ function createHTML() {
 
 			<label class="upload-btn">
 
-				ðŸ“ Upload Image, GIF or MP4 (25 images Â· 5 GIF Â· 5 MP4)
+				馃搧 Upload Image, GIF or MP4 (25 images 路 5 GIF 路 5 MP4)
 
 				<input
 					type="file"
@@ -2969,18 +3908,18 @@ function createHTML() {
 				<select id="quality-select">
 
 					<option value="low">
-						480p Â· Light (1.2 Mbps)
+						480p 路 Light (1.2 Mbps)
 					</option>
 
 					<option
 						value="balanced"
 						selected
 					>
-						720p Â· Balanced (2.5 Mbps)
+						720p 路 Balanced (2.5 Mbps)
 					</option>
 
 					<option value="high">
-						720p Â· High (5 Mbps)
+						720p 路 High (5 Mbps)
 					</option>
 
 				</select>
@@ -2993,7 +3932,7 @@ function createHTML() {
 				onclick="onGenerateClick()"
 			>
 
-				ðŸŽžï¸ Render & Download MP4 Video
+				馃帪锔� Render & Download MP4 Video
 
 			</button>
 
@@ -3032,7 +3971,7 @@ function createHTML() {
 	>
 		<div class="modal-box">
 			<div class="modal-title">
-				âš ï¸ Missing required fields
+				鈿狅笍 Missing required fields
 			</div>
 			<ul
 				id="required-modal-list"
@@ -4631,7 +5570,7 @@ function createHTML() {
 	
 	
 			estimateSourceEl.textContent =
-				"(9s per image or GIF Â· MP4 clips play in full)";
+				"(9s per image or GIF 路 MP4 clips play in full)";
 	
 	
 		}
@@ -4663,7 +5602,7 @@ function createHTML() {
 
 
 		estimateSizeEl.textContent =
-			"Â· approx. " +
+			"路 approx. " +
 			formatBytes(bytes) +
 			" file";
 
@@ -9061,7 +10000,7 @@ function createHTML() {
 			);
 
 			renderBtn.innerHTML =
-				"ðŸŽžï¸ Generate Videos";
+				"馃帪锔� Generate Videos";
 
 		}
 
@@ -9200,8 +10139,8 @@ function createHTML() {
 			arrow.textContent =
 				body.style.display ===
 					"none"
-				? "â–¶"
-				: "â–¼";
+				? "鈻�"
+				: "鈻�";
 		}
 
 	}
@@ -9238,17 +10177,17 @@ function createHTML() {
 	 */
 	const STICKER_OPTIONS =
 		'<option value="none" selected>None</option>' +
-		'<option value="like">ðŸ‘ Like</option>' +
-		'<option value="love">â¤ï¸ Love it</option>' +
-		'<option value="subscribe">ðŸ”” Subscribe</option>' +
-		'<option value="like-subscribe">ðŸ‘ðŸ”” Like &amp; Subscribe</option>' +
-		'<option value="watch">ðŸŽ¬ Watch Video</option>' +
-		'<option value="watch-like-subscribe">ðŸŽ¬ðŸ‘ðŸ”” Watch, Like &amp; Subscribe</option>';
+		'<option value="like">馃憤 Like</option>' +
+		'<option value="love">鉂わ笍 Love it</option>' +
+		'<option value="subscribe">馃敂 Subscribe</option>' +
+		'<option value="like-subscribe">馃憤馃敂 Like &amp; Subscribe</option>' +
+		'<option value="watch">馃幀 Watch Video</option>' +
+		'<option value="watch-like-subscribe">馃幀馃憤馃敂 Watch, Like &amp; Subscribe</option>';
 
 	const QUALITY_OPTIONS =
-		'<option value="low">480p Â· Light (1.2 Mbps)</option>' +
-		'<option value="balanced" selected>720p Â· Balanced (2.5 Mbps)</option>' +
-		'<option value="high">720p Â· High (5 Mbps)</option>';
+		'<option value="low">480p 路 Light (1.2 Mbps)</option>' +
+		'<option value="balanced" selected>720p 路 Balanced (2.5 Mbps)</option>' +
+		'<option value="high">720p 路 High (5 Mbps)</option>';
 
 	const FONT_OPTIONS =
 		'<option value="oswald">Oswald</option>' +
@@ -9266,22 +10205,22 @@ function createHTML() {
 
 		return (
 			'<div class="va-header">' +
-			'<span class="va-title">ðŸŽ¬ Video ' + n + '</span>' +
+			'<span class="va-title">馃幀 Video ' + n + '</span>' +
 			'<span class="va-status" id="va-status-' + n + '">empty</span>' +
 			'<span class="va-summary" id="va-summary-' + n + '"></span>' +
-			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">â–¼</button>' +
+			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">鈻�</button>' +
 			'</div>' +
 			'<div class="va-body" id="va-body-' + n + '">' +
 			'<div class="va-left">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Images / MP4s â€” drag cards to reorder</div>' +
-			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">ðŸ“ Upload Image, GIF or MP4</button>' +
-			'<span class="va-note">Max 5 GIF Â· 25 images Â· 5 MP4 (1:00 each, silent)</span>' +
+			'<div class="va-section-title">Images / MP4s 鈥� drag cards to reorder</div>' +
+			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">馃搧 Upload Image, GIF or MP4</button>' +
+			'<span class="va-note">Max 5 GIF 路 25 images 路 5 MP4 (1:00 each, silent)</span>' +
 			'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
 			'</div>' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Audio â€” one MP3 (the video is as long as the MP3)</div>' +
-			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">ðŸŽµ Upload MP3 Audio</button>' +
+			'<div class="va-section-title">Audio 鈥� one MP3 (the video is as long as the MP3)</div>' +
+			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">馃幍 Upload MP3 Audio</button>' +
 			'<span class="va-audio-line" id="va-audio-line-' + n + '"></span>' +
 			'</div>' +
 			'<div class="va-section">' +
@@ -9308,10 +10247,10 @@ function createHTML() {
 			'</div>' +
 			'<div class="va-right">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">AI Images â€” Cloudflare</div>' +
+			'<div class="va-section-title">AI Images 鈥� Cloudflare</div>' +
 			'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
-			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">âœ¨ Generate 2 Images</button>' +
-			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit Â· 480px landscape</span>' +
+			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">鉁� Generate 2 Images</button>' +
+			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit 路 480px landscape</span>' +
 			'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
 			'</div>' +
 			'</div>' +
@@ -9484,7 +10423,7 @@ function createHTML() {
 
 			summaryEl.textContent =
 				parts.length
-				? parts.join(" Â· ")
+				? parts.join(" 路 ")
 				: "no images yet";
 		}
 
@@ -9799,7 +10738,7 @@ function createHTML() {
 
 		if (line) {
 			line.textContent =
-				"ðŸŽµ " + file.name;
+				"馃幍 " + file.name;
 		}
 
 		updateVideoStatus(
@@ -9897,7 +10836,7 @@ function createHTML() {
 			"va-card-remove";
 
 		removeBtn.textContent =
-			"Ã—";
+			"脳";
 
 		removeBtn.title =
 			"Remove";
@@ -9924,7 +10863,7 @@ function createHTML() {
 			"va-card-handle";
 
 		handle.textContent =
-			"\\u28BF";
+			"\\u22EE";
 
 		handle.title =
 			"Drag to reorder";
@@ -10201,8 +11140,8 @@ function createHTML() {
 			);
 
 			tip.textContent =
-				bits.join(" Â· ") +
-				" â€” drag to reorder";
+				bits.join(" 路 ") +
+				" 鈥� drag to reorder";
 
 			tip.title =
 				tip.textContent;
@@ -10454,7 +11393,7 @@ function createHTML() {
 	 * validates every video in the
 	 * stack, warns about missing
 	 * required fields, then renders
-	 * them in order â€” VIDEO_BATCH_SIZE
+	 * them in order 鈥� VIDEO_BATCH_SIZE
 	 * at a time, last batch may be one.
 	 */
 	function onGenerateClick() {
@@ -10561,7 +11500,7 @@ function createHTML() {
 
 			if (line) {
 				line.textContent =
-					"ðŸŽµ " +
+					"馃幍 " +
 					project.audioFile.name +
 					" (" +
 					formatSeconds(
@@ -11153,6 +12092,32 @@ function createHTML() {
 			return;
 		}
 
+		/*
+		 * Max 4 images in the results
+		 * panel. If it already holds 4
+		 * and the user generates again,
+		 * clear it first, then show the
+		 * new pair.
+		 */
+		if (resultsEl.children.length >= 4) {
+
+			Array.from(
+				resultsEl.children
+			).forEach(
+				(card) => {
+					if (card._displayUrl) {
+						URL.revokeObjectURL(
+							card._displayUrl
+						);
+					}
+				}
+			);
+
+			resultsEl.innerHTML =
+				"";
+
+		}
+
 		if (btn) {
 			btn.disabled =
 				true;
@@ -11193,7 +12158,7 @@ function createHTML() {
 					/*
 					 * The worker returns
 					 * {success:false,
-					 * error:"..."} â€” show
+					 * error:"..."} 鈥� show
 					 * the real reason.
 					 */
 					let message =
@@ -11264,7 +12229,7 @@ function createHTML() {
 						AI_IMAGES_PER_PROMPT +
 						" failed: " +
 						lastError
-					: "Done â€” 480px landscape";
+					: "Done 鈥� 480px landscape";
 		}
 
 		if (failures === AI_IMAGES_PER_PROMPT) {
@@ -11311,6 +12276,14 @@ function createHTML() {
 
 		card.className =
 			"va-ai-card";
+
+		/*
+		 * Remember the object URL so the
+		 * results panel can revoke it
+		 * when it clears itself.
+		 */
+		card._displayUrl =
+			url;
 
 		const img =
 			new Image();
@@ -11381,7 +12354,7 @@ function createHTML() {
 			"upload-btn small";
 
 		addBtn.textContent =
-			"\\u2795 Add to Video";
+			"+ Add to Video";
 
 		addBtn.addEventListener(
 			"click",
@@ -11405,7 +12378,7 @@ function createHTML() {
 			"upload-btn small";
 
 		fsBtn.textContent =
-			"\\u26F6 Fullscreen";
+			"Fullscreen";
 
 		fsBtn.addEventListener(
 			"click",
@@ -11595,7 +12568,598 @@ function createHTML() {
 
 	}
 
+	// =========================================================
+	// MODULE 6: auth
+	// (KV-backed login/signup, max 7 users)
+	//
+	// Flow on load:
+	//   GET /api/session
+	//     200 -> already signed in: show user badge
+	//     401 -> show the sign-in overlay
+	//     503 -> KV not configured: open access
+	//   POST /api/login    (username, password)
+	//   POST /api/signup   (username, password)
+	//   POST /api/logout
+	//
+	// The overlay is built with DOM APIs (no HTML edit).
+	// =========================================================
+
+	const AUTH_MAX_USERS =
+		7;
+
+	let authSubmitting =
+		false;
+
+	let authIsSignup =
+		false;
+
+	/*
+	 * Build (once) and show the sign-in
+	 * overlay.
+	 */
+	function buildAuthOverlay() {
+
+		let overlay =
+			document.getElementById(
+				"auth-overlay"
+			);
+
+		if (overlay) {
+			return overlay;
+		}
+
+		overlay =
+			document.createElement(
+				"div"
+			);
+
+		overlay.id =
+			"auth-overlay";
+
+		overlay.className =
+			"auth-overlay";
+
+		overlay.style.display =
+			"none";
+
+		overlay.innerHTML =
+			'<div class="auth-box">' +
+			'<div class="auth-title">馃幀 YouTube Vibe Studio</div>' +
+			'<div class="auth-sub">Sign in to use the studio (max ' + AUTH_MAX_USERS + ' user accounts)</div>' +
+			'<div class="auth-error" id="auth-error"></div>' +
+			'<div class="auth-field">' +
+			'<label for="auth-username">Username</label>' +
+			'<input type="text" id="auth-username" maxlength="20" autocomplete="username">' +
+			'</div>' +
+			'<div class="auth-field">' +
+			'<label for="auth-password">Password</label>' +
+			'<input type="password" id="auth-password" maxlength="64" autocomplete="current-password">' +
+			'</div>' +
+			'<div class="auth-field" id="auth-confirm-wrap" style="display:none">' +
+			'<label for="auth-confirm">Confirm password</label>' +
+			'<input type="password" id="auth-confirm" maxlength="64" autocomplete="new-password">' +
+			'</div>' +
+			'<button type="button" class="upload-btn auth-submit" id="auth-submit">Sign in</button>' +
+			'<button type="button" class="auth-switch" id="auth-switch">New here? Create an account</button>' +
+			'</div>';
+
+		document.body.appendChild(
+			overlay
+		);
+
+		const submitBtn =
+			document.getElementById(
+				"auth-submit"
+			);
+
+		const switchBtn =
+			document.getElementById(
+				"auth-switch"
+			);
+
+		submitBtn.addEventListener(
+			"click",
+			submitAuth
+		);
+
+		switchBtn.addEventListener(
+			"click",
+			() => {
+
+				authIsSignup =
+					!authIsSignup;
+
+				document.getElementById(
+					"auth-confirm-wrap"
+				).style.display =
+					authIsSignup
+						? "block"
+						: "none";
+
+				submitBtn.textContent =
+					authIsSignup
+						? "Create account"
+						: "Sign in";
+
+				switchBtn.textContent =
+					authIsSignup
+						? "Have an account? Sign in"
+						: "New here? Create an account";
+
+				setAuthError(
+					""
+				);
+
+			}
+		);
+
+		["auth-password", "auth-confirm"].forEach(
+			(fieldId) => {
+
+				const field =
+					document.getElementById(
+						fieldId
+					);
+
+				if (field) {
+					field.addEventListener(
+						"keydown",
+						(e) => {
+
+							if (
+								e.key ===
+									"Enter"
+							) {
+
+								submitAuth();
+
+							}
+
+						}
+					);
+				}
+
+			}
+		);
+
+		return overlay;
+
+	}
+
+	function setAuthError(
+		message
+	) {
+
+		const el =
+			document.getElementById(
+				"auth-error"
+			);
+
+		if (el) {
+			el.textContent =
+				message ||
+				"";
+		}
+
+	}
+
+	function showAuthOverlay() {
+
+		const overlay =
+			buildAuthOverlay();
+
+		overlay.style.display =
+			"flex";
+
+	}
+
+	function hideAuthOverlay() {
+
+		const overlay =
+			document.getElementById(
+				"auth-overlay"
+			);
+
+		if (overlay) {
+			overlay.style.display =
+				"none";
+		}
+
+	}
+
+	/*
+	 * "馃懁 username | Log out" badge in
+	 * the action bar.
+	 */
+	function showUserBadge(
+		username
+	) {
+
+		let badge =
+			document.getElementById(
+				"auth-badge"
+			);
+
+		if (!badge) {
+
+			badge =
+				document.createElement(
+					"div"
+				);
+
+			badge.id =
+				"auth-badge";
+
+			badge.className =
+				"auth-badge";
+
+			const bar =
+				document.getElementById(
+					"action-bar"
+				);
+
+			if (bar) {
+				bar.appendChild(
+					badge
+				);
+			}
+
+		}
+
+		badge.style.display =
+			"flex";
+
+		badge.innerHTML =
+			"";
+
+		const span =
+			document.createElement(
+				"span"
+			);
+
+		span.className =
+			"auth-badge-name";
+
+		span.textContent =
+			"馃懁 " +
+			username;
+
+		const out =
+			document.createElement(
+				"button"
+			);
+
+		out.type =
+			"button";
+
+		out.className =
+			"auth-logout";
+
+		out.textContent =
+			"Log out";
+
+		out.addEventListener(
+			"click",
+			doLogout
+		);
+
+		badge.appendChild(
+			span
+		);
+
+		badge.appendChild(
+			out
+		);
+
+	}
+
+	/*
+	 * Shared handler for the Sign in /
+	 * Create account button.
+	 */
+	async function submitAuth() {
+
+		if (authSubmitting) {
+			return;
+		}
+
+		const usernameEl =
+			document.getElementById(
+				"auth-username"
+			);
+
+		const passwordEl =
+			document.getElementById(
+				"auth-password"
+			);
+
+		const confirmEl =
+			document.getElementById(
+				"auth-confirm"
+			);
+
+		if (
+			!usernameEl ||
+			!passwordEl
+		) {
+			return;
+		}
+
+		const username =
+			usernameEl.value.trim();
+
+		const password =
+			passwordEl.value;
+
+		setAuthError(
+			""
+		);
+
+		if (
+			!/^[a-zA-Z0-9_]{3,20}$/.test(
+				username
+			)
+		) {
+
+			setAuthError(
+				"Username: 3-20 letters, numbers or _ ."
+			);
+
+			return;
+
+		}
+
+		if (
+			password.length <
+				6
+		) {
+
+			setAuthError(
+				"Password must be at least 6 characters."
+			);
+
+			return;
+
+		}
+
+		if (
+			authIsSignup &&
+			confirmEl &&
+			password !==
+				confirmEl.value
+		) {
+
+			setAuthError(
+				"Passwords do not match."
+			);
+
+			return;
+
+		}
+
+		authSubmitting =
+			true;
+
+		const submitBtn =
+			document.getElementById(
+				"auth-submit"
+			);
+
+		submitBtn.disabled =
+			true;
+
+		submitBtn.textContent =
+			"Please wait...";
+
+		try {
+
+			const endpoint =
+				authIsSignup
+					? "/api/signup"
+					: "/api/login";
+
+			const response =
+				await fetch(
+					endpoint,
+					{
+						method: "POST",
+
+						headers: {
+							"Content-Type":
+								"application/json",
+						},
+
+						body: JSON.stringify(
+							{
+								username:
+									username,
+
+								password:
+									password,
+							}
+						),
+
+						credentials:
+							"same-origin",
+					}
+				);
+
+			let data =
+				{};
+
+			try {
+
+				data =
+					await response.json();
+
+			}
+			catch (jsonError) {
+
+				/* keep {} */
+
+			}
+
+			if (response.ok) {
+
+				hideAuthOverlay();
+
+				showUserBadge(
+					data.user &&
+					data.user.username
+						? data.user.username
+						: username
+				);
+
+			}
+			else {
+
+				setAuthError(
+					data.error ||
+					"Request failed (" +
+					response.status +
+					")"
+				);
+
+			}
+
+		}
+		catch (netError) {
+
+			setAuthError(
+				"Network error: " +
+				(netError.message ||
+					netError)
+			);
+
+		}
+		finally {
+
+			authSubmitting =
+				false;
+
+			submitBtn.disabled =
+				false;
+
+			submitBtn.textContent =
+				authIsSignup
+					? "Create account"
+					: "Sign in";
+
+		}
+
+	}
+
+	async function doLogout() {
+
+		try {
+
+			await fetch(
+				"/api/logout",
+				{
+					method: "POST",
+
+					credentials:
+						"same-origin",
+				}
+			);
+
+		}
+		catch (e) {
+
+			/* the UI still locks */
+
+		}
+
+		const badge =
+			document.getElementById(
+				"auth-badge"
+			);
+
+		if (badge) {
+			badge.style.display =
+				"none";
+		}
+
+		showAuthOverlay();
+
+	}
+
+	/*
+	 * On load: ask the worker who we
+	 * are.
+	 */
+	async function initAuth() {
+
+		try {
+
+			const response =
+				await fetch(
+					"/api/session",
+					{
+						credentials:
+							"same-origin",
+					}
+				);
+
+			if (
+				response.status ===
+					503
+			) {
+
+				/*
+				 * KV not configured yet:
+				 * open access (no lock).
+				 */
+				return;
+
+			}
+
+			if (response.ok) {
+
+				let data =
+					{};
+
+				try {
+
+					data =
+						await response.json();
+
+				}
+				catch (jsonError) {
+
+					/* keep {} */
+
+				}
+
+				showUserBadge(
+					data.user &&
+					data.user.username
+						? data.user.username
+						: ""
+				);
+
+				return;
+
+			}
+
+			/* 401: show sign-in */
+			showAuthOverlay();
+
+		}
+		catch (netError) {
+
+			/*
+			 * Network error: do not lock
+			 * the user out.
+			 */
+
+		}
+
+	}
+
 	initVideoStudio();
+
+	initAuth();
 
 	async function generateMP4() {
 
@@ -12964,7 +14528,7 @@ function createHTML() {
 
 
 						statusText.textContent =
-							\`Rendering image \${i + 1}/\${slides.length} â€” \${percent}%\`;
+							\`Rendering image \${i + 1}/\${slides.length} 鈥� \${percent}%\`;
 
 
 						/*
@@ -13175,11 +14739,11 @@ function createHTML() {
 			statusText.textContent =
 				streamingToFile
 					? audioTrack
-						? "âœ“ MP4 saved to disk with audio!"
-						: "âœ“ MP4 saved to disk!"
+						? "鉁� MP4 saved to disk with audio!"
+						: "鉁� MP4 saved to disk!"
 					: audioTrack
-						? "âœ“ MP4 Downloaded with audio!"
-						: "âœ“ MP4 Downloaded!";
+						? "鉁� MP4 Downloaded with audio!"
+						: "鉁� MP4 Downloaded!";
 
 			return "done";
 
@@ -13193,7 +14757,7 @@ function createHTML() {
 
 
 			statusText.textContent =
-				"âš  Video rendering failed.";
+				"鈿� Video rendering failed.";
 
 
 			alert(
@@ -13271,4 +14835,4 @@ function createHTML() {
 
 </html>
 `;
-			  }
+							}
