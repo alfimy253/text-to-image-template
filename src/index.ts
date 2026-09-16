@@ -318,7 +318,7 @@ async function authHashPassword(
 					salt,
 
 				iterations:
-					120000,
+					100000, // Workers runtime caps PBKDF2 at 100,000
 
 				hash: "SHA-256"
 			},
@@ -14835,4 +14835,4 @@ function createHTML() {
 
 </html>
 `;
-							}
+			  }
