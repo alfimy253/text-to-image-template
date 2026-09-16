@@ -173,7 +173,7 @@ function createHTML() {
 	>
 
 	<title>
-		AI Ghibli Video & MP4 Studio
+		YouTube Vibe Studio
 	</title>
 
 
@@ -1422,6 +1422,246 @@ function createHTML() {
 				6px;
 		}
 
+		/* =====================================================
+		   BULK VIDEO QUEUE
+		   ===================================================== */
+
+		.header {
+
+			position:
+				relative;
+		}
+
+
+		.bulk-toggle {
+
+			position:
+				absolute;
+
+			top:
+				10px;
+
+			left:
+				10px;
+
+			width:
+				44px;
+
+			height:
+				44px;
+
+			border-radius:
+				50%;
+
+			border:
+				none;
+
+			background:
+				#ff0000;
+
+			color:
+				#ffffff;
+
+			font-size:
+				30px;
+
+			line-height:
+				1;
+
+			cursor:
+				pointer;
+
+			z-index:
+				20;
+		}
+
+
+		.bulk-banner {
+
+			max-width:
+				980px;
+
+			margin:
+				0 auto 16px auto;
+
+			padding:
+				12px 16px;
+
+			background:
+				#7f1d1d;
+
+			color:
+				#ffffff;
+
+			border-radius:
+				10px;
+
+			font-weight:
+				600;
+
+			text-align:
+				center;
+		}
+
+
+		.bulk-panel {
+
+			max-width:
+				980px;
+
+			margin:
+				0 auto 25px auto;
+
+			padding:
+				14px 18px;
+
+			background:
+				var(--card);
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				12px;
+		}
+
+
+		.bulk-panel-header {
+
+			display:
+				flex;
+
+			justify-content:
+				space-between;
+
+			align-items:
+				center;
+
+			margin-bottom:
+				10px;
+		}
+
+
+		.bulk-panel-title {
+
+			font-family:
+				'Oswald',
+				sans-serif;
+
+			font-size:
+				1.1rem;
+
+			color:
+				var(--text);
+		}
+
+
+		.bulk-arrow {
+
+			background:
+				none;
+
+			border:
+				none;
+
+			color:
+				var(--text);
+
+			font-size:
+				20px;
+
+			line-height:
+				1;
+
+			cursor:
+				pointer;
+		}
+
+
+		.bulk-slot {
+
+			border-top:
+				1px solid #2e3440;
+
+			padding:
+				10px 0;
+		}
+
+
+		.bulk-slot-top {
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			gap:
+				12px;
+
+			margin-bottom:
+				8px;
+		}
+
+
+		.bulk-slot-name {
+
+			font-weight:
+				700;
+
+			min-width:
+				70px;
+		}
+
+
+		.bulk-status {
+
+			font-size:
+				0.75rem;
+
+			padding:
+				2px 10px;
+
+			border-radius:
+				999px;
+
+			background:
+				#374151;
+
+			color:
+				#d1d5db;
+		}
+
+
+		.bulk-summary {
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.85rem;
+		}
+
+
+		.bulk-slot-actions {
+
+			display:
+				flex;
+
+			gap:
+				8px;
+
+			flex-wrap:
+				wrap;
+		}
+
+
+		.bulk-caption-wrap {
+
+			margin-top:
+				10px;
+		}
+
 </style>
 
 </head>
@@ -1432,14 +1672,81 @@ function createHTML() {
 
 	<div class="header">
 
+				<button
+			type="button"
+			id="bulk-toggle"
+			class="bulk-toggle"
+			onclick="toggleBulkPanel()"
+			title="Bulk video queue (up to 7)">+
+		</button>
+
+
 		<h1>
-			🎬 Cloudflare AI Video Studio
+			🎬 YouTube Vibe Studio
 		</h1>
 
 		<p>
 			Generates AI scenes, adds your MP3
 			soundtrack, and exports a cinematic MP4.
 		</p>
+
+	</div>
+
+	<div
+		id="bulk-banner"
+		class="bulk-banner"
+		style="display:none"
+	>
+		⚠️ Bulk generation is in progress — do not
+		move or delete your image or MP4 files until
+		it finishes.
+	</div>
+
+
+	<div
+		id="bulk-panel"
+		class="bulk-panel"
+		style="display:none"
+	>
+
+		<div
+			class="bulk-panel-header"
+		>
+
+			<span
+				class="bulk-panel-title"
+			>
+				📚 Bulk Video Queue — up to 7 videos,
+				processed 2 at a time
+			</span>
+
+			<button
+				type="button"
+				class="bulk-arrow"
+				id="bulk-arrow"
+				onclick="closeBulkPanel()"
+				title="Hide queue"
+			>
+				▼
+			</button>
+
+		</div>
+
+		<div
+			id="bulk-slots"
+		>
+		</div>
+
+		<div class="audio-note">
+			Each video is fully independent (its own
+			images/MP4s, its own MP3, its own captions).
+			The first two are processed before the next
+			two start, and the last batch may be a
+			single video. While the queue is running,
+			each video's files are read from your device
+			as its turn comes — do not move or delete
+			them.
+		</div>
 
 	</div>
 
@@ -1847,7 +2154,7 @@ function createHTML() {
 
 			<button
 				id="render-btn"
-				onclick="generateMP4()"
+				onclick="onRenderClick()"
 			>
 
 				🎞️ Render & Download MP4 Video
@@ -7764,6 +8071,1524 @@ function createHTML() {
 	// MP4 VIDEO GENERATOR
 	// =========================================================
 
+	// =========================================================
+	// BULK VIDEO QUEUE (up to 7 videos)
+	// =========================================================
+
+	/*
+	 * Each queued video is fully
+	 * independent: its own
+	 * images/GIFs/MP4s, its own MP3
+	 * and its own captions. Assets
+	 * are only recorded by
+	 * client-side File reference
+	 * when the user adds them. They
+	 * are read from disk and
+	 * rendered only when the video's
+	 * turn comes: the queue runs in
+	 * batches of BULK_BATCH_SIZE, so
+	 * the first two are done before
+	 * the next two start, and the
+	 * last batch may be a single
+	 * video.
+	 *
+	 * While the queue is running the
+	 * user must not move or delete
+	 * the image or MP4 files.
+	 */
+
+	const BULK_MAX_VIDEOS =
+		7;
+
+	const BULK_BATCH_SIZE =
+		2;
+
+	/*
+	 * var (not let) so tests and the
+	 * save dialog can see it on the
+	 * window object.
+	 */
+	var renderContext =
+		null;
+
+	let bulkVideos =
+		[];
+
+	let bulkRunning =
+		false;
+
+	function newBulkSlot(n) {
+
+		return {
+			name: "Video " + n,
+			assets: [],
+			audioFile: null,
+			audio: null,
+			status: "empty",
+		};
+
+	}
+
+	function initBulkVideos() {
+
+		for (
+			let n = 1;
+			n <= BULK_MAX_VIDEOS;
+			n++
+		) {
+			bulkVideos.push(
+				newBulkSlot(n)
+			);
+		}
+
+		buildBulkPanel();
+
+	}
+
+	function buildBulkPanel() {
+
+		const slotsEl =
+			document.getElementById(
+				"bulk-slots"
+			);
+
+		if (!slotsEl) {
+			return;
+		}
+
+		slotsEl.innerHTML =
+			"";
+
+		for (
+			let i = 0;
+			i < bulkVideos.length;
+			i++
+		) {
+
+			const slot =
+				bulkVideos[i];
+
+			const row =
+				document.createElement(
+					"div"
+				);
+
+			row.className =
+				"bulk-slot";
+
+			row.id =
+				"bulk-slot-" +
+				i;
+
+			row.innerHTML =
+				'<div class="bulk-slot-top">' +
+				'<span class="bulk-slot-name">' +
+					slot.name +
+				'</span>' +
+				'<span class="bulk-status" id="bulk-status-' +
+					i +
+				'">empty</span>' +
+				'<span class="bulk-summary" id="bulk-summary-' +
+					i +
+				'"></span>' +
+				'</div>' +
+				'<div class="bulk-slot-actions">' +
+				'<button type="button" class="upload-btn" onclick="clickBulkFiles(' +
+					i +
+				')">📁 Add images / MP4s</button>' +
+				'<button type="button" class="upload-btn audio" onclick="clickBulkAudio(' +
+					i +
+				')">🎵 Add MP3</button>' +
+				'<button type="button" class="upload-btn" onclick="toggleBulkCaptions(' +
+					i +
+				')">📝 Captions</button>' +
+				'<button type="button" class="upload-btn" onclick="clearBulkSlot(' +
+					i +
+				')">🗑 Clear</button>' +
+				'</div>' +
+				'<div class="bulk-caption-wrap" id="bulk-caption-wrap-' +
+					i +
+				'" style="display:none">' +
+				'<div id="bulk-caption-rows-' +
+					i +
+				'"></div>' +
+				'<button type="button" class="upload-btn" onclick="addBulkCaptionRow(' +
+					i +
+				')">+ Add Caption</button>' +
+				'</div>' +
+				'<input type="file" id="bulk-file-' +
+					i +
+				'" multiple accept="image/*,image/gif,.gif,video/mp4,.mp4" style="display:none">' +
+				'<input type="file" id="bulk-audio-' +
+					i +
+				'" accept="audio/mpeg,.mp3" style="display:none">';
+
+			slotsEl.appendChild(
+				row
+			);
+
+			document.getElementById(
+				"bulk-file-" + i
+			).addEventListener(
+				"change",
+				(event) =>
+					onBulkFiles(
+						i,
+						event
+					)
+			);
+
+			document.getElementById(
+				"bulk-audio-" + i
+			).addEventListener(
+				"change",
+				(event) =>
+					onBulkAudio(
+						i,
+						event
+					)
+			);
+
+		}
+
+	}
+
+	function toggleBulkPanel() {
+
+		const panel =
+			document.getElementById(
+				"bulk-panel"
+			);
+
+		if (panel) {
+			panel.style.display =
+				panel.style.display ===
+					"none"
+					? "block"
+					: "none";
+		}
+
+	}
+
+	function closeBulkPanel() {
+
+		const panel =
+			document.getElementById(
+				"bulk-panel"
+			);
+
+		if (panel) {
+			panel.style.display =
+				"none";
+		}
+
+	}
+
+	function clickBulkFiles(i) {
+
+		const input =
+			document.getElementById(
+				"bulk-file-" + i
+			);
+
+		if (input) {
+			input.click();
+		}
+
+	}
+
+	function clickBulkAudio(i) {
+
+		const input =
+			document.getElementById(
+				"bulk-audio-" + i
+			);
+
+		if (input) {
+			input.click();
+		}
+
+	}
+
+	function bulkSlotHasContent(
+		slot
+	) {
+
+		return (
+			slot.assets.length > 0 ||
+			slot.audioFile !== null
+		);
+
+	}
+
+	function bulkSlotCounts(
+		slot
+	) {
+
+		const gifs =
+			slot.assets.filter(
+				(a) =>
+					a.kind === "gif"
+			).length;
+
+		const stills =
+			slot.assets.filter(
+				(a) =>
+					a.kind === "image"
+			).length;
+
+		const clips =
+			slot.assets.filter(
+				(a) =>
+					a.kind === "mp4"
+			).length;
+
+		return {
+			gifs: gifs,
+			stills: stills,
+			clips: clips,
+		};
+
+	}
+
+	async function onBulkFiles(
+		i,
+		event
+	) {
+
+		const slot =
+			bulkVideos[i];
+
+		const files =
+			event.target.files
+				? Array.from(
+						event.target.files
+				  )
+				: [];
+
+		/*
+		 * Allows the same file to be
+		 * selected again later.
+		 */
+		event.target.value =
+			"";
+
+		if (!files.length) {
+			return;
+		}
+
+		for (
+			const file of files
+		) {
+
+			const fileIsGif =
+				file.type ===
+					"image/gif" ||
+				/\\.gif$/i.test(
+					file.name
+				);
+
+			const fileIsMp4 =
+				file.type ===
+					"video/mp4" ||
+				/\\.(mp4|m4v)$/i.test(
+					file.name
+				);
+
+			const counts =
+				bulkSlotCounts(
+					slot
+				);
+
+			if (
+				fileIsGif &&
+				counts.gifs >=
+					MAX_GIF_UPLOADS
+			) {
+
+				alert(
+					"You can add at most " +
+						MAX_GIF_UPLOADS +
+						" GIFs to this video."
+				);
+
+				break;
+
+			}
+
+			if (
+				!fileIsGif &&
+				!fileIsMp4 &&
+				counts.stills >=
+					MAX_IMAGE_UPLOADS
+			) {
+
+				alert(
+					"You can add at most " +
+						MAX_IMAGE_UPLOADS +
+						" images (jpg, png, jpeg) to this video."
+				);
+
+				break;
+
+			}
+
+			if (
+				fileIsMp4 &&
+				counts.clips >=
+					MAX_MP4_UPLOADS
+			) {
+
+				alert(
+					"You can add at most " +
+						MAX_MP4_UPLOADS +
+						" MP4 clips to this video."
+				);
+
+				break;
+
+			}
+
+			if (fileIsMp4) {
+
+				/*
+				 * MP4s are probed for
+				 * their length now (so
+				 * the 1-minute cap is
+				 * enforced at upload),
+				 * but they are only
+				 * rendered when this
+				 * video's turn comes.
+				 */
+				const clipURL =
+					URL.createObjectURL(
+						file
+					);
+
+				const probed =
+					document.createElement(
+						"video"
+					);
+
+				probed.muted =
+					true;
+
+				probed.playsInline =
+					true;
+
+				probed.src =
+					clipURL;
+
+				try {
+
+					await new Promise(
+						(resolve, reject) => {
+
+							probed.addEventListener(
+								"loadedmetadata",
+								resolve,
+								{
+									once:
+										true
+								}
+							);
+
+							probed.addEventListener(
+								"error",
+								reject,
+								{
+									once:
+										true
+								}
+							);
+
+						}
+					);
+
+				}
+				catch (probeError) {
+
+					URL.revokeObjectURL(
+						clipURL
+					);
+
+					alert(
+						"'" +
+							file.name +
+							"' could not be read as an MP4 clip."
+					);
+
+					continue;
+
+				}
+
+				const clipDuration =
+					probed.duration;
+
+				if (
+					clipDuration >
+						MP4_MAX_DURATION_S
+				) {
+
+					URL.revokeObjectURL(
+						clipURL
+					);
+
+					alert(
+						"'" +
+							file.name +
+							"' is " +
+							formatSeconds(
+								clipDuration
+							) +
+							" long. Each MP4 clip must be at most " +
+							formatSeconds(
+								MP4_MAX_DURATION_S
+							) +
+							"."
+					);
+
+					continue;
+
+				}
+
+				probed.loop =
+					true;
+
+				slot.assets.push(
+					{
+						kind:
+							"mp4",
+						file:
+							file,
+						videoEl:
+							probed,
+						duration:
+							clipDuration,
+						url:
+							clipURL,
+					}
+				);
+
+			}
+			else {
+
+				/*
+				 * Images and GIFs are
+				 * only recorded here;
+				 * they are decoded
+				 * when this video's
+				 * turn comes.
+				 */
+				slot.assets.push(
+					{
+						kind:
+							fileIsGif
+								? "gif"
+								: "image",
+						file:
+							file,
+					}
+				);
+
+			}
+
+		}
+
+		slotChanged(
+			i
+		);
+
+	}
+
+	function onBulkAudio(
+		i,
+		event
+	) {
+
+		const slot =
+			bulkVideos[i];
+
+		const file =
+			event.target.files &&
+			event.target.files[0];
+
+		/*
+		 * Allows the same file to be
+		 * selected again later.
+		 */
+		event.target.value =
+			"";
+
+		if (!file) {
+			return;
+		}
+
+		/*
+		 * Recorded only; decoded when
+		 * this video's turn comes.
+		 */
+		slot.audioFile =
+			file;
+
+		slot.audio =
+			null;
+
+		slotChanged(
+			i
+		);
+
+	}
+
+	function clearBulkSlot(
+		i
+	) {
+
+		const slot =
+			bulkVideos[i];
+
+		for (
+			const asset of slot.assets
+		) {
+
+			if (
+				asset.kind ===
+					"mp4" &&
+				asset.url
+			) {
+
+				URL.revokeObjectURL(
+					asset.url
+				);
+
+			}
+
+		}
+
+		slot.assets.length =
+			0;
+
+		slot.audioFile =
+			null;
+
+		slot.audio =
+			null;
+
+		const rows =
+			document.getElementById(
+				"bulk-caption-rows-" +
+					i
+			);
+
+		if (rows) {
+			rows.innerHTML =
+				"";
+		}
+
+		slotChanged(
+			i
+		);
+
+	}
+
+	function slotChanged(
+		i
+	) {
+
+		const slot =
+			bulkVideos[i];
+
+		/*
+		 * The "rendering" state is
+		 * owned by the queue; never
+		 * clobber it. Any user change
+		 * (assets, audio, captions)
+		 * re-queues the video.
+		 */
+		if (
+			!slot ||
+			slot.status ===
+				"rendering"
+		) {
+
+			return;
+
+		}
+
+		slot.status =
+			bulkSlotHasContent(
+				slot
+			)
+			? "queued"
+			: "empty";
+
+		updateSlotUI(
+			i
+		);
+
+	}
+
+	function updateSlotUI(
+		i
+	) {
+
+		const slot =
+			bulkVideos[i];
+
+		if (!slot) {
+			return;
+		}
+
+		const statusEl =
+			document.getElementById(
+				"bulk-status-" + i
+			);
+
+		if (statusEl) {
+
+			statusEl.textContent =
+				slot.status;
+
+			const colors = {
+				empty:
+					"#374151",
+				queued:
+					"#1d4ed8",
+				rendering:
+					"#b45309",
+				done:
+					"#15803d",
+				error:
+					"#b91c1c",
+				skipped:
+					"#4b5563",
+			};
+
+			statusEl.style.background =
+				colors[slot.status] ||
+				"#374151";
+
+		}
+
+		const summaryEl =
+			document.getElementById(
+				"bulk-summary-" + i
+			);
+
+		if (summaryEl) {
+
+			const counts =
+				bulkSlotCounts(
+					slot
+				);
+
+			const parts =
+				[];
+
+			if (
+				counts.stills > 0
+			) {
+
+				parts.push(
+					counts.stills +
+						" image" +
+						(counts.stills === 1
+							? ""
+							: "s")
+				);
+
+			}
+
+			if (
+				counts.gifs > 0
+			) {
+
+				parts.push(
+					counts.gifs +
+						" GIF" +
+						(counts.gifs === 1
+							? ""
+							: "s")
+				);
+
+			}
+
+			if (
+				counts.clips > 0
+			) {
+
+				const total =
+					slot.assets.reduce(
+						(sum, a) =>
+							a.kind ===
+								"mp4"
+							? sum +
+								a.duration
+							: sum,
+						0
+					);
+
+				parts.push(
+					counts.clips +
+						" MP4 (" +
+						formatSeconds(
+							total
+						) +
+						")"
+				);
+
+			}
+
+			if (
+				slot.audioFile
+			) {
+
+				parts.push(
+					"MP3" +
+					(slot.audio
+						? " " +
+							formatSeconds(
+								slot.audio.duration
+							)
+						: "")
+				);
+
+			}
+
+			const rows =
+				document.getElementById(
+					"bulk-caption-rows-" +
+						i
+				);
+
+			if (
+				rows &&
+				rows.children.length >
+					0
+			) {
+
+				parts.push(
+					rows.children.length +
+						" caption" +
+						(rows.children.length === 1
+							? ""
+							: "s")
+				);
+
+			}
+
+			summaryEl.textContent =
+				parts.length
+				? parts.join(" · ")
+				: "no assets yet";
+
+		}
+
+	}
+
+	function toggleBulkCaptions(
+		i
+	) {
+
+		const wrap =
+			document.getElementById(
+				"bulk-caption-wrap-" +
+					i
+			);
+
+		if (!wrap) {
+			return;
+		}
+
+		wrap.style.display =
+			wrap.style.display ===
+				"none"
+			? "block"
+			: "none";
+
+		if (
+			wrap.style.display ===
+				"block"
+		) {
+
+			const rows =
+				document.getElementById(
+					"bulk-caption-rows-" +
+						i
+				);
+
+			if (
+				!rows.children.length
+			) {
+
+				addBulkCaptionRow(
+					i
+				);
+
+			}
+
+		}
+
+	}
+
+	/*
+	 * Inner HTML of a caption row (the
+	 * same fields as the main panel's
+	 * caption rows). The caller sets
+	 * the outer element's class to
+	 * "caption-row".
+	 */
+	function bulkCaptionRowHTML() {
+
+		return (
+			'<div class="caption-time">' +
+			'<input type="number" min="0" max="99" step="1" value="0" class="caption-hh" aria-label="Hours">' +
+			'<span>:</span>' +
+			'<input type="number" min="0" max="59" step="1" value="0" class="caption-mm" aria-label="Minutes">' +
+			'<span>:</span>' +
+			'<input type="number" min="0" max="59" step="1" value="0" class="caption-ss" aria-label="Seconds">' +
+			'</div>' +
+			'<div class="caption-text-wrap">' +
+			'<input type="text" class="caption-text" maxlength="' +
+			CAPTION_MAX_CHARS +
+			'" placeholder="Caption text (max ' +
+			CAPTION_MAX_CHARS +
+			' characters)">' +
+			'<span class="caption-chars">0/' +
+			CAPTION_MAX_CHARS +
+			'</span>' +
+			'</div>' +
+			'<button type="button" class="caption-remove" title="Remove caption" onclick="removeBulkCaptionRow(this)">&times;</button>'
+		);
+
+	}
+
+	function addBulkCaptionRow(
+		i
+	) {
+
+		const rows =
+			document.getElementById(
+				"bulk-caption-rows-" +
+					i
+			);
+
+		if (!rows) {
+			return;
+		}
+
+		if (
+			rows.children.length >=
+				MAX_CAPTIONS
+		) {
+
+			return;
+
+		}
+
+		const row =
+			document.createElement(
+				"div"
+			);
+
+		row.className =
+			"caption-row";
+
+		row.innerHTML =
+			bulkCaptionRowHTML();
+
+		const textInput =
+			row.querySelector(
+				".caption-text"
+			);
+
+		textInput.addEventListener(
+			"input",
+			() => {
+
+				row.querySelector(
+					".caption-chars"
+				).textContent =
+					textInput.value.length +
+					"/" +
+					CAPTION_MAX_CHARS;
+
+			}
+		);
+
+		rows.appendChild(
+			row
+		);
+
+		slotChanged(
+			i
+		);
+
+	}
+
+	function removeBulkCaptionRow(
+		button
+	) {
+
+		const row =
+			button.closest(
+				".caption-row"
+			);
+
+		if (
+			!row ||
+			!row.parentElement
+		) {
+
+			return;
+
+		}
+
+		const rowsId =
+			row.parentElement.id;
+
+		row.remove();
+
+		const n = Number(
+			rowsId.substring(
+				"bulk-caption-rows-".length
+			)
+		);
+
+		if (
+			Number.isFinite(
+				n
+			)
+		) {
+
+			slotChanged(
+				n
+			);
+
+		}
+
+	}
+
+	/*
+	 * Reads this slot's recorded
+	 * assets from disk now that its
+	 * turn has come: decodes the
+	 * MP3, decodes the images and
+	 * GIFs, and returns the slides
+	 * in upload order.
+	 */
+	async function prepareBulkVideo(
+		i
+	) {
+
+		const slot =
+			bulkVideos[i];
+
+		const slides =
+			[];
+
+		if (
+			slot.audioFile
+		) {
+
+			const arrayBuffer =
+				await slot.audioFile.arrayBuffer();
+
+			const context =
+				getAudioContext();
+
+			const decoded =
+				await context.decodeAudioData(
+					arrayBuffer.slice(0)
+				);
+
+			slot.audio = {
+				name:
+					slot.audioFile.name,
+				duration:
+					decoded.duration,
+				buffer:
+					decoded,
+				url:
+					null,
+			};
+
+		}
+
+		for (
+			let k = 0;
+			k < slot.assets.length;
+			k++
+		) {
+
+			const asset =
+				slot.assets[k];
+
+			if (
+				asset.kind ===
+					"mp4"
+			) {
+
+				/*
+				 * Probed at upload
+				 * time; plays in full
+				 * length, silent.
+				 */
+				slides.push(
+					{
+						id:
+							"bulk-v-" +
+								i +
+								"-" +
+								k,
+						cardId:
+							"",
+						type:
+							"mp4",
+						videoEl:
+							asset.videoEl,
+						duration:
+							asset.duration,
+						img:
+							asset.videoEl,
+					}
+				);
+
+				continue;
+
+			}
+
+			const file =
+				asset.file;
+
+			const imageURL =
+				URL.createObjectURL(
+					file
+				);
+
+			const img =
+				new Image();
+
+			img.src =
+				imageURL;
+
+			if (
+				asset.kind ===
+					"gif"
+			) {
+
+				const buffer =
+					await file.arrayBuffer();
+
+				const gif =
+					buildGifSlideFrames(
+						parseGifBytes(
+							new Uint8Array(
+								buffer
+							)
+						)
+					);
+
+				slides.push(
+					{
+						id:
+							"bulk-g-" +
+								i +
+								"-" +
+								k,
+						cardId:
+							"",
+						type:
+							"gif",
+						gif:
+							gif,
+						img:
+							img,
+					}
+				);
+
+			}
+			else {
+
+				await img.decode();
+
+				slides.push(
+					{
+						id:
+							"bulk-i-" +
+								i +
+								"-" +
+								k,
+						cardId:
+							"",
+						img:
+							img,
+					}
+				);
+
+			}
+
+		}
+
+		return slides;
+
+	}
+
+	function swapBulkCaptionsIn(
+		i
+	) {
+
+		const slotRows =
+			document.getElementById(
+				"bulk-caption-rows-" +
+					i
+			);
+
+		while (
+			slotRows.children.length
+		) {
+
+			captionRowsEl.appendChild(
+				slotRows.children[0]
+			);
+
+		}
+
+	}
+
+	function swapBulkCaptionsOut(
+		i
+	) {
+
+		const slotRows =
+			document.getElementById(
+				"bulk-caption-rows-" +
+					i
+			);
+
+		while (
+			captionRowsEl.children.length
+		) {
+
+			slotRows.appendChild(
+				captionRowsEl.children[0]
+			);
+
+		}
+
+	}
+
+	function hasQueuedBulkVideos() {
+
+		return bulkVideos.some(
+			bulkSlotHasContent
+		);
+
+	}
+
+	/*
+	 * The render button entry point:
+	 * with queued bulk videos the
+	 * whole queue runs (two at a
+	 * time); otherwise the main
+	 * panel renders one video as
+	 * before.
+	 */
+	function onRenderClick() {
+
+		if (bulkRunning) {
+			return;
+		}
+
+		if (
+			hasQueuedBulkVideos()
+		) {
+
+			runBulkQueue();
+
+			return;
+
+		}
+
+		generateMP4();
+
+	}
+
+	async function runBulkQueue() {
+
+		bulkRunning =
+			true;
+
+		const renderBtn =
+			document.getElementById(
+				"render-btn"
+			);
+
+		const banner =
+			document.getElementById(
+				"bulk-banner"
+			);
+
+		const statusText =
+			document.getElementById(
+				"status-text"
+			);
+
+		if (banner) {
+			banner.style.display =
+				"block";
+		}
+
+		if (renderBtn) {
+			renderBtn.disabled =
+				true;
+		}
+
+		/*
+		 * Snapshot the main panel
+		 * state so it can be
+		 * restored afterwards.
+		 */
+		const savedSlides =
+			activeSlides.slice();
+
+		const savedAudio =
+			currentAudio;
+
+		const savedCaptionRows =
+			Array.from(
+				captionRowsEl.children
+			);
+
+		captionRowsEl.innerHTML =
+			"";
+
+		let done =
+			0;
+
+		let skipped =
+			0;
+
+		let errors =
+			0;
+
+		for (
+			let i = 0;
+			i < bulkVideos.length;
+			i++
+		) {
+
+			const slot =
+				bulkVideos[i];
+
+			/*
+			 * The queue is processed
+			 * in batches of
+			 * BULK_BATCH_SIZE: each
+			 * video fully finishes
+			 * before the next starts,
+			 * so the first two are
+			 * done before the next
+			 * two begin, and the
+			 * last batch may be a
+			 * single video.
+			 */
+			if (
+				!bulkSlotHasContent(
+					slot
+				)
+			) {
+
+				continue;
+
+			}
+
+			slot.status =
+				"rendering";
+
+			updateSlotUI(
+				i
+			);
+
+			if (statusText) {
+				statusText.textContent =
+					"Bulk: rendering " +
+						slot.name +
+						" ...";
+			}
+
+			let result =
+				"error";
+
+			try {
+
+				const slides =
+					await prepareBulkVideo(
+						i
+					);
+
+				swapBulkCaptionsIn(
+					i
+				);
+
+				activeSlides.length =
+					0;
+
+				for (
+					const slide of slides
+				) {
+
+					activeSlides.push(
+						slide
+					);
+
+				}
+
+				currentAudio =
+					slot.audio;
+
+				renderContext = {
+					fileName:
+						"YouTubeVibeStudio_" +
+						slot.name.replace(
+							/\\s+/g,
+							""
+						) +
+						".mp4",
+				};
+
+				result =
+					(await generateMP4()) ||
+					"skipped";
+
+			}
+			catch (bulkError) {
+
+				console.error(
+					"Bulk video " +
+						slot.name +
+						" failed:",
+					bulkError
+				);
+
+			}
+			finally {
+
+				swapBulkCaptionsOut(
+					i
+				);
+
+				activeSlides.length =
+					0;
+
+				currentAudio =
+					null;
+
+				renderContext =
+					null;
+
+			}
+
+			if (
+				result ===
+					"done"
+			) {
+
+				slot.status =
+					"done";
+
+				done++;
+
+			}
+			else if (
+				result ===
+					"error"
+			) {
+
+				slot.status =
+					"error";
+
+				errors++;
+
+			}
+			else {
+
+				slot.status =
+					"skipped";
+
+				skipped++;
+
+			}
+
+			updateSlotUI(
+				i
+			);
+
+		}
+
+		/*
+		 * Restore the main panel
+		 * state.
+		 */
+		activeSlides.length =
+			0;
+
+		for (
+			const slide of savedSlides
+		) {
+
+			activeSlides.push(
+				slide
+			);
+
+		}
+
+		currentAudio =
+			savedAudio;
+
+		captionRowsEl.innerHTML =
+			"";
+
+		for (
+			const row of savedCaptionRows
+		) {
+
+			captionRowsEl.appendChild(
+				row
+			);
+
+		}
+
+		updateCaptionCount();
+
+		bulkRunning =
+			false;
+
+		if (renderBtn) {
+			renderBtn.disabled =
+				false;
+		}
+
+		if (banner) {
+			banner.style.display =
+				"none";
+		}
+
+		if (statusText) {
+			statusText.textContent =
+				"Bulk complete: " +
+					done +
+					" saved, " +
+					skipped +
+					" skipped, " +
+					errors +
+					" failed.";
+		}
+
+	}
+
+	initBulkVideos();
+
 	async function generateMP4() {
 
 		if (
@@ -7774,7 +9599,7 @@ function createHTML() {
 				"Please wait for images to generate or upload your own!"
 			);
 
-			return;
+			return "skipped";
 
 		}
 
@@ -7788,7 +9613,7 @@ function createHTML() {
 				"Your browser does not support WebCodecs. Please use modern Chrome, Edge, or Safari."
 			);
 
-			return;
+			return "error";
 
 		}
 
@@ -7816,7 +9641,13 @@ function createHTML() {
 		 */
 
 		const fileName =
-			\`Ghibli_Story_\${Date.now()}.mp4\`;
+			renderContext &&
+				renderContext.fileName
+				? renderContext.fileName
+				: "YouTubeVibeStudio_" +
+					Date.now() +
+					".mp4";
+
 
 
 		let fileStream =
@@ -7870,7 +9701,7 @@ function createHTML() {
 						"AbortError"
 				) {
 
-					return;
+					return "skipped";
 
 				}
 
@@ -8153,7 +9984,7 @@ function createHTML() {
 					statusText.style.display =
 						"none";
 
-					return;
+					return "skipped";
 
 				}
 
@@ -9342,6 +11173,8 @@ function createHTML() {
 						? "✓ MP4 Downloaded with audio!"
 						: "✓ MP4 Downloaded!";
 
+			return "done";
+
 		}
 		catch (error) {
 
@@ -9360,6 +11193,8 @@ function createHTML() {
 					(error.message || String(error)) +
 					"\\n\\nTry reducing the number of images or closing other browser tabs."
 			);
+
+			return "error";
 
 		}
 		finally {
