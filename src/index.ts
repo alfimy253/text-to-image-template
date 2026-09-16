@@ -1662,6 +1662,443 @@ function createHTML() {
 				10px;
 		}
 
+		/* =====================================================
+		   VIDEO SECTIONS (stacked Video N accordions)
+		   ===================================================== */
+
+		.action-bar {
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			gap:
+				14px;
+
+			max-width:
+				980px;
+
+			margin:
+				18px auto 14px auto;
+		}
+
+
+		.action-hint {
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.9rem;
+		}
+
+
+		#video-accordions {
+
+			max-width:
+				980px;
+
+			margin:
+				0 auto;
+		}
+
+
+		.video-accordion {
+
+			background:
+				var(--card);
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				12px;
+
+			margin-bottom:
+				14px;
+
+			overflow:
+				hidden;
+		}
+
+
+		.va-header {
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			gap:
+				12px;
+
+			padding:
+				12px 16px;
+
+			background:
+				#14161a;
+		}
+
+
+		.va-title {
+
+			font-family:
+				'Oswald',
+				sans-serif;
+
+			font-size:
+				1.1rem;
+		}
+
+
+		.va-status {
+
+			font-size:
+				0.75rem;
+
+			padding:
+				2px 10px;
+
+			border-radius:
+				999px;
+
+			background:
+				#374151;
+
+			color:
+				#d1d5db;
+		}
+
+
+		.va-summary {
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.85rem;
+
+			flex:
+				1;
+		}
+
+
+		.va-arrow {
+
+			background:
+				none;
+
+			border:
+				none;
+
+			color:
+				var(--text);
+
+			font-size:
+				18px;
+
+			line-height:
+				1;
+
+			cursor:
+				pointer;
+		}
+
+
+		.va-body {
+
+			padding:
+				4px 16px 14px 16px;
+		}
+
+
+		.va-section {
+
+			border-top:
+				1px solid #2e3440;
+
+			padding:
+				10px 0;
+		}
+
+
+		.va-section:first-child {
+
+			border-top:
+				none;
+		}
+
+
+		.va-section-title {
+
+			font-weight:
+				700;
+
+			margin-bottom:
+				8px;
+		}
+
+
+		.va-note {
+
+			display:
+				block;
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.78rem;
+
+			margin-top:
+				6px;
+		}
+
+
+		.va-row {
+
+			display:
+				flex;
+
+			gap:
+				10px;
+
+			margin-top:
+				8px;
+
+			flex-wrap:
+				wrap;
+		}
+
+
+		.va-audio-line {
+
+			margin-left:
+				10px;
+
+			color:
+				#d1d5db;
+
+			font-size:
+				0.85rem;
+		}
+
+
+		.va-gallery {
+
+			display:
+				grid;
+
+			grid-template-columns:
+				repeat(
+					auto-fill,
+					minmax(140px, 1fr)
+				);
+
+			gap:
+				10px;
+
+			margin-top:
+				10px;
+		}
+
+
+		.va-card {
+
+			position:
+				relative;
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				8px;
+
+			background:
+				#0f1115;
+
+			padding:
+				6px;
+
+			cursor:
+				grab;
+		}
+
+
+		.va-card.dragging {
+
+			opacity:
+				0.4;
+		}
+
+
+		.va-card.drag-over {
+
+			border-color:
+				#f59e0b;
+		}
+
+
+		.va-card img,
+		.va-card video {
+
+			width:
+				100%;
+
+			height:
+				90px;
+
+			object-fit:
+				contain;
+
+			display:
+				block;
+
+			border-radius:
+				4px;
+		}
+
+
+		.va-card-label {
+
+			font-size:
+				0.72rem;
+
+			color:
+				#9ca3af;
+
+			margin-top:
+				4px;
+
+			white-space:
+				nowrap;
+
+			overflow:
+				hidden;
+
+			text-overflow:
+				ellipsis;
+		}
+
+
+		.va-card-remove {
+
+			position:
+				absolute;
+
+			top:
+				2px;
+
+			right:
+				2px;
+
+			width:
+				20px;
+
+			height:
+				20px;
+
+			border-radius:
+				50%;
+
+			border:
+				none;
+
+			background:
+				#b91c1c;
+
+			color:
+				#ffffff;
+
+			cursor:
+				pointer;
+
+			line-height:
+				1;
+		}
+
+
+		.modal-overlay {
+
+			position:
+				fixed;
+
+			top:
+				0;
+
+			left:
+				0;
+
+			right:
+				0;
+
+			bottom:
+				0;
+
+			background:
+				rgba(0, 0, 0, 0.6);
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			justify-content:
+				center;
+
+			z-index:
+				100;
+		}
+
+
+		.modal-box {
+
+			background:
+				#181b20;
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				12px;
+
+			padding:
+				20px 24px;
+
+			max-width:
+				520px;
+
+			width:
+				90%;
+		}
+
+
+		.modal-title {
+
+			font-size:
+				1.1rem;
+
+			font-weight:
+				700;
+
+			margin-bottom:
+				12px;
+		}
+
+
+		.modal-box ul {
+
+			margin:
+				0 0 16px 20px;
+
+			color:
+				#f3f4f6;
+		}
+
 </style>
 
 </head>
@@ -1676,8 +2113,8 @@ function createHTML() {
 			type="button"
 			id="bulk-toggle"
 			class="bulk-toggle"
-			onclick="toggleBulkPanel()"
-			title="Bulk video queue (up to 7)">+
+			onclick="addVideoAccordion()"
+			title="Add a video (up to 7)">+
 		</button>
 
 
@@ -1700,54 +2137,6 @@ function createHTML() {
 		⚠️ Bulk generation is in progress — do not
 		move or delete your image or MP4 files until
 		it finishes.
-	</div>
-
-
-	<div
-		id="bulk-panel"
-		class="bulk-panel"
-		style="display:none"
-	>
-
-		<div
-			class="bulk-panel-header"
-		>
-
-			<span
-				class="bulk-panel-title"
-			>
-				📚 Bulk Video Queue — up to 7 videos,
-				processed 2 at a time
-			</span>
-
-			<button
-				type="button"
-				class="bulk-arrow"
-				id="bulk-arrow"
-				onclick="closeBulkPanel()"
-				title="Hide queue"
-			>
-				▼
-			</button>
-
-		</div>
-
-		<div
-			id="bulk-slots"
-		>
-		</div>
-
-		<div class="audio-note">
-			Each video is fully independent (its own
-			images/MP4s, its own MP3, its own captions).
-			The first two are processed before the next
-			two start, and the last batch may be a
-			single video. While the queue is running,
-			each video's files are read from your device
-			as its turn comes — do not move or delete
-			them.
-		</div>
-
 	</div>
 
 
@@ -2110,6 +2499,25 @@ function createHTML() {
 		</div>
 
 
+		<div
+			class="action-bar"
+			id="action-bar"
+		>
+			<span
+				class="action-hint"
+				id="action-hint"
+			>
+				Click the red + button (top left) to add
+				a video, then press Generate.
+			</span>
+		</div>
+
+		<div
+			id="video-accordions"
+		>
+		</div>
+
+
 		<div class="controls">
 
 			<label class="upload-btn">
@@ -2154,7 +2562,7 @@ function createHTML() {
 
 			<button
 				id="render-btn"
-				onclick="onRenderClick()"
+				onclick="onGenerateClick()"
 			>
 
 				🎞️ Render & Download MP4 Video
@@ -2187,6 +2595,30 @@ function createHTML() {
 		id="gallery"
 		class="gallery"
 	></div>
+
+
+	<div
+		id="required-modal"
+		class="modal-overlay"
+		style="display:none"
+	>
+		<div class="modal-box">
+			<div class="modal-title">
+				⚠️ Missing required fields
+			</div>
+			<ul
+				id="required-modal-list"
+			>
+			</ul>
+			<button
+				type="button"
+				class="upload-btn"
+				onclick="closeRequiredModal()"
+			>
+				OK
+			</button>
+		</div>
+	</div>
 
 
 <script>
@@ -8071,274 +8503,402 @@ function createHTML() {
 	// MP4 VIDEO GENERATOR
 	// =========================================================
 
-	// =========================================================
-	// BULK VIDEO QUEUE (up to 7 videos)
-	// =========================================================
-
 	/*
-	 * Each queued video is fully
-	 * independent: its own
-	 * images/GIFs/MP4s, its own MP3
-	 * and its own captions. Assets
-	 * are only recorded by
-	 * client-side File reference
-	 * when the user adds them. They
-	 * are read from disk and
-	 * rendered only when the video's
-	 * turn comes: the queue runs in
-	 * batches of BULK_BATCH_SIZE, so
-	 * the first two are done before
-	 * the next two start, and the
-	 * last batch may be a single
-	 * video.
+	 * =========================================================
+	 * VIDEO SECTIONS (the stacked "Video N" accordions)
+	 * =========================================================
 	 *
-	 * While the queue is running the
-	 * user must not move or delete
-	 * the image or MP4 files.
+	 * This block is organised as four self-contained modules
+	 * so it can later be cut into separate import files:
+	 *
+	 *   MODULE 1: video-projects  (state, + button, accordion UI)
+	 *   MODULE 2: video-gallery   (upload, cards, drag & drop)
+	 *   MODULE 3: required-modal  (missing-fields warning)
+	 *   MODULE 4: generation-queue (render everything, 2 at a time)
+	 *
+	 * Each module only talks to the others through the
+	 * videoProjects array and the small shared functions, so a
+	 * module can be moved to its own file without touching the
+	 * rest.
+	 *
+	 * The old single-video panels (title, MP3, captions,
+	 * sticker, quality, main gallery) stay in the DOM but are
+	 * hidden; they act as the engine's "working state". Before
+	 * each video is rendered, that video's values are copied
+	 * into the hidden panels, the engine renders, then the
+	 * working state is restored.
 	 */
 
-	const BULK_MAX_VIDEOS =
-		7;
-
-	const BULK_BATCH_SIZE =
-		2;
-
 	/*
-	 * var (not let) so tests and the
-	 * save dialog can see it on the
-	 * window object.
+	 * var (not let) so the save dialog and tests can see it
+	 * on the window object.
 	 */
 	var renderContext =
 		null;
 
-	let bulkVideos =
+	// =========================================================
+	// MODULE 1: video-projects
+	// =========================================================
+
+	const VIDEO_MAX_VIDEOS =
+		7;
+
+	const VIDEO_BATCH_SIZE =
+		2;
+
+	let videoProjects =
 		[];
 
-	let bulkRunning =
+	let generating =
 		false;
 
-	function newBulkSlot(n) {
+	const STATUS_COLORS = {
+		empty:
+			"#374151",
+		queued:
+			"#1d4ed8",
+		rendering:
+			"#b45309",
+		done:
+			"#15803d",
+		error:
+			"#b91c1c",
+		skipped:
+			"#4b5563",
+	};
 
-		return {
+	function initVideoStudio() {
+
+		/*
+		 * Canvas-only start: hide the old
+		 * single-video panels; they become
+		 * the hidden engine working state.
+		 */
+		const mainPanels =
+			document.querySelectorAll(
+				".audio-panel"
+			);
+
+		for (const p of mainPanels) {
+			p.style.display =
+				"none";
+		}
+
+		const controls =
+			document.querySelector(
+				".controls"
+			);
+
+		if (controls) {
+			controls.style.display =
+				"none";
+		}
+
+		const gallery =
+			document.getElementById(
+				"gallery"
+			);
+
+		if (gallery) {
+			gallery.style.display =
+				"none";
+		}
+
+		/*
+		 * Move the single generate button
+		 * into the always-visible action
+		 * bar next to the canvas.
+		 */
+		const renderBtn =
+			document.getElementById(
+				"render-btn"
+			);
+
+		const bar =
+			document.getElementById(
+				"action-bar"
+			);
+
+		if (renderBtn && bar) {
+
+			renderBtn.parentNode.removeChild(
+				renderBtn
+			);
+
+			bar.insertBefore(
+				renderBtn,
+				bar.firstChild
+			);
+
+			renderBtn.innerHTML =
+				"🎞️ Generate Videos";
+
+		}
+
+	}
+
+	/*
+	 * The red + button: adds one "Video N"
+	 * accordion to the stack (max 7).
+	 */
+	function addVideoAccordion() {
+
+		if (
+			videoProjects.length >=
+				VIDEO_MAX_VIDEOS
+		) {
+
+			alert(
+				"You can add at most " +
+					VIDEO_MAX_VIDEOS +
+					" videos."
+			);
+
+			return;
+
+		}
+
+		const n =
+			videoProjects.length + 1;
+
+		const project = {
+			n: n,
 			name: "Video " + n,
 			assets: [],
 			audioFile: null,
 			audio: null,
 			status: "empty",
+			el: null,
 		};
 
-	}
+		videoProjects.push(
+			project
+		);
 
-	function initBulkVideos() {
-
-		for (
-			let n = 1;
-			n <= BULK_MAX_VIDEOS;
-			n++
-		) {
-			bulkVideos.push(
-				newBulkSlot(n)
-			);
-		}
-
-		buildBulkPanel();
-
-	}
-
-	function buildBulkPanel() {
-
-		const slotsEl =
-			document.getElementById(
-				"bulk-slots"
+		const acc =
+			document.createElement(
+				"div"
 			);
 
-		if (!slotsEl) {
-			return;
-		}
+		acc.className =
+			"video-accordion";
 
-		slotsEl.innerHTML =
-			"";
+		acc.id =
+			"video-" + n;
 
-		for (
-			let i = 0;
-			i < bulkVideos.length;
-			i++
-		) {
+		acc.innerHTML =
+			videoAccordionHTML(
+				n
+			);
 
-			const slot =
-				bulkVideos[i];
+		document.getElementById(
+			"video-accordions"
+		).appendChild(
+			acc
+		);
 
-			const row =
-				document.createElement(
-					"div"
+		project.el =
+			acc;
+
+		document.getElementById(
+			"va-file-" + n
+		).addEventListener(
+			"change",
+			(event) =>
+				onVideoFiles(
+					n,
+					event
+				)
+		);
+
+		document.getElementById(
+			"va-audio-" + n
+		).addEventListener(
+			"change",
+			(event) =>
+				onVideoAudio(
+					n,
+					event
+				)
+		);
+
+		/*
+		 * First accordion: the hint
+		 * becomes a queue note.
+		 */
+		if (n === 1) {
+			const hint =
+				document.getElementById(
+					"action-hint"
 				);
-
-			row.className =
-				"bulk-slot";
-
-			row.id =
-				"bulk-slot-" +
-				i;
-
-			row.innerHTML =
-				'<div class="bulk-slot-top">' +
-				'<span class="bulk-slot-name">' +
-					slot.name +
-				'</span>' +
-				'<span class="bulk-status" id="bulk-status-' +
-					i +
-				'">empty</span>' +
-				'<span class="bulk-summary" id="bulk-summary-' +
-					i +
-				'"></span>' +
-				'</div>' +
-				'<div class="bulk-slot-actions">' +
-				'<button type="button" class="upload-btn" onclick="clickBulkFiles(' +
-					i +
-				')">📁 Add images / MP4s</button>' +
-				'<button type="button" class="upload-btn audio" onclick="clickBulkAudio(' +
-					i +
-				')">🎵 Add MP3</button>' +
-				'<button type="button" class="upload-btn" onclick="toggleBulkCaptions(' +
-					i +
-				')">📝 Captions</button>' +
-				'<button type="button" class="upload-btn" onclick="clearBulkSlot(' +
-					i +
-				')">🗑 Clear</button>' +
-				'</div>' +
-				'<div class="bulk-caption-wrap" id="bulk-caption-wrap-' +
-					i +
-				'" style="display:none">' +
-				'<div id="bulk-caption-rows-' +
-					i +
-				'"></div>' +
-				'<button type="button" class="upload-btn" onclick="addBulkCaptionRow(' +
-					i +
-				')">+ Add Caption</button>' +
-				'</div>' +
-				'<input type="file" id="bulk-file-' +
-					i +
-				'" multiple accept="image/*,image/gif,.gif,video/mp4,.mp4" style="display:none">' +
-				'<input type="file" id="bulk-audio-' +
-					i +
-				'" accept="audio/mpeg,.mp3" style="display:none">';
-
-			slotsEl.appendChild(
-				row
-			);
-
-			document.getElementById(
-				"bulk-file-" + i
-			).addEventListener(
-				"change",
-				(event) =>
-					onBulkFiles(
-						i,
-						event
-					)
-			);
-
-			document.getElementById(
-				"bulk-audio-" + i
-			).addEventListener(
-				"change",
-				(event) =>
-					onBulkAudio(
-						i,
-						event
-					)
-			);
-
+			if (hint) {
+				hint.textContent =
+					"Videos render in the order listed, two at a time.";
+			}
 		}
 
-	}
-
-	function toggleBulkPanel() {
-
-		const panel =
-			document.getElementById(
-				"bulk-panel"
-			);
-
-		if (panel) {
-			panel.style.display =
-				panel.style.display ===
-					"none"
-					? "block"
-					: "none";
-		}
-
-	}
-
-	function closeBulkPanel() {
-
-		const panel =
-			document.getElementById(
-				"bulk-panel"
-			);
-
-		if (panel) {
-			panel.style.display =
-				"none";
-		}
-
-	}
-
-	function clickBulkFiles(i) {
-
-		const input =
-			document.getElementById(
-				"bulk-file-" + i
-			);
-
-		if (input) {
-			input.click();
-		}
-
-	}
-
-	function clickBulkAudio(i) {
-
-		const input =
-			document.getElementById(
-				"bulk-audio-" + i
-			);
-
-		if (input) {
-			input.click();
-		}
-
-	}
-
-	function bulkSlotHasContent(
-		slot
-	) {
-
-		return (
-			slot.assets.length > 0 ||
-			slot.audioFile !== null
+		updateVideoStatus(
+			n
 		);
 
 	}
 
-	function bulkSlotCounts(
-		slot
+	function toggleVideoAccordion(
+		n
+	) {
+
+		const body =
+			document.getElementById(
+				"va-body-" + n
+			);
+
+		const arrow =
+			document.getElementById(
+				"va-arrow-" + n
+			);
+
+		if (!body) {
+			return;
+		}
+
+		body.style.display =
+			body.style.display === "none"
+			? "block"
+			: "none";
+
+		if (arrow) {
+			arrow.textContent =
+				body.style.display ===
+					"none"
+				? "▶"
+				: "▼";
+		}
+
+	}
+
+	function clickVaFiles(n) {
+
+		const input =
+			document.getElementById(
+				"va-file-" + n
+			);
+
+		if (input) {
+			input.click();
+		}
+
+	}
+
+	function clickVaAudio(n) {
+
+		const input =
+			document.getElementById(
+				"va-audio-" + n
+			);
+
+		if (input) {
+			input.click();
+		}
+
+	}
+
+	/*
+	 * Static option lists, copied from
+	 * the main panels.
+	 */
+	const STICKER_OPTIONS =
+		'<option value="none" selected>None</option>' +
+		'<option value="like">👍 Like</option>' +
+		'<option value="love">❤️ Love it</option>' +
+		'<option value="subscribe">🔔 Subscribe</option>' +
+		'<option value="like-subscribe">👍🔔 Like &amp; Subscribe</option>' +
+		'<option value="watch">🎬 Watch Video</option>' +
+		'<option value="watch-like-subscribe">🎬👍🔔 Watch, Like &amp; Subscribe</option>';
+
+	const QUALITY_OPTIONS =
+		'<option value="low">480p · Light (1.2 Mbps)</option>' +
+		'<option value="balanced" selected>720p · Balanced (2.5 Mbps)</option>' +
+		'<option value="high">720p · High (5 Mbps)</option>';
+
+	const FONT_OPTIONS =
+		'<option value="oswald">Oswald</option>' +
+		'<option value="bauhaus">Bauhaus</option>' +
+		'<option value="bookman">Bookman</option>';
+
+	const COLOR_OPTIONS =
+		'<option value="white">White text</option>' +
+		'<option value="black">Black text</option>' +
+		'<option value="green">Green text</option>';
+
+	function videoAccordionHTML(
+		n
+	) {
+
+		return (
+			'<div class="va-header">' +
+			'<span class="va-title">🎬 Video ' + n + '</span>' +
+			'<span class="va-status" id="va-status-' + n + '">empty</span>' +
+			'<span class="va-summary" id="va-summary-' + n + '"></span>' +
+			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">▼</button>' +
+			'</div>' +
+			'<div class="va-body" id="va-body-' + n + '">' +
+			'<div class="va-section">' +
+			'<div class="va-section-title">Audio — one MP3 (the video is as long as the MP3)</div>' +
+			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">🎵 Upload MP3 Audio</button>' +
+			'<span class="va-audio-line" id="va-audio-line-' + n + '"></span>' +
+			'</div>' +
+			'<div class="va-section">' +
+			'<div class="va-section-title">Title (top left)</div>' +
+			'<input type="text" id="va-title-' + n + '" maxlength="70" placeholder="Enter your video title...">' +
+			'<div class="va-row">' +
+			'<label class="quality-select">Font <select id="va-font-' + n + '">' + FONT_OPTIONS + '</select></label>' +
+			'<label class="quality-select">Colour <select id="va-color-' + n + '">' + COLOR_OPTIONS + '</select></label>' +
+			'</div>' +
+			'</div>' +
+			'<div class="va-section">' +
+			'<div class="va-section-title">Captions (bottom)</div>' +
+			'<div id="va-captions-' + n + '"></div>' +
+			'<button type="button" class="upload-btn" onclick="addVaCaptionRow(' + n + ')">+ Add Caption</button>' +
+			'</div>' +
+			'<div class="va-section">' +
+			'<div class="va-section-title">Sticker (bottom right)</div>' +
+			'<select id="va-sticker-' + n + '" class="quality-select">' + STICKER_OPTIONS + '</select>' +
+			'</div>' +
+			'<div class="va-section">' +
+			'<div class="va-section-title">Quality</div>' +
+			'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
+			'</div>' +
+			'<div class="va-section">' +
+			'<div class="va-section-title">Images / MP4s — drag cards to reorder</div>' +
+			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">📁 Upload Image, GIF or MP4</button>' +
+			'<span class="va-note">Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)</span>' +
+			'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
+			'</div>' +
+			'</div>' +
+			'<input type="file" id="va-file-' + n + '" multiple accept="image/*,image/gif,.gif,video/mp4,.mp4" style="display:none">' +
+			'<input type="file" id="va-audio-' + n + '" accept="audio/mpeg,.mp3" style="display:none">'
+		);
+
+	}
+
+	function videoCounts(
+		project
 	) {
 
 		const gifs =
-			slot.assets.filter(
+			project.assets.filter(
 				(a) =>
 					a.kind === "gif"
 			).length;
 
 		const stills =
-			slot.assets.filter(
+			project.assets.filter(
 				(a) =>
 					a.kind === "image"
 			).length;
 
 		const clips =
-			slot.assets.filter(
+			project.assets.filter(
 				(a) =>
 					a.kind === "mp4"
 			).length;
@@ -8351,13 +8911,163 @@ function createHTML() {
 
 	}
 
-	async function onBulkFiles(
-		i,
+	function updateVideoStatus(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		const statusEl =
+			document.getElementById(
+				"va-status-" + n
+			);
+
+		if (statusEl) {
+
+			statusEl.textContent =
+				project.status;
+
+			statusEl.style.background =
+				STATUS_COLORS[project.status] ||
+				"#374151";
+
+		}
+
+		const summaryEl =
+			document.getElementById(
+				"va-summary-" + n
+			);
+
+		if (summaryEl) {
+
+			const counts =
+				videoCounts(
+					project
+				);
+
+			const parts =
+				[];
+
+			if (
+				counts.stills > 0
+			) {
+
+				parts.push(
+					counts.stills +
+						" image" +
+						(counts.stills === 1
+							? ""
+							: "s")
+				);
+
+			}
+
+			if (
+				counts.gifs > 0
+			) {
+
+				parts.push(
+					counts.gifs +
+						" GIF" +
+						(counts.gifs === 1
+							? ""
+							: "s")
+				);
+
+			}
+
+			if (
+				counts.clips > 0
+			) {
+
+				const total =
+					project.assets.reduce(
+						(sum, a) =>
+							a.kind === "mp4"
+							? sum + a.duration
+							: sum,
+						0
+					);
+
+				parts.push(
+					counts.clips +
+						" MP4 (" +
+						formatSeconds(
+							total
+						) +
+						")"
+				);
+
+			}
+
+			if (
+				project.audioFile
+			) {
+
+				parts.push(
+					"MP3" +
+					(project.audio
+						? " " +
+							formatSeconds(
+								project.audio.duration
+							)
+						: "")
+				);
+
+			}
+
+			const rows =
+				document.getElementById(
+					"va-captions-" + n
+				);
+
+			if (
+				rows &&
+				rows.children.length > 0
+			) {
+
+				parts.push(
+					rows.children.length +
+						" caption" +
+						(rows.children.length === 1
+							? ""
+							: "s")
+				);
+
+			}
+
+			summaryEl.textContent =
+				parts.length
+				? parts.join(" · ")
+				: "no images yet";
+
+		}
+
+	}
+
+	// =========================================================
+	// MODULE 2: video-gallery
+	// =========================================================
+
+	/*
+	 * One upload per video: files are
+	 * recorded by File reference (and
+	 * MP4s probed for length) and shown
+	 * as cards. Decoding happens only
+	 * when the video is rendered.
+	 */
+	async function onVideoFiles(
+		n,
 		event
 	) {
 
-		const slot =
-			bulkVideos[i];
+		const project =
+			videoProjects[n - 1];
 
 		const files =
 			event.target.files
@@ -8396,8 +9106,8 @@ function createHTML() {
 				);
 
 			const counts =
-				bulkSlotCounts(
-					slot
+				videoCounts(
+					project
 				);
 
 			if (
@@ -8407,9 +9117,10 @@ function createHTML() {
 			) {
 
 				alert(
-					"You can add at most " +
+					"Video " + n +
+						": you can add at most " +
 						MAX_GIF_UPLOADS +
-						" GIFs to this video."
+						" GIFs."
 				);
 
 				break;
@@ -8424,9 +9135,10 @@ function createHTML() {
 			) {
 
 				alert(
-					"You can add at most " +
+					"Video " + n +
+						": you can add at most " +
 						MAX_IMAGE_UPLOADS +
-						" images (jpg, png, jpeg) to this video."
+						" images (jpg, png, jpeg)."
 				);
 
 				break;
@@ -8440,9 +9152,10 @@ function createHTML() {
 			) {
 
 				alert(
-					"You can add at most " +
+					"Video " + n +
+						": you can add at most " +
 						MAX_MP4_UPLOADS +
-						" MP4 clips to this video."
+						" MP4 clips."
 				);
 
 				break;
@@ -8452,13 +9165,9 @@ function createHTML() {
 			if (fileIsMp4) {
 
 				/*
-				 * MP4s are probed for
-				 * their length now (so
-				 * the 1-minute cap is
-				 * enforced at upload),
-				 * but they are only
-				 * rendered when this
-				 * video's turn comes.
+				 * Probed now so the
+				 * 1-minute cap is
+				 * enforced at upload.
 				 */
 				const clipURL =
 					URL.createObjectURL(
@@ -8488,8 +9197,7 @@ function createHTML() {
 								"loadedmetadata",
 								resolve,
 								{
-									once:
-										true
+									once: true
 								}
 							);
 
@@ -8497,8 +9205,7 @@ function createHTML() {
 								"error",
 								reject,
 								{
-									once:
-										true
+									once: true
 								}
 							);
 
@@ -8555,59 +9262,66 @@ function createHTML() {
 				probed.loop =
 					true;
 
-				slot.assets.push(
-					{
-						kind:
-							"mp4",
-						file:
-							file,
-						videoEl:
-							probed,
-						duration:
-							clipDuration,
-						url:
-							clipURL,
-					}
+				const asset = {
+					kind: "mp4",
+					file: file,
+					videoEl: probed,
+					duration: clipDuration,
+					url: clipURL,
+					card: null,
+				};
+
+				project.assets.push(
+					asset
+				);
+
+				buildVaCard(
+					n,
+					asset
 				);
 
 			}
 			else {
 
-				/*
-				 * Images and GIFs are
-				 * only recorded here;
-				 * they are decoded
-				 * when this video's
-				 * turn comes.
-				 */
-				slot.assets.push(
-					{
-						kind:
-							fileIsGif
-								? "gif"
-								: "image",
-						file:
-							file,
-					}
+				const asset = {
+					kind:
+						fileIsGif
+							? "gif"
+							: "image",
+					file: file,
+					url:
+						URL.createObjectURL(
+							file
+						),
+					card: null,
+				};
+
+				project.assets.push(
+					asset
+				);
+
+				buildVaCard(
+					n,
+					asset
 				);
 
 			}
 
 		}
 
-		slotChanged(
-			i
+		updateVideoStatus(
+			n
 		);
 
 	}
 
-	function onBulkAudio(
-		i,
+	function onVideoAudio(
+		n,
 		event
 	) {
 
-		const slot =
-			bulkVideos[i];
+		const project =
+			videoProjects[n - 1];
 
 		const file =
 			event.target.files &&
@@ -8626,319 +9340,346 @@ function createHTML() {
 
 		/*
 		 * Recorded only; decoded when
-		 * this video's turn comes.
+		 * the video is rendered. A new
+		 * MP3 replaces the old one.
 		 */
-		slot.audioFile =
+		project.audioFile =
 			file;
 
-		slot.audio =
+		project.audio =
 			null;
 
-		slotChanged(
-			i
-		);
-
-	}
-
-	function clearBulkSlot(
-		i
-	) {
-
-		const slot =
-			bulkVideos[i];
-
-		for (
-			const asset of slot.assets
-		) {
-
-			if (
-				asset.kind ===
-					"mp4" &&
-				asset.url
-			) {
-
-				URL.revokeObjectURL(
-					asset.url
-				);
-
-			}
-
-		}
-
-		slot.assets.length =
-			0;
-
-		slot.audioFile =
-			null;
-
-		slot.audio =
-			null;
-
-		const rows =
+		const line =
 			document.getElementById(
-				"bulk-caption-rows-" +
-					i
+				"va-audio-line-" + n
 			);
 
-		if (rows) {
-			rows.innerHTML =
-				"";
+		if (line) {
+			line.textContent =
+				"🎵 " + file.name;
 		}
 
-		slotChanged(
-			i
+		updateVideoStatus(
+			n
 		);
 
 	}
 
-	function slotChanged(
-		i
+	function buildVaCard(
+		n,
+		asset
 	) {
 
-		const slot =
-			bulkVideos[i];
+		const gallery =
+			document.getElementById(
+				"va-gallery-" + n
+			);
+
+		const card =
+			document.createElement(
+				"div"
+			);
+
+		card.className =
+			"va-card";
+
+		card.draggable =
+			true;
+
+		const media =
+			document.createElement(
+				asset.kind ===
+					"mp4"
+				? "video"
+				: "img"
+			);
+
+		media.src =
+			asset.url;
+
+		if (
+			asset.kind ===
+				"mp4"
+		) {
+
+			media.muted =
+				true;
+
+			media.loop =
+				true;
+
+			media.playsInline =
+				true;
+
+		}
+
+		const label =
+			document.createElement(
+				"div"
+			);
+
+		label.className =
+			"va-card-label";
+
+		label.textContent =
+			asset.kind ===
+				"mp4"
+			? asset.file.name +
+				"  |  " +
+				formatSeconds(
+					asset.duration
+				)
+			: asset.file.name;
+
+		label.title =
+			label.textContent;
+
+		const removeBtn =
+			document.createElement(
+				"button"
+			);
+
+		removeBtn.type =
+			"button";
+
+		removeBtn.className =
+			"va-card-remove";
+
+		removeBtn.textContent =
+			"×";
+
+		removeBtn.title =
+			"Remove";
+
+		removeBtn.addEventListener(
+			"click",
+			() =>
+				removeVaCard(
+					n,
+					asset
+				)
+		);
 
 		/*
-		 * The "rendering" state is
-		 * owned by the queue; never
-		 * clobber it. Any user change
-		 * (assets, audio, captions)
-		 * re-queues the video.
+		 * Drag & drop reordering inside
+		 * this video's gallery.
 		 */
-		if (
-			!slot ||
-			slot.status ===
-				"rendering"
-		) {
+		card.addEventListener(
+			"dragstart",
+			(e) => {
 
-			return;
+				dragCard =
+					card;
 
-		}
+				card.classList.add(
+					"dragging"
+				);
 
-		slot.status =
-			bulkSlotHasContent(
-				slot
-			)
-			? "queued"
-			: "empty";
+				e.dataTransfer.effectAllowed =
+					"move";
 
-		updateSlotUI(
-			i
+			}
+		);
+
+		card.addEventListener(
+			"dragend",
+			() => {
+
+				dragCard =
+					null;
+
+				card.classList.remove(
+					"dragging"
+				);
+
+			}
+		);
+
+		card.addEventListener(
+			"dragover",
+			(e) => {
+
+				e.preventDefault();
+
+				card.classList.add(
+					"drag-over"
+				);
+
+			}
+		);
+
+		card.addEventListener(
+			"dragleave",
+			() => {
+
+				card.classList.remove(
+					"drag-over"
+				);
+
+			}
+		);
+
+		card.addEventListener(
+			"drop",
+			(e) => {
+
+				e.preventDefault();
+
+				card.classList.remove(
+					"drag-over"
+				);
+
+				if (!dragCard) {
+					return;
+				}
+
+				const draggedTop =
+					dragCard.getBoundingClientRect()
+						.top;
+
+				const targetTop =
+					card.getBoundingClientRect()
+						.top;
+
+				if (
+					draggedTop <
+						targetTop
+				) {
+
+					gallery.insertBefore(
+						dragCard,
+						card
+					);
+
+				}
+				else {
+
+					gallery.insertBefore(
+						dragCard,
+						card.nextSibling
+					);
+
+				}
+
+				syncVaOrder(
+					n
+				);
+
+			}
+		);
+
+		card.appendChild(
+			media
+		);
+
+		card.appendChild(
+			label
+		);
+
+		card.appendChild(
+			removeBtn
+		);
+
+		asset.card =
+			card;
+
+		card._asset =
+			asset;
+
+		gallery.appendChild(
+			card
 		);
 
 	}
 
-	function updateSlotUI(
-		i
+	let dragCard =
+		null;
+
+	function removeVaCard(
+		n,
+		asset
 	) {
 
-		const slot =
-			bulkVideos[i];
+		const project =
+			videoProjects[n - 1];
 
-		if (!slot) {
-			return;
-		}
-
-		const statusEl =
-			document.getElementById(
-				"bulk-status-" + i
+		const idx =
+			project.assets.indexOf(
+				asset
 			);
 
-		if (statusEl) {
-
-			statusEl.textContent =
-				slot.status;
-
-			const colors = {
-				empty:
-					"#374151",
-				queued:
-					"#1d4ed8",
-				rendering:
-					"#b45309",
-				done:
-					"#15803d",
-				error:
-					"#b91c1c",
-				skipped:
-					"#4b5563",
-			};
-
-			statusEl.style.background =
-				colors[slot.status] ||
-				"#374151";
-
-		}
-
-		const summaryEl =
-			document.getElementById(
-				"bulk-summary-" + i
+		if (idx >= 0) {
+			project.assets.splice(
+				idx,
+				1
 			);
-
-		if (summaryEl) {
-
-			const counts =
-				bulkSlotCounts(
-					slot
-				);
-
-			const parts =
-				[];
-
-			if (
-				counts.stills > 0
-			) {
-
-				parts.push(
-					counts.stills +
-						" image" +
-						(counts.stills === 1
-							? ""
-							: "s")
-				);
-
-			}
-
-			if (
-				counts.gifs > 0
-			) {
-
-				parts.push(
-					counts.gifs +
-						" GIF" +
-						(counts.gifs === 1
-							? ""
-							: "s")
-				);
-
-			}
-
-			if (
-				counts.clips > 0
-			) {
-
-				const total =
-					slot.assets.reduce(
-						(sum, a) =>
-							a.kind ===
-								"mp4"
-							? sum +
-								a.duration
-							: sum,
-						0
-					);
-
-				parts.push(
-					counts.clips +
-						" MP4 (" +
-						formatSeconds(
-							total
-						) +
-						")"
-				);
-
-			}
-
-			if (
-				slot.audioFile
-			) {
-
-				parts.push(
-					"MP3" +
-					(slot.audio
-						? " " +
-							formatSeconds(
-								slot.audio.duration
-							)
-						: "")
-				);
-
-			}
-
-			const rows =
-				document.getElementById(
-					"bulk-caption-rows-" +
-						i
-				);
-
-			if (
-				rows &&
-				rows.children.length >
-					0
-			) {
-
-				parts.push(
-					rows.children.length +
-						" caption" +
-						(rows.children.length === 1
-							? ""
-							: "s")
-				);
-
-			}
-
-			summaryEl.textContent =
-				parts.length
-				? parts.join(" · ")
-				: "no assets yet";
-
 		}
-
-	}
-
-	function toggleBulkCaptions(
-		i
-	) {
-
-		const wrap =
-			document.getElementById(
-				"bulk-caption-wrap-" +
-					i
-			);
-
-		if (!wrap) {
-			return;
-		}
-
-		wrap.style.display =
-			wrap.style.display ===
-				"none"
-			? "block"
-			: "none";
 
 		if (
-			wrap.style.display ===
-				"block"
+			asset.kind !==
+				"mp4" &&
+			asset.url
 		) {
 
-			const rows =
-				document.getElementById(
-					"bulk-caption-rows-" +
-						i
-				);
-
-			if (
-				!rows.children.length
-			) {
-
-				addBulkCaptionRow(
-					i
-				);
-
-			}
+			URL.revokeObjectURL(
+				asset.url
+			);
 
 		}
+
+		if (asset.card) {
+			asset.card.remove();
+		}
+
+		updateVideoStatus(
+			n
+		);
 
 	}
 
 	/*
-	 * Inner HTML of a caption row (the
-	 * same fields as the main panel's
-	 * caption rows). The caller sets
-	 * the outer element's class to
-	 * "caption-row".
+	 * After a drop, the DOM order is the
+	 * source of truth for the slide
+	 * order.
 	 */
-	function bulkCaptionRowHTML() {
+	function syncVaOrder(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		const gallery =
+			document.getElementById(
+				"va-gallery-" + n
+			);
+
+		const order =
+			Array.from(
+				gallery.children
+			).map(
+				(card) =>
+					card._asset
+			);
+
+		project.assets.length =
+			0;
+
+		for (
+			const a of order
+		) {
+
+			if (a) {
+				project.assets.push(
+					a
+				);
+			}
+
+		}
+
+	}
+
+	function vaCaptionRowHTML() {
 
 		return (
 			'<div class="caption-time">' +
@@ -8958,19 +9699,18 @@ function createHTML() {
 			CAPTION_MAX_CHARS +
 			'</span>' +
 			'</div>' +
-			'<button type="button" class="caption-remove" title="Remove caption" onclick="removeBulkCaptionRow(this)">&times;</button>'
+			'<button type="button" class="caption-remove" title="Remove caption" onclick="removeVaCaptionRow(this)">&times;</button>'
 		);
 
 	}
 
-	function addBulkCaptionRow(
-		i
+	function addVaCaptionRow(
+		n
 	) {
 
 		const rows =
 			document.getElementById(
-				"bulk-caption-rows-" +
-					i
+				"va-captions-" + n
 			);
 
 		if (!rows) {
@@ -8995,7 +9735,7 @@ function createHTML() {
 			"caption-row";
 
 		row.innerHTML =
-			bulkCaptionRowHTML();
+			vaCaptionRowHTML();
 
 		const textInput =
 			row.querySelector(
@@ -9020,13 +9760,13 @@ function createHTML() {
 			row
 		);
 
-		slotChanged(
-			i
+		updateVideoStatus(
+			n
 		);
 
 	}
 
-	function removeBulkCaptionRow(
+	function removeVaCaptionRow(
 		button
 	) {
 
@@ -9051,7 +9791,7 @@ function createHTML() {
 
 		const n = Number(
 			rowsId.substring(
-				"bulk-caption-rows-".length
+				"va-captions-".length
 			)
 		);
 
@@ -9061,7 +9801,7 @@ function createHTML() {
 			)
 		) {
 
-			slotChanged(
+			updateVideoStatus(
 				n
 			);
 
@@ -9069,30 +9809,157 @@ function createHTML() {
 
 	}
 
-	/*
-	 * Reads this slot's recorded
-	 * assets from disk now that its
-	 * turn has come: decodes the
-	 * MP3, decodes the images and
-	 * GIFs, and returns the slides
-	 * in upload order.
-	 */
-	async function prepareBulkVideo(
-		i
+	// =========================================================
+	// MODULE 3: required-modal
+	// =========================================================
+
+	function showRequiredModal(
+		issues
 	) {
 
-		const slot =
-			bulkVideos[i];
+		const modal =
+			document.getElementById(
+				"required-modal"
+			);
+
+		const list =
+			document.getElementById(
+				"required-modal-list"
+			);
+
+		if (!modal || !list) {
+			return;
+		}
+
+		list.innerHTML =
+			"";
+
+		for (
+			const issue of issues
+		) {
+
+			const li =
+				document.createElement(
+					"li"
+				);
+
+			li.textContent =
+				issue;
+
+			list.appendChild(
+				li
+			);
+
+		}
+
+		modal.style.display =
+			"flex";
+
+	}
+
+	function closeRequiredModal() {
+
+		const modal =
+			document.getElementById(
+				"required-modal"
+			);
+
+		if (modal) {
+			modal.style.display =
+				"none";
+		}
+
+	}
+
+	// =========================================================
+	// MODULE 4: generation-queue
+	// =========================================================
+
+	/*
+	 * The single generate button:
+	 * validates every video in the
+	 * stack, warns about missing
+	 * required fields, then renders
+	 * them in order — VIDEO_BATCH_SIZE
+	 * at a time, last batch may be one.
+	 */
+	function onGenerateClick() {
+
+		if (generating) {
+			return;
+		}
+
+		if (
+			!videoProjects.length
+		) {
+
+			showRequiredModal(
+				[
+					"Click the red + button to add a video first."
+				]
+			);
+
+			return;
+
+		}
+
+		const issues =
+			[];
+
+		for (
+			const project of videoProjects
+		) {
+
+			if (
+				!project.assets.length
+			) {
+
+				issues.push(
+					project.name +
+						": add at least one image, GIF or MP4."
+				);
+
+			}
+
+		}
+
+		if (issues.length) {
+
+			showRequiredModal(
+				issues
+			);
+
+			return;
+
+		}
+
+		runGenerationQueue();
+
+	}
+
+	/*
+	 * Reads this video's recorded assets
+	 * from disk now that its turn has
+	 * come: decodes the MP3, decodes
+	 * the images and GIFs, and returns
+	 * the slides in gallery order.
+	 */
+	async function prepareVideo(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
 
 		const slides =
 			[];
 
 		if (
-			slot.audioFile
+			project.audioFile
 		) {
 
 			const arrayBuffer =
-				await slot.audioFile.arrayBuffer();
+				await project.audioFile.arrayBuffer();
 
 			const context =
 				getAudioContext();
@@ -9102,9 +9969,9 @@ function createHTML() {
 					arrayBuffer.slice(0)
 				);
 
-			slot.audio = {
+			project.audio = {
 				name:
-					slot.audioFile.name,
+					project.audioFile.name,
 				duration:
 					decoded.duration,
 				buffer:
@@ -9113,16 +9980,32 @@ function createHTML() {
 					null,
 			};
 
+			const line =
+				document.getElementById(
+					"va-audio-line-" + n
+				);
+
+			if (line) {
+				line.textContent =
+					"🎵 " +
+					project.audioFile.name +
+					" (" +
+					formatSeconds(
+						project.audio.duration
+					) +
+					")";
+			}
+
 		}
 
 		for (
 			let k = 0;
-			k < slot.assets.length;
+			k < project.assets.length;
 			k++
 		) {
 
 			const asset =
-				slot.assets[k];
+				project.assets[k];
 
 			if (
 				asset.kind ===
@@ -9137,10 +10020,8 @@ function createHTML() {
 				slides.push(
 					{
 						id:
-							"bulk-v-" +
-								i +
-								"-" +
-								k,
+							"video" + n +
+								"-mp4-" + k,
 						cardId:
 							"",
 						type:
@@ -9158,19 +10039,11 @@ function createHTML() {
 
 			}
 
-			const file =
-				asset.file;
-
-			const imageURL =
-				URL.createObjectURL(
-					file
-				);
-
 			const img =
 				new Image();
 
 			img.src =
-				imageURL;
+				asset.url;
 
 			if (
 				asset.kind ===
@@ -9178,7 +10051,7 @@ function createHTML() {
 			) {
 
 				const buffer =
-					await file.arrayBuffer();
+					await asset.file.arrayBuffer();
 
 				const gif =
 					buildGifSlideFrames(
@@ -9192,10 +10065,8 @@ function createHTML() {
 				slides.push(
 					{
 						id:
-							"bulk-g-" +
-								i +
-								"-" +
-								k,
+							"video" + n +
+								"-gif-" + k,
 						cardId:
 							"",
 						type:
@@ -9215,10 +10086,8 @@ function createHTML() {
 				slides.push(
 					{
 						id:
-							"bulk-i-" +
-								i +
-								"-" +
-								k,
+							"video" + n +
+								"-img-" + k,
 						cardId:
 							"",
 						img:
@@ -9234,14 +10103,13 @@ function createHTML() {
 
 	}
 
-	function swapBulkCaptionsIn(
-		i
+	function swapVaCaptionsIn(
+		n
 	) {
 
 		const slotRows =
 			document.getElementById(
-				"bulk-caption-rows-" +
-					i
+				"va-captions-" + n
 			);
 
 		while (
@@ -9256,14 +10124,13 @@ function createHTML() {
 
 	}
 
-	function swapBulkCaptionsOut(
-		i
+	function swapVaCaptionsOut(
+		n
 	) {
 
 		const slotRows =
 			document.getElementById(
-				"bulk-caption-rows-" +
-					i
+				"va-captions-" + n
 			);
 
 		while (
@@ -9278,45 +10145,9 @@ function createHTML() {
 
 	}
 
-	function hasQueuedBulkVideos() {
+	async function runGenerationQueue() {
 
-		return bulkVideos.some(
-			bulkSlotHasContent
-		);
-
-	}
-
-	/*
-	 * The render button entry point:
-	 * with queued bulk videos the
-	 * whole queue runs (two at a
-	 * time); otherwise the main
-	 * panel renders one video as
-	 * before.
-	 */
-	function onRenderClick() {
-
-		if (bulkRunning) {
-			return;
-		}
-
-		if (
-			hasQueuedBulkVideos()
-		) {
-
-			runBulkQueue();
-
-			return;
-
-		}
-
-		generateMP4();
-
-	}
-
-	async function runBulkQueue() {
-
-		bulkRunning =
+		generating =
 			true;
 
 		const renderBtn =
@@ -9345,23 +10176,41 @@ function createHTML() {
 		}
 
 		/*
-		 * Snapshot the main panel
-		 * state so it can be
-		 * restored afterwards.
+		 * Snapshot the engine's working
+		 * state (the hidden main
+		 * panels) so it can be restored
+		 * afterwards.
 		 */
-		const savedSlides =
-			activeSlides.slice();
-
-		const savedAudio =
-			currentAudio;
-
-		const savedCaptionRows =
-			Array.from(
-				captionRowsEl.children
-			);
-
-		captionRowsEl.innerHTML =
-			"";
+		const saved = {
+			slides:
+				activeSlides.slice(),
+			audio:
+				currentAudio,
+			captionRows:
+				Array.from(
+					captionRowsEl.children
+				),
+			title:
+				document.getElementById(
+					"title-input"
+				).value,
+			font:
+				document.getElementById(
+					"title-font"
+				).value,
+			color:
+				document.getElementById(
+					"title-color"
+				).value,
+			sticker:
+				document.getElementById(
+					"sticker-select"
+				).value,
+			quality:
+				document.getElementById(
+					"quality-select"
+				).value,
+		};
 
 		let done =
 			0;
@@ -9372,48 +10221,35 @@ function createHTML() {
 		let errors =
 			0;
 
+		/*
+		 * Batches of VIDEO_BATCH_SIZE:
+		 * each video fully finishes
+		 * before the next starts, so
+		 * the first two are done before
+		 * the next two begin, and the
+		 * last batch may be a single
+		 * video.
+		 */
 		for (
-			let i = 0;
-			i < bulkVideos.length;
-			i++
+			let n = 1;
+			n <= videoProjects.length;
+			n++
 		) {
 
-			const slot =
-				bulkVideos[i];
+			const project =
+				videoProjects[n - 1];
 
-			/*
-			 * The queue is processed
-			 * in batches of
-			 * BULK_BATCH_SIZE: each
-			 * video fully finishes
-			 * before the next starts,
-			 * so the first two are
-			 * done before the next
-			 * two begin, and the
-			 * last batch may be a
-			 * single video.
-			 */
-			if (
-				!bulkSlotHasContent(
-					slot
-				)
-			) {
-
-				continue;
-
-			}
-
-			slot.status =
+			project.status =
 				"rendering";
 
-			updateSlotUI(
-				i
+			updateVideoStatus(
+				n
 			);
 
 			if (statusText) {
 				statusText.textContent =
 					"Bulk: rendering " +
-						slot.name +
+						project.name +
 						" ...";
 			}
 
@@ -9423,13 +10259,53 @@ function createHTML() {
 			try {
 
 				const slides =
-					await prepareBulkVideo(
-						i
+					await prepareVideo(
+						n
 					);
 
-				swapBulkCaptionsIn(
-					i
+				swapVaCaptionsIn(
+					n
 				);
+
+				/*
+				 * Point the hidden
+				 * engine working state
+				 * at this video.
+				 */
+				document.getElementById(
+					"title-input"
+				).value =
+					document.getElementById(
+						"va-title-" + n
+					).value;
+
+				document.getElementById(
+					"title-font"
+				).value =
+					document.getElementById(
+						"va-font-" + n
+					).value;
+
+				document.getElementById(
+					"title-color"
+				).value =
+					document.getElementById(
+						"va-color-" + n
+					).value;
+
+				document.getElementById(
+					"sticker-select"
+				).value =
+					document.getElementById(
+						"va-sticker-" + n
+					).value;
+
+				document.getElementById(
+					"quality-select"
+				).value =
+					document.getElementById(
+						"va-quality-" + n
+					).value;
 
 				activeSlides.length =
 					0;
@@ -9445,12 +10321,12 @@ function createHTML() {
 				}
 
 				currentAudio =
-					slot.audio;
+					project.audio;
 
 				renderContext = {
 					fileName:
 						"YouTubeVibeStudio_" +
-						slot.name.replace(
+						project.name.replace(
 							/\\s+/g,
 							""
 						) +
@@ -9465,8 +10341,7 @@ function createHTML() {
 			catch (bulkError) {
 
 				console.error(
-					"Bulk video " +
-						slot.name +
+					project.name +
 						" failed:",
 					bulkError
 				);
@@ -9474,8 +10349,8 @@ function createHTML() {
 			}
 			finally {
 
-				swapBulkCaptionsOut(
-					i
+				swapVaCaptionsOut(
+					n
 				);
 
 				activeSlides.length =
@@ -9494,7 +10369,7 @@ function createHTML() {
 					"done"
 			) {
 
-				slot.status =
+				project.status =
 					"done";
 
 				done++;
@@ -9505,7 +10380,7 @@ function createHTML() {
 					"error"
 			) {
 
-				slot.status =
+				project.status =
 					"error";
 
 				errors++;
@@ -9513,28 +10388,28 @@ function createHTML() {
 			}
 			else {
 
-				slot.status =
+				project.status =
 					"skipped";
 
 				skipped++;
 
 			}
 
-			updateSlotUI(
-				i
+			updateVideoStatus(
+				n
 			);
 
 		}
 
 		/*
-		 * Restore the main panel
+		 * Restore the engine's working
 		 * state.
 		 */
 		activeSlides.length =
 			0;
 
 		for (
-			const slide of savedSlides
+			const slide of saved.slides
 		) {
 
 			activeSlides.push(
@@ -9544,13 +10419,13 @@ function createHTML() {
 		}
 
 		currentAudio =
-			savedAudio;
+			saved.audio;
 
 		captionRowsEl.innerHTML =
 			"";
 
 		for (
-			const row of savedCaptionRows
+			const row of saved.captionRows
 		) {
 
 			captionRowsEl.appendChild(
@@ -9561,7 +10436,32 @@ function createHTML() {
 
 		updateCaptionCount();
 
-		bulkRunning =
+		document.getElementById(
+			"title-input"
+		).value =
+			saved.title;
+
+		document.getElementById(
+			"title-font"
+		).value =
+			saved.font;
+
+		document.getElementById(
+			"title-color"
+		).value =
+			saved.color;
+
+		document.getElementById(
+			"sticker-select"
+		).value =
+			saved.sticker;
+
+		document.getElementById(
+			"quality-select"
+		).value =
+			saved.quality;
+
+		generating =
 			false;
 
 		if (renderBtn) {
@@ -9587,7 +10487,7 @@ function createHTML() {
 
 	}
 
-	initBulkVideos();
+	initVideoStudio();
 
 	async function generateMP4() {
 
