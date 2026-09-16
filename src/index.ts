@@ -1810,8 +1810,363 @@ function createHTML() {
 
 		.va-body {
 
+			display:
+				flex;
+
+			gap:
+				16px;
+
 			padding:
 				4px 16px 14px 16px;
+
+			align-items:
+				flex-start;
+		}
+
+
+		/*
+		 * Left = 60% of the accordion,
+		 * right = 40% (AI panel).
+		 */
+
+		.va-left {
+
+			width:
+				60%;
+
+			min-width:
+				0;
+		}
+
+
+		.va-right {
+
+			width:
+				40%;
+
+			min-width:
+				0;
+		}
+
+
+		/*
+		 * AI image panel (right 40%)
+		 */
+
+		.va-ai-prompt {
+
+			width:
+				100%;
+
+			box-sizing:
+				border-box;
+
+			background:
+				#0f1115;
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				8px;
+
+			color:
+				var(--text);
+
+			padding:
+				8px;
+
+			font-size:
+				0.85rem;
+
+			resize:
+				vertical;
+
+			margin-top:
+				8px;
+		}
+
+
+		.va-ai-results {
+
+			display:
+				flex;
+
+			flex-direction:
+				column;
+
+			gap:
+				10px;
+
+			margin-top:
+				10px;
+		}
+
+
+		.va-ai-card {
+
+			border:
+				1px solid #2e3440;
+
+			border-radius:
+				8px;
+
+			background:
+				#0f1115;
+
+			padding:
+				6px;
+		}
+
+
+		/*
+		 * 480px landscape (854x480)
+		 */
+
+		.va-ai-img {
+
+			width:
+				100%;
+
+			aspect-ratio:
+				854 / 480;
+
+			object-fit:
+				cover;
+
+			display:
+				block;
+
+			border-radius:
+				4px;
+
+			background:
+				#000000;
+		}
+
+
+		.va-ai-label {
+
+			font-size:
+				0.72rem;
+
+			color:
+				#9ca3af;
+
+			margin-top:
+				4px;
+
+			white-space:
+				nowrap;
+
+			overflow:
+				hidden;
+
+			text-overflow:
+				ellipsis;
+		}
+
+
+		.va-ai-actions {
+
+			display:
+				flex;
+
+			gap:
+				8px;
+
+			margin-top:
+				8px;
+
+			flex-wrap:
+				wrap;
+		}
+
+
+		.upload-btn.small {
+
+			padding:
+				6px 10px;
+
+			font-size:
+				0.75rem;
+		}
+
+
+		.ai-fullscreen-overlay {
+
+			position:
+				fixed;
+
+			top:
+				0;
+
+			left:
+				0;
+
+			right:
+				0;
+
+			bottom:
+				0;
+
+			background:
+				rgba(0, 0, 0, 0.92);
+
+			display:
+				none;
+
+			align-items:
+				center;
+
+			justify-content:
+				center;
+
+			z-index:
+				200;
+
+			cursor:
+				zoom-out;
+		}
+
+
+		.ai-fullscreen-img {
+
+			max-width:
+				95vw;
+
+			max-height:
+				92vh;
+
+			object-fit:
+				contain;
+		}
+
+
+		.ai-fullscreen-note {
+
+			position:
+				absolute;
+
+			bottom:
+				18px;
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.8rem;
+		}
+
+
+		/*
+		 * Drag handle + hover tooltip
+		 * on gallery cards
+		 */
+
+		.va-card-handle {
+
+			position:
+				absolute;
+
+			top:
+				2px;
+
+			left:
+				2px;
+
+			z-index:
+				4;
+
+			cursor:
+				grab;
+
+			color:
+				#d1d5db;
+
+			background:
+				rgba(0, 0, 0, 0.55);
+
+			border-radius:
+				4px;
+
+			padding:
+				1px 5px;
+
+			font-size:
+				13px;
+
+			line-height:
+				1.3;
+
+			user-select:
+				none;
+		}
+
+
+		.va-card-handle:active {
+
+			cursor:
+				grabbing;
+		}
+
+
+		.va-card-tip {
+
+			position:
+				absolute;
+
+			left:
+				8px;
+
+			right:
+				8px;
+
+			bottom:
+				8px;
+
+			z-index:
+				5;
+
+			background:
+				rgba(0, 0, 0, 0.85);
+
+			color:
+				#ffffff;
+
+			font-size:
+				0.7rem;
+
+			padding:
+				4px 8px;
+
+			border-radius:
+				6px;
+
+			opacity:
+				0;
+
+			pointer-events:
+				none;
+
+			transition:
+				opacity 0.15s;
+
+			white-space:
+				nowrap;
+
+			overflow:
+				hidden;
+
+			text-overflow:
+				ellipsis;
+		}
+
+
+		.va-card:hover .va-card-tip {
+
+			opacity:
+				1;
 		}
 
 
@@ -2114,7 +2469,7 @@ function createHTML() {
 			id="bulk-toggle"
 			class="bulk-toggle"
 			onclick="addVideoAccordion()"
-			title="Add a video (up to 7)">+
+			title="Add a video (up to 10)">+
 		</button>
 
 
@@ -8512,9 +8867,11 @@ function createHTML() {
 	 * so it can later be cut into separate import files:
 	 *
 	 *   MODULE 1: video-projects  (state, + button, accordion UI)
-	 *   MODULE 2: video-gallery   (upload, cards, drag & drop)
+	 *   MODULE 2: video-gallery   (upload, cards, drag & drop, tips)
 	 *   MODULE 3: required-modal  (missing-fields warning)
 	 *   MODULE 4: generation-queue (render everything, 2 at a time)
+	 *   MODULE 5: ai-images       (40% panel: prompt -> 2 CF images,
+	 *                              add-to-video + fullscreen)
 	 *
 	 * Each module only talks to the others through the
 	 * videoProjects array and the small shared functions, so a
@@ -8541,7 +8898,7 @@ function createHTML() {
 	// =========================================================
 
 	const VIDEO_MAX_VIDEOS =
-		7;
+		10;
 
 	const VIDEO_BATCH_SIZE =
 		2;
@@ -8842,6 +9199,13 @@ function createHTML() {
 			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">▼</button>' +
 			'</div>' +
 			'<div class="va-body" id="va-body-' + n + '">' +
+			'<div class="va-left">' +
+			'<div class="va-section">' +
+			'<div class="va-section-title">Images / MP4s — drag cards to reorder</div>' +
+			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">📁 Upload Image, GIF or MP4</button>' +
+			'<span class="va-note">Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)</span>' +
+			'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
+			'</div>' +
 			'<div class="va-section">' +
 			'<div class="va-section-title">Audio — one MP3 (the video is as long as the MP3)</div>' +
 			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">🎵 Upload MP3 Audio</button>' +
@@ -8868,11 +9232,15 @@ function createHTML() {
 			'<div class="va-section-title">Quality</div>' +
 			'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
 			'</div>' +
+			'</div>' +
+			'<div class="va-right">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Images / MP4s — drag cards to reorder</div>' +
-			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">📁 Upload Image, GIF or MP4</button>' +
-			'<span class="va-note">Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)</span>' +
-			'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
+			'<div class="va-section-title">AI Images — Cloudflare</div>' +
+			'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
+			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">✨ Generate 2 Images</button>' +
+			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit · 480px landscape</span>' +
+			'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
+			'</div>' +
 			'</div>' +
 			'</div>' +
 			'<input type="file" id="va-file-' + n + '" multiple accept="image/*,image/gif,.gif,video/mp4,.mp4" style="display:none">' +
@@ -9045,9 +9413,11 @@ function createHTML() {
 				parts.length
 				? parts.join(" · ")
 				: "no images yet";
-
 		}
 
+		refreshVaTips(
+			n
+		);
 	}
 
 	// =========================================================
@@ -9390,12 +9760,20 @@ function createHTML() {
 			document.createElement(
 				asset.kind ===
 					"mp4"
-				? "video"
-				: "img"
+					? "video"
+					: "img"
 			);
 
 		media.src =
 			asset.url;
+
+		/*
+		 * Stop the browser's native
+		 * img/video drag so only the
+		 * card's reorder drag fires.
+		 */
+		media.draggable =
+			false;
 
 		if (
 			asset.kind ===
@@ -9459,6 +9837,32 @@ function createHTML() {
 					asset
 				)
 		);
+
+		/*
+		 * Visible drag handle + hover
+		 * tooltip (position + name).
+		 */
+		const handle =
+			document.createElement(
+				"div"
+			);
+
+		handle.className =
+			"va-card-handle";
+
+		handle.textContent =
+			"\\u28BF";
+
+		handle.title =
+			"Drag to reorder";
+
+		const tip =
+			document.createElement(
+				"div"
+			);
+
+		tip.className =
+			"va-card-tip";
 
 		/*
 		 * Drag & drop reordering inside
@@ -9565,6 +9969,10 @@ function createHTML() {
 					n
 				);
 
+				updateVideoStatus(
+					n
+				);
+
 			}
 		);
 
@@ -9578,6 +9986,14 @@ function createHTML() {
 
 		card.appendChild(
 			removeBtn
+		);
+
+		card.appendChild(
+			handle
+		);
+
+		card.appendChild(
+			tip
 		);
 
 		asset.card =
@@ -9634,6 +10050,91 @@ function createHTML() {
 		updateVideoStatus(
 			n
 		);
+
+	}
+
+	/*
+	 * Updates each card's tooltip with
+	 * its current position and name.
+	 */
+	function refreshVaTips(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		const gallery =
+			document.getElementById(
+				"va-gallery-" + n
+			);
+
+		if (!gallery) {
+			return;
+		}
+
+		const cards =
+			Array.from(
+				gallery.children
+			);
+
+		for (
+			let i = 0;
+			i < cards.length;
+			i++
+		) {
+
+			const asset =
+				cards[i]._asset;
+
+			const tip =
+				cards[i].querySelector(
+					".va-card-tip"
+				);
+
+			if (!tip || !asset) {
+				continue;
+			}
+
+			const bits =
+				[
+					"#" + (i + 1),
+					asset.file.name,
+				];
+
+			if (
+				asset.kind ===
+					"mp4"
+			) {
+
+				bits.push(
+					formatSeconds(
+						asset.duration
+					)
+				);
+
+			}
+
+			bits.push(
+				asset.kind === "mp4"
+					? "MP4"
+					: asset.kind === "gif"
+						? "GIF"
+						: "image"
+			);
+
+			tip.textContent =
+				bits.join(" · ") +
+				" — drag to reorder";
+
+			tip.title =
+				tip.textContent;
+
+		}
 
 	}
 
@@ -10401,10 +10902,10 @@ function createHTML() {
 
 		}
 
-		/*
-		 * Restore the engine's working
-		 * state.
-		 */
+	/*
+	 * Restore the engine's working
+	 * state.
+	 */
 		activeSlides.length =
 			0;
 
@@ -10483,6 +10984,485 @@ function createHTML() {
 					" skipped, " +
 					errors +
 					" failed.";
+		}
+
+	}
+
+	// =========================================================
+	// MODULE 5: ai-images
+	// (the 40% right panel of each accordion)
+	// =========================================================
+
+	const AI_IMAGES_PER_PROMPT =
+		2;
+
+	const AI_IMAGE_WIDTH =
+		854;
+
+	const AI_IMAGE_HEIGHT =
+		480;
+
+	/*
+	 * The Cloudflare worker's image
+	 * route, called like the existing
+	 * fetchAIImage() (fetch /image/...).
+	 * Each submit = AI_IMAGES_PER_PROMPT
+	 * requests (variant 1, 2) = 2
+	 * images. Images are always 480px
+	 * landscape (854x480, 16:9).
+	 * Adjust this line if your worker
+	 * route uses different parameters.
+	 */
+	const AI_ENDPOINT =
+		(prompt, variant) =>
+			"/image?prompt=" +
+				encodeURIComponent(
+					prompt
+				) +
+				"&variant=" +
+				variant +
+				"&w=" +
+				AI_IMAGE_WIDTH +
+				"&h=" +
+				AI_IMAGE_HEIGHT;
+
+	/*
+	 * Submits the prompt from this
+	 * accordion's right panel and
+	 * accumulates the returned images
+	 * in its results list.
+	 */
+	async function submitAiImages(
+		n
+	) {
+
+		const promptEl =
+			document.getElementById(
+				"va-ai-prompt-" + n
+			);
+
+		const btn =
+			document.getElementById(
+				"va-ai-btn-" + n
+			);
+
+		const statusEl =
+			document.getElementById(
+				"va-ai-status-" + n
+			);
+
+		const resultsEl =
+			document.getElementById(
+				"va-ai-results-" + n
+			);
+
+		if (
+			!promptEl ||
+			!resultsEl
+		) {
+			return;
+		}
+
+		const prompt =
+			promptEl.value.trim();
+
+		if (!prompt) {
+			alert(
+				"Enter an image prompt first."
+			);
+			return;
+		}
+
+		if (btn) {
+			btn.disabled =
+				true;
+		}
+
+		if (statusEl) {
+			statusEl.textContent =
+				"Generating...";
+		}
+
+		let failures =
+			0;
+
+		for (
+			let variant = 1;
+			variant <=
+				AI_IMAGES_PER_PROMPT;
+			variant++
+		) {
+
+			try {
+
+				const response =
+					await fetch(
+						AI_ENDPOINT(
+							prompt,
+							variant
+						)
+					);
+
+				if (
+					!response.ok
+				) {
+					throw new Error(
+						"Image generation failed"
+					);
+				}
+
+				const blob =
+					await response.blob();
+
+				addAiResultCard(
+					n,
+					prompt,
+					variant,
+					blob
+				);
+
+			}
+			catch (aiError) {
+				failures++;
+				console.error(
+					aiError
+				);
+			}
+
+		}
+
+		if (btn) {
+			btn.disabled =
+				false;
+		}
+
+		if (statusEl) {
+			statusEl.textContent =
+				failures
+					? failures +
+						" of " +
+						AI_IMAGES_PER_PROMPT +
+						" failed"
+					: "Done — 480px landscape";
+		}
+
+	}
+
+	/*
+	 * One generated image card:
+	 * 480px landscape preview, an
+	 * "Add to Video" button (adds it
+	 * to this accordion's gallery)
+	 * and a fullscreen button.
+	 */
+	function addAiResultCard(
+		n,
+		prompt,
+		variant,
+		blob
+	) {
+
+		const resultsEl =
+			document.getElementById(
+				"va-ai-results-" + n
+			);
+
+		if (!resultsEl) {
+			return;
+		}
+
+		const url =
+			URL.createObjectURL(
+				blob
+			);
+
+		const card =
+			document.createElement(
+				"div"
+			);
+
+		card.className =
+			"va-ai-card";
+
+		const img =
+			new Image();
+
+		img.className =
+			"va-ai-img";
+
+		img.src =
+			url;
+
+		img.alt =
+			prompt;
+
+		const name =
+			"ai-video" +
+			n +
+			"-v" +
+			variant +
+			"-" +
+			Date.now() +
+			".png";
+
+		const file =
+			new File(
+				[blob],
+				name,
+				{
+					type:
+						blob.type ||
+						"image/png",
+				}
+			);
+
+		const label =
+			document.createElement(
+				"div"
+			);
+
+		label.className =
+			"va-ai-label";
+
+		label.textContent =
+			"Image " +
+			variant +
+			" of " +
+			AI_IMAGES_PER_PROMPT;
+
+		label.title =
+			prompt;
+
+		const row =
+			document.createElement(
+				"div"
+			);
+
+		row.className =
+			"va-ai-actions";
+
+		const addBtn =
+			document.createElement(
+				"button"
+			);
+
+		addBtn.type =
+			"button";
+
+		addBtn.className =
+			"upload-btn small";
+
+		addBtn.textContent =
+			"\\u2795 Add to Video";
+
+		addBtn.addEventListener(
+			"click",
+			() =>
+				addAiToVideo(
+					n,
+					file,
+					blob
+				)
+		);
+
+		const fsBtn =
+			document.createElement(
+				"button"
+			);
+
+		fsBtn.type =
+			"button";
+
+		fsBtn.className =
+			"upload-btn small";
+
+		fsBtn.textContent =
+			"\\u26F6 Fullscreen";
+
+		fsBtn.addEventListener(
+			"click",
+			() =>
+				showAiFullscreen(
+					url
+				)
+		);
+
+		row.appendChild(
+			addBtn
+		);
+
+		row.appendChild(
+			fsBtn
+		);
+
+		card.appendChild(
+			img
+		);
+
+		card.appendChild(
+			label
+		);
+
+		card.appendChild(
+			row
+		);
+
+		resultsEl.appendChild(
+			card
+		);
+
+	}
+
+	/*
+	 * Adds a generated image to this
+	 * accordion's own gallery (counts
+	 * against the image cap).
+	 */
+	function addAiToVideo(
+		n,
+		file,
+		blob
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		const counts =
+			videoCounts(
+				project
+			);
+
+		if (
+			counts.stills >=
+				MAX_IMAGE_UPLOADS
+		) {
+
+			alert(
+				"Video " + n +
+					": you can add at most " +
+					MAX_IMAGE_UPLOADS +
+					" images (jpg, png, jpeg)."
+			);
+
+			return;
+		}
+
+		const url =
+			URL.createObjectURL(
+				blob
+			);
+
+		const asset = {
+			kind: "image",
+			file: file,
+			url: url,
+			card: null,
+		};
+
+		project.assets.push(
+			asset
+		);
+
+		buildVaCard(
+			n,
+			asset
+		);
+
+		updateVideoStatus(
+			n
+		);
+
+	}
+
+	/*
+	 * Fullscreen preview overlay for
+	 * a generated image.
+	 */
+	function showAiFullscreen(
+		url
+	) {
+
+		let overlay =
+			document.getElementById(
+				"ai-fullscreen"
+			);
+
+		if (!overlay) {
+
+			overlay =
+				document.createElement(
+					"div"
+				);
+
+			overlay.id =
+				"ai-fullscreen";
+
+			overlay.className =
+				"ai-fullscreen-overlay";
+
+			const img =
+				new Image();
+
+			img.className =
+				"ai-fullscreen-img";
+
+			img.alt =
+				"fullscreen preview";
+
+			const note =
+				document.createElement(
+					"div"
+				);
+
+			note.className =
+				"ai-fullscreen-note";
+
+			note.textContent =
+				"Click anywhere to close";
+
+			overlay.appendChild(
+				img
+			);
+
+			overlay.appendChild(
+				note
+			);
+
+			overlay.addEventListener(
+				"click",
+				closeAiFullscreen
+			);
+
+			document.body.appendChild(
+				overlay
+			);
+
+		}
+
+		overlay.querySelector(
+			"img"
+		).src =
+			url;
+
+		overlay.style.display =
+			"flex";
+
+	}
+
+	function closeAiFullscreen() {
+
+		const overlay =
+			document.getElementById(
+				"ai-fullscreen"
+			);
+
+		if (overlay) {
+			overlay.style.display =
+				"none";
 		}
 
 	}
