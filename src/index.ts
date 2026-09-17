@@ -256,7 +256,11 @@ export default {
 
 		// MeloTTS (MyShell) -
 		// the TTS model for
-		// voiceover MP3s.
+		// voiceover MP3s. One
+		// fixed voice per
+		// language (no
+		// male/female
+		// parameter).
 		const VOICEOVER_MODEL =
 			"@cf/myshell-ai/melotts";
 
@@ -499,9 +503,17 @@ export default {
 			* AI script (SRT) generation.
 			* INSTRUCT model on Workers
 			* AI. POST the topic
-			+ minutes (1-6) + speech
+			* + minutes (1-6) + speech
 			* speed; returns the timed
-			* SRT text.
+			* SRT text. The output is
+			* VALIDATED server-side: it
+			* must parse as clean SRT
+			* and its total duration
+			* must stay under the
+			* selected minutes (invalid
+			* output is retried up to 3
+			* times with the problem
+			* spelled out).
 		*/
 		if (
 			request.method === "POST" &&
@@ -516,22 +528,22 @@ export default {
 			const topic =
 				String(
 					body.topic ||
-					"my video"
+						"my video"
 				).trim().slice(0, 160);
 
 			const minutes =
 				Number(
 					(body.minutes === undefined ||
-					body.minutes === null ||
-					body.minutes === "")
-					? 1
-					: body.minutes
+						body.minutes === null ||
+						body.minutes === "")
+						? 1
+						: body.minutes
 				);
 
 			const speed =
 				String(
 					body.speed ||
-					"medium"
+						"medium"
 				).toLowerCase().trim();
 
 			/*
@@ -605,112 +617,526 @@ export default {
 			const wordTarget =
 				SPEED_WORDS[speed] * minutes;
 
-			const userPrompt =
-				"You are a professional video script writer. Answer with ONLY valid SRT subtitle text, nothing else. "
-				+
-				"Write a YouTube narration script as SRT subtitles about: "
-					+ topic +
-					". The video is exactly " + minutes +
-					" minute(s) long, so the final timestamp must end at " +
-					endStamp +
-					". The speaker talks " + speed +
-					" (about " + wordTarget + " words total). Output ONLY valid SRT: each cue is a number, a line like 00:00:00,000 --> 00:00:04,000, then the subtitle text, with a blank line between cues. Keep each subtitle line under 42 characters. Timestamps start at 00:00:00,000, never overlap, and cover the full duration. Plain spoken English only - no headings, no markdown, no code fences, nothing outside the SRT.";
-
-			try {
-
-				const result =
-					await env.AI.run(
-						SCRIPT_MODEL,
-						{
-							prompt:
-							userPrompt,
-							max_tokens:
-								2048,
-							temperature:
-								0.7
-						}
-					);
+			/*
+				* Server-side SRT
+				* validation: strips
+				* fences/prose, parses
+				* the cues, checks the
+				* timestamps and the
+				* total duration (must
+				* stay UNDER the
+				* selected minutes).
+				* Returns { ok, error,
+				* srt, endMs }.
+				*/
+			function validateSrt(
+				text,
+				minutes
+			) {
 
 				let srt =
-					"";
-
-				/*
-					* Accept every response
-					* shape: chat array,
-					* { response } object,
-					* or a plain string.
-				*/
-				if (
-					result &&
-					result[0] &&
-					result[0].message
-				) {
-
-					srt =
-						String(
-							result[0].message.content ||
+					String(
+						text ||
 							""
-						).trim();
-
-				}
-
-				if (
-					srt === "" &&
-					result &&
-					typeof result.response === "string"
-				) {
-
-					srt =
-						result.response.trim();
-
-				}
+					).replace(
+						/[\u0000-\u0008\u000B\u000E-\u001F]/g,
+						""
+					).trim();
 
 				if (
-					srt === "" &&
-					typeof result === "string"
-				) {
-
-					srt =
-						result.trim();
-
-				}
-
-				if (
-					srt.indexOf("```") !== -1
+					srt.indexOf(
+						"```"
+					) !== -1
 				) {
 
 					const parts =
-						srt.split("```");
+						srt.split(
+							"```"
+						);
 
 					srt =
 						(parts[1] ||
-						srt).trim();
+							srt).trim();
+
+				}
+
+				const lines =
+					srt.split(
+						/\r?\n/
+					);
+
+				/*
+					* Drop any prose the
+					* model puts before
+					* the first cue
+					* number.
+					*/
+				let firstCue =
+					-1;
+
+				for (
+					let li = 0;
+					li < lines.length;
+					li++
+				) {
+
+					if (
+						/^[0-9]+$/.test(
+							lines[li].trim()
+						)
+					) {
+
+						firstCue =
+							li;
+
+						break;
+
+					}
 
 				}
 
 				if (
-					srt.indexOf("-->") === -1
+					firstCue === -1
 				) {
 
-					return json(
-						{
-							success: false,
-							error:
-								"The model did not return SRT - try again"
-						},
-						500
+					return {
+						ok: false,
+						error:
+							"no SRT cues found in the model output"
+					};
+
+				}
+
+				srt =
+					lines
+						.slice(firstCue)
+						.join("\n");
+
+				const cueLines =
+					srt.split(
+						/\r?\n/
 					);
+
+				const STAMP =
+					/([0-9]{1,2}):([0-9]{2}):([0-9]{2}),([0-9]{3})/;
+
+				const cues =
+					[];
+
+				let bad =
+					"";
+
+				let current =
+					null;
+
+				const toMs =
+					(h, m, s, ms) =>
+						((Number(h) * 60 +
+							Number(m)) * 60 +
+							Number(s)) *
+						1000 +
+						Number(ms);
+
+				for (
+					let li = 0;
+					li < cueLines.length;
+					li++
+				) {
+
+					const line =
+						cueLines[li]
+							.trim();
+
+					if (
+						!line
+					) {
+						continue;
+					}
+
+					if (
+						/^[0-9]+$/.test(
+							line
+						)
+					) {
+
+						current =
+							{
+								startMs:
+									0,
+								endMs:
+									0,
+								text:
+									""
+							};
+
+						cues.push(
+							current
+						);
+
+						continue;
+
+					}
+
+					if (
+						line.indexOf(
+							"-->"
+						) !== -1
+					) {
+
+						if (
+							!current
+						) {
+
+							bad =
+								"timestamp without a cue number";
+
+							break;
+
+						}
+
+						const sides =
+							line.split(
+								"-->"
+							);
+
+						const a =
+							STAMP.exec(
+								String(
+									sides[0]
+								)
+							);
+
+						const b =
+							STAMP.exec(
+								String(
+									sides[1] ||
+										""
+								)
+							);
+
+						if (
+							!a ||
+							!b
+						) {
+
+							bad =
+								"broken timestamp: " +
+								line.slice(
+									0,
+									60
+								);
+
+							break;
+
+						}
+
+						current.startMs =
+							toMs(
+								a[1],
+								a[2],
+								a[3],
+								a[4]
+							);
+
+						current.endMs =
+							toMs(
+								b[1],
+								b[2],
+								b[3],
+								b[4]
+							);
+
+						if (
+							current.startMs >=
+								current.endMs
+						) {
+
+							bad =
+								"cue starts at or after its end: " +
+								line.slice(
+									0,
+									60
+								);
+
+							break;
+
+						}
+
+						if (
+							cues.length >
+								1 &&
+							cues[cues.length -
+								2].endMs >
+								current.startMs
+						) {
+
+							bad =
+								"overlapping cues at: " +
+								line.slice(
+									0,
+									60
+								);
+
+							break;
+
+						}
+
+						continue;
+
+					}
+
+					if (
+						current
+					) {
+
+						current.text =
+							current.text
+								? current.text +
+									" " +
+									line
+								: line;
+
+					}
+
+				}
+
+				if (
+					bad
+				) {
+
+					return {
+						ok: false,
+						error:
+							bad
+					};
+
+				}
+
+				const realCues =
+					cues.filter(
+						(c) =>
+							c.text &&
+							c.endMs >
+							c.startMs
+					);
+
+				if (
+					!realCues.length
+				) {
+
+					return {
+						ok: false,
+						error:
+							"no valid SRT cues in the model output"
+					};
+
+				}
+
+				const endMs =
+					realCues[
+						realCues.length -
+							1
+					].endMs;
+
+				if (
+					endMs < 10000
+				) {
+
+					return {
+						ok: false,
+						error:
+							"script too short (" +
+							Math.round(
+								endMs / 1000
+							) +
+							"s) for " +
+							minutes +
+							" minute(s)"
+					};
+
+				}
+
+				if (
+					endMs >
+						minutes * 60 *
+						1000 + 1500
+				) {
+
+					return {
+						ok: false,
+						error:
+							"script is " +
+							Math.round(
+								endMs / 1000
+							) +
+							"s long - it must stay under " +
+							minutes +
+							" minute(s)"
+					};
+
+				}
+
+				return {
+					ok: true,
+					srt:
+						srt,
+					endMs:
+						endMs
+				};
+
+			}
+
+			const userPrompt =
+				"You are a professional video script writer. Answer with ONLY valid SRT subtitle text, nothing else. " +
+				"Write a YouTube narration script as SRT subtitles about: " +
+					topic +
+					". The video is " +
+					minutes +
+					" minute(s) long and the TOTAL duration of your SRT must stay UNDER " +
+					minutes +
+					" minute(s): the final timestamp must end at or before " +
+					endStamp +
+					" and must never exceed it. The speaker talks " +
+					speed +
+					" (about " +
+					wordTarget +
+					" words total). Output ONLY valid SRT: each cue is a number, a line like 00:00:00,000 --> 00:00:04,000, then the subtitle text, with a blank line between cues. Keep each subtitle line under 42 characters. Timestamps start at 00:00:00,000, never overlap, and use the whole duration. Plain spoken English only - no headings, no markdown, no code fences, nothing outside the SRT.";
+
+			/*
+				* Generate + validate,
+				* retrying with the
+				* specific problem added
+				* to the prompt (max 3
+				* attempts).
+				*/
+			try {
+
+				let lastError =
+					"";
+
+				for (
+					let attempt = 1;
+					attempt <= 3;
+					attempt++
+				) {
+
+					const prompt =
+						userPrompt +
+						(attempt > 1
+							?
+							" Your previous attempt was rejected: " +
+								lastError +
+								" Try again and fix that exact problem."
+							: "");
+
+					const result =
+						await env.AI.run(
+							SCRIPT_MODEL,
+							{
+								prompt:
+									prompt,
+								max_tokens:
+									2048,
+								temperature:
+									0.7
+							}
+						);
+
+					let srt =
+						"";
+
+					/*
+						* Accept every
+						* response
+						* shape: chat
+						* array,
+						* { response }
+						* object,
+						* or a plain
+						* string.
+						*/
+					if (
+						result &&
+						result[0] &&
+						result[0].message
+					) {
+
+						srt =
+							String(
+								result[0]
+									.message
+									.content ||
+									""
+							).trim();
+
+					}
+
+					if (
+						srt === "" &&
+						result &&
+						typeof result
+							.response ===
+							"string"
+					) {
+
+						srt =
+							result
+								.response
+								.trim();
+
+					}
+
+					if (
+						srt === "" &&
+						typeof result ===
+							"string"
+					) {
+
+						srt =
+							result
+								.trim();
+
+					}
+
+					const check =
+						validateSrt(
+							srt,
+							minutes
+						);
+
+					if (
+						check.ok
+					) {
+
+						return json(
+							{
+								success:
+									true,
+								srt:
+									check
+										.srt,
+								model:
+									SCRIPT_MODEL
+							}
+						);
+
+					}
+
+					lastError =
+						check
+							.error;
 
 				}
 
 				return json(
 					{
-						success: true,
-						srt:
-						srt,
-						model:
-						SCRIPT_MODEL
-					}
+						success: false,
+						error:
+							"Script output invalid (" +
+								lastError +
+								") - try again"
+					},
+					500
 				);
 
 			}
@@ -729,18 +1155,26 @@ export default {
 
 			}
 
-		}
-
-		/*
+		}		/*
 			* Voiceover (MeloTTS):
-			* speak the script text
-			* and return the MP3.
+			* speak the script text and
+			* return the MP3. Long
+			* scripts are split into
+			* sentence chunks (TTS
+			* models reject overly long
+			* text - that was the
+			* "internal server error")
+			* and the MP3 pieces are
+			* concatenated. One fixed
+			* voice per language
+			* (MeloTTS has no
+			* male/female parameter).
 		*/
 		if (
 			request.method === "POST" &&
 			url.pathname === "/api/voiceover"
 		) {
-
+		try {
 			const body =
 				await request.json().catch(
 					() => ({})
@@ -749,13 +1183,19 @@ export default {
 			const text =
 				String(
 					body.text ||
+						""
+				).replace(
+					/[\u0000-\u001F]/g,
 					""
-				).trim().slice(0, 4000);
+				).replace(
+					/\s+/g,
+					" "
+				).trim().slice(0, 8000);
 
 			const lang =
 				String(
 					body.lang ||
-					"en"
+						"en"
 				).toLowerCase().trim();
 
 			const VOICE_LANGS =
@@ -792,7 +1232,9 @@ export default {
 			}
 
 			if (
-				VOICE_LANGS.indexOf(lang) === -1
+				VOICE_LANGS.indexOf(
+					lang
+				) === -1
 			) {
 
 				return json(
@@ -806,145 +1248,332 @@ export default {
 
 			}
 
-			try {
+			/*
+				* TTS models reject
+				* overly long text (the
+				* old "internal server
+				* error"): split the
+				* script into sentence
+				* chunks of 1800 chars
+				* or less.
+				*/
+			const MAX_CHUNK =
+				1800;
+
+			const sentences =
+				text.match(
+					/[^.!?…]+[.!?…]*\s*/g
+				) || [text];
+
+			const chunks =
+				[];
+
+			let current =
+				"";
+
+			for (
+				let ci = 0;
+				ci < sentences.length;
+				ci++
+			) {
+
+				const s =
+					sentences[ci];
+
+				if (
+					current &&
+					current.length +
+						s.length >
+						MAX_CHUNK
+				) {
+
+					chunks.push(
+						current.trim()
+					);
+
+					current =
+						"";
+
+				}
+
+				if (
+					s.length >
+						MAX_CHUNK
+				) {
+
+					/*
+						* One sentence
+						* longer than a
+						* whole chunk:
+						* hard-split it.
+						*/
+					if (
+						current
+					) {
+
+						chunks.push(
+							current.trim()
+						);
+
+						current =
+							"";
+
+					}
+
+					for (
+						let off = 0;
+						off < s.length;
+						off +=
+							MAX_CHUNK
+					) {
+
+						chunks.push(
+							s.slice(
+								off,
+								off +
+								MAX_CHUNK
+							).trim()
+						);
+
+					}
+
+					continue;
+
+				}
+
+				current +=
+					s;
+
+			}
+
+			if (
+				current.trim()
+			) {
+
+				chunks.push(
+					current.trim()
+				);
+
+			}
+
+			/*
+				* One TTS request per
+				* chunk, then the MP3
+				* pieces are joined
+				* into one file.
+				*/
+			const pieces =
+				[];
+
+			for (
+				let ci = 0;
+				ci < chunks.length;
+				ci++
+			) {
 
 				const result =
 					await env.AI.run(
 						VOICEOVER_MODEL,
 						{
 							prompt:
-							text,
+								chunks[ci],
 							lang:
-							lang
+								lang
 						}
 					);
 
 				/*
-					* Accept every output
-					* shape: { audio: base64 },
-					* a base64 string, an
-					* ArrayBuffer, or raw
-					* bytes.
-				*/
+					* Accept every
+					* output shape: an
+					* audio
+					* ReadableStream
+					* (the normal
+					* Workers AI TTS
+					* case), raw bytes,
+					* a base64 string,
+					* or { audio:
+					* base64 }.
+					*/
 				let mp3 =
 					null;
 
 				if (
+					result instanceof
+						ArrayBuffer
+				) {
+
+					mp3 =
+						new Uint8Array(
+							result
+						);
+
+				} else if (
+					typeof ReadableStream !==
+						"undefined" &&
+					result instanceof
+						ReadableStream
+				) {
+
+					/*
+						* ReadableStream
+						* has no
+						* .arrayBuffer():
+						* wrap it in a
+						* Response to
+						* collect the
+						* bytes.
+						*/
+					mp3 =
+						new Uint8Array(
+							await new Response(
+								result
+							).arrayBuffer()
+						);
+
+				} else if (
 					result &&
-					typeof result.audio === "string"
-				) {
-
-					const bin =
-						atob(result.audio);
-
-					mp3 =
-						new Uint8Array(bin.length);
-
-					for (
-						let i = 0;
-						i < bin.length;
-						i++
-					) {
-
-						mp3[i] =
-							bin.charCodeAt(i);
-
-					}
-
-				}
-
-				if (
-					!mp3 &&
-					typeof result === "string"
-				) {
-
-					const bin =
-						atob(result);
-
-					mp3 =
-						new Uint8Array(bin.length);
-
-					for (
-						let i = 0;
-						i < bin.length;
-						i++
-					) {
-
-						mp3[i] =
-							bin.charCodeAt(i);
-
-					}
-
-				}
-
-				if (
-					!mp3 &&
-					result instanceof ArrayBuffer
+					typeof result
+						.byteLength ===
+						"number"
 				) {
 
 					mp3 =
-						new Uint8Array(result);
+						new Uint8Array(
+							result
+						);
 
-				}
-
-				if (
-					!mp3 &&
+				} else if (
 					result &&
-					typeof result.byteLength === "number"
+					typeof result
+						.arrayBuffer ===
+						"function"
 				) {
 
 					mp3 =
-						result instanceof Uint8Array
-						? result
-						: new Uint8Array(result);
+						new Uint8Array(
+							await result
+								.arrayBuffer()
+						);
+
+				} else if (
+					typeof result ===
+						"string" &&
+					result.length > 0
+				) {
+
+					mp3 =
+						Uint8Array.from(
+							atob(result),
+							(c) =>
+								c.charCodeAt(
+									0
+								)
+						);
+
+				} else if (
+					result &&
+					typeof result.audio ===
+						"string"
+				) {
+
+					mp3 =
+						Uint8Array.from(
+							atob(result
+								.audio),
+							(c) =>
+								c.charCodeAt(
+									0
+								)
+						);
 
 				}
 
-				if (!mp3) {
+				if (
+					!mp3 ||
+					mp3.length === 0
+				) {
 
 					return json(
 						{
 							success: false,
 							error:
-								"Unexpected TTS output"
+								"Unexpected TTS output (chunk " +
+								(ci + 1) +
+								" of " +
+								chunks.length +
+								")"
 						},
 						500
 					);
 
 				}
 
-				return new Response(
-					mp3,
-					{
-						status: 200,
-						headers: {
-							"Content-Type":
-								"audio/mpeg",
-							"Content-Disposition":
-								"attachment; filename=voiceover.mp3"
-						}
+				pieces.push(
+					mp3
+				);
+
+			}
+
+			const total =
+				pieces.reduce(
+					(sum, p) =>
+						sum + p.length,
+					0
+				);
+
+			const mp3 =
+				new Uint8Array(
+					total
+				);
+
+			let off =
+				0;
+
+			for (
+				let pi = 0;
+				pi < pieces.length;
+				pi++
+			) {
+
+				mp3.set(
+					pieces[pi],
+					off
+				);
+
+				off +=
+					pieces[pi]
+						.length;
+
+			}
+
+			return new Response(
+				mp3,
+				{
+					status: 200,
+					headers: {
+						"Content-Type":
+							"audio/mpeg",
+						"Content-Disposition":
+							"attachment; filename=voiceover.mp3"
 					}
-				);
+				}
+			);
+		}
+		catch (error) {
 
-			}
-
-			catch (error) {
-
-				return json(
-					{
-						success: false,
-						error:
-							error.message ||
-							"Voiceover generation failed"
-					},
-					500
-				);
-
-			}
-
+			return json(
+				{
+					success: false,
+					error:
+						(error &&
+							error.message) ||
+						String(error)
+				},
+				500
+			);
 		}
 
-		/*
+		}		/*
 			* Submit a render job: ALL of
 			* the video's elements.
 		*/
@@ -17245,7 +17874,7 @@ function createHTML() {
 
 	}
 
-	function closeVoiceoverModal() {
+			function closeVoiceoverModal() {
 
 		const modal =
 			document.getElementById(
@@ -17288,7 +17917,7 @@ function createHTML() {
 		modal.innerHTML =
 			'<div class="modal-box">' +
 			'<div class="modal-title">🎙 Voiceover (MP3) — Video ' + n + '</div>' +
-			'<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks the script. The MP3 can be uploaded as this video\\'s audio track.</div>' +
+			'<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks the script in the selected language (one fixed voice per language). The MP3 can be uploaded as this video\\'s audio track.</div>' +
 			'<label class="quality-select voiceover-voice-label">Voice <select id="voiceover-voice">' +
 			'<option value="en" selected>English (en)</option>' +
 			'<option value="zh">Chinese (zh)</option>' +
@@ -17303,7 +17932,11 @@ function createHTML() {
 			'<textarea id="voiceover-text" class="voiceover-textarea" rows="8" readonly disabled></textarea>' +
 			'<div class="voiceover-actions">' +
 			'<button type="button" class="upload-btn small" id="voiceover-gen" onclick="generateVoiceover(' + n + ')">🎧 Generate Voiceover (MP3)</button>' +
-			'<button type="button" class="upload-btn small" onclick="applySubtitles(' + n + ')">📝 Apply Subtitles to Video</button>' +
+			'<button type="button" class="upload-btn small" id="voiceover-subtitles" onclick="toggleSubtitles(' + n + ')">' +
+			(project.subtitles && project.subtitles.length
+				? "✅ Subtitles ON — click to turn off"
+				: "📝 Apply Subtitles to Video") +
+			'</button>' +
 			'</div>' +
 			'<span class="va-note" id="voiceover-status"></span>' +
 			'<button type="button" class="upload-btn small" onclick="closeVoiceoverModal()">✕ Close</button>' +
@@ -17485,13 +18118,16 @@ function createHTML() {
 	}
 
 	/*
-	 * Applies the SRT script as burned-in
-	 * subtitles: drawn below the caption,
-	 * at 1/3 of the height up from the
-	 * bottom, for every export of this
-	 * video.
+	 * Toggle the SRT script as
+	 * burned-in subtitles for this
+	 * video: drawn below the
+	 * caption, at 1/3 of the
+	 * height up from the bottom,
+	 * for every export. Click
+	 * again to turn them off.
+	 * The modal stays open.
 	 */
-	function applySubtitles(n) {
+	function toggleSubtitles(n) {
 
 		const project =
 			videoProjects[n - 1];
@@ -17505,22 +18141,79 @@ function createHTML() {
 
 		}
 
+		const statusEl =
+			document.getElementById(
+				"voiceover-status"
+			);
+
+		const subBtn =
+			document.getElementById(
+				"voiceover-subtitles"
+			);
+
+		const scriptStatus =
+			document.getElementById(
+				"va-script-status-" + n
+			);
+
+		if (
+			project.subtitles &&
+			project.subtitles.length
+		) {
+
+			/*
+			 * Subtitles are ON ->
+			 * turn them off.
+			 */
+
+			project.subtitles =
+				null;
+
+			if (statusEl) {
+
+				statusEl.textContent =
+					"Subtitles turned off";
+
+			}
+
+			if (scriptStatus) {
+
+				scriptStatus.textContent =
+					"Subtitles off";
+
+			}
+
+			if (subBtn) {
+
+				subBtn.textContent =
+					"📝 Apply Subtitles to Video";
+
+			}
+
+			return;
+
+		}
+
 		const cues =
 			parseSrtCues(
 				project.srt
 			);
 
 		if (!cues.length) {
+
+			if (statusEl) {
+
+				statusEl.textContent =
+					"No subtitle cues found in the script";
+
+			}
+
 			return;
+
 		}
 
 		project.subtitles =
 			cues;
-
-		const statusEl =
-			document.getElementById(
-				"voiceover-status"
-			);
 
 		if (statusEl) {
 
@@ -17531,11 +18224,6 @@ function createHTML() {
 
 		}
 
-		const scriptStatus =
-			document.getElementById(
-				"va-script-status-" + n
-			);
-
 		if (scriptStatus) {
 
 			scriptStatus.textContent =
@@ -17543,7 +18231,12 @@ function createHTML() {
 
 		}
 
-		closeVoiceoverModal();
+		if (subBtn) {
+
+			subBtn.textContent =
+				"✅ Subtitles ON — click to turn off";
+
+		}
 
 	}
 
