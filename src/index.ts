@@ -234,7 +234,7 @@ export default {
 		const CONFIG_WORKERS_KEY =
 			"config:workers";
 
-		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "⚙️ Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "⚙️ Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional — URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "▶ Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "■ Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "▶ Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("⏳ Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("✅ Delivered \\"" + (job.name || "job") + "\\" — waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("❌ Job failed: " + msg + " — waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker running…";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("⏳ Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
+		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional 鈥� URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "鈻� Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "鈻� Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "鈻� Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("鈴� Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("鉁� Delivered \\"" + (job.name || "job") + "\\" 鈥� waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("鉂� Job failed: " + msg + " 鈥� waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker running鈥�";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("鈴� Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
 
 		async function putBlobStore(
 			env,
@@ -4564,7 +4564,7 @@ function createHTML() {
 
 
 		<h1>
-			🎬 YouTube Vibe Studio
+			馃幀 YouTube Vibe Studio
 		</h1>
 
 		<p>
@@ -4579,7 +4579,7 @@ function createHTML() {
 		class="bulk-banner"
 		style="display:none"
 	>
-		⚠️ Bulk generation is in progress — do not
+		鈿狅笍 Bulk generation is in progress 鈥� do not
 		move or delete your image or MP4 files until
 		it finishes.
 	</div>
@@ -4618,7 +4618,7 @@ function createHTML() {
 		<div class="audio-panel">
 
 			<div class="audio-title">
-				Audio Track — upload an MP3
+				Audio Track 鈥� upload an MP3
 				before rendering
 			</div>
 
@@ -4627,7 +4627,7 @@ function createHTML() {
 
 				<label class="upload-btn audio">
 
-					🎵 Upload MP3 Audio
+					馃幍 Upload MP3 Audio
 
 					<input
 						type="file"
@@ -4642,7 +4642,7 @@ function createHTML() {
 					class="audio-empty"
 					id="audio-empty"
 				>
-					No audio added —
+					No audio added 鈥�
 					the MP4 will be silent.
 				</div>
 
@@ -4680,7 +4680,7 @@ function createHTML() {
 						class="remove-audio-btn"
 						onclick="removeAudio()"
 					>
-						🗑 Remove Audio
+						馃棏 Remove Audio
 					</button>
 
 				</div>
@@ -4784,7 +4784,7 @@ function createHTML() {
 
 			<div class="audio-note">
 				Drawn straight onto every
-				frame — no background box
+				frame 鈥� no background box
 				and no highlight.
 			</div>
 
@@ -4820,31 +4820,31 @@ function createHTML() {
 						</option>
 
 						<option value="like">
-							👍 Like
+							馃憤 Like
 						</option>
 
 						<option value="love">
-							❤️ Love it
+							鉂わ笍 Love it
 						</option>
 
 						<option value="subscribe">
-							🔔 Subscribe
+							馃敂 Subscribe
 						</option>
 
 						<option
 							value="like-subscribe"
 						>
-							👍🔔 Like &amp; Subscribe
+							馃憤馃敂 Like &amp; Subscribe
 						</option>
 
 						<option value="watch">
-							🎬 Watch Video
+							馃幀 Watch Video
 						</option>
 
 						<option
 							value="watch-like-subscribe"
 						>
-							🎬👍🔔 Watch, Like
+							馃幀馃憤馃敂 Watch, Like
 							&amp; Subscribe
 						</option>
 
@@ -4856,7 +4856,7 @@ function createHTML() {
 
 
 			<div class="audio-note">
-				White 200 × 80 rectangle, square
+				White 200 脳 80 rectangle, square
 				corners, flush with the bottom
 				right corner and hanging 40px
 				past the right edge. Drawn on
@@ -4967,7 +4967,7 @@ function createHTML() {
 
 			<label class="upload-btn">
 
-				📁 Upload Image, GIF or MP4 (25 images · 5 GIF · 5 MP4)
+				馃搧 Upload Image, GIF or MP4 (25 images 路 5 GIF 路 5 MP4)
 
 				<input
 					type="file"
@@ -4986,18 +4986,18 @@ function createHTML() {
 				<select id="quality-select">
 
 					<option value="low">
-						480p · Light (1.2 Mbps)
+						480p 路 Light (1.2 Mbps)
 					</option>
 
 					<option
 						value="balanced"
 						selected
 					>
-						720p · Balanced (2.5 Mbps)
+						720p 路 Balanced (2.5 Mbps)
 					</option>
 
 					<option value="high">
-						720p · High (5 Mbps)
+						720p 路 High (5 Mbps)
 					</option>
 
 				</select>
@@ -5010,7 +5010,7 @@ function createHTML() {
 				onclick="onGenerateClick()"
 			>
 
-				🎞️ Render & Download MP4 Video
+				馃帪锔� Render & Download MP4 Video
 
 			</button>
 
@@ -5033,7 +5033,7 @@ function createHTML() {
 	>
 		<div class="modal-box">
 			<div class="modal-title">
-				⚠️ Missing required fields
+				鈿狅笍 Missing required fields
 			</div>
 			<ul
 				id="required-modal-list"
@@ -6627,7 +6627,7 @@ function createHTML() {
 	
 	
 			estimateSourceEl.textContent =
-				"(9s per image or GIF · MP4 clips play in full)";
+				"(9s per image or GIF 路 MP4 clips play in full)";
 	
 	
 		}
@@ -6659,7 +6659,7 @@ function createHTML() {
 
 
 		estimateSizeEl.textContent =
-			"· approx. " +
+			"路 approx. " +
 			formatBytes(bytes) +
 			" file";
 
@@ -11056,7 +11056,7 @@ function createHTML() {
 			);
 
 			renderBtn.innerHTML =
-				"🎞️ Generate Videos";
+				"馃帪锔� Generate Videos";
 
 		}
 
@@ -11180,8 +11180,8 @@ function createHTML() {
 			arrow.textContent =
 				body.style.display ===
 					"none"
-				? "▶"
-				: "▼";
+				? "鈻�"
+				: "鈻�";
 		}
 
 	}
@@ -11218,17 +11218,17 @@ function createHTML() {
 	 */
 	const STICKER_OPTIONS =
 		'<option value="none" selected>None</option>' +
-		'<option value="like">👍 Like</option>' +
-		'<option value="love">❤️ Love it</option>' +
-		'<option value="subscribe">🔔 Subscribe</option>' +
-		'<option value="like-subscribe">👍🔔 Like &amp; Subscribe</option>' +
-		'<option value="watch">🎬 Watch Video</option>' +
-		'<option value="watch-like-subscribe">🎬👍🔔 Watch, Like &amp; Subscribe</option>';
+		'<option value="like">馃憤 Like</option>' +
+		'<option value="love">鉂わ笍 Love it</option>' +
+		'<option value="subscribe">馃敂 Subscribe</option>' +
+		'<option value="like-subscribe">馃憤馃敂 Like &amp; Subscribe</option>' +
+		'<option value="watch">馃幀 Watch Video</option>' +
+		'<option value="watch-like-subscribe">馃幀馃憤馃敂 Watch, Like &amp; Subscribe</option>';
 
 	const QUALITY_OPTIONS =
-		'<option value="low">480p · Light (1.2 Mbps)</option>' +
-		'<option value="balanced" selected>720p · Balanced (2.5 Mbps)</option>' +
-		'<option value="high">720p · High (5 Mbps)</option>';
+		'<option value="low">480p 路 Light (1.2 Mbps)</option>' +
+		'<option value="balanced" selected>720p 路 Balanced (2.5 Mbps)</option>' +
+		'<option value="high">720p 路 High (5 Mbps)</option>';
 
 	const FONT_OPTIONS =
 		'<option value="oswald">Oswald</option>' +
@@ -11246,23 +11246,23 @@ function createHTML() {
 
 		return (
 			'<div class="va-header">' +
-			'<span class="va-title">🎬 Video ' + n + '</span>' +
+			'<span class="va-title">馃幀 Video ' + n + '</span>' +
 			'<span class="va-status" id="va-status-' + n + '">empty</span>' +
-			'<button type="button" class="va-api-btn" onclick="apiRenderVideo(' + n + ')" title="Send all of this video\\'s elements to the render API">☁️ API</button>' +
+			'<button type="button" class="va-api-btn" onclick="apiRenderVideo(' + n + ')" title="Send all of this video\\'s elements to the render API">鈽侊笍 API</button>' +
 			'<span class="va-summary" id="va-summary-' + n + '"></span>' +
-			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">▼</button>' +
+			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">鈻�</button>' +
 			'</div>' +
 			'<div class="va-body" id="va-body-' + n + '">' +
 			'<div class="va-left">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Images / MP4s — drag cards to reorder</div>' +
-			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">📁 Upload Image, GIF or MP4</button>' +
-			'<span class="va-note">Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)</span>' +
+			'<div class="va-section-title">Images / MP4s 鈥� drag cards to reorder</div>' +
+			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">馃搧 Upload Image, GIF or MP4</button>' +
+			'<span class="va-note">Max 5 GIF 路 25 images 路 5 MP4 (1:00 each, silent)</span>' +
 			'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
 			'</div>' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Audio — one MP3 (the video is as long as the MP3)</div>' +
-			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">🎵 Upload MP3 Audio</button>' +
+			'<div class="va-section-title">Audio 鈥� one MP3 (the video is as long as the MP3)</div>' +
+			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">馃幍 Upload MP3 Audio</button>' +
 			'<span class="va-audio-line" id="va-audio-line-' + n + '"></span>' +
 			'</div>' +
 			'<div class="va-section">' +
@@ -11289,10 +11289,10 @@ function createHTML() {
 			'</div>' +
 			'<div class="va-right">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">AI Images — Cloudflare</div>' +
+			'<div class="va-section-title">AI Images 鈥� Cloudflare</div>' +
 			'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
-			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">✨ Generate 2 Images</button>' +
-			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit · 480px landscape</span>' +
+			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">鉁� Generate 2 Images</button>' +
+			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit 路 480px landscape</span>' +
 			'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
 			'</div>' +
 			'</div>' +
@@ -11465,7 +11465,7 @@ function createHTML() {
 
 			summaryEl.textContent =
 				parts.length
-				? parts.join(" · ")
+				? parts.join(" 路 ")
 				: "no images yet";
 		}
 
@@ -11780,7 +11780,7 @@ function createHTML() {
 
 		if (line) {
 			line.textContent =
-				"🎵 " + file.name;
+				"馃幍 " + file.name;
 		}
 
 		updateVideoStatus(
@@ -11878,7 +11878,7 @@ function createHTML() {
 			"va-card-remove";
 
 		removeBtn.textContent =
-			"×";
+			"脳";
 
 		removeBtn.title =
 			"Remove";
@@ -12182,8 +12182,8 @@ function createHTML() {
 			);
 
 			tip.textContent =
-				bits.join(" · ") +
-				" — drag to reorder";
+				bits.join(" 路 ") +
+				" 鈥� drag to reorder";
 
 			tip.title =
 				tip.textContent;
@@ -12435,7 +12435,7 @@ function createHTML() {
 	 * validates every video in the
 	 * stack, warns about missing
 	 * required fields, then renders
-	 * them in order — VIDEO_BATCH_SIZE
+	 * them in order 鈥� VIDEO_BATCH_SIZE
 	 * at a time, last batch may be one.
 	 */
 	function onGenerateClick() {
@@ -12542,7 +12542,7 @@ function createHTML() {
 
 			if (line) {
 				line.textContent =
-					"🎵 " +
+					"馃幍 " +
 					project.audioFile.name +
 					" (" +
 					formatSeconds(
@@ -13200,7 +13200,7 @@ function createHTML() {
 					/*
 					 * The worker returns
 					 * {success:false,
-					 * error:"..."} — show
+					 * error:"..."} 鈥� show
 					 * the real reason.
 					 */
 					let message =
@@ -13271,7 +13271,7 @@ function createHTML() {
 						AI_IMAGES_PER_PROMPT +
 						" failed: " +
 						lastError
-					: "Done — 480px landscape";
+					: "Done 鈥� 480px landscape";
 		}
 
 		if (failures === AI_IMAGES_PER_PROMPT) {
@@ -13672,7 +13672,7 @@ function createHTML() {
 
 		overlay.innerHTML =
 			'<div class="auth-box">' +
-			'<div class="auth-title">🎬 YouTube Vibe Studio</div>' +
+			'<div class="auth-title">馃幀 YouTube Vibe Studio</div>' +
 			'<div class="auth-sub">Sign in to use the studio (max ' + AUTH_MAX_USERS + ' user accounts)</div>' +
 			'<div class="auth-error" id="auth-error"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
@@ -13892,7 +13892,7 @@ function createHTML() {
 			"auth-footer-user";
 
 		span.textContent =
-			"👤 " +
+			"馃懁 " +
 			username;
 
 		const accountLink =
@@ -14551,7 +14551,7 @@ function createHTML() {
 	}
 
 	/*
-	 * The "☁️ API" button in each accordion:
+	 * The "鈽侊笍 API" button in each accordion:
 	 * uploads all of this video's elements to
 	 * POST /api/render, then polls
 	 * /api/render/<jobId> until a (background)
@@ -14719,7 +14719,7 @@ function createHTML() {
 				statusText.textContent =
 					"API: " +
 					payload.name +
-					" — waiting for a worker to render ...";
+					" 鈥� waiting for a worker to render ...";
 			}
 
 			let r;
@@ -14770,7 +14770,7 @@ function createHTML() {
 
 				if (statusText) {
 					statusText.textContent =
-						"✓ API render complete: " +
+						"鉁� API render complete: " +
 						payload.name;
 				}
 
@@ -16688,7 +16688,7 @@ function createHTML() {
 
 
 						statusText.textContent =
-							\`Rendering image \${i + 1}/\${slides.length} — \${percent}%\`;
+							\`Rendering image \${i + 1}/\${slides.length} 鈥� \${percent}%\`;
 
 
 						/*
@@ -16903,11 +16903,11 @@ function createHTML() {
 			statusText.textContent =
 				streamingToFile
 					? audioTrack
-						? "✓ MP4 saved to disk with audio!"
-						: "✓ MP4 saved to disk!"
+						? "鉁� MP4 saved to disk with audio!"
+						: "鉁� MP4 saved to disk!"
 					: audioTrack
-						? "✓ MP4 Downloaded with audio!"
-						: "✓ MP4 Downloaded!";
+						? "鉁� MP4 Downloaded with audio!"
+						: "鉁� MP4 Downloaded!";
 
 			return "done";
 
@@ -16921,7 +16921,7 @@ function createHTML() {
 
 
 			statusText.textContent =
-				"⚠ Video rendering failed.";
+				"鈿� Video rendering failed.";
 
 
 			alert(
