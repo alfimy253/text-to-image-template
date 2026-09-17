@@ -264,6 +264,16 @@ export default {
 		const VOICEOVER_MODEL =
 			"@cf/myshell-ai/melotts";
 
+		/*
+			* Fallback TTS endpoint
+			* (free), used when the
+			* Workers AI melotts
+			* engine keeps failing
+			* a chunk (3043).
+		*/
+		const FALLBACK_TTS_URL =
+			"https://tts-api.netlify.app/";
+
 		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "âš™ï¸ Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "âš™ï¸ Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional â€” URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "â–¶ Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "â–  Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "â–¶ Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("â³ Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("âœ… Delivered \\"" + (job.name || "job") + "\\" â€” waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("âŒ Job failed: " + msg + " â€” waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker runningâ€¦";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("â³ Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
 
 		async function putBlobStore(
@@ -1768,6 +1778,105 @@ export default {
 
 				}
 
+				/*
+					* Fallback engine:
+					* if the Workers AI
+					* TTS kept failing
+					* (3043), ask the
+					* free Netlify TTS
+					* for this chunk
+					* instead. Raw bytes
+					* fit the shape
+					* handler below
+					* as-is.
+				*/
+				if (
+					!result
+				) {
+					
+					try {
+						
+						const fbUrl =
+							FALLBACK_TTS_URL +
+							"?text=" +
+							encodeURIComponent(
+								chunks[ci]
+							) +
+							"&lang=" +
+							encodeURIComponent(
+								lang
+							);
+						
+						const fbResp =
+							await fetch(
+								fbUrl
+							);
+						
+						if (
+							fbResp.ok
+						) {
+							
+							const fbBytes =
+								new Uint8Array(
+									await fbResp.arrayBuffer()
+								);
+							
+							if (
+								fbBytes.length >
+									0
+							) {
+								
+								result =
+									fbBytes;
+								
+							}
+							
+							console.log(
+								"[voiceover] fallback TTS",
+								{
+									chunk:
+										ci + 1,
+									of:
+										chunks.length,
+									bytes:
+										fbBytes.length
+								}
+							);
+							
+						} else {
+							
+							console.log(
+								"[voiceover] fallback TTS rejected",
+								{
+									chunk:
+										ci + 1,
+									of:
+										chunks.length,
+									status:
+										fbResp.status
+								}
+							);
+							
+						}
+						
+					} catch (fbError) {
+						
+						console.log(
+							"[voiceover] fallback TTS error",
+							{
+								chunk:
+									ci + 1,
+								of:
+									chunks.length,
+								err:
+									String(fbError)
+							}
+						);
+						
+					}
+					
+				}
+
 				if (
 					!result
 				) {
@@ -2298,7 +2407,137 @@ export default {
 			);
 		}
 
-		}		/*
+		}
+
+		/*
+			* Free TTS proxy: a
+			* second TTS engine
+			* (the fallback for the
+			* flaky Workers AI
+			* melotts). Proxied
+			* server-side so the
+			* browser never deals
+			* with CORS.
+			*
+			* GET /tts?text=...&lang=en
+			* -> audio/mpeg
+		*/
+		if (
+			request.method === "GET" &&
+			url.pathname === "/tts"
+		) {
+			
+			const text =
+				url.searchParams.get(
+					"text"
+				);
+			
+			const lang =
+				url.searchParams.get(
+					"lang"
+				) ||
+				"en";
+			
+			if (
+				!text
+			) {
+				
+				return json(
+					{
+						success: false,
+						error:
+							"Missing text"
+					},
+					400
+				);
+				
+			}
+			
+			if (
+				text.length >
+					2000
+			) {
+				
+				return json(
+					{
+						success: false,
+						error:
+							"Text too long (max 2000 chars)"
+					},
+					400
+				);
+				
+			}
+			
+			try {
+				
+				const ttsUrl =
+					FALLBACK_TTS_URL +
+					"?text=" +
+					encodeURIComponent(
+						text
+					) +
+					"&lang=" +
+					encodeURIComponent(
+						lang
+					);
+				
+				const response =
+					await fetch(
+						ttsUrl
+					);
+				
+				if (
+					!response.ok
+				) {
+					
+					return json(
+						{
+							success: false,
+							error:
+								"TTS service error (" +
+								response.status +
+								")"
+						},
+						502
+					);
+					
+				}
+				
+				const bytes =
+					new Uint8Array(
+						await response.arrayBuffer()
+					);
+				
+				return new Response(
+					bytes,
+					{
+						headers: {
+							"Content-Type":
+								"audio/mpeg",
+							"Cache-Control":
+								"no-cache"
+						}
+					}
+				);
+				
+			} catch (proxyError) {
+				
+				return json(
+					{
+						success: false,
+						error:
+							"TTS proxy failed: " +
+							String(proxyError)
+					},
+					502
+				);
+				
+			}
+			
+		}
+
+		/*
 			* Submit a render job: ALL of
 			* the video's elements.
 		*/
