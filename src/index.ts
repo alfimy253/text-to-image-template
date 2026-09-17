@@ -1411,15 +1411,43 @@ export default {
 
 					try {
 
-						result =
-							await env.AI.run(
-								VOICEOVER_MODEL,
-								{
+						/*
+							* Exact
+							* documented
+							* schema: {
+							* prompt }
+							* required,
+							* lang
+							* optional
+							* (defaults
+							* to "en" -
+							* so it is
+							* omitted
+							* for
+							* English,
+							* as in
+							* the
+							* docs'
+							* example).
+							*/
+						const ttsOpts =
+							lang ===
+								"en"
+								? {
+									prompt:
+										chunks[ci]
+								}
+								: {
 									prompt:
 										chunks[ci],
 									lang:
 										lang
-								}
+								};
+
+						result =
+							await env.AI.run(
+								VOICEOVER_MODEL,
+								ttsOpts
 							);
 
 						lastTtsError =
