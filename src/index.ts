@@ -1303,12 +1303,14 @@ export default {
 				* overly long text (the
 				* old "internal server
 				* error"): split the
-				* script into sentence
-				* chunks of 1800 chars
-				* or less.
+				* script into small
+				* sentence chunks
+				* (500 chars or less -
+				* the upstream TTS is
+				* flaky on long input).
 				*/
 			const MAX_CHUNK =
-				1800;
+				500;
 
 			const sentences =
 				text.match(
@@ -13391,7 +13393,7 @@ function createHTML() {
 		'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">â–¼ Script (SRT)</button>' +
 		'<div class="va-script-box" id="va-script-box-' + n + '" style="display:none"></div>' +
 		'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">â¬‡ Download .srt</button>' +
-		'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled title="Turn the script into a spoken MP3 (MeloTTS voice) + apply the SRT as subtitles">ðŸŽ™ Generate Voiceover</button>' +
+		'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" title="Write a script from the topic (or use the existing one) + speak it to MP3 (MeloTTS voice) + apply the SRT as subtitles">ðŸŽ™ Generate Voiceover</button>' +
 		'</div>' +
 		'</div>' +
 		'<div class="va-right">' +
@@ -18292,7 +18294,7 @@ function createHTML() {
 
 	}
 
-					function closeVoiceoverModal() {
+							function closeVoiceoverModal() {
 
 		const modal =
 			document.getElementById(
@@ -18310,14 +18312,36 @@ function createHTML() {
 		const project =
 			videoProjects[n - 1];
 
-		if (
-			!project ||
-			!project.srt
-		) {
+		if (!project) {
 
 			return;
 
 		}
+
+		/*
+			* No script yet: the
+			* modal offers a topic
+			* input and the AI will
+			* write the script first,
+			* then speak it.
+			*/
+		const hasScript =
+			!!project.srt;
+
+		const accTopic =
+			document.getElementById(
+				"va-script-topic-" + n
+			);
+
+		const accTitle =
+			document.getElementById(
+				"va-title-" + n
+			);
+
+		const topicDefault =
+			(accTopic && accTopic.value.trim()) ||
+			(accTitle && accTitle.value.trim()) ||
+			"my video";
 
 		closeVoiceoverModal();
 
@@ -18335,7 +18359,14 @@ function createHTML() {
 		modal.innerHTML =
 			'<div class="modal-box">' +
 			'<div class="modal-title">ðŸŽ™ Voiceover (MP3) â€” Video ' + n + '</div>' +
-			'<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks the script in the selected language (one fixed voice per language). The MP3 can be uploaded as this video\\'s audio track.</div>' +
+			(hasScript
+				? '<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks the script in the selected language (one fixed voice per language). The MP3 can be uploaded as this video\\'s audio track.</div>'
+				: '<div class="va-note" style="margin-bottom:8px">No script yet â€” the AI will write one from the topic (Minutes / Speech from the accordion below), then MeloTTS speaks it as MP3.</div>') +
+			(hasScript
+				? ""
+				: '<div class="voiceover-label">Topic</div>' +
+				'<input type="text" id="voiceover-topic" maxlength="120" style="width:100%;box-sizing:border-box;margin-bottom:8px">' +
+				'<div class="va-note" style="margin-bottom:8px">Voice</div>') +
 			'<label class="quality-select voiceover-voice-label">Voice <select id="voiceover-voice">' +
 			'<option value="en" selected>English (en)</option>' +
 			'<option value="zh">Chinese (zh)</option>' +
@@ -18369,10 +18400,31 @@ function createHTML() {
 				"#voiceover-text"
 			);
 
-		area.value =
-			spokenScriptFromSrt(
-				project.srt
-			);
+		if (hasScript) {
+
+			area.value =
+				spokenScriptFromSrt(
+					project.srt
+				);
+
+		} else {
+
+			area.placeholder =
+				"No script yet â€” it will be generated from the topic.";
+
+			const topicInput =
+				modal.querySelector(
+					"#voiceover-topic"
+				);
+
+			if (topicInput) {
+
+				topicInput.value =
+					topicDefault;
+
+			}
+
+		}
 
 	}
 
@@ -18383,10 +18435,7 @@ function createHTML() {
 		const project =
 			videoProjects[n - 1];
 
-		if (
-			!project ||
-			!project.srt
-		) {
+		if (!project) {
 
 			return;
 
@@ -18407,21 +18456,197 @@ function createHTML() {
 				"voiceover-voice"
 			);
 
-		const text =
-			spokenScriptFromSrt(
-				project.srt
-			);
-
-		if (!text) {
-			return;
-		}
-
 		genBtn.disabled = true;
 
 		statusEl.textContent =
-			"Speaking your script (MeloTTS)...";
+			"Preparing...";
 
 		try {
+
+			if (!project.srt) {
+
+				/*
+					* No script yet: the
+					* AI writes one from
+					* the topic, keeps
+					* it on the video
+					* (subtitles +
+					* download unlock),
+					* then it is
+					* spoken.
+					*/
+				const topicInput =
+					document.getElementById(
+						"voiceover-topic"
+					);
+
+				const accTopic =
+					document.getElementById(
+						"va-script-topic-" + n
+					);
+
+				const accTitle =
+					document.getElementById(
+						"va-title-" + n
+					);
+
+				const topic =
+					(topicInput &&
+						topicInput.value.trim()) ||
+					(accTopic &&
+						accTopic.value.trim()) ||
+					(accTitle &&
+						accTitle.value.trim()) ||
+					"my video";
+
+				const minutesEl =
+					document.getElementById(
+						"va-script-minutes-" + n
+					);
+
+				const speedEl =
+					document.getElementById(
+						"va-script-speed-" + n
+					);
+
+				const minutes =
+					Number(
+						minutesEl
+							? minutesEl.value
+							: 1
+					);
+
+				const speed =
+					speedEl
+						? speedEl.value
+						: "medium";
+
+				statusEl.textContent =
+					"Writing your script (AI model)...";
+
+				const scriptResp =
+					await fetch(
+						"/api/script",
+						{
+							method: "POST",
+							headers: {
+								"Content-Type":
+									"application/json"
+							},
+							body:
+								JSON.stringify(
+									{
+										topic: topic,
+										minutes: minutes,
+										speed: speed
+									}
+								)
+						}
+					);
+
+				const scriptData =
+					await scriptResp
+						.json()
+						.catch(
+							() => ({})
+						);
+
+				if (
+					!scriptResp.ok ||
+					!scriptData.success ||
+					!scriptData.srt
+				) {
+
+					throw new Error(
+						(scriptData &&
+							scriptData.error) ||
+						("HTTP " +
+							scriptResp.status)
+					);
+
+				}
+
+				project.srt =
+					scriptData.srt;
+
+				const box =
+					document.getElementById(
+						"va-script-box-" + n
+					);
+
+				if (box) {
+
+					box.textContent =
+						scriptData.srt;
+
+				}
+
+				const dlBtn =
+					document.getElementById(
+						"va-script-dl-" + n
+					);
+
+				if (dlBtn) {
+
+					dlBtn.style.display =
+						"";
+
+				}
+
+				const togBtn =
+					document.getElementById(
+						"va-script-toggle-" + n
+					);
+
+				if (togBtn) {
+
+					togBtn.style.display =
+						"";
+
+				}
+
+				if (
+					typeof showScriptBox ===
+						"function"
+				) {
+
+					showScriptBox(
+						n
+					);
+
+				}
+
+				const area =
+					document.getElementById(
+						"voiceover-text"
+					);
+
+				if (area) {
+
+					area.value =
+						spokenScriptFromSrt(
+							project.srt
+						);
+
+				}
+
+			}
+
+			const text =
+				spokenScriptFromSrt(
+					project.srt
+				);
+
+			if (!text) {
+
+				throw new Error(
+					"No script text to speak"
+				);
+
+			}
+
+			statusEl.textContent =
+				"Speaking your script (MeloTTS)...";
 
 			const response =
 				await fetch(
