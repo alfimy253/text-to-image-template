@@ -220,8 +220,8 @@ export default {
 		// GET  /api/worker/poll       worker claims a job
 		// POST /api/worker/deliver    worker uploads the MP4
 		// POST /api/worker/failed     worker reports failure
-		// POST /api/script            AI script (SRT) via a
-		//                             FREE INSTRUCT model
+		// POST /api/script            AI script (SRT) via an
+		//                             INSTRUCT model
 		// GET/POST /api/config/workers  up to 3 worker URLs
 		// GET  /config/uvxyz          settings page
 		// (password: CONFIG_PASSWORD)
@@ -239,11 +239,16 @@ export default {
 		const MAX_RENDER_JOBS =
 			10;
 
-		// Free INSTRUCT model for
-		// SRT script generation
-		// (Workers AI free tier).
+		// INSTRUCT model for SRT
+		// script generation. The old
+		// FREE llama-3.1-8b-instruct
+		// was deprecated by
+		// Cloudflare on 2026-05-30;
+		// this fp8 build is the
+		// cheapest instruct model
+		// in the current catalog.
 		const SCRIPT_MODEL =
-			"@cf/meta/llama-3.1-8b-instruct";
+			"@cf/meta/llama-3.1-8b-instruct-fp8";
 
 		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional 鈥� URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "鈻� Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "鈻� Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "鈻� Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("鈴� Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("鉁� Delivered \\"" + (job.name || "job") + "\\" 鈥� waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("鉂� Job failed: " + msg + " 鈥� waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker running鈥�";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("鈴� Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
 
@@ -482,8 +487,8 @@ export default {
 
 		/*
 			* AI script (SRT) generation.
-			* Free INSTRUCT model on
-			* Workers AI. POST the topic
+			* INSTRUCT model on Workers
+			* AI. POST the topic
 			+ minutes (1-6) + speech
 			* speed; returns the timed
 			* SRT text.
@@ -591,6 +596,8 @@ export default {
 				SPEED_WORDS[speed] * minutes;
 
 			const userPrompt =
+				"You are a professional video script writer. Answer with ONLY valid SRT subtitle text, nothing else. "
+				+
 				"Write a YouTube narration script as SRT subtitles about: "
 					+ topic +
 					". The video is exactly " + minutes +
@@ -605,18 +612,8 @@ export default {
 					await env.AI.run(
 						SCRIPT_MODEL,
 						{
-							messages: [
-								{
-									role: "system",
-									content:
-										"You are a professional video script writer. You answer with ONLY valid SRT subtitle text, nothing else."
-								},
-								{
-									role: "user",
-									content:
-									userPrompt
-								}
-							],
+							prompt:
+							userPrompt,
 							max_tokens:
 								2048,
 							temperature:
@@ -627,6 +624,12 @@ export default {
 				let srt =
 					"";
 
+				/*
+					* Accept every response
+					* shape: chat array,
+					* { response } object,
+					* or a plain string.
+				*/
 				if (
 					result &&
 					result[0] &&
@@ -638,6 +641,27 @@ export default {
 							result[0].message.content ||
 							""
 						).trim();
+
+				}
+
+				if (
+					srt === "" &&
+					result &&
+					typeof result.response === "string"
+				) {
+
+					srt =
+						result.response.trim();
+
+				}
+
+				if (
+					srt === "" &&
+					typeof result === "string"
+				) {
+
+					srt =
+						result.trim();
 
 				}
 
@@ -11357,7 +11381,7 @@ function createHTML() {
 	 *                              video's elements; background-worker
 	 *                              mode for /config/uvxyz)
 	 *   MODULE 8: script-srt      (AI script generation -> SRT with
-	 *                              timestamps; free INSTRUCT model;
+	 *                              timestamps; INSTRUCT model;
 	 *                              minutes 1-6 + speech speed; the
 	 *                              gallery + SRT box are scroll areas
 	 *                              with wide arrow toggle buttons)
@@ -11709,7 +11733,7 @@ function createHTML() {
 		'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
 		'</div>' +
 		'<div class="va-section">' +
-		'<div class="va-section-title">Script (SRT) 鈥� free AI model</div>' +
+		'<div class="va-section-title">Script (SRT) 鈥� AI model</div>' +
 		'<input type="text" id="va-script-topic-' + n + '" maxlength="120" placeholder="Topic (uses the video title if empty)">' +
 		'<div class="va-row">' +
 		'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
@@ -16089,8 +16113,11 @@ function createHTML() {
 	// =========================================================
 	// MODULE 8: script-srt
 	// (AI script generation -> SRT with timestamps. The server
-	//  route /api/script uses a FREE INSTRUCT model on Workers
-	//  AI (SCRIPT_MODEL). Minutes 1-6 + speech speed:
+	//  route /api/script uses an INSTRUCT model on Workers AI,
+	//  set in the SCRIPT_MODEL constant - the old free
+	//  llama-3.1-8b-instruct was deprecated by Cloudflare on
+	//  2026-05-30, so it is now the cheap llama-3.1-8b-instruct-
+	//  fp8 instruct model. Minutes 1-6 + speech speed:
 	//  super fast / fast / medium / slow.)
 	// =========================================================
 
@@ -16256,7 +16283,7 @@ function createHTML() {
 		btn.disabled = true;
 
 		statusEl.textContent =
-			"Writing your script (free AI model)...";
+			"Writing your script (AI model)...";
 
 		try {
 
@@ -16328,7 +16355,7 @@ function createHTML() {
 				speed +
 				" speech, " +
 				minutes +
-				" min, free model)";
+				")";
 
 		}
 		catch (err) {
