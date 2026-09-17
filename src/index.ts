@@ -1196,7 +1196,7 @@ export default {
 					() => ({})
 				);
 
-			const text =
+			let text =
 				String(
 					body.text ||
 						""
@@ -1207,6 +1207,40 @@ export default {
 					/\s+/g,
 					" "
 				).trim().slice(0, 8000);
+
+			/*
+				* Normalize tricky
+				* typography before
+				* speaking: the
+				* upstream TTS has
+				* been reported to
+				* fail (3043) on
+				* unusual characters,
+				* and model output
+				* loves em dashes,
+				* ellipses and
+				* curly quotes.
+				*/
+			text =
+				text.replace(
+					/\u2014|\u2013/g,
+					"-"
+				).replace(
+					/\u2026/g,
+					"..."
+				).replace(
+					/[\u2018\u2019]/g,
+					"'"
+				).replace(
+					/[\u201C\u201D]/g,
+					'"'
+				).replace(
+					/\u00A0/g,
+					" "
+				).replace(
+					/\s+/g,
+					" "
+				).trim();
 
 			const lang =
 				String(
@@ -1412,42 +1446,28 @@ export default {
 					try {
 
 						/*
-							* Exact
-							* documented
-							* schema: {
-							* prompt }
-							* required,
-							* lang
-							* optional
-							* (defaults
-							* to "en" -
-							* so it is
-							* omitted
-							* for
-							* English,
-							* as in
+							* Exactly
 							* the
-							* docs'
-							* example).
+							* documented
+							* sample
+							* call:
+							* { prompt,
+							* lang }
+							* (lang
+							* always
+							* sent,
+							* default
+							* "en").
 							*/
-						const ttsOpts =
-							lang ===
-								"en"
-								? {
-									prompt:
-										chunks[ci]
-								}
-								: {
+						result =
+							await env.AI.run(
+								VOICEOVER_MODEL,
+								{
 									prompt:
 										chunks[ci],
 									lang:
 										lang
-								};
-
-						result =
-							await env.AI.run(
-								VOICEOVER_MODEL,
-								ttsOpts
+								}
 							);
 
 						lastTtsError =
