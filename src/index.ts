@@ -609,6 +609,22 @@ export default {
 
 			}
 
+			console.log(
+				"[script] start",
+				{
+					topic:
+						topic.slice(
+						0,
+						80),
+					minutes:
+						minutes,
+					speed:
+						speed,
+					model:
+						SCRIPT_MODEL
+				}
+			);
+
 			const endStamp =
 				"00:" +
 					String(minutes).padStart(2, "0") +
@@ -1029,6 +1045,16 @@ export default {
 								" Try again and fix that exact problem."
 							: "");
 
+					console.log(
+						"[script] attempt",
+						{
+							attempt:
+								attempt,
+							promptChars:
+								prompt.length
+						}
+					);
+
 					const result =
 						await env.AI.run(
 							SCRIPT_MODEL,
@@ -1108,6 +1134,17 @@ export default {
 						check.ok
 					) {
 
+						console.log(
+							"[script] ok",
+							{
+								attempt:
+									attempt,
+								srtChars:
+									check
+									.srt.length
+							}
+						);
+
 						return json(
 							{
 								success:
@@ -1126,6 +1163,17 @@ export default {
 						check
 							.error;
 
+					console.log(
+						"[script] invalid",
+						{
+							attempt:
+								attempt,
+							reason:
+								lastError
+						}
+					);
+
+
 				}
 
 				return json(
@@ -1142,6 +1190,15 @@ export default {
 			}
 
 			catch (error) {
+
+				console.log(
+					"[script] error",
+					{
+						error:
+							error.message ||
+							String(error)
+					}
+				);
 
 				return json(
 					{
@@ -1206,7 +1263,65 @@ export default {
 				).replace(
 					/\s+/g,
 					" "
-				).trim().slice(0, 8000);
+				).trim();
+
+			/*
+				* 8000-char cap -
+				* but never in the
+				* middle of an emoji
+				* (surrogate pair):
+				* a lone surrogate in
+				* the prompt makes the
+				* upstream TTS crash
+				* with 3043.
+				*/
+			if (
+				text.length >
+					8000
+			) {
+
+				let cap =
+					8000;
+
+				if (
+					cap <
+						text.length
+				) {
+
+					const prev =
+						text.charCodeAt(
+							cap - 1
+						);
+
+					const next =
+						text.charCodeAt(
+							cap
+						);
+
+					if (
+						prev >=
+							0xD800 &&
+						prev <=
+							0xDBFF &&
+						next >=
+							0xDC00 &&
+						next <=
+							0xDFFF
+					) {
+
+						cap--;
+
+					}
+
+				}
+
+				text =
+					text.slice(
+						0,
+						cap
+					);
+
+			}
 
 			/*
 				* Normalize tricky
@@ -1238,6 +1353,12 @@ export default {
 					/\u00A0/g,
 					" "
 				).replace(
+					/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g,
+					""
+				).replace(
+					/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+					""
+				).replace(
 					/\s+/g,
 					" "
 				).trim();
@@ -1255,6 +1376,10 @@ export default {
 				!env.AI
 			) {
 
+				console.log(
+					"[voiceover] rejected: no AI binding (503)"
+				);
+
 				return json(
 					{
 						success: false,
@@ -1269,6 +1394,10 @@ export default {
 			if (
 				!text
 			) {
+
+				console.log(
+					"[voiceover] rejected: empty text (400)"
+				);
 
 				return json(
 					{
@@ -1286,6 +1415,14 @@ export default {
 					lang
 				) === -1
 			) {
+
+				console.log(
+					"[voiceover] rejected: unknown lang (400)",
+					{
+						lang:
+							lang
+					}
+				);
 
 				return json(
 					{
@@ -1309,6 +1446,16 @@ export default {
 				* the upstream TTS is
 				* flaky on long input).
 				*/
+			console.log(
+				"[voiceover] start",
+				{
+					chars:
+						text.length,
+					lang:
+						lang
+				}
+			);
+
 			const MAX_CHUNK =
 				500;
 
@@ -1372,20 +1519,89 @@ export default {
 
 					}
 
-					for (
-						let off = 0;
-						off < s.length;
-						off +=
-							MAX_CHUNK
+					let off =
+						0;
+
+					while (
+						off < s.length
 					) {
 
-						chunks.push(
+						let end =
+							off +
+							MAX_CHUNK;
+
+						if (
+							end >
+								s.length
+						) {
+
+							end =
+								s.length;
+
+						}
+
+						/*
+							* Never cut an
+							* emoji
+							* (surrogate
+							* pair) in
+							* half: a
+							* lone
+							* surrogate
+							* crashes
+							* the
+							* upstream
+							* TTS
+							* (3043).
+							*/
+						if (
+							end <
+								s.length
+						) {
+
+							const prev =
+								s.charCodeAt(
+									end - 1
+								);
+
+							const next =
+								s.charCodeAt(
+									end
+								);
+
+							if (
+								prev >=
+									0xD800 &&
+								prev <=
+									0xDBFF &&
+								next >=
+									0xDC00 &&
+								next <=
+									0xDFFF
+							) {
+
+								end--;
+
+							}
+
+						}
+
+						const part =
 							s.slice(
 								off,
-								off +
-								MAX_CHUNK
-							).trim()
-						);
+								end
+							).trim();
+
+						if (part) {
+
+							chunks.push(
+								part
+							);
+
+						}
+
+						off =
+							end;
 
 					}
 
@@ -1407,6 +1623,19 @@ export default {
 				);
 
 			}
+
+			console.log(
+				"[voiceover] chunks",
+				{
+					count:
+						chunks.length,
+					sizes:
+						chunks.map(
+						(c) =>
+						c.length
+						)
+				}
+			);
 
 			/*
 				* One TTS request per
@@ -1461,6 +1690,24 @@ export default {
 							* default
 							* "en").
 							*/
+						console.log(
+							"[voiceover] tts call",
+							{
+								chunk:
+									ci + 1,
+								of:
+									chunks.length,
+								attempt:
+									attempt,
+								chars:
+									chunks[ci].length,
+								preview:
+									chunks[ci].slice(
+									0,
+									60)
+							}
+						);
+
 						result =
 							await env.AI.run(
 								VOICEOVER_MODEL,
@@ -1487,6 +1734,20 @@ export default {
 						result =
 							null;
 
+						console.log(
+							"[voiceover] tts error",
+							{
+								chunk:
+									ci + 1,
+								of:
+									chunks.length,
+								attempt:
+									attempt,
+								err:
+									lastTtsError
+							}
+						);
+
 						if (
 							attempt <
 								3
@@ -1510,6 +1771,18 @@ export default {
 				if (
 					!result
 				) {
+
+					console.log(
+						"[voiceover] FAILED: TTS retries exhausted",
+						{
+							chunk:
+								ci + 1,
+							of:
+								chunks.length,
+							err:
+								lastTtsError
+						}
+					);
 
 					return json(
 						{
@@ -1637,6 +1910,16 @@ export default {
 					!piece ||
 					piece.length === 0
 				) {
+
+					console.log(
+						"[voiceover] FAILED: no audio in TTS output",
+						{
+							chunk:
+								ci + 1,
+							of:
+								chunks.length
+						}
+					);
 
 					return json(
 						{
@@ -1965,6 +2248,18 @@ export default {
 
 			}
 
+			console.log(
+				"[voiceover] done",
+				{
+					chunks:
+						chunks.length,
+					format:
+						audioType,
+					bytes:
+						outBytes.length
+				}
+			);
+
 			return new Response(
 				outBytes,
 				{
@@ -1980,6 +2275,16 @@ export default {
 			);
 		}
 		catch (error) {
+
+			console.log(
+				"[voiceover] error",
+				{
+					error:
+						(error &&
+						error.message) ||
+						String(error)
+				}
+			);
 
 			return json(
 				{
