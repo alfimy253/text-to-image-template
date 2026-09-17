@@ -2,9 +2,9 @@
 const MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0";
 
 const prompts = [
-	"Ghibli-inspired hand-painted anime scene of a young entrepreneur standing inside a tiny neighborhood shop before opening, warm morning sunlight entering through windows, shelves of products and simple checkout counter, gentle storytelling about what a business is, expressive character, hand-painted backgrounds, nostalgic cel animation texture, warm colors, a completely text-free image, no text, no words, no letters, no writing, no kanji, no Japanese characters, no subtitles, no signs, no logos, no watermarks, 16:9",
+	"Ghibli-inspired hand-painted anime scene of a young entrepreneur standing inside a tiny neighborhood shop before opening, warm morning sunlight entering through windows, shelves of products and simple checkout counter, gentle storytelling about what a business is, expressive character, hand-painted backgrounds, nostalgic cel animation texture, warm colors, a completely text-free image, no text, no words, no letters, no writing, no kanji, no Chinese characters, no Japanese characters, no subtitles, no signs, no logos, no watermarks, 16:9",
 
-	"1990s nostalgic Studio Ghibli-inspired anime scene of a small business owner handing a product to a smiling customer across a wooden counter, another customer waiting behind, warm human interaction showing exchange and trust, detailed hand-painted shop interior, soft nostalgic lighting, expressive faces, a completely text-free image, no text, no words, no letters, no writing, no kanji, no Japanese characters, no subtitles, no signs, no logos, no watermarks, 16:9",
+	"1990s nostalgic Studio Ghibli-inspired anime scene of a small business owner handing a product to a smiling customer across a wooden counter, another customer waiting behind, warm human interaction showing exchange and trust, detailed hand-painted shop interior, soft nostalgic lighting, expressive faces, a completely text-free image, no text, no words, no letters, no writing, no kanji, no Chinese characters, no Japanese characters, no subtitles, no signs, no logos, no watermarks, 16:9",
 ];
 
 export default {
@@ -158,7 +158,7 @@ export default {
 						{
 							prompt:
 								prompt +
-								", 16:9 landscape"
+								", 16:9 landscape, a completely text-free image, no text, no words, no letters, no writing, no kanji, no Chinese characters, no Japanese characters, no subtitles, no signs, no logos, no watermarks"
 						}
 					);
 
@@ -222,6 +222,7 @@ export default {
 		// POST /api/worker/failed     worker reports failure
 		// POST /api/script            AI script (SRT) via an
 		//                             INSTRUCT model
+		// POST /api/voiceover         MeloTTS voice -> MP3
 		// GET/POST /api/config/workers  up to 3 worker URLs
 		// GET  /config/uvxyz          settings page
 		// (password: CONFIG_PASSWORD)
@@ -249,6 +250,12 @@ export default {
 		// in the current catalog.
 		const SCRIPT_MODEL =
 			"@cf/meta/llama-3.1-8b-instruct-fp8";
+
+		// MeloTTS (MyShell) -
+		// the TTS model for
+		// voiceover MP3s.
+		const VOICEOVER_MODEL =
+			"@cf/myshell-ai/melotts";
 
 		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional 鈥� URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "鈻� Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "鈻� Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "鈻� Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("鈴� Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("鉁� Delivered \\"" + (job.name || "job") + "\\" 鈥� waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("鉂� Job failed: " + msg + " 鈥� waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker running鈥�";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("鈴� Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
 
@@ -713,6 +720,219 @@ export default {
 						error:
 							error.message ||
 							"Script generation failed"
+					},
+					500
+				);
+
+			}
+
+		}
+
+		/*
+			* Voiceover (MeloTTS):
+			* speak the script text
+			* and return the MP3.
+		*/
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/voiceover"
+		) {
+
+			const body =
+				await request.json().catch(
+					() => ({})
+				);
+
+			const text =
+				String(
+					body.text ||
+					""
+				).trim().slice(0, 4000);
+
+			const lang =
+				String(
+					body.lang ||
+					"en"
+				).toLowerCase().trim();
+
+			const VOICE_LANGS =
+				["en", "zh", "es", "fr", "hi", "it", "ja", "ko"];
+
+			if (
+				!env.AI
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"AI binding not configured"
+					},
+					503
+				);
+
+			}
+
+			if (
+				!text
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"No script text to speak"
+					},
+					400
+				);
+
+			}
+
+			if (
+				VOICE_LANGS.indexOf(lang) === -1
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Unknown voice language"
+					},
+					400
+				);
+
+			}
+
+			try {
+
+				const result =
+					await env.AI.run(
+						VOICEOVER_MODEL,
+						{
+							prompt:
+							text,
+							lang:
+							lang
+						}
+					);
+
+				/*
+					* Accept every output
+					* shape: { audio: base64 },
+					* a base64 string, an
+					* ArrayBuffer, or raw
+					* bytes.
+				*/
+				let mp3 =
+					null;
+
+				if (
+					result &&
+					typeof result.audio === "string"
+				) {
+
+					const bin =
+						atob(result.audio);
+
+					mp3 =
+						new Uint8Array(bin.length);
+
+					for (
+						let i = 0;
+						i < bin.length;
+						i++
+					) {
+
+						mp3[i] =
+							bin.charCodeAt(i);
+
+					}
+
+				}
+
+				if (
+					!mp3 &&
+					typeof result === "string"
+				) {
+
+					const bin =
+						atob(result);
+
+					mp3 =
+						new Uint8Array(bin.length);
+
+					for (
+						let i = 0;
+						i < bin.length;
+						i++
+					) {
+
+						mp3[i] =
+							bin.charCodeAt(i);
+
+					}
+
+				}
+
+				if (
+					!mp3 &&
+					result instanceof ArrayBuffer
+				) {
+
+					mp3 =
+						new Uint8Array(result);
+
+				}
+
+				if (
+					!mp3 &&
+					result &&
+					typeof result.byteLength === "number"
+				) {
+
+					mp3 =
+						result instanceof Uint8Array
+						? result
+						: new Uint8Array(result);
+
+				}
+
+				if (!mp3) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Unexpected TTS output"
+						},
+						500
+					);
+
+				}
+
+				return new Response(
+					mp3,
+					{
+						status: 200,
+						headers: {
+							"Content-Type":
+								"audio/mpeg",
+							"Content-Disposition":
+								"attachment; filename=voiceover.mp3"
+						}
+					}
+				);
+
+			}
+
+			catch (error) {
+
+				return json(
+					{
+						success: false,
+						error:
+							error.message ||
+							"Voiceover generation failed"
 					},
 					500
 				);
@@ -3658,10 +3878,10 @@ function createHTML() {
 				#ffffff;
 
 			font-size:
-				0.72rem;
+				0.75rem;
 
 			padding:
-				3px 9px;
+				6px 10px;
 
 			cursor:
 				pointer;
@@ -3700,10 +3920,13 @@ function createHTML() {
 				var(--text);
 
 			font-size:
-				18px;
+				0.75rem;
 
 			line-height:
 				1;
+
+			padding:
+				6px 10px;
 
 			cursor:
 				pointer;
@@ -4214,7 +4437,7 @@ function createHTML() {
 				10px;
 
 			font-size:
-				0.8rem;
+				0.75rem;
 
 			cursor:
 				pointer;
@@ -4961,6 +5184,200 @@ function createHTML() {
 
 
 		.auth-logout:hover {
+
+			background:
+				#4b5563;
+		}
+
+
+		/* =====================================================
+		 * BUTTON STANDARDIZATION (accordion)
+		 * All buttons inside a Video accordion share the
+		 * same SMALL size as the Fullscreen button
+		 * (.upload-btn.small: 6px 10px / 0.75rem).
+		 * ===================================================== */
+
+		.va-body .upload-btn,
+		.va-body .upload-btn.small {
+
+			padding:
+				6px 10px;
+
+			font-size:
+				0.75rem;
+
+			font-weight:
+				bold;
+
+			border-radius:
+				6px;
+		}
+
+
+		/*
+		 * 4px margin on top + bottom of
+		 * every button inside the video
+		 * accordion.
+		 */
+
+		.va-body button {
+
+			margin-top:
+				4px;
+
+			margin-bottom:
+				4px;
+		}
+
+
+		/* =====================================================
+		 * VOICEOVER MODAL (MeloTTS -> MP3 + subtitles)
+		 * ===================================================== */
+
+		.voiceover-voice-label {
+
+			display:
+				block;
+
+			margin-bottom:
+				10px;
+		}
+
+
+		.voiceover-voice-label select {
+
+			margin-left:
+				8px;
+		}
+
+
+		.voiceover-label {
+
+			font-size:
+				0.8rem;
+
+			color:
+				#9ca3af;
+
+			margin-bottom:
+				4px;
+		}
+
+
+		.voiceover-textarea {
+
+			width:
+				100%;
+
+			box-sizing:
+				border-box;
+
+			background:
+				#0b0e14;
+
+			color:
+				#d1d5db;
+
+			border:
+				1px solid
+				#374151;
+
+			border-radius:
+				6px;
+
+			padding:
+				8px;
+
+			font-family:
+				"Courier New",
+				monospace;
+
+			font-size:
+				0.78rem;
+
+			line-height:
+				1.4;
+
+			resize:
+				vertical;
+
+			margin-bottom:
+				10px;
+		}
+
+
+		.voiceover-textarea:disabled {
+
+			opacity:
+				0.85;
+		}
+
+
+		.voiceover-actions {
+
+			display:
+				flex;
+
+			gap:
+				8px;
+
+			flex-wrap:
+				wrap;
+
+			margin-bottom:
+				8px;
+		}
+
+
+		/*
+		 * The card remove button is
+		 * absolutely positioned, so the
+		 * 4px button margins would
+		 * shift it: keep it in place.
+		 */
+		.va-body .va-card-remove {
+
+			margin-top:
+				0;
+
+			margin-bottom:
+				0;
+		}
+
+		/*
+		 * Caption row x button:
+		 * same small look as the
+		 * other buttons.
+		 */
+		.va-body .caption-remove {
+
+			background:
+				#374151;
+
+			border:
+				none;
+
+			border-radius:
+				6px;
+
+			color:
+				#d1d5db;
+
+			font-size:
+				0.75rem;
+
+			line-height:
+				1;
+
+			padding:
+				6px 10px;
+
+			cursor:
+				pointer;
+		}
+
+
+		.va-body .caption-remove:hover {
 
 			background:
 				#4b5563;
@@ -5955,6 +6372,21 @@ function createHTML() {
 		"'Bookman Old Style', 'Bookman', 'URW Bookman L', Georgia, serif";
 
 
+	/*
+	 * Subtitles (SRT script) are
+	 * drawn below the caption, at
+	 * 1/3 of the height up from the
+	 * bottom.
+	 */
+
+	const SUBTITLE_FONT_SIZE =
+		22;
+
+
+	const SUBTITLE_FONT_STACK =
+		"'Bookman Old Style', 'Bookman', 'URW Bookman L', Georgia, serif";
+
+
 	const captionRowsEl =
 		document.getElementById(
 			"caption-rows"
@@ -6425,6 +6857,171 @@ function createHTML() {
 
 		context.fillStyle =
 			"#000000";
+
+
+		context.fillText(
+			active.text,
+			x,
+			y
+		);
+
+
+		context.restore();
+
+	}
+
+
+	/*
+	 * Draws the active SRT subtitle
+	 * onto the current frame.
+	 *
+	 * Position: centred horizontally,
+	 * at 1/3 of the frame height measured
+	 * from the bottom (below the 4/7
+	 * caption).
+	 *
+	 * Style: white 22px text on a
+	 * translucent black box.
+	 */
+
+	function drawSubtitles(
+		context,
+		subs,
+		timestampMs,
+		width,
+		height
+	) {
+
+		if (!subs.length) {
+
+			return;
+
+		}
+
+
+		let active =
+			null;
+
+
+		for (
+			const sub of
+				subs
+		) {
+
+			if (
+				timestampMs >=
+					sub.startMs &&
+				timestampMs <
+					sub.endMs
+			) {
+
+				active =
+					sub;
+
+				break;
+
+			}
+
+		}
+
+
+		if (!active) {
+
+			return;
+
+		}
+
+
+		context.save();
+
+
+		context.font =
+			SUBTITLE_FONT_SIZE +
+			"px " +
+			SUBTITLE_FONT_STACK;
+
+
+		context.textAlign =
+			"center";
+
+
+		context.textBaseline =
+			"middle";
+
+
+		/*
+		 * Centre of the text: middle of
+		 * the frame horizontally, 1/3 of
+		 * the height up from the bottom.
+		 */
+
+		const x =
+			width / 2;
+
+
+		const y =
+			height -
+			height / 3;
+
+
+		const textWidth =
+			context.measureText(
+				active.text
+			).width;
+
+
+		const padX =
+			10;
+
+
+		const padY =
+			6;
+
+
+		const boxWidth =
+			textWidth +
+			padX * 2;
+
+
+		const boxHeight =
+			SUBTITLE_FONT_SIZE +
+			padY * 2 +
+			4;
+
+
+		const boxX =
+			x - boxWidth / 2;
+
+
+		const boxY =
+			y - boxHeight / 2;
+
+
+		/*
+		 * Translucent black box behind
+		 * the white text.
+		 */
+
+		context.fillStyle =
+			"rgba(0, 0, 0, 0.55)";
+
+
+		context.beginPath();
+
+
+		context.rect(
+			boxX,
+			boxY,
+			boxWidth,
+			boxHeight
+		);
+
+
+		context.fill();
+
+
+		context.fillStyle =
+			"#ffffff";
 
 
 		context.fillText(
@@ -11744,6 +12341,7 @@ function createHTML() {
 		'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">鈻� Script (SRT)</button>' +
 		'<div class="va-script-box" id="va-script-box-' + n + '" style="display:none"></div>' +
 		'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">猬� Download .srt</button>' +
+		'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled title="Turn the script into a spoken MP3 (MeloTTS voice) + apply the SRT as subtitles">馃帣 Generate Voiceover</button>' +
 		'</div>' +
 		'</div>' +
 		'<div class="va-right">' +
@@ -12364,7 +12962,7 @@ function createHTML() {
 			"va-card-handle";
 
 		handle.textContent =
-			"\\u22EE";
+			"\\u283F";
 
 		handle.title =
 			"Drag to reorder";
@@ -13345,6 +13943,9 @@ function createHTML() {
 							""
 						) +
 						".mp4",
+					subtitles:
+						project.subtitles ||
+						[],
 				};
 
 				result =
@@ -14998,7 +15599,10 @@ function createHTML() {
 						"va-quality-" + n
 					).value,
 				captions:
-					captions
+					captions,
+				subtitles:
+					project.subtitles ||
+					[]
 			},
 			assets:
 				project.assets,
@@ -15472,6 +16076,9 @@ function createHTML() {
 						""
 					) +
 					".mp4",
+				subtitles:
+					project.subtitles ||
+					[],
 			};
 
 			result =
@@ -15941,7 +16548,11 @@ function createHTML() {
 						/\\s+/g,
 						""
 					) +
-					".mp4"
+					".mp4",
+				subtitles:
+					(job.project &&
+						job.project.subtitles) ||
+					[]
 			};
 
 			const result =
@@ -16337,6 +16948,15 @@ function createHTML() {
 
 			box.textContent = data.srt;
 
+			const voiceBtn =
+				document.getElementById(
+					"va-voice-btn-" + n
+				);
+
+			if (voiceBtn) {
+				voiceBtn.disabled = false;
+			}
+
 			showScriptBox(n);
 
 			const lineCount =
@@ -16426,6 +17046,501 @@ function createHTML() {
 		document.body.removeChild(a);
 
 		URL.revokeObjectURL(url);
+
+	}
+
+	// =========================================================
+	// MODULE 9: voiceover + subtitles
+	// (voice: MeloTTS via /api/voiceover -> MP3; the SRT
+	//  script becomes spoken audio + burned-in subtitles
+	//  drawn BELOW the caption, at 1/3 of the height up
+	//  from the bottom)
+	// =========================================================
+
+	function srtTimeToMs(str) {
+
+		const parts =
+			String(str).trim().split(":");
+
+		if (parts.length !== 3) {
+			return 0;
+		}
+
+		const hours =
+			Number(parts[0]) || 0;
+
+		const minutes =
+			Number(parts[1]) || 0;
+
+		const secParts =
+			parts[2].split(",");
+
+		const seconds =
+			Number(secParts[0]) || 0;
+
+		const millis =
+			Number(secParts[1] || 0) || 0;
+
+		return (
+			((hours * 60 + minutes) * 60 + seconds) *
+			1000 +
+			millis
+		);
+
+	}
+
+	/*
+	 * Parses SRT text into cues:
+	 * [{startMs, endMs, text}]
+	 */
+	function parseSrtCues(srt) {
+
+		const cues =
+			[];
+
+		const lines =
+			String(srt).split(
+				/\\r?\\n/
+			);
+
+		let current =
+			null;
+
+		for (
+			let i = 0;
+			i < lines.length;
+			i++
+		) {
+
+			const line =
+				lines[i].trim();
+
+			if (!line) {
+				continue;
+			}
+
+			if (/^\\d+$/.test(line)) {
+
+				current = {
+					startMs: 0,
+					endMs: 0,
+					text: ""
+				};
+
+				cues.push(current);
+
+				continue;
+
+			}
+
+			if (
+				line.indexOf(
+					"-->"
+				) !== -1
+			) {
+
+				if (!current) {
+
+					current = {
+						startMs: 0,
+						endMs: 0,
+						text: ""
+					};
+
+					cues.push(current);
+
+				}
+
+				const parts =
+					line.split(
+						"-->"
+					);
+
+				current.startMs =
+					srtTimeToMs(
+						parts[0]
+					);
+
+				current.endMs =
+					srtTimeToMs(
+						parts[1]
+					);
+
+				continue;
+
+			}
+
+			if (current) {
+
+				current.text =
+					current.text
+						? current.text +
+							" " +
+							line
+						: line;
+
+			}
+
+		}
+
+		return cues.filter(
+			(cue) =>
+				cue.text &&
+				cue.endMs >
+					cue.startMs
+		);
+
+	}
+
+	/*
+	 * The spoken script: the SRT with cue
+	 * numbers + timestamps removed (only
+	 * the words are spoken).
+	 */
+	function spokenScriptFromSrt(srt) {
+
+		const words =
+			[];
+
+		const lines =
+			String(srt).split(
+				/\\r?\\n/
+			);
+
+		for (
+			let i = 0;
+			i < lines.length;
+			i++
+		) {
+
+			const line =
+				lines[i].trim();
+
+			if (!line) {
+				continue;
+			}
+
+			if (/^\\d+$/.test(line)) {
+				continue;
+			}
+
+			if (
+				line.indexOf(
+					"-->"
+				) !== -1
+			) {
+
+				continue;
+
+			}
+
+			words.push(line);
+
+		}
+
+		return words.join(" ");
+
+	}
+
+	function closeVoiceoverModal() {
+
+		const modal =
+			document.getElementById(
+				"voiceover-modal"
+			);
+
+		if (modal) {
+			modal.remove();
+		}
+
+	}
+
+	function openVoiceoverModal(n) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (
+			!project ||
+			!project.srt
+		) {
+
+			return;
+
+		}
+
+		closeVoiceoverModal();
+
+		const modal =
+			document.createElement(
+				"div"
+			);
+
+		modal.id =
+			"voiceover-modal";
+
+		modal.className =
+			"modal-overlay";
+
+		modal.innerHTML =
+			'<div class="modal-box">' +
+			'<div class="modal-title">馃帣 Voiceover (MP3) 鈥� Video ' + n + '</div>' +
+			'<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks the script. The MP3 can be uploaded as this video\\'s audio track.</div>' +
+			'<label class="quality-select voiceover-voice-label">Voice <select id="voiceover-voice">' +
+			'<option value="en" selected>English (en)</option>' +
+			'<option value="zh">Chinese (zh)</option>' +
+			'<option value="es">Spanish (es)</option>' +
+			'<option value="fr">French (fr)</option>' +
+			'<option value="hi">Hindi (hi)</option>' +
+			'<option value="it">Italian (it)</option>' +
+			'<option value="ja">Japanese (ja)</option>' +
+			'<option value="ko">Korean (ko)</option>' +
+			'</select></label>' +
+			'<div class="voiceover-label">Script (spoken into the MP3)</div>' +
+			'<textarea id="voiceover-text" class="voiceover-textarea" rows="8" readonly disabled></textarea>' +
+			'<div class="voiceover-actions">' +
+			'<button type="button" class="upload-btn small" id="voiceover-gen" onclick="generateVoiceover(' + n + ')">馃帶 Generate Voiceover (MP3)</button>' +
+			'<button type="button" class="upload-btn small" onclick="applySubtitles(' + n + ')">馃摑 Apply Subtitles to Video</button>' +
+			'</div>' +
+			'<span class="va-note" id="voiceover-status"></span>' +
+			'<button type="button" class="upload-btn small" onclick="closeVoiceoverModal()">鉁� Close</button>' +
+			'</div>';
+
+		document.body.appendChild(
+			modal
+		);
+
+		const area =
+			modal.querySelector(
+				"#voiceover-text"
+			);
+
+		area.value =
+			spokenScriptFromSrt(
+				project.srt
+			);
+
+	}
+
+	async function generateVoiceover(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (
+			!project ||
+			!project.srt
+		) {
+
+			return;
+
+		}
+
+		const genBtn =
+			document.getElementById(
+				"voiceover-gen"
+			);
+
+		const statusEl =
+			document.getElementById(
+				"voiceover-status"
+			);
+
+		const voiceSel =
+			document.getElementById(
+				"voiceover-voice"
+			);
+
+		const text =
+			spokenScriptFromSrt(
+				project.srt
+			);
+
+		if (!text) {
+			return;
+		}
+
+		genBtn.disabled = true;
+
+		statusEl.textContent =
+			"Speaking your script (MeloTTS)...";
+
+		try {
+
+			const response =
+				await fetch(
+					"/api/voiceover",
+					{
+						method: "POST",
+						headers: {
+							"Content-Type":
+								"application/json"
+						},
+						body:
+							JSON.stringify(
+								{
+									text: text,
+									lang:
+										voiceSel
+											? voiceSel.value
+											: "en"
+								}
+							)
+					}
+				);
+
+			if (
+				!response.ok
+			) {
+
+				const data =
+					await response
+						.json()
+						.catch(
+							() => ({})
+						);
+
+				throw new Error(
+					(data && data.error) ||
+					("HTTP " +
+						response.status)
+				);
+
+			}
+
+			const blob =
+				await response.blob();
+
+			const titleEl =
+				document.getElementById(
+					"va-title-" + n
+				);
+
+			const title =
+				titleEl
+					? titleEl.value.trim()
+					: "";
+
+			const fileName =
+				"YouTubeVibeStudio_" +
+				(title ||
+					"Video" + n).replace(
+						/[^A-Za-z0-9]+/g,
+						""
+					) +
+				"_voiceover.mp3";
+
+			const url =
+				URL.createObjectURL(
+					blob
+				);
+
+			const a =
+				document.createElement(
+					"a"
+				);
+
+			a.href = url;
+			a.download = fileName;
+
+			document.body.appendChild(
+				a
+			);
+
+			a.click();
+
+			document.body.removeChild(
+				a
+			);
+
+			URL.revokeObjectURL(
+				url
+			);
+
+			project.voiceoverFile =
+				blob;
+
+			statusEl.textContent =
+				"Voiceover MP3 saved 鈥� upload it as the audio track";
+
+		}
+		catch (err) {
+
+			statusEl.textContent =
+				"Voiceover failed: " +
+				(err.message || err);
+
+		}
+		finally {
+
+			genBtn.disabled = false;
+
+		}
+
+	}
+
+	/*
+	 * Applies the SRT script as burned-in
+	 * subtitles: drawn below the caption,
+	 * at 1/3 of the height up from the
+	 * bottom, for every export of this
+	 * video.
+	 */
+	function applySubtitles(n) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (
+			!project ||
+			!project.srt
+		) {
+
+			return;
+
+		}
+
+		const cues =
+			parseSrtCues(
+				project.srt
+			);
+
+		if (!cues.length) {
+			return;
+		}
+
+		project.subtitles =
+			cues;
+
+		const statusEl =
+			document.getElementById(
+				"voiceover-status"
+			);
+
+		if (statusEl) {
+
+			statusEl.textContent =
+				"Subtitles applied (" +
+				cues.length +
+				" cues) 鈥� shown below the caption";
+
+		}
+
+		const scriptStatus =
+			document.getElementById(
+				"va-script-status-" + n
+			);
+
+		if (scriptStatus) {
+
+			scriptStatus.textContent =
+				"Subtitles applied to this video";
+
+		}
+
+		closeVoiceoverModal();
 
 	}
 
@@ -16651,6 +17766,19 @@ function createHTML() {
 
 		const captions =
 			getCaptions();
+
+		/*
+		 * Subtitles (the applied SRT
+		 * script) come from the render
+		 * context, if any.
+		 */
+
+		const subtitles =
+			renderContext &&
+			renderContext.subtitles
+				? renderContext.subtitles
+				: [];
+
 
 
 		renderBtn.disabled =
@@ -17681,6 +18809,27 @@ function createHTML() {
 						ctx,
 
 						captions,
+
+						frameTimeMs,
+
+						WIDTH,
+
+						HEIGHT
+
+					);
+
+
+					/*
+					 * SRT subtitles: below the
+					 * caption, 1/3 up from the
+					 * bottom.
+					 */
+
+					drawSubtitles(
+
+						ctx,
+
+						subtitles,
 
 						frameTimeMs,
 
