@@ -2,9 +2,9 @@
 const MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0";
 
 const prompts = [
-	"Ghibli-inspired hand-painted anime scene of a young entrepreneur standing inside a tiny neighborhood shop before opening, warm morning sunlight entering through windows, shelves of products and simple checkout counter, gentle storytelling about what a business is, expressive character, hand-painted backgrounds, nostalgic cel animation texture, warm colors, no text, no logos, 16:9",
+	"Ghibli-inspired hand-painted anime scene of a young entrepreneur standing inside a tiny neighborhood shop before opening, warm morning sunlight entering through windows, shelves of products and simple checkout counter, gentle storytelling about what a business is, expressive character, hand-painted backgrounds, nostalgic cel animation texture, warm colors, a completely text-free image, no text, no words, no letters, no writing, no kanji, no Japanese characters, no subtitles, no signs, no logos, no watermarks, 16:9",
 
-	"1990s nostalgic Studio Ghibli-inspired anime scene of a small business owner handing a product to a smiling customer across a wooden counter, another customer waiting behind, warm human interaction showing exchange and trust, detailed hand-painted shop interior, soft nostalgic lighting, expressive faces, no text, no logos, 16:9",
+	"1990s nostalgic Studio Ghibli-inspired anime scene of a small business owner handing a product to a smiling customer across a wooden counter, another customer waiting behind, warm human interaction showing exchange and trust, detailed hand-painted shop interior, soft nostalgic lighting, expressive faces, a completely text-free image, no text, no words, no letters, no writing, no kanji, no Japanese characters, no subtitles, no signs, no logos, no watermarks, 16:9",
 ];
 
 export default {
@@ -220,6 +220,8 @@ export default {
 		// GET  /api/worker/poll       worker claims a job
 		// POST /api/worker/deliver    worker uploads the MP4
 		// POST /api/worker/failed     worker reports failure
+		// POST /api/script            AI script (SRT) via a
+		//                             FREE INSTRUCT model
 		// GET/POST /api/config/workers  up to 3 worker URLs
 		// GET  /config/uvxyz          settings page
 		// (password: CONFIG_PASSWORD)
@@ -233,6 +235,15 @@ export default {
 
 		const CONFIG_WORKERS_KEY =
 			"config:workers";
+
+		const MAX_RENDER_JOBS =
+			10;
+
+		// Free INSTRUCT model for
+		// SRT script generation
+		// (Workers AI free tier).
+		const SCRIPT_MODEL =
+			"@cf/meta/llama-3.1-8b-instruct";
 
 		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional 鈥� URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "鈻� Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "鈻� Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "鈻� Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("鈴� Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("鉁� Delivered \\"" + (job.name || "job") + "\\" 鈥� waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("鉂� Job failed: " + msg + " 鈥� waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker running鈥�";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("鈴� Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
 
@@ -470,6 +481,223 @@ export default {
 		}
 
 		/*
+			* AI script (SRT) generation.
+			* Free INSTRUCT model on
+			* Workers AI. POST the topic
+			+ minutes (1-6) + speech
+			* speed; returns the timed
+			* SRT text.
+		*/
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/script"
+		) {
+
+			const body =
+				await request.json().catch(
+					() => ({})
+				);
+
+			const topic =
+				String(
+					body.topic ||
+					"my video"
+				).trim().slice(0, 160);
+
+			const minutes =
+				Number(
+					(body.minutes === undefined ||
+					body.minutes === null ||
+					body.minutes === "")
+					? 1
+					: body.minutes
+				);
+
+			const speed =
+				String(
+					body.speed ||
+					"medium"
+				).toLowerCase().trim();
+
+			/*
+				* Words per minute for
+				* each speech speed.
+			*/
+			const SPEED_WORDS =
+				{
+					"super fast":
+						210,
+					"fast":
+						170,
+					"medium":
+						140,
+					"slow":
+						110
+				};
+
+			if (
+				!env.AI
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"AI binding not configured"
+					},
+					503
+				);
+
+			}
+
+			if (
+				!Number.isInteger(minutes) ||
+				minutes < 1 ||
+				minutes > 6
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Minutes must be 1-6"
+					},
+					400
+				);
+
+			}
+
+			if (
+				!SPEED_WORDS[speed]
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Speech must be super fast, fast, medium or slow"
+					},
+					400
+				);
+
+			}
+
+			const endStamp =
+				"00:" +
+					String(minutes).padStart(2, "0") +
+					":00,000";
+
+			const wordTarget =
+				SPEED_WORDS[speed] * minutes;
+
+			const userPrompt =
+				"Write a YouTube narration script as SRT subtitles about: "
+					+ topic +
+					". The video is exactly " + minutes +
+					" minute(s) long, so the final timestamp must end at " +
+					endStamp +
+					". The speaker talks " + speed +
+					" (about " + wordTarget + " words total). Output ONLY valid SRT: each cue is a number, a line like 00:00:00,000 --> 00:00:04,000, then the subtitle text, with a blank line between cues. Keep each subtitle line under 42 characters. Timestamps start at 00:00:00,000, never overlap, and cover the full duration. Plain spoken English only - no headings, no markdown, no code fences, nothing outside the SRT.";
+
+			try {
+
+				const result =
+					await env.AI.run(
+						SCRIPT_MODEL,
+						{
+							messages: [
+								{
+									role: "system",
+									content:
+										"You are a professional video script writer. You answer with ONLY valid SRT subtitle text, nothing else."
+								},
+								{
+									role: "user",
+									content:
+									userPrompt
+								}
+							],
+							max_tokens:
+								2048,
+							temperature:
+								0.7
+						}
+					);
+
+				let srt =
+					"";
+
+				if (
+					result &&
+					result[0] &&
+					result[0].message
+				) {
+
+					srt =
+						String(
+							result[0].message.content ||
+							""
+						).trim();
+
+				}
+
+				if (
+					srt.indexOf("```") !== -1
+				) {
+
+					const parts =
+						srt.split("```");
+
+					srt =
+						(parts[1] ||
+						srt).trim();
+
+				}
+
+				if (
+					srt.indexOf("-->") === -1
+				) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"The model did not return SRT - try again"
+						},
+						500
+					);
+
+				}
+
+				return json(
+					{
+						success: true,
+						srt:
+						srt,
+						model:
+						SCRIPT_MODEL
+					}
+				);
+
+			}
+
+			catch (error) {
+
+				return json(
+					{
+						success: false,
+						error:
+							error.message ||
+							"Script generation failed"
+					},
+					500
+				);
+
+			}
+
+		}
+
+		/*
 			* Submit a render job: ALL of
 			* the video's elements.
 		*/
@@ -524,6 +752,54 @@ export default {
 							"Payload too large (max 60MB)"
 					},
 					413
+				);
+
+			}
+
+			/*
+				* Max 10 in-progress jobs.
+				* When the cap is reached the
+				* POST is rejected with a busy
+				* status (not an error); the
+				* web app then renders the
+				* video itself in-browser.
+			*/
+			const jobsNow =
+				await listRenderJobs(env);
+
+			let inProgress =
+				0;
+
+			for (
+				const j of jobsNow
+			) {
+
+				if (
+					j.status === "queued" ||
+					j.status === "running"
+				) {
+
+					inProgress++;
+
+				}
+
+			}
+
+			if (
+				inProgress >=
+					MAX_RENDER_JOBS
+			) {
+
+				return json(
+					{
+						success: true,
+						status:
+							"busy",
+						inProgress:
+							inProgress,
+						max:
+							MAX_RENDER_JOBS
+					}
 				);
 
 			}
@@ -3844,6 +4120,14 @@ function createHTML() {
 		}
 
 
+		/*
+		 * The gallery is a scroll
+		 * area (same strategy as
+		 * the SRT script box):
+		 * max 250px tall, with a
+		 * wide arrow toggle above.
+		 */
+
 		.va-gallery {
 
 			display:
@@ -3860,6 +4144,120 @@ function createHTML() {
 
 			margin-top:
 				10px;
+
+			max-height:
+				250px;
+
+			overflow-y:
+				auto;
+		}
+
+
+		/*
+		 * Wide show/hide toggle
+		 * button (arrow icon) for
+		 * the scroll areas.
+		 */
+
+		.va-scroll-toggle {
+
+			display:
+				block;
+
+			width:
+				100%;
+
+			box-sizing:
+				border-box;
+
+			background:
+				#1f2937;
+
+			color:
+				#e5e7eb;
+
+			border:
+				1px solid
+				#374151;
+
+			border-radius:
+				6px;
+
+			padding:
+				6px 10px;
+
+			margin-top:
+				10px;
+
+			font-size:
+				0.8rem;
+
+			cursor:
+				pointer;
+		}
+
+
+		.va-scroll-toggle:hover {
+
+			background:
+				#374151;
+		}
+
+
+		/*
+		 * The generated SRT script:
+		 * a scroll area with a FIXED
+		 * 220px height (min = max).
+		 */
+
+		.va-script-box {
+
+			height:
+				220px;
+
+			min-height:
+				220px;
+
+			max-height:
+				220px;
+
+			overflow-y:
+				auto;
+
+			box-sizing:
+				border-box;
+
+			background:
+				#0b0e14;
+
+			border:
+				1px solid
+				#374151;
+
+			border-radius:
+				6px;
+
+			padding:
+				8px;
+
+			margin-top:
+				10px;
+
+			font-family:
+				"Courier New",
+				monospace;
+
+			font-size:
+				0.75rem;
+
+			line-height:
+				1.4;
+
+			white-space:
+				pre-wrap;
+
+			color:
+				#d1d5db;
 		}
 
 
@@ -6975,6 +7373,24 @@ function createHTML() {
 				\`card-\${index}\`
 			);
 
+		/*
+		 * The legacy top-of-page
+		 * image slots were removed,
+		 * so there is nowhere to
+		 * show these images: skip
+		 * the generation (no wasted
+		 * AI calls, no uncaught
+		 * errors).
+		 */
+		if (
+			!container ||
+			!btn ||
+			!card
+		) {
+
+			return;
+
+		}
 
 		try {
 
@@ -10940,6 +11356,11 @@ function createHTML() {
 	 *   MODULE 7: api-render      (POST /api/render with all of a
 	 *                              video's elements; background-worker
 	 *                              mode for /config/uvxyz)
+	 *   MODULE 8: script-srt      (AI script generation -> SRT with
+	 *                              timestamps; free INSTRUCT model;
+	 *                              minutes 1-6 + speech speed; the
+	 *                              gallery + SRT box are scroll areas
+	 *                              with wide arrow toggle buttons)
 	 *
 	 * Each module only talks to the others through the
 	 * videoProjects array and the small shared functions, so a
@@ -11255,10 +11676,11 @@ function createHTML() {
 			'<div class="va-body" id="va-body-' + n + '">' +
 			'<div class="va-left">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Images / MP4s 鈥� drag cards to reorder</div>' +
-			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">馃搧 Upload Image, GIF or MP4</button>' +
-			'<span class="va-note">Max 5 GIF 路 25 images 路 5 MP4 (1:00 each, silent)</span>' +
-			'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
+		'<div class="va-section-title">Images / MP4s 鈥� drag cards to reorder</div>' +
+		'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">馃搧 Upload Image, GIF or MP4</button>' +
+		'<span class="va-note">Max 5 GIF 路 25 images 路 5 MP4 (1:00 each, silent)</span>' +
+		'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">鈻� Images / MP4s</button>' +
+		'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
 			'</div>' +
 			'<div class="va-section">' +
 			'<div class="va-section-title">Audio 鈥� one MP3 (the video is as long as the MP3)</div>' +
@@ -11282,12 +11704,25 @@ function createHTML() {
 			'<div class="va-section-title">Sticker (bottom right)</div>' +
 			'<select id="va-sticker-' + n + '" class="quality-select">' + STICKER_OPTIONS + '</select>' +
 			'</div>' +
-			'<div class="va-section">' +
-			'<div class="va-section-title">Quality</div>' +
-			'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
-			'</div>' +
-			'</div>' +
-			'<div class="va-right">' +
+		'<div class="va-section">' +
+		'<div class="va-section-title">Quality</div>' +
+		'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
+		'</div>' +
+		'<div class="va-section">' +
+		'<div class="va-section-title">Script (SRT) 鈥� free AI model</div>' +
+		'<input type="text" id="va-script-topic-' + n + '" maxlength="120" placeholder="Topic (uses the video title if empty)">' +
+		'<div class="va-row">' +
+		'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
+		'<label class="quality-select">Speech <select id="va-script-speed-' + n + '"><option value="super fast">Super fast</option><option value="fast">Fast</option><option value="medium" selected>Medium</option><option value="slow">Slow</option></select></label>' +
+		'</div>' +
+		'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')">鉁� Generate Script</button>' +
+		'<span class="va-note" id="va-script-status-' + n + '"></span>' +
+		'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">鈻� Script (SRT)</button>' +
+		'<div class="va-script-box" id="va-script-box-' + n + '" style="display:none"></div>' +
+		'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">猬� Download .srt</button>' +
+		'</div>' +
+		'</div>' +
+		'<div class="va-right">' +
 			'<div class="va-section">' +
 			'<div class="va-section-title">AI Images 鈥� Cloudflare</div>' +
 			'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
@@ -14689,6 +15124,41 @@ function createHTML() {
 				() => ({})
 			);
 
+		/*
+		 * Busy (10/10 jobs in progress):
+		 * not an error 鈥� this browser
+		 * renders the video itself with
+		 * its own video generation (the
+		 * same engine the Generate
+		 * Videos button uses).
+		 */
+		if (
+			response.ok &&
+			submitted.status ===
+				"busy"
+		) {
+
+			if (statusText) {
+				statusText.textContent =
+					"API is busy (" +
+					(submitted.inProgress ||
+						10) +
+					"/" +
+					(submitted.max ||
+						10) +
+					" jobs) 鈥� rendering " +
+					payload.name +
+					" in this browser ...";
+			}
+
+			await renderVideoLocally(
+				n
+			);
+
+			return;
+
+		}
+
 		if (
 			!response.ok ||
 			!submitted.jobId
@@ -14805,6 +15275,308 @@ function createHTML() {
 
 			}
 
+		}
+
+	}
+
+	/*
+	 * The web app's OWN video generation:
+	 * the same internal engine the
+	 * Generate Videos button runs, for
+	 * just one video. Used as the
+	 * fallback when the render API
+	 * answers "busy".
+	 */
+	async function renderVideoLocally(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		if (generating) {
+
+			alert(
+				"A video is already being generated 鈥� please wait for it to finish."
+			);
+
+			return;
+
+		}
+
+		generating =
+			true;
+
+		const renderBtn =
+			document.getElementById(
+				"render-btn"
+			);
+
+		const statusText =
+			document.getElementById(
+				"status-text"
+			);
+
+		if (renderBtn) {
+			renderBtn.disabled =
+				true;
+		}
+
+		/*
+		 * Snapshot the engine's working
+		 * state so it can be restored.
+		 */
+		const saved = {
+			slides:
+				activeSlides.slice(),
+			audio:
+				currentAudio,
+			captionRows:
+				Array.from(
+					captionRowsEl.children
+				),
+			title:
+				document.getElementById(
+					"title-input"
+				).value,
+			font:
+				document.getElementById(
+					"title-font"
+				).value,
+			color:
+				document.getElementById(
+					"title-color"
+				).value,
+			sticker:
+				document.getElementById(
+					"sticker-select"
+				).value,
+			quality:
+				document.getElementById(
+					"quality-select"
+				).value,
+		};
+
+		project.status =
+			"rendering";
+
+		updateVideoStatus(
+			n
+		);
+
+		if (statusText) {
+			statusText.textContent =
+				"Rendering " +
+				project.name +
+				" in this browser ...";
+		}
+
+		let result =
+			"error";
+
+		try {
+
+			const slides =
+				await prepareVideo(
+					n
+				);
+
+			swapVaCaptionsIn(
+				n
+			);
+
+			document.getElementById(
+				"title-input"
+			).value =
+				document.getElementById(
+					"va-title-" + n
+				).value;
+
+			document.getElementById(
+				"title-font"
+			).value =
+				document.getElementById(
+					"va-font-" + n
+				).value;
+
+			document.getElementById(
+				"title-color"
+			).value =
+				document.getElementById(
+					"va-color-" + n
+				).value;
+
+			document.getElementById(
+				"sticker-select"
+			).value =
+				document.getElementById(
+					"va-sticker-" + n
+				).value;
+
+			document.getElementById(
+				"quality-select"
+			).value =
+				document.getElementById(
+					"va-quality-" + n
+				).value;
+
+			activeSlides.length =
+				0;
+
+			for (
+				const slide of slides
+			) {
+
+				activeSlides.push(
+					slide
+				);
+
+			}
+
+			currentAudio =
+				project.audio;
+
+			renderContext = {
+				fileName:
+					"YouTubeVibeStudio_" +
+					project.name.replace(
+						/\\s+/g,
+						""
+					) +
+					".mp4",
+			};
+
+			result =
+				(await generateMP4()) ||
+				"skipped";
+
+		}
+		catch (localError) {
+
+			console.error(
+				project.name +
+					" local render failed:",
+				localError
+			);
+
+		}
+		finally {
+
+			swapVaCaptionsOut(
+				n
+			);
+
+			activeSlides.length =
+				0;
+
+			for (
+				const slide of
+					saved.slides
+			) {
+
+				activeSlides.push(
+					slide
+				);
+
+			}
+
+			currentAudio =
+				saved.audio;
+
+			captionRowsEl.innerHTML =
+				"";
+
+			for (
+				const row of
+					saved.captionRows
+			) {
+
+				captionRowsEl.appendChild(
+					row
+				);
+
+			}
+
+			if (
+				typeof updateCaptionCount ===
+					"function"
+			) {
+
+				updateCaptionCount();
+
+			}
+
+			document.getElementById(
+				"title-input"
+			).value =
+				saved.title;
+
+			document.getElementById(
+				"title-font"
+			).value =
+				saved.font;
+
+			document.getElementById(
+				"title-color"
+			).value =
+				saved.color;
+
+			document.getElementById(
+				"sticker-select"
+			).value =
+				saved.sticker;
+
+			document.getElementById(
+				"quality-select"
+			).value =
+				saved.quality;
+
+			renderContext =
+				null;
+
+			generating =
+				false;
+
+			if (renderBtn) {
+				renderBtn.disabled =
+					false;
+			}
+
+		}
+
+		if (result === "done") {
+			project.status =
+				"done";
+		}
+		else if (
+			result === "error"
+		) {
+			project.status =
+				"error";
+		}
+		else {
+			project.status =
+				"skipped";
+		}
+
+		updateVideoStatus(
+			n
+		);
+
+		if (statusText) {
+			statusText.textContent =
+				result ===
+					"done"
+					? "鉁� " +
+						project.name +
+						" rendered in this browser (API was busy)"
+					: project.name +
+						" local render " +
+						result;
 		}
 
 	}
@@ -15311,6 +16083,322 @@ function createHTML() {
 			 */
 
 		}
+
+	}
+
+	// =========================================================
+	// MODULE 8: script-srt
+	// (AI script generation -> SRT with timestamps. The server
+	//  route /api/script uses a FREE INSTRUCT model on Workers
+	//  AI (SCRIPT_MODEL). Minutes 1-6 + speech speed:
+	//  super fast / fast / medium / slow.)
+	// =========================================================
+
+	function setScriptBoxState(
+		n,
+		open
+	) {
+
+		const box =
+			document.getElementById(
+				"va-script-box-" + n
+			);
+
+		const toggle =
+			document.getElementById(
+				"va-script-toggle-" + n
+			);
+
+		const dl =
+			document.getElementById(
+				"va-script-dl-" + n
+			);
+
+		if (box) {
+			box.style.display =
+				open ? "" : "none";
+		}
+
+		if (dl) {
+			dl.style.display =
+				open ? "" : "none";
+		}
+
+		if (toggle) {
+			toggle.style.display =
+				open ? "" : "none";
+
+			toggle.textContent =
+				(open
+					? "鈻� "
+					: "鈻� ") +
+				"Script (SRT)";
+		}
+
+	}
+
+	function toggleScriptBox(n) {
+
+		const box =
+			document.getElementById(
+				"va-script-box-" + n
+			);
+
+		if (!box) {
+			return;
+		}
+
+		setScriptBoxState(
+			n,
+			box.style.display === "none"
+		);
+
+	}
+
+	function showScriptBox(n) {
+
+		setScriptBoxState(n, true);
+
+	}
+
+	function toggleGalleryScroll(n) {
+
+		const gallery =
+			document.getElementById(
+				"va-gallery-" + n
+			);
+
+		const toggle =
+			document.getElementById(
+				"va-gallery-toggle-" + n
+			);
+
+		if (!gallery || !toggle) {
+			return;
+		}
+
+		const open =
+			gallery.style.display === "none";
+
+		gallery.style.display =
+			open ? "" : "none";
+
+		toggle.textContent =
+			(open
+				? "鈻� "
+				: "鈻� ") +
+			"Images / MP4s";
+
+	}
+
+	async function generateScript(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		const btn =
+			document.getElementById(
+				"va-script-btn-" + n
+			);
+
+		const statusEl =
+			document.getElementById(
+				"va-script-status-" + n
+			);
+
+		const topicEl =
+			document.getElementById(
+				"va-script-topic-" + n
+			);
+
+		const titleEl =
+			document.getElementById(
+				"va-title-" + n
+			);
+
+		const minutesEl =
+			document.getElementById(
+				"va-script-minutes-" + n
+			);
+
+		const speedEl =
+			document.getElementById(
+				"va-script-speed-" + n
+			);
+
+		if (!btn) {
+			return;
+		}
+
+		const topic =
+			(topicEl && topicEl.value.trim()) ||
+			(titleEl && titleEl.value.trim()) ||
+			"my video";
+
+		const minutes =
+			Number(
+				minutesEl
+					? minutesEl.value
+					: 1
+			);
+
+		const speed =
+			speedEl
+				? speedEl.value
+				: "medium";
+
+		btn.disabled = true;
+
+		statusEl.textContent =
+			"Writing your script (free AI model)...";
+
+		try {
+
+			const response =
+				await fetch(
+					"/api/script",
+					{
+						method: "POST",
+						headers: {
+							"Content-Type":
+								"application/json"
+						},
+						body:
+							JSON.stringify(
+								{
+									topic: topic,
+									minutes: minutes,
+									speed: speed
+								}
+							)
+					}
+				);
+
+			const data =
+				await response
+					.json()
+					.catch(
+						() => ({})
+					);
+
+			if (
+				!response.ok ||
+				!data.success ||
+				!data.srt
+			) {
+
+				throw new Error(
+					(data && data.error) ||
+					("HTTP " +
+						response.status)
+				);
+
+			}
+
+			project.srt = data.srt;
+
+			const box =
+				document.getElementById(
+					"va-script-box-" + n
+				);
+
+			box.textContent = data.srt;
+
+			showScriptBox(n);
+
+			const lineCount =
+				data.srt
+					.split("\\n")
+					.filter(
+						(line) =>
+							line.trim() !== ""
+					)
+					.length;
+
+			statusEl.textContent =
+				"Script ready 鈥� " +
+				lineCount +
+				" lines (" +
+				speed +
+				" speech, " +
+				minutes +
+				" min, free model)";
+
+		}
+		catch (err) {
+
+			statusEl.textContent =
+				"Script failed: " +
+				(err.message || err);
+
+		}
+		finally {
+
+			btn.disabled = false;
+
+		}
+
+	}
+
+	function downloadSrt(n) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (
+			!project ||
+			!project.srt
+		) {
+
+			return;
+
+		}
+
+		const titleEl =
+			document.getElementById(
+				"va-title-" + n
+			);
+
+		const title =
+			titleEl
+				? titleEl.value.trim()
+				: "";
+
+		const fileName =
+			"YouTubeVibeStudio_" +
+			(title ||
+				"Video" + n).replace(
+					/[^A-Za-z0-9]+/g,
+					""
+				) +
+			".srt";
+
+		const blob =
+			new Blob(
+				[project.srt],
+				{ type: "text/plain" }
+			);
+
+		const url =
+			URL.createObjectURL(blob);
+
+		const a =
+			document.createElement("a");
+
+		a.href = url;
+		a.download = fileName;
+
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+
+		URL.revokeObjectURL(url);
 
 	}
 
