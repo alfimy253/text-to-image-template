@@ -264,7 +264,7 @@ export default {
 		const VOICEOVER_MODEL =
 			"@cf/myshell-ai/melotts";
 
-		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "⚙️ Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "⚙️ Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional — URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "▶ Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "■ Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "▶ Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("⏳ Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("✅ Delivered \\"" + (job.name || "job") + "\\" — waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("❌ Job failed: " + msg + " — waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker running…";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("⏳ Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
+		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "âš™ï¸ Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "âš™ï¸ Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional â€” URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "â–¶ Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "â–  Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "â–¶ Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("â³ Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("âœ… Delivered \\"" + (job.name || "job") + "\\" â€” waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("âŒ Job failed: " + msg + " â€” waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker runningâ€¦";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("â³ Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
 
 		async function putBlobStore(
 			env,
@@ -1158,17 +1158,33 @@ export default {
 		}		/*
 			* Voiceover (MeloTTS):
 			* speak the script text and
-			* return the MP3. Long
+			* return the audio. Long
 			* scripts are split into
 			* sentence chunks (TTS
 			* models reject overly long
 			* text - that was the
 			* "internal server error")
-			* and the MP3 pieces are
+			* and the pieces are
 			* concatenated. One fixed
 			* voice per language
 			* (MeloTTS has no
 			* male/female parameter).
+			*
+			* MeloTTS has been failing
+			* intermittently upstream
+			* with "AiError 3043:
+			* Internal server error"
+			* (~70% of calls, reported
+			* on the Cloudflare forum
+			* since July 2026), so
+			* each chunk gets up to 3
+			* attempts with a short
+			* backoff. It also
+			* sometimes returns WAV
+			* instead of the
+			* documented MP3, so the
+			* container is detected
+			* from the bytes.
 		*/
 		if (
 			request.method === "POST" &&
@@ -1262,7 +1278,7 @@ export default {
 
 			const sentences =
 				text.match(
-					/[^.!?…]+[.!?…]*\s*/g
+					/[^.!?â€¦]+[.!?â€¦]*\s*/g
 				) || [text];
 
 			const chunks =
@@ -1358,7 +1374,9 @@ export default {
 
 			/*
 				* One TTS request per
-				* chunk, then the MP3
+				* chunk (with retries
+				* for the flaky
+				* upstream), then the
 				* pieces are joined
 				* into one file.
 				*/
@@ -1371,16 +1389,93 @@ export default {
 				ci++
 			) {
 
-				const result =
-					await env.AI.run(
-						VOICEOVER_MODEL,
-						{
-							prompt:
-								chunks[ci],
-							lang:
-								lang
+				/*
+					* Upstream flakiness
+					* (AiError 3043):
+					* up to 3 attempts
+					* per chunk, short
+					* backoff between
+					* tries.
+					*/
+				let result =
+					null;
+
+				let lastTtsError =
+					"";
+
+				for (
+					let attempt = 1;
+					attempt <= 3;
+					attempt++
+				) {
+
+					try {
+
+						result =
+							await env.AI.run(
+								VOICEOVER_MODEL,
+								{
+									prompt:
+										chunks[ci],
+									lang:
+										lang
+								}
+							);
+
+						lastTtsError =
+							"";
+
+						break;
+
+					} catch (ttsError) {
+
+						lastTtsError =
+							(ttsError &&
+								ttsError.message) ||
+							String(ttsError);
+
+						result =
+							null;
+
+						if (
+							attempt <
+								3
+						) {
+
+							await new Promise(
+								(resume) =>
+									setTimeout(
+										resume,
+										400 *
+										attempt
+									)
+							);
+
 						}
+
+					}
+
+				}
+
+				if (
+					!result
+				) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"TTS failed (chunk " +
+								(ci + 1) +
+								" of " +
+								chunks.length +
+								"): " +
+								lastTtsError
+						},
+						500
 					);
+
+				}
 
 				/*
 					* Accept every
@@ -1394,7 +1489,7 @@ export default {
 					* or { audio:
 					* base64 }.
 					*/
-				let mp3 =
+				let piece =
 					null;
 
 				if (
@@ -1402,7 +1497,7 @@ export default {
 						ArrayBuffer
 				) {
 
-					mp3 =
+					piece =
 						new Uint8Array(
 							result
 						);
@@ -1423,7 +1518,7 @@ export default {
 						* collect the
 						* bytes.
 						*/
-					mp3 =
+					piece =
 						new Uint8Array(
 							await new Response(
 								result
@@ -1437,7 +1532,7 @@ export default {
 						"number"
 				) {
 
-					mp3 =
+					piece =
 						new Uint8Array(
 							result
 						);
@@ -1449,7 +1544,7 @@ export default {
 						"function"
 				) {
 
-					mp3 =
+					piece =
 						new Uint8Array(
 							await result
 								.arrayBuffer()
@@ -1461,7 +1556,7 @@ export default {
 					result.length > 0
 				) {
 
-					mp3 =
+					piece =
 						Uint8Array.from(
 							atob(result),
 							(c) =>
@@ -1476,7 +1571,7 @@ export default {
 						"string"
 				) {
 
-					mp3 =
+					piece =
 						Uint8Array.from(
 							atob(result
 								.audio),
@@ -1489,8 +1584,8 @@ export default {
 				}
 
 				if (
-					!mp3 ||
-					mp3.length === 0
+					!piece ||
+					piece.length === 0
 				) {
 
 					return json(
@@ -1509,52 +1604,327 @@ export default {
 				}
 
 				pieces.push(
-					mp3
+					piece
 				);
 
 			}
 
-			const total =
-				pieces.reduce(
-					(sum, p) =>
-						sum + p.length,
-					0
-				);
+			/*
+				* Container detection:
+				* documented as MP3,
+				* but Cloudflare has
+				* reported that
+				* MeloTTS sometimes
+				* returns WAV. Join
+				* the pieces into one
+				* valid file either
+				* way.
+				*/
+			const isWav =
+				(p) =>
+					p.length > 12 &&
+					p[0] === 0x52 &&
+					p[1] === 0x49 &&
+					p[2] === 0x46 &&
+					p[3] === 0x46;
 
-			const mp3 =
-				new Uint8Array(
-					total
-				);
+			const findWavChunk =
+				(p, id) => {
+					const dv =
+						new DataView(
+							p.buffer,
+							p.byteOffset,
+							p.length
+						);
 
-			let off =
-				0;
+					let off =
+						12;
 
-			for (
-				let pi = 0;
-				pi < pieces.length;
-				pi++
+					while (
+						off + 8 <=
+							p.length
+					) {
+
+						const tag =
+							String.fromCharCode(
+								p[off],
+								p[off + 1],
+								p[off + 2],
+								p[off + 3]
+							);
+
+						const sz =
+							dv.getUint32(
+								off + 4,
+								true
+							);
+
+						if (
+							tag === id
+						) {
+
+							return {
+								off:
+									off + 8,
+								sz: sz
+							};
+
+						}
+
+						off +=
+							8 + sz +
+							(sz % 2);
+
+					}
+
+					return
+						null;
+
+				};
+
+			let outBytes =
+				null;
+
+			let audioType =
+				"audio/mpeg";
+
+			let audioName =
+				"voiceover.mp3";
+
+			if (
+				pieces.every(
+					isWav
+				)
 			) {
 
-				mp3.set(
-					pieces[pi],
-					off
+				/*
+					* All pieces are
+					* WAV: take the
+					* fmt chunk of the
+					* first piece and
+					* the data chunks
+					* of all pieces
+					* into one valid
+					* WAV.
+					*/
+				const fmtRef =
+					findWavChunk(
+						pieces[0],
+						"fmt "
+					);
+
+				const fmtBytes =
+					fmtRef
+						? pieces[0].slice(
+								fmtRef.off,
+								fmtRef.off +
+									fmtRef.sz
+							)
+						: new Uint8Array(
+								16
+							);
+
+				const dataParts =
+					[];
+
+				for (
+					let pi = 0;
+					pi < pieces.length;
+					pi++
+				) {
+
+					const dRef =
+						findWavChunk(
+							pieces[pi],
+							"data"
+						);
+
+					if (dRef) {
+
+						dataParts.push(
+							pieces[pi].slice(
+								dRef.off,
+								dRef.off +
+									dRef.sz
+							)
+						);
+
+					}
+
+				}
+
+				const totalData =
+					dataParts.reduce(
+						(sum, d) =>
+							sum + d.length,
+						0
+					);
+
+				outBytes =
+					new Uint8Array(
+						28 +
+						fmtBytes.length +
+						totalData
+					);
+
+				/*
+					* RIFF....WAVE
+					*/
+				outBytes[0] =
+					0x52;
+				outBytes[1] =
+					0x49;
+				outBytes[2] =
+					0x46;
+				outBytes[3] =
+					0x46;
+				outBytes[8] =
+					0x57;
+				outBytes[9] =
+					0x41;
+				outBytes[10] =
+					0x56;
+				outBytes[11] =
+					0x45;
+
+				const outDv =
+					new DataView(
+						outBytes.buffer
+					);
+
+				outDv.setUint32(
+					4,
+					outBytes.length -
+						8,
+					true
 				);
 
-				off +=
-					pieces[pi]
-						.length;
+				/*
+					* fmt chunk
+					*/
+				outBytes[12] =
+					0x66;
+				outBytes[13] =
+					0x6d;
+				outBytes[14] =
+					0x74;
+				outBytes[15] =
+					0x20;
+
+				outDv.setUint32(
+					16,
+					fmtBytes.length,
+					true
+				);
+
+				outBytes.set(
+					fmtBytes,
+					20
+				);
+
+				/*
+					* data chunk
+					*/
+				const dataOff =
+					20 +
+					fmtBytes.length;
+
+				outBytes[dataOff] =
+					0x64;
+				outBytes[dataOff +
+						1] =
+					0x61;
+				outBytes[dataOff +
+						2] =
+					0x74;
+				outBytes[dataOff +
+						3] =
+					0x61;
+
+				outDv.setUint32(
+					dataOff + 4,
+					totalData,
+					true
+				);
+
+				let dOff =
+					dataOff + 8;
+
+				for (
+					let di = 0;
+					di < dataParts.length;
+					di++
+				) {
+
+					outBytes.set(
+						dataParts[di],
+						dOff
+					);
+
+					dOff +=
+						dataParts[di]
+							.length;
+
+				}
+
+				audioType =
+					"audio/wav";
+
+				audioName =
+					"voiceover.wav";
+
+			} else {
+
+				/*
+					* MP3 (or mixed
+					* containers -
+					* rare): join the
+					* raw bytes.
+					*/
+				const total =
+					pieces.reduce(
+						(sum, p) =>
+							sum + p.length,
+						0
+					);
+
+				outBytes =
+					new Uint8Array(
+						total
+					);
+
+				let off =
+					0;
+
+				for (
+					let pi = 0;
+					pi < pieces.length;
+					pi++
+				) {
+
+					outBytes.set(
+						pieces[pi],
+						off
+					);
+
+					off +=
+						pieces[pi]
+							.length;
+
+				}
 
 			}
 
 			return new Response(
-				mp3,
+				outBytes,
 				{
 					status: 200,
 					headers: {
 						"Content-Type":
-							"audio/mpeg",
+							audioType,
 						"Content-Disposition":
-							"attachment; filename=voiceover.mp3"
+							"attachment; filename=" +
+							audioName
 					}
 				}
 			);
@@ -6035,7 +6405,7 @@ function createHTML() {
 
 
 		<h1>
-			🎬 YouTube Vibe Studio
+			ðŸŽ¬ YouTube Vibe Studio
 		</h1>
 
 		<p>
@@ -6050,7 +6420,7 @@ function createHTML() {
 		class="bulk-banner"
 		style="display:none"
 	>
-		⚠️ Bulk generation is in progress — do not
+		âš ï¸ Bulk generation is in progress â€” do not
 		move or delete your image or MP4 files until
 		it finishes.
 	</div>
@@ -6089,7 +6459,7 @@ function createHTML() {
 		<div class="audio-panel">
 
 			<div class="audio-title">
-				Audio Track — upload an MP3
+				Audio Track â€” upload an MP3
 				before rendering
 			</div>
 
@@ -6098,7 +6468,7 @@ function createHTML() {
 
 				<label class="upload-btn audio">
 
-					🎵 Upload MP3 Audio
+					ðŸŽµ Upload MP3 Audio
 
 					<input
 						type="file"
@@ -6113,7 +6483,7 @@ function createHTML() {
 					class="audio-empty"
 					id="audio-empty"
 				>
-					No audio added —
+					No audio added â€”
 					the MP4 will be silent.
 				</div>
 
@@ -6151,7 +6521,7 @@ function createHTML() {
 						class="remove-audio-btn"
 						onclick="removeAudio()"
 					>
-						🗑 Remove Audio
+						ðŸ—‘ Remove Audio
 					</button>
 
 				</div>
@@ -6255,7 +6625,7 @@ function createHTML() {
 
 			<div class="audio-note">
 				Drawn straight onto every
-				frame — no background box
+				frame â€” no background box
 				and no highlight.
 			</div>
 
@@ -6291,31 +6661,31 @@ function createHTML() {
 						</option>
 
 						<option value="like">
-							👍 Like
+							ðŸ‘ Like
 						</option>
 
 						<option value="love">
-							❤️ Love it
+							â¤ï¸ Love it
 						</option>
 
 						<option value="subscribe">
-							🔔 Subscribe
+							ðŸ”” Subscribe
 						</option>
 
 						<option
 							value="like-subscribe"
 						>
-							👍🔔 Like &amp; Subscribe
+							ðŸ‘ðŸ”” Like &amp; Subscribe
 						</option>
 
 						<option value="watch">
-							🎬 Watch Video
+							ðŸŽ¬ Watch Video
 						</option>
 
 						<option
 							value="watch-like-subscribe"
 						>
-							🎬👍🔔 Watch, Like
+							ðŸŽ¬ðŸ‘ðŸ”” Watch, Like
 							&amp; Subscribe
 						</option>
 
@@ -6327,7 +6697,7 @@ function createHTML() {
 
 
 			<div class="audio-note">
-				White 200 × 80 rectangle, square
+				White 200 Ã— 80 rectangle, square
 				corners, flush with the bottom
 				right corner and hanging 40px
 				past the right edge. Drawn on
@@ -6438,7 +6808,7 @@ function createHTML() {
 
 			<label class="upload-btn">
 
-				📁 Upload Image, GIF or MP4 (25 images · 5 GIF · 5 MP4)
+				ðŸ“ Upload Image, GIF or MP4 (25 images Â· 5 GIF Â· 5 MP4)
 
 				<input
 					type="file"
@@ -6457,18 +6827,18 @@ function createHTML() {
 				<select id="quality-select">
 
 					<option value="low">
-						480p · Light (1.2 Mbps)
+						480p Â· Light (1.2 Mbps)
 					</option>
 
 					<option
 						value="balanced"
 						selected
 					>
-						720p · Balanced (2.5 Mbps)
+						720p Â· Balanced (2.5 Mbps)
 					</option>
 
 					<option value="high">
-						720p · High (5 Mbps)
+						720p Â· High (5 Mbps)
 					</option>
 
 				</select>
@@ -6481,7 +6851,7 @@ function createHTML() {
 				onclick="onGenerateClick()"
 			>
 
-				🎞️ Render & Download MP4 Video
+				ðŸŽžï¸ Render & Download MP4 Video
 
 			</button>
 
@@ -6504,7 +6874,7 @@ function createHTML() {
 	>
 		<div class="modal-box">
 			<div class="modal-title">
-				⚠️ Missing required fields
+				âš ï¸ Missing required fields
 			</div>
 			<ul
 				id="required-modal-list"
@@ -8278,7 +8648,7 @@ function createHTML() {
 	
 	
 			estimateSourceEl.textContent =
-				"(9s per image or GIF · MP4 clips play in full)";
+				"(9s per image or GIF Â· MP4 clips play in full)";
 	
 	
 		}
@@ -8310,7 +8680,7 @@ function createHTML() {
 
 
 		estimateSizeEl.textContent =
-			"· approx. " +
+			"Â· approx. " +
 			formatBytes(bytes) +
 			" file";
 
@@ -12730,7 +13100,7 @@ function createHTML() {
 			);
 
 			renderBtn.innerHTML =
-				"🎞️ Generate Videos";
+				"ðŸŽžï¸ Generate Videos";
 
 		}
 
@@ -12854,8 +13224,8 @@ function createHTML() {
 			arrow.textContent =
 				body.style.display ===
 					"none"
-				? "▶"
-				: "▼";
+				? "â–¶"
+				: "â–¼";
 		}
 
 	}
@@ -12892,17 +13262,17 @@ function createHTML() {
 	 */
 	const STICKER_OPTIONS =
 		'<option value="none" selected>None</option>' +
-		'<option value="like">👍 Like</option>' +
-		'<option value="love">❤️ Love it</option>' +
-		'<option value="subscribe">🔔 Subscribe</option>' +
-		'<option value="like-subscribe">👍🔔 Like &amp; Subscribe</option>' +
-		'<option value="watch">🎬 Watch Video</option>' +
-		'<option value="watch-like-subscribe">🎬👍🔔 Watch, Like &amp; Subscribe</option>';
+		'<option value="like">ðŸ‘ Like</option>' +
+		'<option value="love">â¤ï¸ Love it</option>' +
+		'<option value="subscribe">ðŸ”” Subscribe</option>' +
+		'<option value="like-subscribe">ðŸ‘ðŸ”” Like &amp; Subscribe</option>' +
+		'<option value="watch">ðŸŽ¬ Watch Video</option>' +
+		'<option value="watch-like-subscribe">ðŸŽ¬ðŸ‘ðŸ”” Watch, Like &amp; Subscribe</option>';
 
 	const QUALITY_OPTIONS =
-		'<option value="low">480p · Light (1.2 Mbps)</option>' +
-		'<option value="balanced" selected>720p · Balanced (2.5 Mbps)</option>' +
-		'<option value="high">720p · High (5 Mbps)</option>';
+		'<option value="low">480p Â· Light (1.2 Mbps)</option>' +
+		'<option value="balanced" selected>720p Â· Balanced (2.5 Mbps)</option>' +
+		'<option value="high">720p Â· High (5 Mbps)</option>';
 
 	const FONT_OPTIONS =
 		'<option value="oswald">Oswald</option>' +
@@ -12920,24 +13290,24 @@ function createHTML() {
 
 		return (
 			'<div class="va-header">' +
-			'<span class="va-title">🎬 Video ' + n + '</span>' +
+			'<span class="va-title">ðŸŽ¬ Video ' + n + '</span>' +
 			'<span class="va-status" id="va-status-' + n + '">empty</span>' +
-			'<button type="button" class="va-api-btn" onclick="apiRenderVideo(' + n + ')" title="Send all of this video\\'s elements to the render API">☁️ API</button>' +
+			'<button type="button" class="va-api-btn" onclick="apiRenderVideo(' + n + ')" title="Send all of this video\\'s elements to the render API">â˜ï¸ API</button>' +
 			'<span class="va-summary" id="va-summary-' + n + '"></span>' +
-			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">▼</button>' +
+			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">â–¼</button>' +
 			'</div>' +
 			'<div class="va-body" id="va-body-' + n + '">' +
 			'<div class="va-left">' +
 			'<div class="va-section">' +
-		'<div class="va-section-title">Images / MP4s — drag cards to reorder</div>' +
-		'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">📁 Upload Image, GIF or MP4</button>' +
-		'<span class="va-note">Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)</span>' +
-		'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">▲ Images / MP4s</button>' +
+		'<div class="va-section-title">Images / MP4s â€” drag cards to reorder</div>' +
+		'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">ðŸ“ Upload Image, GIF or MP4</button>' +
+		'<span class="va-note">Max 5 GIF Â· 25 images Â· 5 MP4 (1:00 each, silent)</span>' +
+		'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">â–² Images / MP4s</button>' +
 		'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
 			'</div>' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Audio — one MP3 (the video is as long as the MP3)</div>' +
-			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">🎵 Upload MP3 Audio</button>' +
+			'<div class="va-section-title">Audio â€” one MP3 (the video is as long as the MP3)</div>' +
+			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">ðŸŽµ Upload MP3 Audio</button>' +
 			'<span class="va-audio-line" id="va-audio-line-' + n + '"></span>' +
 			'</div>' +
 			'<div class="va-section">' +
@@ -12962,26 +13332,26 @@ function createHTML() {
 		'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
 		'</div>' +
 		'<div class="va-section">' +
-		'<div class="va-section-title">Script (SRT) — AI model</div>' +
+		'<div class="va-section-title">Script (SRT) â€” AI model</div>' +
 		'<input type="text" id="va-script-topic-' + n + '" maxlength="120" placeholder="Topic (uses the video title if empty)">' +
 		'<div class="va-row">' +
 		'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
 		'<label class="quality-select">Speech <select id="va-script-speed-' + n + '"><option value="super fast">Super fast</option><option value="fast">Fast</option><option value="medium" selected>Medium</option><option value="slow">Slow</option></select></label>' +
 		'</div>' +
-		'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')">✨ Generate Script</button>' +
+		'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')">âœ¨ Generate Script</button>' +
 		'<span class="va-note" id="va-script-status-' + n + '"></span>' +
-		'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">▼ Script (SRT)</button>' +
+		'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">â–¼ Script (SRT)</button>' +
 		'<div class="va-script-box" id="va-script-box-' + n + '" style="display:none"></div>' +
-		'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">⬇ Download .srt</button>' +
-		'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled title="Turn the script into a spoken MP3 (MeloTTS voice) + apply the SRT as subtitles">🎙 Generate Voiceover</button>' +
+		'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">â¬‡ Download .srt</button>' +
+		'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled title="Turn the script into a spoken MP3 (MeloTTS voice) + apply the SRT as subtitles">ðŸŽ™ Generate Voiceover</button>' +
 		'</div>' +
 		'</div>' +
 		'<div class="va-right">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">AI Images — Cloudflare</div>' +
+			'<div class="va-section-title">AI Images â€” Cloudflare</div>' +
 			'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
-			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">✨ Generate 2 Images</button>' +
-			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit · 480px landscape</span>' +
+			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">âœ¨ Generate 2 Images</button>' +
+			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit Â· 480px landscape</span>' +
 			'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
 			'</div>' +
 			'</div>' +
@@ -13154,7 +13524,7 @@ function createHTML() {
 
 			summaryEl.textContent =
 				parts.length
-				? parts.join(" · ")
+				? parts.join(" Â· ")
 				: "no images yet";
 		}
 
@@ -13469,7 +13839,7 @@ function createHTML() {
 
 		if (line) {
 			line.textContent =
-				"🎵 " + file.name;
+				"ðŸŽµ " + file.name;
 		}
 
 		updateVideoStatus(
@@ -13567,7 +13937,7 @@ function createHTML() {
 			"va-card-remove";
 
 		removeBtn.textContent =
-			"×";
+			"Ã—";
 
 		removeBtn.title =
 			"Remove";
@@ -13871,8 +14241,8 @@ function createHTML() {
 			);
 
 			tip.textContent =
-				bits.join(" · ") +
-				" — drag to reorder";
+				bits.join(" Â· ") +
+				" â€” drag to reorder";
 
 			tip.title =
 				tip.textContent;
@@ -14124,7 +14494,7 @@ function createHTML() {
 	 * validates every video in the
 	 * stack, warns about missing
 	 * required fields, then renders
-	 * them in order — VIDEO_BATCH_SIZE
+	 * them in order â€” VIDEO_BATCH_SIZE
 	 * at a time, last batch may be one.
 	 */
 	function onGenerateClick() {
@@ -14231,7 +14601,7 @@ function createHTML() {
 
 			if (line) {
 				line.textContent =
-					"🎵 " +
+					"ðŸŽµ " +
 					project.audioFile.name +
 					" (" +
 					formatSeconds(
@@ -14892,7 +15262,7 @@ function createHTML() {
 					/*
 					 * The worker returns
 					 * {success:false,
-					 * error:"..."} — show
+					 * error:"..."} â€” show
 					 * the real reason.
 					 */
 					let message =
@@ -14963,7 +15333,7 @@ function createHTML() {
 						AI_IMAGES_PER_PROMPT +
 						" failed: " +
 						lastError
-					: "Done — 480px landscape";
+					: "Done â€” 480px landscape";
 		}
 
 		if (failures === AI_IMAGES_PER_PROMPT) {
@@ -15364,7 +15734,7 @@ function createHTML() {
 
 		overlay.innerHTML =
 			'<div class="auth-box">' +
-			'<div class="auth-title">🎬 YouTube Vibe Studio</div>' +
+			'<div class="auth-title">ðŸŽ¬ YouTube Vibe Studio</div>' +
 			'<div class="auth-sub">Sign in to use the studio (max ' + AUTH_MAX_USERS + ' user accounts)</div>' +
 			'<div class="auth-error" id="auth-error"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
@@ -15584,7 +15954,7 @@ function createHTML() {
 			"auth-footer-user";
 
 		span.textContent =
-			"👤 " +
+			"ðŸ‘¤ " +
 			username;
 
 		const accountLink =
@@ -16246,7 +16616,7 @@ function createHTML() {
 	}
 
 	/*
-	 * The "☁️ API" button in each accordion:
+	 * The "â˜ï¸ API" button in each accordion:
 	 * uploads all of this video's elements to
 	 * POST /api/render, then polls
 	 * /api/render/<jobId> until a (background)
@@ -16386,7 +16756,7 @@ function createHTML() {
 
 		/*
 		 * Busy (10/10 jobs in progress):
-		 * not an error — this browser
+		 * not an error â€” this browser
 		 * renders the video itself with
 		 * its own video generation (the
 		 * same engine the Generate
@@ -16406,7 +16776,7 @@ function createHTML() {
 					"/" +
 					(submitted.max ||
 						10) +
-					" jobs) — rendering " +
+					" jobs) â€” rendering " +
 					payload.name +
 					" in this browser ...";
 			}
@@ -16449,7 +16819,7 @@ function createHTML() {
 				statusText.textContent =
 					"API: " +
 					payload.name +
-					" — waiting for a worker to render ...";
+					" â€” waiting for a worker to render ...";
 			}
 
 			let r;
@@ -16500,7 +16870,7 @@ function createHTML() {
 
 				if (statusText) {
 					statusText.textContent =
-						"✓ API render complete: " +
+						"âœ“ API render complete: " +
 						payload.name;
 				}
 
@@ -16561,7 +16931,7 @@ function createHTML() {
 		if (generating) {
 
 			alert(
-				"A video is already being generated — please wait for it to finish."
+				"A video is already being generated â€” please wait for it to finish."
 			);
 
 			return;
@@ -16834,7 +17204,7 @@ function createHTML() {
 			statusText.textContent =
 				result ===
 					"done"
-					? "✓ " +
+					? "âœ“ " +
 						project.name +
 						" rendered in this browser (API was busy)"
 					: project.name +
@@ -17400,8 +17770,8 @@ function createHTML() {
 
 			toggle.textContent =
 				(open
-					? "▲ "
-					: "▼ ") +
+					? "â–² "
+					: "â–¼ ") +
 				"Script (SRT)";
 		}
 
@@ -17455,8 +17825,8 @@ function createHTML() {
 
 		toggle.textContent =
 			(open
-				? "▲ "
-				: "▼ ") +
+				? "â–² "
+				: "â–¼ ") +
 			"Images / MP4s";
 
 	}
@@ -17601,7 +17971,7 @@ function createHTML() {
 					.length;
 
 			statusEl.textContent =
-				"Script ready — " +
+				"Script ready â€” " +
 				lineCount +
 				" lines (" +
 				speed +
@@ -17874,7 +18244,7 @@ function createHTML() {
 
 	}
 
-			function closeVoiceoverModal() {
+					function closeVoiceoverModal() {
 
 		const modal =
 			document.getElementById(
@@ -17916,7 +18286,7 @@ function createHTML() {
 
 		modal.innerHTML =
 			'<div class="modal-box">' +
-			'<div class="modal-title">🎙 Voiceover (MP3) — Video ' + n + '</div>' +
+			'<div class="modal-title">ðŸŽ™ Voiceover (MP3) â€” Video ' + n + '</div>' +
 			'<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks the script in the selected language (one fixed voice per language). The MP3 can be uploaded as this video\\'s audio track.</div>' +
 			'<label class="quality-select voiceover-voice-label">Voice <select id="voiceover-voice">' +
 			'<option value="en" selected>English (en)</option>' +
@@ -17931,15 +18301,15 @@ function createHTML() {
 			'<div class="voiceover-label">Script (spoken into the MP3)</div>' +
 			'<textarea id="voiceover-text" class="voiceover-textarea" rows="8" readonly disabled></textarea>' +
 			'<div class="voiceover-actions">' +
-			'<button type="button" class="upload-btn small" id="voiceover-gen" onclick="generateVoiceover(' + n + ')">🎧 Generate Voiceover (MP3)</button>' +
+			'<button type="button" class="upload-btn small" id="voiceover-gen" onclick="generateVoiceover(' + n + ')">ðŸŽ§ Generate Voiceover (MP3)</button>' +
 			'<button type="button" class="upload-btn small" id="voiceover-subtitles" onclick="toggleSubtitles(' + n + ')">' +
 			(project.subtitles && project.subtitles.length
-				? "✅ Subtitles ON — click to turn off"
-				: "📝 Apply Subtitles to Video") +
+				? "âœ… Subtitles ON â€” click to turn off"
+				: "ðŸ“ Apply Subtitles to Video") +
 			'</button>' +
 			'</div>' +
 			'<span class="va-note" id="voiceover-status"></span>' +
-			'<button type="button" class="upload-btn small" onclick="closeVoiceoverModal()">✕ Close</button>' +
+			'<button type="button" class="upload-btn small" onclick="closeVoiceoverModal()">âœ• Close</button>' +
 			'</div>';
 
 		document.body.appendChild(
@@ -18059,6 +18429,12 @@ function createHTML() {
 					? titleEl.value.trim()
 					: "";
 
+			const isWav =
+				String(
+					blob.type
+				) ===
+				"audio/wav";
+
 			const fileName =
 				"YouTubeVibeStudio_" +
 				(title ||
@@ -18066,7 +18442,10 @@ function createHTML() {
 						/[^A-Za-z0-9]+/g,
 						""
 					) +
-				"_voiceover.mp3";
+				"_voiceover." +
+				(isWav
+					? "wav"
+					: "mp3");
 
 			const url =
 				URL.createObjectURL(
@@ -18099,7 +18478,7 @@ function createHTML() {
 				blob;
 
 			statusEl.textContent =
-				"Voiceover MP3 saved — upload it as the audio track";
+				"Voiceover MP3 saved â€” upload it as the audio track";
 
 		}
 		catch (err) {
@@ -18186,7 +18565,7 @@ function createHTML() {
 			if (subBtn) {
 
 				subBtn.textContent =
-					"📝 Apply Subtitles to Video";
+					"ðŸ“ Apply Subtitles to Video";
 
 			}
 
@@ -18220,7 +18599,7 @@ function createHTML() {
 			statusEl.textContent =
 				"Subtitles applied (" +
 				cues.length +
-				" cues) — shown below the caption";
+				" cues) â€” shown below the caption";
 
 		}
 
@@ -18234,7 +18613,7 @@ function createHTML() {
 		if (subBtn) {
 
 			subBtn.textContent =
-				"✅ Subtitles ON — click to turn off";
+				"âœ… Subtitles ON â€” click to turn off";
 
 		}
 
@@ -19648,7 +20027,7 @@ function createHTML() {
 
 
 						statusText.textContent =
-							\`Rendering image \${i + 1}/\${slides.length} — \${percent}%\`;
+							\`Rendering image \${i + 1}/\${slides.length} â€” \${percent}%\`;
 
 
 						/*
@@ -19863,11 +20242,11 @@ function createHTML() {
 			statusText.textContent =
 				streamingToFile
 					? audioTrack
-						? "✓ MP4 saved to disk with audio!"
-						: "✓ MP4 saved to disk!"
+						? "âœ“ MP4 saved to disk with audio!"
+						: "âœ“ MP4 saved to disk!"
 					: audioTrack
-						? "✓ MP4 Downloaded with audio!"
-						: "✓ MP4 Downloaded!";
+						? "âœ“ MP4 Downloaded with audio!"
+						: "âœ“ MP4 Downloaded!";
 
 			return "done";
 
@@ -19881,7 +20260,7 @@ function createHTML() {
 
 
 			statusText.textContent =
-				"⚠ Video rendering failed.";
+				"âš  Video rendering failed.";
 
 
 			alert(
