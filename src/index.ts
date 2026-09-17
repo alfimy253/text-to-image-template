@@ -213,6 +213,902 @@ export default {
 		if (authResponse) {
 			return authResponse;
 		}
+		// =====================================================
+		// RENDER API + BACKGROUND WORKERS
+		// POST /api/render            all video elements -> job
+		// GET  /api/render/<jobId>    status, or the MP4
+		// GET  /api/worker/poll       worker claims a job
+		// POST /api/worker/deliver    worker uploads the MP4
+		// POST /api/worker/failed     worker reports failure
+		// GET/POST /api/config/workers  up to 3 worker URLs
+		// GET  /config/uvxyz          settings page
+		// (password: CONFIG_PASSWORD)
+		// =====================================================
+
+		const CONFIG_PASSWORD =
+			"#123admin%";
+
+		const BLOB_CHUNK_SIZE =
+			20 * 1024 * 1024;
+
+		const CONFIG_WORKERS_KEY =
+			"config:workers";
+
+		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "⚙️ Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "⚙️ Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional — URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "▶ Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "■ Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "▶ Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("⏳ Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("✅ Delivered \\"" + (job.name || "job") + "\\" — waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("❌ Job failed: " + msg + " — waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker running…";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("⏳ Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
+
+		async function putBlobStore(
+			env,
+			id,
+			bytes,
+			contentType
+		) {
+
+			const total =
+				bytes.length;
+
+			const parts =
+				Math.max(
+					1,
+					Math.ceil(
+						total /
+						BLOB_CHUNK_SIZE
+					)
+				);
+
+			for (
+				let i = 0;
+				i < parts;
+				i++
+			) {
+
+				await env.KV_BINDING.put(
+					"blob:" + id + ":" + i,
+					new Response(
+						bytes.slice(
+							i * BLOB_CHUNK_SIZE,
+							(i + 1) * BLOB_CHUNK_SIZE
+						)
+					).body,
+					{
+						expirationTtl:
+							7200
+					}
+				);
+
+			}
+
+			await env.KV_BINDING.put(
+				"blob:" + id + ":_idx",
+				JSON.stringify(
+					{
+						parts:
+						parts,
+						total:
+						total,
+						contentType:
+							contentType ||
+							"application/octet-stream"
+					}
+				),
+				{ expirationTtl: 7200 }
+			);
+
+		}
+
+		async function getBlobStore(
+			env,
+			id
+		) {
+
+			const idxRaw =
+				await env.KV_BINDING.get(
+					"blob:" + id + ":_idx"
+				);
+
+			if (!idxRaw) {
+				return null;
+			}
+
+			const idx =
+				JSON.parse(idxRaw);
+
+			const buffers =
+				[];
+
+			for (
+				let i = 0;
+				i < idx.parts;
+				i++
+			) {
+
+				const body =
+					await env.KV_BINDING.get(
+						"blob:" + id + ":" + i,
+						"stream"
+					);
+
+				buffers.push(
+					body
+						? await
+						new Response(body).arrayBuffer()
+					:
+					new ArrayBuffer(0)
+				);
+
+			}
+
+			const chunks =
+				await Promise.all(buffers);
+
+			const out =
+				new Uint8Array(
+					idx.total
+				);
+
+			let offset =
+				0;
+
+			for (
+				const chunk of chunks
+			) {
+
+				out.set(
+					new Uint8Array(chunk),
+					offset
+				);
+
+				offset +=
+					chunk.byteLength;
+
+			}
+
+			return {
+				bytes:
+				out,
+				contentType:
+					idx.contentType,
+				total:
+					idx.total
+			};
+
+		}
+
+		async function listRenderJobs(env) {
+
+			const list =
+				await env.KV_BINDING.list(
+					{ prefix: "job:" }
+				);
+
+			const jobs =
+				[];
+
+			for (
+				const key of list.keys
+			) {
+
+				const raw =
+					await env.KV_BINDING.get(
+						key.name
+					);
+
+				if (raw) {
+					jobs.push(
+						JSON.parse(raw)
+					);
+				}
+
+			}
+
+			return jobs;
+
+		}
+
+		/*
+			* No KV: the render API is
+			* unavailable (503).
+		*/
+		const RENDER_API_PATH =
+			(url.pathname === "/api/render" ||
+			url.pathname.indexOf("/api/render/") === 0 ||
+			url.pathname === "/api/worker/poll" ||
+			url.pathname === "/api/worker/deliver" ||
+			url.pathname === "/api/worker/failed");
+
+		if (
+			!env.KV_BINDING &&
+			RENDER_API_PATH
+		) {
+
+			return json(
+				{
+					success: false,
+					error:
+						"Render storage not configured (bind the KV namespace)"
+				},
+				503
+			);
+
+		}
+
+		/*
+			* Settings page (password gated).
+		*/
+		if (
+			request.method === "GET" &&
+			url.pathname === "/config/uvxyz"
+		) {
+
+			let cfgHtml =
+				createHTML();
+
+			cfgHtml =
+				cfgHtml.replace(
+					"<script>",
+					"<script>window.__CONFIG_PAGE = true;</" +
+						"script>\r\n<script>"
+				);
+
+			cfgHtml =
+				cfgHtml.replace(
+					"</body>",
+					CONFIG_PAGE_SCRIPT +
+						"</body>"
+				);
+
+			return new Response(
+				cfgHtml,
+				{
+					status: 200,
+					headers: {
+						"Content-Type":
+							"text/html; charset=UTF-8"
+					}
+				}
+			);
+
+		}
+
+		/*
+			* Submit a render job: ALL of
+			* the video's elements.
+		*/
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/render"
+		) {
+
+			const body =
+				await request.json().catch(
+					() => ({})
+				);
+
+			const name =
+				String(
+					body.name ||
+					"Video"
+				).slice(0, 60);
+
+			const assets =
+				Array.isArray(
+					body.assets
+				)
+					? body.assets
+					: [];
+
+			const payload =
+				JSON.stringify(
+					{
+						name:
+						name,
+						project:
+							body.project ||
+							{},
+						assets:
+						assets,
+						audio:
+							body.audio ||
+							null
+					}
+				);
+
+			if (
+				payload.length >
+					60 * 1024 * 1024
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Payload too large (max 60MB)"
+					},
+					413
+				);
+
+			}
+
+			const jobId =
+				"job-" +
+				Date.now().toString(36) +
+				"-" +
+				Math.random().toString(36).slice(
+					2,
+					8
+				);
+
+			await putBlobStore(
+				env,
+				"payload-" +
+				jobId,
+				new TextEncoder().encode(
+					payload
+				),
+				"application/json"
+			);
+
+			const job = {
+				id:
+				jobId,
+				name:
+				name,
+				status:
+				"queued",
+				createdAt:
+					Date.now(),
+				payloadId:
+					"payload-" +
+					jobId
+			};
+
+			await env.KV_BINDING.put(
+				"job:" + jobId,
+				JSON.stringify(job),
+				{ expirationTtl: 3600 }
+			);
+
+			return json(
+				{
+					success: true,
+					jobId:
+					jobId
+				}
+			);
+
+		}
+
+		/*
+			* Job status, or the finished
+			* MP4 once a worker delivered
+			* it.
+		*/
+		const renderJobMatch =
+			url.pathname.match(
+				new RegExp("^/api/render/([A-Za-z0-9_-]+)$")
+			);
+
+		if (
+			request.method === "GET" &&
+			renderJobMatch
+		) {
+
+			const raw =
+				await env.KV_BINDING.get(
+					"job:" + renderJobMatch[1]
+				);
+
+			if (!raw) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Job not found (expired?)"
+					},
+					404
+				);
+
+			}
+
+			const job =
+				JSON.parse(raw);
+
+			if (
+				job.status === "done" &&
+				job.fileId
+			) {
+
+				const data =
+					await getBlobStore(
+						env,
+						job.fileId
+					);
+
+				if (!data) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Output file missing"
+						},
+						500
+					);
+
+				}
+
+				const safeName =
+					String(
+						job.name ||
+						"video"
+					).replace(
+						/[^A-Za-z0-9_-]/g,
+						""
+					);
+
+				return new Response(
+					data.bytes,
+					{
+						status: 200,
+						headers: {
+							"Content-Type":
+								data.contentType ||
+								"video/mp4",
+							"Content-Length":
+								String(
+									data.total
+								),
+							"Content-Disposition":
+								"attachment; filename=" + safeName + ".mp4"
+						}
+					}
+				);
+
+			}
+
+			if (
+				job.status ===
+					"failed"
+			) {
+
+				return json(
+					{
+						success: false,
+						status:
+							"failed",
+						error:
+							job.error ||
+							"render failed"
+					},
+					500
+				);
+
+			}
+
+			return json(
+				{
+					success: true,
+					status:
+						job.status,
+					name:
+						job.name
+				}
+			);
+
+		}
+
+		/*
+			* Background worker: claim the
+			* next queued job.
+		*/
+		if (
+			request.method === "GET" &&
+			url.pathname === "/api/worker/poll"
+		) {
+
+			const jobs =
+				await listRenderJobs(
+					env
+				);
+
+			const now =
+				Date.now();
+
+			for (
+				const job of jobs
+			) {
+
+				if (
+					job.status ===
+						"running" &&
+					now -
+						(job.claimedAt || 0) >
+						10 * 60 * 1000
+				) {
+
+					job.status =
+						"failed";
+
+					job.error =
+						"worker timed out";
+
+					await env.KV_BINDING.put(
+						"job:" + job.id,
+						JSON.stringify(job),
+						{
+							expirationTtl:
+								3600
+						}
+					);
+
+				}
+
+			}
+
+			const queued =
+				jobs.find(
+					(j) =>
+						j.status ===
+						"queued"
+				);
+
+			if (!queued) {
+				return json(
+					{ job: null }
+				);
+			}
+
+			queued.status =
+				"running";
+
+			queued.claimedAt =
+				now;
+
+			await env.KV_BINDING.put(
+				"job:" + queued.id,
+				JSON.stringify(queued),
+				{ expirationTtl: 3600 }
+			);
+
+			const data =
+				await getBlobStore(
+					env,
+					queued.payloadId
+				);
+
+			let payload =
+				{};
+
+			if (data) {
+
+				try {
+
+					payload =
+						JSON.parse(
+							new TextDecoder().decode(
+								data.bytes
+							)
+						);
+
+				}
+				catch (parseError) {
+					payload =
+						{};
+				}
+
+			}
+
+			return json(
+				{
+					job: {
+						id:
+							queued.id,
+						name:
+							payload.name ||
+							queued.name,
+						project:
+							payload.project ||
+							{},
+						assets:
+							payload.assets ||
+							[],
+						audio:
+							payload.audio ||
+							null
+					}
+				}
+			);
+
+		}
+
+		/*
+			* Worker uploads the finished
+			* MP4 (raw body).
+		*/
+		if (
+			request.method === "POST" &&
+			url.pathname ===
+				"/api/worker/deliver"
+		) {
+
+			const jobId =
+				url.searchParams.get(
+					"job"
+				) ||
+				"";
+
+			const raw =
+				await env.KV_BINDING.get(
+					"job:" + jobId
+				);
+
+			if (!raw) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Job not found"
+					},
+					404
+				);
+
+			}
+
+			const bytes =
+				new Uint8Array(
+					await request.arrayBuffer()
+				);
+
+			if (!bytes.length) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Empty file"
+					},
+					400
+				);
+
+			}
+
+			const fileId =
+				"file-" + jobId;
+
+			await putBlobStore(
+				env,
+				fileId,
+				bytes,
+				"video/mp4"
+			);
+
+			const job =
+				JSON.parse(raw);
+
+			job.status =
+				"done";
+
+			job.fileId =
+				fileId;
+
+			job.size =
+				bytes.length;
+
+			job.finishedAt =
+				Date.now();
+
+			await env.KV_BINDING.put(
+				"job:" + jobId,
+				JSON.stringify(job),
+				{ expirationTtl: 3600 }
+			);
+
+			return json(
+				{
+					success: true,
+					size:
+						bytes.length
+				}
+			);
+
+		}
+
+		/*
+			* Worker reports a failed job.
+		*/
+		if (
+			request.method === "POST" &&
+			url.pathname ===
+				"/api/worker/failed"
+		) {
+
+			const jobId =
+				url.searchParams.get(
+					"job"
+				) ||
+				"";
+
+			const raw =
+				await env.KV_BINDING.get(
+					"job:" + jobId
+				);
+
+			if (!raw) {
+				return json(
+					{
+						success: false,
+						error:
+							"Job not found"
+					},
+					404
+				);
+			}
+
+			const body =
+				await request.json().catch(
+					() => ({})
+				);
+
+			const job =
+				JSON.parse(raw);
+
+			job.status =
+				"failed";
+
+			job.error =
+				String(
+					body.error ||
+					"render failed"
+				).slice(0, 300);
+
+			await env.KV_BINDING.put(
+				"job:" + jobId,
+				JSON.stringify(job),
+				{ expirationTtl: 3600 }
+			);
+
+			return json(
+				{ success: true }
+			);
+
+		}
+
+		/*
+			* Registered background workers
+			* (up to 3 URLs, optional).
+		*/
+		if (
+			url.pathname ===
+				"/api/config/workers"
+		) {
+
+			if (
+				request.method ===
+					"GET"
+			) {
+
+				const raw =
+					await env.KV_BINDING.get(
+						CONFIG_WORKERS_KEY
+					);
+
+				let urls =
+					[];
+
+				try {
+					urls = raw
+						? JSON.parse(raw)
+						: [];
+				}
+				catch (parseError) {
+					urls =
+						[];
+				}
+
+				if (!Array.isArray(urls)) {
+					urls =
+						[];
+				}
+
+				return json(
+					{
+						success: true,
+						urls:
+							urls
+					}
+				);
+
+			}
+
+			if (
+				request.method ===
+					"POST"
+			) {
+
+				const body =
+					await request.json().catch(
+						() => ({})
+					);
+
+				if (
+					body.pw !==
+						CONFIG_PASSWORD
+				) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Wrong password"
+						},
+						403
+					);
+
+				}
+
+				const urls =
+					(
+						Array.isArray(
+							body.urls
+						)
+							? body.urls
+							: []
+					)
+					.map(
+						(u) =>
+							String(u || "").trim()
+					)
+					.filter(
+						(u) =>
+							u.length > 0
+					)
+					.slice(0, 3);
+
+				for (
+					const u of urls
+				) {
+
+					if (
+						u.length > 500 ||
+						!new RegExp("^https?://").test(
+							u
+						)
+					) {
+
+						return json(
+							{
+								success: false,
+								error:
+									"Worker URLs must be http(s) links (max 500 chars)"
+							},
+							400
+						);
+
+					}
+
+				}
+
+				await env.KV_BINDING.put(
+					CONFIG_WORKERS_KEY,
+					JSON.stringify(
+						urls
+					)
+				);
+
+				return json(
+					{
+						success: true,
+						urls:
+							urls
+					}
+				);
+
+			}
+
+		}
+
+
 		return new Response(
 			"Not Found",
 			{
@@ -434,7 +1330,9 @@ async function handleAuthApi(
 					authenticated: true,
 					user: {
 						username:
-							session.username
+							session.username,
+						email:
+							session.email
 					}
 				}
 			);
@@ -466,6 +1364,12 @@ async function handleAuthApi(
 						""
 				);
 
+			const email =
+				String(
+					body.email ||
+						""
+				).trim().toLowerCase();
+
 			if (
 				!/^[a-zA-Z0-9_]{3,20}$/.test(
 					username
@@ -490,6 +1394,21 @@ async function handleAuthApi(
 						success: false,
 						error:
 							"Password must be at least 6 characters"
+					},
+					400
+				);
+			}
+
+			if (
+				!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+					email
+				)
+			) {
+				return json(
+					{
+						success: false,
+						error:
+							"Enter a valid email address"
 					},
 					400
 				);
@@ -532,6 +1451,36 @@ async function handleAuthApi(
 				);
 			}
 
+			for (
+				const key of list.keys
+			) {
+				const existingRaw =
+					await env.KV_BINDING.get(
+						key.name
+					);
+
+				if (existingRaw) {
+					const existing =
+						JSON.parse(
+							existingRaw
+						);
+
+					if (
+						existing &&
+						existing.email === email
+					) {
+						return json(
+							{
+								success: false,
+								error:
+									"Email already in use"
+							},
+							409
+						);
+					}
+				}
+			}
+
 			const salt =
 				crypto.getRandomValues(
 					new Uint8Array(16)
@@ -546,6 +1495,8 @@ async function handleAuthApi(
 			const user = {
 				username:
 					username,
+				email:
+					email,
 				salt:
 					authToHex(
 						salt
@@ -577,6 +1528,8 @@ async function handleAuthApi(
 					{
 						username:
 							username,
+						email:
+							email,
 						createdAt:
 							new Date().toISOString()
 					}
@@ -588,7 +1541,9 @@ async function handleAuthApi(
 					success: true,
 					user: {
 						username:
-							username
+							username,
+						email:
+							email
 					}
 				},
 				200,
@@ -678,6 +1633,8 @@ async function handleAuthApi(
 					{
 						username:
 							user.username,
+						email:
+							user.email,
 						createdAt:
 							new Date().toISOString()
 					}
@@ -689,7 +1646,9 @@ async function handleAuthApi(
 					success: true,
 					user: {
 						username:
-							user.username
+							user.username,
+						email:
+							user.email
 					}
 				},
 				200,
@@ -2384,6 +3343,38 @@ function createHTML() {
 		}
 
 
+		.va-api-btn {
+
+			background:
+				#1d4ed8;
+
+			border:
+				none;
+
+			border-radius:
+				6px;
+
+			color:
+				#ffffff;
+
+			font-size:
+				0.72rem;
+
+			padding:
+				3px 9px;
+
+			cursor:
+				pointer;
+		}
+
+
+		.va-api-btn:hover {
+
+			background:
+				#2563eb;
+		}
+
+
 		.va-summary {
 
 			color:
@@ -3406,32 +4397,119 @@ function createHTML() {
 		}
 
 
-		.auth-badge {
+		.auth-footer {
+
+			padding:
+				14px 24px 22px;
+
+			text-align:
+				center;
+		}
+
+
+		.auth-footer-hr {
+
+			border:
+				none;
+
+			border-top:
+				1px solid #e5e7eb;
+
+			margin:
+				0 0 14px;
+		}
+
+
+		.auth-footer-row {
 
 			display:
-				none;
+				flex;
 
 			align-items:
 				center;
 
-			gap:
-				10px;
+			justify-content:
+				center;
 
-			margin-left:
-				auto;
+			gap:
+				18px;
+
+			flex-wrap:
+				wrap;
+
+			font-size:
+				0.85rem;
+		}
+
+
+		.auth-footer-user {
+
+			white-space:
+				nowrap;
+
+			font-weight:
+				600;
+
+			color:
+				#1f2937;
+		}
+
+
+		.auth-footer-link {
+
+			white-space:
+				nowrap;
+
+			color:
+				#2563eb;
+
+			text-decoration:
+				underline;
+
+			cursor:
+				pointer;
+		}
+
+
+		.auth-footer-link:hover {
+
+			color:
+				#1d4ed8;
+		}
+
+
+		.auth-account-box {
+
+			margin:
+				12px auto 0;
+
+			max-width:
+				340px;
+
+			background:
+				#f9fafb;
+
+			border:
+				1px solid #e5e7eb;
+
+			border-radius:
+				8px;
+
+			padding:
+				10px 16px;
 
 			font-size:
 				0.85rem;
 
 			color:
-				#d1d5db;
+				#374151;
 		}
 
 
-		.auth-badge-name {
+		.auth-account-line {
 
-			white-space:
-				nowrap;
+			padding:
+				2px 0;
 		}
 
 
@@ -3486,7 +4564,7 @@ function createHTML() {
 
 
 		<h1>
-			馃幀 YouTube Vibe Studio
+			🎬 YouTube Vibe Studio
 		</h1>
 
 		<p>
@@ -3501,7 +4579,7 @@ function createHTML() {
 		class="bulk-banner"
 		style="display:none"
 	>
-		鈿狅笍 Bulk generation is in progress 鈥� do not
+		⚠️ Bulk generation is in progress — do not
 		move or delete your image or MP4 files until
 		it finishes.
 	</div>
@@ -3540,7 +4618,7 @@ function createHTML() {
 		<div class="audio-panel">
 
 			<div class="audio-title">
-				Audio Track 鈥� upload an MP3
+				Audio Track — upload an MP3
 				before rendering
 			</div>
 
@@ -3549,7 +4627,7 @@ function createHTML() {
 
 				<label class="upload-btn audio">
 
-					馃幍 Upload MP3 Audio
+					🎵 Upload MP3 Audio
 
 					<input
 						type="file"
@@ -3564,7 +4642,7 @@ function createHTML() {
 					class="audio-empty"
 					id="audio-empty"
 				>
-					No audio added 鈥�
+					No audio added —
 					the MP4 will be silent.
 				</div>
 
@@ -3602,7 +4680,7 @@ function createHTML() {
 						class="remove-audio-btn"
 						onclick="removeAudio()"
 					>
-						馃棏 Remove Audio
+						🗑 Remove Audio
 					</button>
 
 				</div>
@@ -3706,7 +4784,7 @@ function createHTML() {
 
 			<div class="audio-note">
 				Drawn straight onto every
-				frame 鈥� no background box
+				frame — no background box
 				and no highlight.
 			</div>
 
@@ -3742,31 +4820,31 @@ function createHTML() {
 						</option>
 
 						<option value="like">
-							馃憤 Like
+							👍 Like
 						</option>
 
 						<option value="love">
-							鉂わ笍 Love it
+							❤️ Love it
 						</option>
 
 						<option value="subscribe">
-							馃敂 Subscribe
+							🔔 Subscribe
 						</option>
 
 						<option
 							value="like-subscribe"
 						>
-							馃憤馃敂 Like &amp; Subscribe
+							👍🔔 Like &amp; Subscribe
 						</option>
 
 						<option value="watch">
-							馃幀 Watch Video
+							🎬 Watch Video
 						</option>
 
 						<option
 							value="watch-like-subscribe"
 						>
-							馃幀馃憤馃敂 Watch, Like
+							🎬👍🔔 Watch, Like
 							&amp; Subscribe
 						</option>
 
@@ -3778,7 +4856,7 @@ function createHTML() {
 
 
 			<div class="audio-note">
-				White 200 脳 80 rectangle, square
+				White 200 × 80 rectangle, square
 				corners, flush with the bottom
 				right corner and hanging 40px
 				past the right edge. Drawn on
@@ -3889,7 +4967,7 @@ function createHTML() {
 
 			<label class="upload-btn">
 
-				馃搧 Upload Image, GIF or MP4 (25 images 路 5 GIF 路 5 MP4)
+				📁 Upload Image, GIF or MP4 (25 images · 5 GIF · 5 MP4)
 
 				<input
 					type="file"
@@ -3908,18 +4986,18 @@ function createHTML() {
 				<select id="quality-select">
 
 					<option value="low">
-						480p 路 Light (1.2 Mbps)
+						480p · Light (1.2 Mbps)
 					</option>
 
 					<option
 						value="balanced"
 						selected
 					>
-						720p 路 Balanced (2.5 Mbps)
+						720p · Balanced (2.5 Mbps)
 					</option>
 
 					<option value="high">
-						720p 路 High (5 Mbps)
+						720p · High (5 Mbps)
 					</option>
 
 				</select>
@@ -3932,7 +5010,7 @@ function createHTML() {
 				onclick="onGenerateClick()"
 			>
 
-				馃帪锔� Render & Download MP4 Video
+				🎞️ Render & Download MP4 Video
 
 			</button>
 
@@ -3940,22 +5018,6 @@ function createHTML() {
 
 	</div>
 
-
-	<!-- ======================================================
-	     STORYBOARD
-	     ====================================================== -->
-
-	<h2>
-
-		Storyboard Queue
-		(
-		<span id="queue-count">
-			0
-		</span>
-		images ready
-		)
-
-	</h2>
 
 
 	<div
@@ -3971,7 +5033,7 @@ function createHTML() {
 	>
 		<div class="modal-box">
 			<div class="modal-title">
-				鈿狅笍 Missing required fields
+				⚠️ Missing required fields
 			</div>
 			<ul
 				id="required-modal-list"
@@ -4003,11 +5065,6 @@ function createHTML() {
 			"gallery"
 		);
 
-
-	const queueCountEl =
-		document.getElementById(
-			"queue-count"
-		);
 
 
 	/*
@@ -5570,7 +6627,7 @@ function createHTML() {
 	
 	
 			estimateSourceEl.textContent =
-				"(9s per image or GIF 路 MP4 clips play in full)";
+				"(9s per image or GIF · MP4 clips play in full)";
 	
 	
 		}
@@ -5602,7 +6659,7 @@ function createHTML() {
 
 
 		estimateSizeEl.textContent =
-			"路 approx. " +
+			"· approx. " +
 			formatBytes(bytes) +
 			" file";
 
@@ -6800,10 +7857,6 @@ function createHTML() {
 	// =========================================================
 
 	function updateQueueCount() {
-
-		queueCountEl.textContent =
-			activeSlides.length;
-
 
 		/*
 		 * Slide timing depends on the
@@ -9884,6 +10937,9 @@ function createHTML() {
 	 *   MODULE 4: generation-queue (render everything, 2 at a time)
 	 *   MODULE 5: ai-images       (40% panel: prompt -> 2 CF images,
 	 *                              add-to-video + fullscreen)
+	 *   MODULE 7: api-render      (POST /api/render with all of a
+	 *                              video's elements; background-worker
+	 *                              mode for /config/uvxyz)
 	 *
 	 * Each module only talks to the others through the
 	 * videoProjects array and the small shared functions, so a
@@ -10000,7 +11056,7 @@ function createHTML() {
 			);
 
 			renderBtn.innerHTML =
-				"馃帪锔� Generate Videos";
+				"🎞️ Generate Videos";
 
 		}
 
@@ -10091,21 +11147,6 @@ function createHTML() {
 				)
 		);
 
-		/*
-		 * First accordion: the hint
-		 * becomes a queue note.
-		 */
-		if (n === 1) {
-			const hint =
-				document.getElementById(
-					"action-hint"
-				);
-			if (hint) {
-				hint.textContent =
-					"Videos render in the order listed, two at a time.";
-			}
-		}
-
 		updateVideoStatus(
 			n
 		);
@@ -10139,8 +11180,8 @@ function createHTML() {
 			arrow.textContent =
 				body.style.display ===
 					"none"
-				? "鈻�"
-				: "鈻�";
+				? "▶"
+				: "▼";
 		}
 
 	}
@@ -10177,17 +11218,17 @@ function createHTML() {
 	 */
 	const STICKER_OPTIONS =
 		'<option value="none" selected>None</option>' +
-		'<option value="like">馃憤 Like</option>' +
-		'<option value="love">鉂わ笍 Love it</option>' +
-		'<option value="subscribe">馃敂 Subscribe</option>' +
-		'<option value="like-subscribe">馃憤馃敂 Like &amp; Subscribe</option>' +
-		'<option value="watch">馃幀 Watch Video</option>' +
-		'<option value="watch-like-subscribe">馃幀馃憤馃敂 Watch, Like &amp; Subscribe</option>';
+		'<option value="like">👍 Like</option>' +
+		'<option value="love">❤️ Love it</option>' +
+		'<option value="subscribe">🔔 Subscribe</option>' +
+		'<option value="like-subscribe">👍🔔 Like &amp; Subscribe</option>' +
+		'<option value="watch">🎬 Watch Video</option>' +
+		'<option value="watch-like-subscribe">🎬👍🔔 Watch, Like &amp; Subscribe</option>';
 
 	const QUALITY_OPTIONS =
-		'<option value="low">480p 路 Light (1.2 Mbps)</option>' +
-		'<option value="balanced" selected>720p 路 Balanced (2.5 Mbps)</option>' +
-		'<option value="high">720p 路 High (5 Mbps)</option>';
+		'<option value="low">480p · Light (1.2 Mbps)</option>' +
+		'<option value="balanced" selected>720p · Balanced (2.5 Mbps)</option>' +
+		'<option value="high">720p · High (5 Mbps)</option>';
 
 	const FONT_OPTIONS =
 		'<option value="oswald">Oswald</option>' +
@@ -10205,22 +11246,23 @@ function createHTML() {
 
 		return (
 			'<div class="va-header">' +
-			'<span class="va-title">馃幀 Video ' + n + '</span>' +
+			'<span class="va-title">🎬 Video ' + n + '</span>' +
 			'<span class="va-status" id="va-status-' + n + '">empty</span>' +
+			'<button type="button" class="va-api-btn" onclick="apiRenderVideo(' + n + ')" title="Send all of this video\\'s elements to the render API">☁️ API</button>' +
 			'<span class="va-summary" id="va-summary-' + n + '"></span>' +
-			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">鈻�</button>' +
+			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">▼</button>' +
 			'</div>' +
 			'<div class="va-body" id="va-body-' + n + '">' +
 			'<div class="va-left">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Images / MP4s 鈥� drag cards to reorder</div>' +
-			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">馃搧 Upload Image, GIF or MP4</button>' +
-			'<span class="va-note">Max 5 GIF 路 25 images 路 5 MP4 (1:00 each, silent)</span>' +
+			'<div class="va-section-title">Images / MP4s — drag cards to reorder</div>' +
+			'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">📁 Upload Image, GIF or MP4</button>' +
+			'<span class="va-note">Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)</span>' +
 			'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
 			'</div>' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Audio 鈥� one MP3 (the video is as long as the MP3)</div>' +
-			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">馃幍 Upload MP3 Audio</button>' +
+			'<div class="va-section-title">Audio — one MP3 (the video is as long as the MP3)</div>' +
+			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">🎵 Upload MP3 Audio</button>' +
 			'<span class="va-audio-line" id="va-audio-line-' + n + '"></span>' +
 			'</div>' +
 			'<div class="va-section">' +
@@ -10247,10 +11289,10 @@ function createHTML() {
 			'</div>' +
 			'<div class="va-right">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">AI Images 鈥� Cloudflare</div>' +
+			'<div class="va-section-title">AI Images — Cloudflare</div>' +
 			'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
-			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">鉁� Generate 2 Images</button>' +
-			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit 路 480px landscape</span>' +
+			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">✨ Generate 2 Images</button>' +
+			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit · 480px landscape</span>' +
 			'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
 			'</div>' +
 			'</div>' +
@@ -10423,7 +11465,7 @@ function createHTML() {
 
 			summaryEl.textContent =
 				parts.length
-				? parts.join(" 路 ")
+				? parts.join(" · ")
 				: "no images yet";
 		}
 
@@ -10738,7 +11780,7 @@ function createHTML() {
 
 		if (line) {
 			line.textContent =
-				"馃幍 " + file.name;
+				"🎵 " + file.name;
 		}
 
 		updateVideoStatus(
@@ -10836,7 +11878,7 @@ function createHTML() {
 			"va-card-remove";
 
 		removeBtn.textContent =
-			"脳";
+			"×";
 
 		removeBtn.title =
 			"Remove";
@@ -11140,8 +12182,8 @@ function createHTML() {
 			);
 
 			tip.textContent =
-				bits.join(" 路 ") +
-				" 鈥� drag to reorder";
+				bits.join(" · ") +
+				" — drag to reorder";
 
 			tip.title =
 				tip.textContent;
@@ -11393,7 +12435,7 @@ function createHTML() {
 	 * validates every video in the
 	 * stack, warns about missing
 	 * required fields, then renders
-	 * them in order 鈥� VIDEO_BATCH_SIZE
+	 * them in order — VIDEO_BATCH_SIZE
 	 * at a time, last batch may be one.
 	 */
 	function onGenerateClick() {
@@ -11500,7 +12542,7 @@ function createHTML() {
 
 			if (line) {
 				line.textContent =
-					"馃幍 " +
+					"🎵 " +
 					project.audioFile.name +
 					" (" +
 					formatSeconds(
@@ -12158,7 +13200,7 @@ function createHTML() {
 					/*
 					 * The worker returns
 					 * {success:false,
-					 * error:"..."} 鈥� show
+					 * error:"..."} — show
 					 * the real reason.
 					 */
 					let message =
@@ -12229,7 +13271,7 @@ function createHTML() {
 						AI_IMAGES_PER_PROMPT +
 						" failed: " +
 						lastError
-					: "Done 鈥� 480px landscape";
+					: "Done — 480px landscape";
 		}
 
 		if (failures === AI_IMAGES_PER_PROMPT) {
@@ -12574,11 +13616,14 @@ function createHTML() {
 	//
 	// Flow on load:
 	//   GET /api/session
-	//     200 -> already signed in: show user badge
+	//     200 -> already signed in: show the
+	//            footer (username + links +
+	//            Logout (username))
 	//     401 -> show the sign-in overlay
 	//     503 -> KV not configured: open access
 	//   POST /api/login    (username, password)
-	//   POST /api/signup   (username, password)
+	//   POST /api/signup   (username, email,
+	//                       password)
 	//   POST /api/logout
 	//
 	// The overlay is built with DOM APIs (no HTML edit).
@@ -12586,6 +13631,9 @@ function createHTML() {
 
 	const AUTH_MAX_USERS =
 		7;
+
+	const AUTH_CONTACT_EMAIL =
+		"ytvibemotions.business@gmail.com";
 
 	let authSubmitting =
 		false;
@@ -12624,9 +13672,13 @@ function createHTML() {
 
 		overlay.innerHTML =
 			'<div class="auth-box">' +
-			'<div class="auth-title">馃幀 YouTube Vibe Studio</div>' +
+			'<div class="auth-title">🎬 YouTube Vibe Studio</div>' +
 			'<div class="auth-sub">Sign in to use the studio (max ' + AUTH_MAX_USERS + ' user accounts)</div>' +
 			'<div class="auth-error" id="auth-error"></div>' +
+			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
+			'<label for="auth-email">Email</label>' +
+			'<input type="email" id="auth-email" maxlength="64" autocomplete="email">' +
+			'</div>' +
 			'<div class="auth-field">' +
 			'<label for="auth-username">Username</label>' +
 			'<input type="text" id="auth-username" maxlength="20" autocomplete="username">' +
@@ -12671,6 +13723,13 @@ function createHTML() {
 
 				document.getElementById(
 					"auth-confirm-wrap"
+				).style.display =
+					authIsSignup
+						? "block"
+						: "none";
+
+				document.getElementById(
+					"auth-email-wrap"
 				).style.display =
 					authIsSignup
 						? "block"
@@ -12768,49 +13827,61 @@ function createHTML() {
 	}
 
 	/*
-	 * "馃懁 username | Log out" badge in
-	 * the action bar.
+	 * Footer (end of the page): an hr
+	 * line, then the username, the
+	 * Account + Contact us links and
+	 * the "Logout (username)" button.
 	 */
 	function showUserBadge(
-		username
+		username,
+		email
 	) {
 
-		let badge =
+		let footer =
 			document.getElementById(
-				"auth-badge"
+				"auth-footer"
 			);
 
-		if (!badge) {
+		if (!footer) {
 
-			badge =
+			footer =
 				document.createElement(
 					"div"
 				);
 
-			badge.id =
-				"auth-badge";
+			footer.id =
+				"auth-footer";
 
-			badge.className =
-				"auth-badge";
+			footer.className =
+				"auth-footer";
 
-			const bar =
-				document.getElementById(
-					"action-bar"
-				);
-
-			if (bar) {
-				bar.appendChild(
-					badge
-				);
-			}
+			document.body.appendChild(
+				footer
+			);
 
 		}
 
-		badge.style.display =
-			"flex";
+		footer.style.display =
+			"block";
 
-		badge.innerHTML =
+		footer.innerHTML =
 			"";
+
+		const hr =
+			document.createElement(
+				"hr"
+			);
+
+		hr.className =
+			"auth-footer-hr";
+
+		const row =
+			document.createElement(
+				"div"
+			);
+
+		row.className =
+			"auth-footer-row";
 
 		const span =
 			document.createElement(
@@ -12818,11 +13889,61 @@ function createHTML() {
 			);
 
 		span.className =
-			"auth-badge-name";
+			"auth-footer-user";
 
 		span.textContent =
-			"馃懁 " +
+			"👤 " +
 			username;
+
+		const accountLink =
+			document.createElement(
+				"a"
+			);
+
+		accountLink.href =
+			"#";
+
+		accountLink.className =
+			"auth-footer-link";
+
+		accountLink.id =
+			"account-link";
+
+		accountLink.textContent =
+			"Account";
+
+		accountLink.addEventListener(
+			"click",
+			(e) => {
+
+				e.preventDefault();
+
+				toggleAccountBox(
+					username,
+					email ||
+						""
+				);
+
+			}
+		);
+
+		const contactLink =
+			document.createElement(
+				"a"
+			);
+
+		contactLink.href =
+			"mailto:" +
+				AUTH_CONTACT_EMAIL;
+
+		contactLink.className =
+			"auth-footer-link";
+
+		contactLink.id =
+			"contact-link";
+
+		contactLink.textContent =
+			"Contact us";
 
 		const out =
 			document.createElement(
@@ -12836,20 +13957,135 @@ function createHTML() {
 			"auth-logout";
 
 		out.textContent =
-			"Log out";
+			"Logout (" +
+			username +
+			")";
 
 		out.addEventListener(
 			"click",
 			doLogout
 		);
 
-		badge.appendChild(
+		row.appendChild(
 			span
 		);
 
-		badge.appendChild(
+		row.appendChild(
+			accountLink
+		);
+
+		row.appendChild(
+			contactLink
+		);
+
+		row.appendChild(
 			out
 		);
+
+		footer.appendChild(
+			hr
+		);
+
+		footer.appendChild(
+			row
+		);
+
+	}
+
+	/*
+	 * The small account box toggled
+	 * by the Account link: shows the
+	 * signed-in username + email.
+	 */
+	function toggleAccountBox(
+		username,
+		email
+	) {
+
+		let box =
+			document.getElementById(
+				"auth-account-box"
+			);
+
+		if (!box) {
+
+			box =
+				document.createElement(
+					"div"
+				);
+
+			box.id =
+				"auth-account-box";
+
+			box.className =
+				"auth-account-box";
+
+			box.style.display =
+				"none";
+
+			const footer =
+				document.getElementById(
+					"auth-footer"
+				);
+
+			if (footer) {
+				footer.appendChild(
+					box
+				);
+			}
+
+		}
+
+		if (
+			box.style.display ===
+				"none"
+		) {
+
+			box.innerHTML =
+				"";
+
+			const uLine =
+				document.createElement(
+					"div"
+				);
+
+			uLine.className =
+				"auth-account-line";
+
+			uLine.textContent =
+				"Username: " +
+				username;
+
+			const eLine =
+				document.createElement(
+					"div"
+				);
+
+			eLine.className =
+				"auth-account-line";
+
+			eLine.textContent =
+				"Email: " +
+				email;
+
+			box.appendChild(
+				uLine
+			);
+
+			box.appendChild(
+				eLine
+			);
+
+			box.style.display =
+				"block";
+
+		}
+		else {
+
+			box.style.display =
+				"none";
+
+		}
 
 	}
 
@@ -12878,6 +14114,11 @@ function createHTML() {
 				"auth-confirm"
 			);
 
+		const emailEl =
+			document.getElementById(
+				"auth-email"
+			);
+
 		if (
 			!usernameEl ||
 			!passwordEl
@@ -12891,6 +14132,11 @@ function createHTML() {
 		const password =
 			passwordEl.value;
 
+		const email =
+			emailEl
+				? emailEl.value.trim()
+				: "";
+
 		setAuthError(
 			""
 		);
@@ -12903,6 +14149,21 @@ function createHTML() {
 
 			setAuthError(
 				"Username: 3-20 letters, numbers or _ ."
+			);
+
+			return;
+
+		}
+
+		if (
+			authIsSignup &&
+			!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(
+				email
+			)
+		) {
+
+			setAuthError(
+				"Enter a valid email address."
 			);
 
 			return;
@@ -12974,6 +14235,9 @@ function createHTML() {
 								username:
 									username,
 
+								email:
+									email,
+
 								password:
 									password,
 							}
@@ -12999,18 +14263,22 @@ function createHTML() {
 
 			}
 
-			if (response.ok) {
+				if (response.ok) {
 
-				hideAuthOverlay();
+					hideAuthOverlay();
 
-				showUserBadge(
-					data.user &&
-					data.user.username
-						? data.user.username
-						: username
-				);
+					showUserBadge(
+						data.user &&
+						data.user.username
+							? data.user.username
+							: username,
+						data.user &&
+						data.user.email
+							? data.user.email
+							: email
+					);
 
-			}
+				}
 			else {
 
 				setAuthError(
@@ -13070,13 +14338,13 @@ function createHTML() {
 
 		}
 
-		const badge =
+		const footer =
 			document.getElementById(
-				"auth-badge"
+				"auth-footer"
 			);
 
-		if (badge) {
-			badge.style.display =
+		if (footer) {
+			footer.style.display =
 				"none";
 		}
 
@@ -13084,11 +14352,896 @@ function createHTML() {
 
 	}
 
+	// =========================================================
+	// MODULE 7: api-render + background worker
+	// (POST /api/render takes ALL of a video's elements and
+	//  outputs the finished MP4; the background-worker mode
+	//  at /config/uvxyz renders those jobs in this browser)
+	// =========================================================
+
+	function apiSleep(ms) {
+
+		return new Promise(
+			(resolve) => {
+				setTimeout(resolve, ms);
+			}
+		);
+
+	}
+
+	function b64ToBytes(b64) {
+
+		const bin = atob(b64);
+		const bytes = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) {
+			bytes[i] = bin.charCodeAt(i);
+		}
+		return bytes;
+
+	}
+
+	function fileToB64(file) {
+
+		return new Promise(
+			(resolve, reject) => {
+				const reader = new FileReader();
+				reader.onload = () => {
+					const result =
+						String(reader.result || "");
+					const comma =
+						result.indexOf(",");
+					resolve(
+						comma >= 0
+							? result.substring(comma + 1)
+							: ""
+					);
+				};
+				reader.onerror = () =>
+					reject(reader.error);
+				reader.readAsDataURL(file);
+			}
+		);
+
+	}
+
+	function downloadBlob(
+		blob,
+		fileName
+	) {
+
+		const url =
+			URL.createObjectURL(
+				blob
+			);
+
+		const a =
+			document.createElement(
+				"a"
+			);
+
+		a.href =
+			url;
+
+		a.download =
+			fileName;
+
+		document.body.appendChild(
+			a
+		);
+
+		a.click();
+
+		a.remove();
+
+		setTimeout(
+			() => {
+				URL.revokeObjectURL(
+					url
+				);
+			},
+			2000
+		);
+
+	}
+
+	/*
+	 * Collects ALL of video n's elements
+	 * (assets, MP3, title, font, colour,
+	 * sticker, quality, captions) for the
+	 * /api/render payload.
+	 */
+	function collectVideoPayload(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		const rowsEl =
+			document.getElementById(
+				"va-captions-" + n
+			);
+
+		const captions =
+			[];
+
+		if (rowsEl) {
+
+			rowsEl.querySelectorAll(
+				".caption-row"
+			).forEach(
+				(row) => {
+
+					const hh =
+						Number(
+							row.querySelector(
+								".caption-hh"
+							).value ||
+							0
+						);
+
+					const mm =
+						Number(
+							row.querySelector(
+								".caption-mm"
+							).value ||
+							0
+						);
+
+					const ss =
+						Number(
+							row.querySelector(
+								".caption-ss"
+							).value ||
+							0
+						);
+
+					captions.push(
+						{
+							time:
+								hh * 3600 +
+								mm * 60 +
+								ss,
+							text:
+								row.querySelector(
+									".caption-text"
+								).value
+						}
+					);
+
+				}
+			);
+
+		}
+
+		return {
+			name:
+				project.name,
+			project: {
+				title:
+					document.getElementById(
+						"va-title-" + n
+					).value,
+				font:
+					document.getElementById(
+						"va-font-" + n
+					).value,
+				color:
+					document.getElementById(
+						"va-color-" + n
+					).value,
+				sticker:
+					document.getElementById(
+						"va-sticker-" + n
+					).value,
+				quality:
+					document.getElementById(
+						"va-quality-" + n
+					).value,
+				captions:
+					captions
+			},
+			assets:
+				project.assets,
+			audioFile:
+				project.audioFile ||
+				null
+		};
+
+	}
+
+	/*
+	 * The "☁️ API" button in each accordion:
+	 * uploads all of this video's elements to
+	 * POST /api/render, then polls
+	 * /api/render/<jobId> until a (background)
+	 * worker finishes and the MP4 is ready to
+	 * download.
+	 */
+	async function apiRenderVideo(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		if (
+			!project.assets.length
+		) {
+
+			alert(
+				project.name +
+					": add at least one image, GIF or MP4 first."
+			);
+
+			return;
+
+		}
+
+		const payload =
+			collectVideoPayload(
+				n
+			);
+
+		const assets =
+			[];
+
+		for (
+			const a of payload.assets
+		) {
+
+			assets.push(
+				{
+					name:
+						a.file.name,
+					type:
+						a.file.type ||
+						"",
+					data:
+						await fileToB64(
+							a.file
+						)
+				}
+			);
+
+		}
+
+		let audio =
+			null;
+
+		if (payload.audioFile) {
+
+			audio = {
+				name:
+					payload.audioFile.name,
+				type:
+					payload.audioFile.type ||
+					"audio/mpeg",
+				data:
+					await fileToB64(
+						payload.audioFile
+					)
+			};
+
+		}
+
+		const statusText =
+			document.getElementById(
+				"status-text"
+			);
+
+		if (statusText) {
+			statusText.textContent =
+				"API: uploading " +
+				payload.name +
+				" ...";
+		}
+
+		let response;
+
+		try {
+
+			response =
+				await fetch(
+					"/api/render",
+					{
+						method: "POST",
+						headers: {
+							"Content-Type":
+								"application/json"
+						},
+						body: JSON.stringify(
+							{
+								name:
+									payload.name,
+								project:
+									payload.project,
+								assets:
+									assets,
+								audio:
+									audio
+							}
+						),
+						credentials:
+							"same-origin"
+					}
+				);
+
+		}
+		catch (netError) {
+
+			alert(
+				"API error: " +
+					(netError.message ||
+						netError)
+			);
+
+			return;
+
+		}
+
+		const submitted =
+			await response.json().catch(
+				() => ({})
+			);
+
+		if (
+			!response.ok ||
+			!submitted.jobId
+		) {
+
+			alert(
+				"API: " +
+					(submitted.error ||
+						"request failed (" +
+						response.status +
+						")")
+			);
+
+			return;
+
+		}
+
+		const jobId =
+			submitted.jobId;
+
+		while (true) {
+
+			await apiSleep(
+				4000
+			);
+
+			if (statusText) {
+				statusText.textContent =
+					"API: " +
+					payload.name +
+					" — waiting for a worker to render ...";
+			}
+
+			let r;
+
+			try {
+
+				r =
+					await fetch(
+						"/api/render/" +
+							jobId,
+						{
+							credentials:
+								"same-origin"
+						}
+					);
+
+			}
+			catch (netError) {
+				continue;
+			}
+
+			const contentType =
+				r.headers.get(
+					"Content-Type"
+				) ||
+				"";
+
+			if (
+				r.status === 200 &&
+				contentType.indexOf(
+					"video/"
+				) ===
+					0
+			) {
+
+				const blob =
+					await r.blob();
+
+				downloadBlob(
+					blob,
+					"API_" +
+					payload.name.replace(
+						/\\s+/g,
+						""
+					) +
+					".mp4"
+				);
+
+				if (statusText) {
+					statusText.textContent =
+						"✓ API render complete: " +
+						payload.name;
+				}
+
+				return;
+
+			}
+
+			if (r.status === 500) {
+
+				const j =
+					await r.json().catch(
+						() => ({})
+					);
+
+				alert(
+					"Render failed: " +
+						(j.error ||
+							"unknown error")
+				);
+
+				return;
+
+			}
+
+			if (r.status === 404) {
+
+				alert(
+					"API: job expired or not found."
+				);
+
+				return;
+
+			}
+
+		}
+
+	}
+
+	/*
+	 * Background-worker side: runs one render
+	 * job (from /api/worker/poll) through the
+	 * hidden engine, then POSTs the finished
+	 * MP4 to /api/worker/deliver. Used by the
+	 * /config/uvxyz page in worker mode.
+	 */
+	async function workerRunJob(
+		job
+	) {
+
+		window.__workerMode =
+			true;
+
+		window.__lastRenderBlob =
+			null;
+
+		const project = {
+			n: 1,
+			name:
+				job.name ||
+				"Video",
+			assets: [],
+			audioFile:
+				null,
+			audio:
+				null,
+			status:
+				"rendering",
+			el:
+				null
+		};
+
+		try {
+
+			for (
+				const a of
+					job.assets ||
+					[]
+			) {
+
+				const file =
+					new File(
+						[
+							b64ToBytes(
+								a.data
+							)
+						],
+						a.name ||
+						"asset",
+						{
+							type:
+								a.type ||
+								"application/octet-stream"
+						}
+					);
+
+				const looksGif =
+					/\\.gif$/i.test(
+						a.name ||
+						""
+					) ||
+					(a.type ||
+						"").indexOf(
+						"image/gif"
+					) ===
+						0;
+
+				const looksMp4 =
+					/\\.mp4$/i.test(
+						a.name ||
+						""
+					) ||
+					/\\.m4v$/i.test(
+						a.name ||
+						""
+					) ||
+					(a.type ||
+						"").indexOf(
+						"video/mp4"
+					) ===
+						0;
+
+				const asset = {
+					kind:
+						looksGif
+							? "gif"
+							: looksMp4
+								? "mp4"
+								: "image",
+					file:
+						file,
+					url:
+						null,
+					card:
+						null
+				};
+
+				if (
+					asset.kind ===
+						"mp4"
+				) {
+
+					const url =
+						URL.createObjectURL(
+							file
+						);
+
+					const probed =
+						document.createElement(
+							"video"
+						);
+
+					probed.muted =
+						true;
+
+					probed.playsInline =
+						true;
+
+					probed.src =
+						url;
+
+					await new Promise(
+						(resolve, reject) =>
+						{
+							probed.addEventListener(
+								"loadedmetadata",
+								resolve,
+								{
+									once:
+										true
+								}
+							);
+
+							probed.addEventListener(
+								"error",
+								reject,
+								{
+									once:
+										true
+								}
+							);
+						}
+					);
+
+					probed.loop =
+						true;
+
+					asset.videoEl =
+						probed;
+
+					asset.duration =
+						probed.duration;
+
+					asset.url =
+						url;
+
+				}
+				else {
+
+					asset.url =
+						URL.createObjectURL(
+							file
+						);
+
+				}
+
+				project.assets.push(
+					asset
+				);
+
+			}
+
+			if (
+				job.audio &&
+				job.audio.data
+			) {
+
+				project.audioFile =
+					new File(
+						[
+							b64ToBytes(
+								job.audio.data
+							)
+						],
+						job.audio.name ||
+						"audio.mp3",
+						{
+							type:
+								job.audio.type ||
+								"audio/mpeg"
+						}
+					);
+
+			}
+
+			videoProjects.length =
+				0;
+
+			videoProjects.push(
+				project
+			);
+
+			const p =
+				job.project ||
+				{};
+
+			document.getElementById(
+				"title-input"
+			).value =
+				p.title ||
+				"";
+
+			document.getElementById(
+				"title-font"
+			).value =
+				p.font ||
+				"oswald";
+
+			document.getElementById(
+				"title-color"
+			).value =
+				p.color ||
+				"white";
+
+			document.getElementById(
+				"sticker-select"
+			).value =
+				p.sticker ||
+				"none";
+
+			document.getElementById(
+				"quality-select"
+			).value =
+				p.quality ||
+				"balanced";
+
+			captionRowsEl.innerHTML =
+				"";
+
+			(
+				p.captions ||
+				[]
+			).forEach(
+				(c) => {
+
+					const t =
+						Number(
+							c.time ||
+							0
+						);
+
+					const row =
+						document.createElement(
+							"div"
+						);
+
+					row.className =
+						"caption-row";
+
+					row.innerHTML =
+						vaCaptionRowHTML();
+
+					row.querySelector(
+						".caption-hh"
+					).value =
+						Math.floor(
+							t /
+							3600
+						);
+
+					row.querySelector(
+						".caption-mm"
+					).value =
+						Math.floor(
+							(t % 3600) /
+							60
+						);
+
+					row.querySelector(
+						".caption-ss"
+					).value =
+						t %
+						60;
+
+					row.querySelector(
+						".caption-text"
+					).value =
+						c.text ||
+						"";
+
+					captionRowsEl.appendChild(
+						row
+					);
+
+				}
+			);
+
+			if (
+				typeof updateCaptionCount ===
+					"function"
+			) {
+
+				updateCaptionCount();
+
+			}
+
+			const slides =
+				await prepareVideo(
+					1
+				);
+
+			activeSlides.length =
+				0;
+
+			for (
+				const s of slides
+			) {
+
+				activeSlides.push(
+					s
+				);
+
+			}
+
+			currentAudio =
+				project.audio;
+
+			renderContext = {
+				fileName:
+					"Worker_" +
+					(job.name ||
+						"video").replace(
+						/\\s+/g,
+						""
+					) +
+					".mp4"
+			};
+
+			const result =
+				await generateMP4();
+
+			const blob =
+				window.__lastRenderBlob;
+
+			if (
+				result !==
+					"done" ||
+				!blob
+			) {
+
+				throw new Error(
+					"render produced no output"
+				);
+
+			}
+
+			const resp =
+				await fetch(
+					"/api/worker/deliver?job=" +
+						job.id,
+					{
+						method: "POST",
+						body:
+							blob,
+						credentials:
+							"same-origin"
+					}
+				);
+
+			const d =
+				await resp.json().catch(
+					() => ({})
+				);
+
+			if (!resp.ok) {
+
+				throw new Error(
+					d.error ||
+					"deliver failed (" +
+					resp.status +
+					")"
+				);
+
+			}
+
+		}
+		finally {
+
+			for (
+				const a of
+					project.assets
+			) {
+
+				if (a.url) {
+					URL.revokeObjectURL(
+						a.url
+					);
+				}
+
+			}
+
+			videoProjects.length =
+				0;
+
+			activeSlides.length =
+				0;
+
+			currentAudio =
+				null;
+
+			renderContext =
+				null;
+
+			window.__workerMode =
+				false;
+
+		}
+
+	}
+
 	/*
 	 * On load: ask the worker who we
-	 * are.
+	 * are. The /config/uvxyz page skips the
+	 * auth lock (it has its own password
+	 * gate) and may run as a background
+	 * worker.
 	 */
 	async function initAuth() {
+
+		if (window.__CONFIG_PAGE) {
+			return;
+		}
 
 		try {
 
@@ -13135,6 +15288,10 @@ function createHTML() {
 					data.user &&
 					data.user.username
 						? data.user.username
+						: "",
+					data.user &&
+					data.user.email
+						? data.user.email
 						: ""
 				);
 
@@ -13225,10 +15382,13 @@ function createHTML() {
 		let fileStream =
 			null;
 
+		window.__lastRenderBlob =
+			null;
 
 		if (
 			typeof window.showSaveFilePicker ===
-			"function"
+			"function" &&
+			!window.__workerMode
 		) {
 
 			try {
@@ -14528,7 +16688,7 @@ function createHTML() {
 
 
 						statusText.textContent =
-							\`Rendering image \${i + 1}/\${slides.length} 鈥� \${percent}%\`;
+							\`Rendering image \${i + 1}/\${slides.length} — \${percent}%\`;
 
 
 						/*
@@ -14686,6 +16846,8 @@ function createHTML() {
 						}
 					);
 
+			window.__lastRenderBlob =
+				blob;
 
 				const downloadURL =
 					URL.createObjectURL(
@@ -14712,7 +16874,9 @@ function createHTML() {
 				);
 
 
-				a.click();
+				if (!window.__workerMode) {
+					a.click();
+				}
 
 
 				a.remove();
@@ -14739,11 +16903,11 @@ function createHTML() {
 			statusText.textContent =
 				streamingToFile
 					? audioTrack
-						? "鉁� MP4 saved to disk with audio!"
-						: "鉁� MP4 saved to disk!"
+						? "✓ MP4 saved to disk with audio!"
+						: "✓ MP4 saved to disk!"
 					: audioTrack
-						? "鉁� MP4 Downloaded with audio!"
-						: "鉁� MP4 Downloaded!";
+						? "✓ MP4 Downloaded with audio!"
+						: "✓ MP4 Downloaded!";
 
 			return "done";
 
@@ -14757,7 +16921,7 @@ function createHTML() {
 
 
 			statusText.textContent =
-				"鈿� Video rendering failed.";
+				"⚠ Video rendering failed.";
 
 
 			alert(
