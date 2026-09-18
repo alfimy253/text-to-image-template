@@ -274,7 +274,7 @@ export default {
 		const FALLBACK_TTS_URL =
 			"https://tts-api.netlify.app/";
 
-		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "âš™ï¸ Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "âš™ï¸ Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional â€” URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "â–¶ Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "â–  Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "â–¶ Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("â³ Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("âœ… Delivered \\"" + (job.name || "job") + "\\" â€” waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("âŒ Job failed: " + msg + " â€” waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker runningâ€¦";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("â³ Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
+		const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "鈿欙笍 Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional 鈥� URLs of extra worker instances (max 3). Each one is this same /config/uvxyz page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "鈻� Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "鈻� Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "鈻� Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("鈴� Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("鉁� Delivered \\"" + (job.name || "job") + "\\" 鈥� waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("鉂� Job failed: " + msg + " 鈥� waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker running鈥�";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("鈴� Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
 
 		async function putBlobStore(
 			env,
@@ -1471,7 +1471,7 @@ export default {
 
 			const sentences =
 				text.match(
-					/[^.!?â€¦]+[.!?â€¦]*\s*/g
+					/[^.!?鈥+[.!?鈥*\s*/g
 				) || [text];
 
 			const chunks =
@@ -5950,6 +5950,13 @@ function createHTML() {
 		}
 
 
+		.va-script-actions {
+
+			justify-content:
+				flex-end;
+		}
+
+
 		.va-audio-line {
 
 			margin-left:
@@ -6999,7 +7006,7 @@ function createHTML() {
 
 
 		<h1>
-			ðŸŽ¬ YouTube Vibe Studio
+			馃幀 YouTube Vibe Studio
 		</h1>
 
 		<p>
@@ -7014,7 +7021,7 @@ function createHTML() {
 		class="bulk-banner"
 		style="display:none"
 	>
-		âš ï¸ Bulk generation is in progress â€” do not
+		鈿狅笍 Bulk generation is in progress 鈥� do not
 		move or delete your image or MP4 files until
 		it finishes.
 	</div>
@@ -7053,7 +7060,7 @@ function createHTML() {
 		<div class="audio-panel">
 
 			<div class="audio-title">
-				Audio Track â€” upload an MP3
+				Audio Track 鈥� upload an MP3
 				before rendering
 			</div>
 
@@ -7062,7 +7069,7 @@ function createHTML() {
 
 				<label class="upload-btn audio">
 
-					ðŸŽµ Upload MP3 Audio
+					馃幍 Upload MP3 Audio
 
 					<input
 						type="file"
@@ -7077,7 +7084,7 @@ function createHTML() {
 					class="audio-empty"
 					id="audio-empty"
 				>
-					No audio added â€”
+					No audio added 鈥�
 					the MP4 will be silent.
 				</div>
 
@@ -7115,7 +7122,7 @@ function createHTML() {
 						class="remove-audio-btn"
 						onclick="removeAudio()"
 					>
-						ðŸ—‘ Remove Audio
+						馃棏 Remove Audio
 					</button>
 
 				</div>
@@ -7219,7 +7226,7 @@ function createHTML() {
 
 			<div class="audio-note">
 				Drawn straight onto every
-				frame â€” no background box
+				frame 鈥� no background box
 				and no highlight.
 			</div>
 
@@ -7255,31 +7262,31 @@ function createHTML() {
 						</option>
 
 						<option value="like">
-							ðŸ‘ Like
+							馃憤 Like
 						</option>
 
 						<option value="love">
-							â¤ï¸ Love it
+							鉂わ笍 Love it
 						</option>
 
 						<option value="subscribe">
-							ðŸ”” Subscribe
+							馃敂 Subscribe
 						</option>
 
 						<option
 							value="like-subscribe"
 						>
-							ðŸ‘ðŸ”” Like &amp; Subscribe
+							馃憤馃敂 Like &amp; Subscribe
 						</option>
 
 						<option value="watch">
-							ðŸŽ¬ Watch Video
+							馃幀 Watch Video
 						</option>
 
 						<option
 							value="watch-like-subscribe"
 						>
-							ðŸŽ¬ðŸ‘ðŸ”” Watch, Like
+							馃幀馃憤馃敂 Watch, Like
 							&amp; Subscribe
 						</option>
 
@@ -7291,7 +7298,7 @@ function createHTML() {
 
 
 			<div class="audio-note">
-				White 200 Ã— 80 rectangle, square
+				White 200 脳 80 rectangle, square
 				corners, flush with the bottom
 				right corner and hanging 40px
 				past the right edge. Drawn on
@@ -7402,7 +7409,7 @@ function createHTML() {
 
 			<label class="upload-btn">
 
-				ðŸ“ Upload Image, GIF or MP4 (25 images Â· 5 GIF Â· 5 MP4)
+				馃搧 Upload Image, GIF or MP4 (25 images 路 5 GIF 路 5 MP4)
 
 				<input
 					type="file"
@@ -7421,18 +7428,18 @@ function createHTML() {
 				<select id="quality-select">
 
 					<option value="low">
-						480p Â· Light (1.2 Mbps)
+						480p 路 Light (1.2 Mbps)
 					</option>
 
 					<option
 						value="balanced"
 						selected
 					>
-						720p Â· Balanced (2.5 Mbps)
+						720p 路 Balanced (2.5 Mbps)
 					</option>
 
 					<option value="high">
-						720p Â· High (5 Mbps)
+						720p 路 High (5 Mbps)
 					</option>
 
 				</select>
@@ -7445,7 +7452,7 @@ function createHTML() {
 				onclick="onGenerateClick()"
 			>
 
-				ðŸŽžï¸ Render & Download MP4 Video
+				馃帪锔� Render & Download MP4 Video
 
 			</button>
 
@@ -7468,7 +7475,7 @@ function createHTML() {
 	>
 		<div class="modal-box">
 			<div class="modal-title">
-				âš ï¸ Missing required fields
+				鈿狅笍 Missing required fields
 			</div>
 			<ul
 				id="required-modal-list"
@@ -7793,6 +7800,23 @@ function createHTML() {
 
 	const STICKER_EMOJI_FONT =
 		"'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Segoe UI Symbol', sans-serif";
+
+	/*
+	 * The sticker icon artwork,
+	 * embedded as data URIs
+	 * (offline-safe): the icons
+	 * are identical on every
+	 * machine, no network
+	 * needed.
+	 */
+	const STICKER_EMOJI_DATA =
+		{
+			"1f525": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAAh1BMVEVHcEz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz/zE3/zE3/zE3/zE3/zE3/zE3/zE3/zE39wkL/zE3/zE3/zE3/zE30kAz/zE36ri33nxz+yEn+xUX5qij8vT32mxj9wUH3oyD1mBT6sjH1lBD7tjX8uTmQeifTAAAAHXRSTlMAMEBQv++PEM+A359gryBwzxDvv4CPUK9gIN9gMOUtXcUAAAKrSURBVHjarZfZkoIwEEWDLEkAcXfWDpu78//fN4OMqdAkJFCeJy3LI919OwJxJAtm5DUkENGXiGYAof8SUwwAERkPxV+K4I+AjvawoFdbAxtrYpAQBDiacB1c06SG+RiPBxpRAC2cuDMHgMQkgszZkz2a0W/bP4GzaAENuKsg8dwra0hJBx8kiXuIG2K8bJLQVaQbjwcKM3cRLo7KVlsTEGX9ti56Hnso/Vg3H5bSRsNDkFgCkIUJEklXwAATm0UBcPWNDaMn7UwimiyicUfkTxZxtIoxaLEnMkQ/YqstMHUIb6I/UcRw7Gegw7q1nkyxq2jR/b7X6UjiXBpeWj9SK4OQujcbzZz9h6i30jSEQRg+B2mnjtBzXZE5Pgd9mcbW1JbuMbDA8aw4/n3GOceao21oi2euLBdwqvLb4NDiZ9NgmFqIMscinDkX0VH8cToaSwtcRVA2pvJs2JCFDFYGFg7iQXtNOLteKEUULNxbUXlBlyQ9rqXlouWgFkcf18ABJohEAQoB5/MQpokOYEQfSJS/H/HkMrzFAW5uAR0qKaqHj14OHa7ijAIp+RneYh9UzkLkaPqSExjwSS9IlxI19SgUwMB/QBnu7E1p/Ela0Aeo1+iELkRDjj2aJBXK6+iZc+NeFYoHieqD5i6XqRfUUNa3pu93gcjV4Rb9/4JUM6GqFH2uarrumlvNUB49w1Sdc1Nza8JlZRZqNRRF/z+FxnI9nUy10rGYEoVUzsxGlefXSj0NUs0zVCVGUelulbKm32IkTaczgvCniXzSI5oiioiG+XjR3PCoP1ZkenSny3GeJSUGVm9jPG8rYmbn7tmRQfZrN816Tyx8bFw8mw9i5/3Tpvl8J06stuvBqraUOPO1NM78i4zje7fUWHbfZAKr/XazlI7Ndj8UnF+YwEpCshNBaAAAAABJRU5ErkJggg==",
+			"2764": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAAM1BMVEVHcEzdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkQVM82yAAAAEHRSTlMAIN+fzzBAEO+/j3Bgr1CAS8Xz9AAAAV5JREFUeF7l2M2OgzAMhdGbEOK4/N33f9rRMMISamgF9m7O1tKnNgmtAv6Vsdbx4dykSRt3bZlSb74cc7X5u7nwRFecrMqTMqOnZr7RClOVb7LNjbzY9To6V3PBiRReKPJ9bjA2Xipina42wkjmB0Ws05UFh8KPloUflaOz0WnDLtEt4ZfSTQFgZIARwMAAA4DGAA2oDFGxMcSGhSEWKEMoCkMUMAgaQ7SwNQoLxZ2jlSFWJIZIUQ9t5M/IzAAzAGEAAYCFbgt+rXRbsct0yvgzByz1ThpdGg4TXSaY7Fwhs3q3zKjzf9+kxodawsnkXWmj7i/mOkxN8KbygYqOjbdt6Bp404A+KbylCC5Idne+XyX6Vwd/yTrXJXfHSu6OlZwdI8WxXyei/Eh7nQdnfMANc+OFNuOWsbCrjLhJXhe38/tqvnpf4P1QL8FTSWk0waOqvSXxqgM5VEQQwb/2A80o0l7lU88FAAAAAElFTkSuQmCC",
+			"1f44d": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAAk1BMVEVHcEz/217/217/217/217/217/217/217/217/217/217/217ulUf/217/217ulUfulUf/217ulUf/217ulUf3uFP4v1X7zFnwnEnzqU78zVnulUfvm0nwn0rulUfulUf/217ulUf7ylj3uFP0r1Dzq07+1138zlr5wVXwnkrvmUjxokvyp036xVf1tFH4vFT90lstgPVGAAAAIHRSTlMAcGDfIBCfQL+Az6/v7zAQMFDfj4CAUN+fcO9Qv99gcEnxpdkAAAIGSURBVHherZbZkpswEEUFFiC8zTj7nsu6eJ3//7oA5VQUpLbVJZ1HHk5JfbtbCIokzlUaSeFLssNM7iuKcCf1FCn8JQ8lggwl2oQSQYYSRaFEKpQIwUSJh2gNjcxDBJ29x6ghUI0yaOz8Z9Y//hQa7z1EK4TpbIlA6cehQttAYxWqi1Sg8LEJlBnWXm2to/I7cTYj+SuERqk8etYWBzijIvnwjeWQSsqzBo9dbC/0ChRlPRQ6V9yxmGQKkrpYUhLDmMRrcDxFpw2RcRiKyyw461TW/RDjMadR07RkdEYzk4yeY0snZzxjFOUoqkFj7A2KbroZVb6qhPPNMKdEHvYzISLSP/alSXUcRR/dRW/Hgmb74i5C/8DzKoKITt8kQ9TOV2sqkwugGKLbqBneQCDdRc0ouoAidhedRxFIcp7IfrOuqdvIXVRNpaZSaPaMhpzXkdnatynNn5w+uhY03zkinEjPb0GIeMM2fBWUiF7+dbXk1kGxRO3k6WFFEiL2rj1wRRXd1/4n6s9Nd+DXyP4oSP/U5o8/RJg+2r7yROjspu0vwRS1VlH9Sejs4Vika/k/7fJ3Hs+ZDlRa+1pnA/7rb/4b8VubFonIZUUO5gI+dguRyNIVHjKYQ9JP102ESZY+Wf/FcNaYd+YXYWW/Zu7a7Yuwk9D5tRbTO30+3IvVnxaaD//O8wc9hoFwgKeolwAAAABJRU5ErkJggg==",
+			"1f514": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAAM1BMVEVHcEz/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDPIzIGKAAAAEXRSTlMAIJ/v/zAQQK+/j89ggHDfUC2EKUAAAAEoSURBVHgB7dgFcugwDARQJ1qzA/e/7IcyryyV23cAGUbaZByYZRVA1iU4RcEFicFlEVwR355W3FiDh+CGBIeEO1xXjTvsl5QL7inZVqbikTpfKjU8qaXJOh3P6MnSz/fN93gSvECS/VzG0zUQLahkULouqKCqfUOGLRUolEAtILQTPKAy1JlI8LzsUOmBgdLnK5TUKU1EdV8T+ecWGiC0M7JBaaOjprTq4tEfklBTNba/tXeo7ZrAdsd2woTE29HfkgcmHGxD/i2lA1OOxOfMNW8R0yI5mO9wFQaVX5D1miKMMv/km34CTpidPGEtmSswE5Kwep+80AGzgyeRKZV2gYns4VX8wgMfX6iSXFUb5IOo13FH97+Mwf82tvSb/ZA61KgAUOn9/AVW2in/wdtp3QAAAABJRU5ErkJggg==",
+			"1f3ac": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAArlBMVEVHcEw/cSM/cSM/cSM/cSMpLzMpLzMpLzPM1t3M1t0/cSM/cSPM1t0/cSMpLzPM1t3M1t0/cSM/cSM/cSMpLzMpLzMpLzPM1t3M1t0pLzPM1t3M1t0/cSNES08/cSMpLzMpLzPM1t3M1t0/cSM9REhSWV7M1t0pLzNfZ2xqcnc/cSMpLzPM1t0zOT6tt73CzNKPl51mbnM9REh7g4hSWV6ZoqijrLO4wchITlOFjZPVvWfCAAAAKnRSTlMAgEBQv0C/gL+AEI/P748Q75+vcM8QUEAw769w379gr3BQjyCAgJ8wMJ/qDCaiAAABkElEQVR42u3UW0/CQBQE4AUFWgQKKqKgYuvdXVquXv7/H5Mim9mUbs7S0xeTzutpvpAZWsHL9WTcj0QJiNqmw0EavtdXOkFRpNWUcq6QsCiSxpSioogpHVvSyPe+YWSlwBlJn05mVil0Q3TiA2njVlLjCUi+NIt1SUSxC+UoBdQ6P45SaEPQp5sUZYtNLBsjc5knvWgjCPfrFJDu/DDYI1EHzyXLY6RmqyF03g9boCUgSM95Y0hAjFzJIyXPH4m8DKVc0ZIdQS6d/i12BCXl9PmZgZrPdgQlERujWCJDy8bOCErKl9wRlLRLTE1Ml4RlCIQsSUv98YRC6JJupg9vgpneFnkVJaQl02Q/0WuJ0DfPgGaJ9QNG3wDh3T38wNE3E1oqMyuJULcMtFFGvvD+u90ArZWZhUScboBi22eEvgFiTg+IOT0g5vSAmNMDYk4PiDk9IN70gGof/JxWUAVVUAVV0P+C6iVA5ynULgG6EGkGfKi9gx67XKcm/nLPdAZC54T1m84E0q7dFlS6g3oK/AJJbHdxh9vlLAAAAABJRU5ErkJggg=="
+		};
 
 
 	/*
@@ -9242,7 +9266,7 @@ function createHTML() {
 	
 	
 			estimateSourceEl.textContent =
-				"(9s per image or GIF Â· MP4 clips play in full)";
+				"(9s per image or GIF 路 MP4 clips play in full)";
 	
 	
 		}
@@ -9274,7 +9298,7 @@ function createHTML() {
 
 
 		estimateSizeEl.textContent =
-			"Â· approx. " +
+			"路 approx. " +
 			formatBytes(bytes) +
 			" file";
 
@@ -11305,9 +11329,10 @@ function createHTML() {
 					points.map(
 						(point) =>
 							loadImage(
-								"https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.0.3/assets/72x72/" +
+								STICKER_EMOJI_DATA[point] ||
+								("https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.0.3/assets/72x72/" +
 									point +
-									".png",
+									".png"),
 								8000
 							)
 					)
@@ -13694,7 +13719,7 @@ function createHTML() {
 			);
 
 			renderBtn.innerHTML =
-				"ðŸŽžï¸ Generate Videos";
+				"馃帪锔� Generate Videos";
 
 		}
 
@@ -13818,8 +13843,8 @@ function createHTML() {
 			arrow.textContent =
 				body.style.display ===
 					"none"
-				? "â–¶"
-				: "â–¼";
+				? "鈻�"
+				: "鈻�";
 		}
 
 	}
@@ -13856,17 +13881,17 @@ function createHTML() {
 	 */
 	const STICKER_OPTIONS =
 		'<option value="none" selected>None</option>' +
-		'<option value="like">ðŸ‘ Like</option>' +
-		'<option value="love">â¤ï¸ Love it</option>' +
-		'<option value="subscribe">ðŸ”” Subscribe</option>' +
-		'<option value="like-subscribe">ðŸ‘ðŸ”” Like &amp; Subscribe</option>' +
-		'<option value="watch">ðŸŽ¬ Watch Video</option>' +
-		'<option value="watch-like-subscribe">ðŸŽ¬ðŸ‘ðŸ”” Watch, Like &amp; Subscribe</option>';
+		'<option value="like">馃憤 Like</option>' +
+		'<option value="love">鉂わ笍 Love it</option>' +
+		'<option value="subscribe">馃敂 Subscribe</option>' +
+		'<option value="like-subscribe">馃憤馃敂 Like &amp; Subscribe</option>' +
+		'<option value="watch">馃幀 Watch Video</option>' +
+		'<option value="watch-like-subscribe">馃幀馃憤馃敂 Watch, Like &amp; Subscribe</option>';
 
 	const QUALITY_OPTIONS =
-		'<option value="low">480p Â· Light (1.2 Mbps)</option>' +
-		'<option value="balanced" selected>720p Â· Balanced (2.5 Mbps)</option>' +
-		'<option value="high">720p Â· High (5 Mbps)</option>';
+		'<option value="low">480p 路 Light (1.2 Mbps)</option>' +
+		'<option value="balanced" selected>720p 路 Balanced (2.5 Mbps)</option>' +
+		'<option value="high">720p 路 High (5 Mbps)</option>';
 
 	const FONT_OPTIONS =
 		'<option value="oswald">Oswald</option>' +
@@ -13884,24 +13909,24 @@ function createHTML() {
 
 		return (
 			'<div class="va-header">' +
-			'<span class="va-title">ðŸŽ¬ Video ' + n + '</span>' +
+			'<span class="va-title">馃幀 Video ' + n + '</span>' +
 			'<span class="va-status" id="va-status-' + n + '">empty</span>' +
-			'<button type="button" class="va-api-btn" onclick="apiRenderVideo(' + n + ')" title="Send all of this video\\'s elements to the render API">â˜ï¸ API</button>' +
+			'<button type="button" class="va-api-btn" onclick="apiRenderVideo(' + n + ')" title="Send all of this video\\'s elements to the render API">鈽侊笍 API</button>' +
 			'<span class="va-summary" id="va-summary-' + n + '"></span>' +
-			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">â–¼</button>' +
+			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">鈻�</button>' +
 			'</div>' +
 			'<div class="va-body" id="va-body-' + n + '">' +
 			'<div class="va-left">' +
 			'<div class="va-section">' +
-		'<div class="va-section-title">Images / MP4s â€” drag cards to reorder</div>' +
-		'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">ðŸ“ Upload Image, GIF or MP4</button>' +
-		'<span class="va-note">Max 5 GIF Â· 25 images Â· 5 MP4 (1:00 each, silent)</span>' +
-		'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">â–² Images / MP4s</button>' +
+		'<div class="va-section-title">Images / MP4s 鈥� drag cards to reorder</div>' +
+		'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">馃搧 Upload Image, GIF or MP4</button>' +
+		'<span class="va-note">Max 5 GIF 路 25 images 路 5 MP4 (1:00 each, silent)</span>' +
+		'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">鈻� Images / MP4s</button>' +
 		'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
 			'</div>' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">Audio â€” one MP3 (the video is as long as the MP3)</div>' +
-			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">ðŸŽµ Upload MP3 Audio</button>' +
+			'<div class="va-section-title">Audio 鈥� one MP3 (the video is as long as the MP3)</div>' +
+			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">馃幍 Upload MP3 Audio</button>' +
 			'<span class="va-audio-line" id="va-audio-line-' + n + '"></span>' +
 			'</div>' +
 			'<div class="va-section">' +
@@ -13926,26 +13951,28 @@ function createHTML() {
 		'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
 		'</div>' +
 		'<div class="va-section">' +
-		'<div class="va-section-title">Script (SRT) â€” AI model</div>' +
+		'<div class="va-section-title">Script (SRT) 鈥� AI model</div>' +
 		'<input type="text" id="va-script-topic-' + n + '" maxlength="120" placeholder="Topic (uses the video title if empty)">' +
 		'<div class="va-row">' +
 		'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
 		'<label class="quality-select">Speech <select id="va-script-speed-' + n + '"><option value="super fast">Super fast</option><option value="fast">Fast</option><option value="medium" selected>Medium</option><option value="slow">Slow</option></select></label>' +
 		'</div>' +
-		'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')">âœ¨ Generate Script</button>' +
+		'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px">鉁� Generate Script</button>' +
 		'<span class="va-note" id="va-script-status-' + n + '"></span>' +
-		'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">â–¼ Script (SRT)</button>' +
+		'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">鈻� Script (SRT)</button>' +
 		'<div class="va-script-box" id="va-script-box-' + n + '" style="display:none"></div>' +
-		'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">â¬‡ Download .srt</button>' +
-		'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" title="Write a script from the topic (or use the existing one) + speak it to MP3 (MeloTTS voice) + apply the SRT as subtitles">ðŸŽ™ Generate Voiceover</button>' +
+		'<div class="va-row va-script-actions">' +
+		'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">猬� Download .srt</button>' +
+		'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled title="Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles">馃帣 Generate Voiceover</button>' +
+		'</div>' +
 		'</div>' +
 		'</div>' +
 		'<div class="va-right">' +
 			'<div class="va-section">' +
-			'<div class="va-section-title">AI Images â€” Cloudflare</div>' +
+			'<div class="va-section-title">AI Images 鈥� Cloudflare</div>' +
 			'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
-			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">âœ¨ Generate 2 Images</button>' +
-			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit Â· 480px landscape</span>' +
+			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">鉁� Generate 2 Images</button>' +
+			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit 路 480px landscape</span>' +
 			'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
 			'</div>' +
 			'</div>' +
@@ -14118,7 +14145,7 @@ function createHTML() {
 
 			summaryEl.textContent =
 				parts.length
-				? parts.join(" Â· ")
+				? parts.join(" 路 ")
 				: "no images yet";
 		}
 
@@ -14433,7 +14460,7 @@ function createHTML() {
 
 		if (line) {
 			line.textContent =
-				"ðŸŽµ " + file.name;
+				"馃幍 " + file.name;
 		}
 
 		updateVideoStatus(
@@ -14531,7 +14558,7 @@ function createHTML() {
 			"va-card-remove";
 
 		removeBtn.textContent =
-			"Ã—";
+			"脳";
 
 		removeBtn.title =
 			"Remove";
@@ -14835,8 +14862,8 @@ function createHTML() {
 			);
 
 			tip.textContent =
-				bits.join(" Â· ") +
-				" â€” drag to reorder";
+				bits.join(" 路 ") +
+				" 鈥� drag to reorder";
 
 			tip.title =
 				tip.textContent;
@@ -15088,7 +15115,7 @@ function createHTML() {
 	 * validates every video in the
 	 * stack, warns about missing
 	 * required fields, then renders
-	 * them in order â€” VIDEO_BATCH_SIZE
+	 * them in order 鈥� VIDEO_BATCH_SIZE
 	 * at a time, last batch may be one.
 	 */
 	function onGenerateClick() {
@@ -15195,7 +15222,7 @@ function createHTML() {
 
 			if (line) {
 				line.textContent =
-					"ðŸŽµ " +
+					"馃幍 " +
 					project.audioFile.name +
 					" (" +
 					formatSeconds(
@@ -15856,7 +15883,7 @@ function createHTML() {
 					/*
 					 * The worker returns
 					 * {success:false,
-					 * error:"..."} â€” show
+					 * error:"..."} 鈥� show
 					 * the real reason.
 					 */
 					let message =
@@ -15927,7 +15954,7 @@ function createHTML() {
 						AI_IMAGES_PER_PROMPT +
 						" failed: " +
 						lastError
-					: "Done â€” 480px landscape";
+					: "Done 鈥� 480px landscape";
 		}
 
 		if (failures === AI_IMAGES_PER_PROMPT) {
@@ -16328,7 +16355,7 @@ function createHTML() {
 
 		overlay.innerHTML =
 			'<div class="auth-box">' +
-			'<div class="auth-title">ðŸŽ¬ YouTube Vibe Studio</div>' +
+			'<div class="auth-title">馃幀 YouTube Vibe Studio</div>' +
 			'<div class="auth-sub">Sign in to use the studio (max ' + AUTH_MAX_USERS + ' user accounts)</div>' +
 			'<div class="auth-error" id="auth-error"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
@@ -16548,7 +16575,7 @@ function createHTML() {
 			"auth-footer-user";
 
 		span.textContent =
-			"ðŸ‘¤ " +
+			"馃懁 " +
 			username;
 
 		const accountLink =
@@ -17210,7 +17237,7 @@ function createHTML() {
 	}
 
 	/*
-	 * The "â˜ï¸ API" button in each accordion:
+	 * The "鈽侊笍 API" button in each accordion:
 	 * uploads all of this video's elements to
 	 * POST /api/render, then polls
 	 * /api/render/<jobId> until a (background)
@@ -17350,7 +17377,7 @@ function createHTML() {
 
 		/*
 		 * Busy (10/10 jobs in progress):
-		 * not an error â€” this browser
+		 * not an error 鈥� this browser
 		 * renders the video itself with
 		 * its own video generation (the
 		 * same engine the Generate
@@ -17370,7 +17397,7 @@ function createHTML() {
 					"/" +
 					(submitted.max ||
 						10) +
-					" jobs) â€” rendering " +
+					" jobs) 鈥� rendering " +
 					payload.name +
 					" in this browser ...";
 			}
@@ -17413,7 +17440,7 @@ function createHTML() {
 				statusText.textContent =
 					"API: " +
 					payload.name +
-					" â€” waiting for a worker to render ...";
+					" 鈥� waiting for a worker to render ...";
 			}
 
 			let r;
@@ -17464,7 +17491,7 @@ function createHTML() {
 
 				if (statusText) {
 					statusText.textContent =
-						"âœ“ API render complete: " +
+						"鉁� API render complete: " +
 						payload.name;
 				}
 
@@ -17525,7 +17552,7 @@ function createHTML() {
 		if (generating) {
 
 			alert(
-				"A video is already being generated â€” please wait for it to finish."
+				"A video is already being generated 鈥� please wait for it to finish."
 			);
 
 			return;
@@ -17798,7 +17825,7 @@ function createHTML() {
 			statusText.textContent =
 				result ===
 					"done"
-					? "âœ“ " +
+					? "鉁� " +
 						project.name +
 						" rendered in this browser (API was busy)"
 					: project.name +
@@ -18364,8 +18391,8 @@ function createHTML() {
 
 			toggle.textContent =
 				(open
-					? "â–² "
-					: "â–¼ ") +
+					? "鈻� "
+					: "鈻� ") +
 				"Script (SRT)";
 		}
 
@@ -18419,8 +18446,8 @@ function createHTML() {
 
 		toggle.textContent =
 			(open
-				? "â–² "
-				: "â–¼ ") +
+				? "鈻� "
+				: "鈻� ") +
 			"Images / MP4s";
 
 	}
@@ -18565,7 +18592,7 @@ function createHTML() {
 					.length;
 
 			statusEl.textContent =
-				"Script ready â€” " +
+				"Script ready 鈥� " +
 				lineCount +
 				" lines (" +
 				speed +
@@ -18863,29 +18890,18 @@ function createHTML() {
 		}
 
 		/*
-			* No script yet: the
-			* modal offers a topic
-			* input and the AI will
-			* write the script first,
-			* then speak it.
+			* The accordion button only
+			* enables once the script
+			* (SRT) box has text, so the
+			* modal always has a script
+			* to speak.
 			*/
-		const hasScript =
-			!!project.srt;
 
-		const accTopic =
-			document.getElementById(
-				"va-script-topic-" + n
-			);
+		if (!project.srt) {
 
-		const accTitle =
-			document.getElementById(
-				"va-title-" + n
-			);
+			return;
 
-		const topicDefault =
-			(accTopic && accTopic.value.trim()) ||
-			(accTitle && accTitle.value.trim()) ||
-			"my video";
+		}
 
 		closeVoiceoverModal();
 
@@ -18902,37 +18918,23 @@ function createHTML() {
 
 		modal.innerHTML =
 			'<div class="modal-box">' +
-			'<div class="modal-title">ðŸŽ™ Voiceover (MP3) â€” Video ' + n + '</div>' +
-			(hasScript
-				? '<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks the script in the selected language (one fixed voice per language). The MP3 can be uploaded as this video\\'s audio track.</div>'
-				: '<div class="va-note" style="margin-bottom:8px">No script yet â€” the AI will write one from the topic (Minutes / Speech from the accordion below), then MeloTTS speaks it as MP3.</div>') +
-			(hasScript
-				? ""
-				: '<div class="voiceover-label">Topic</div>' +
-				'<input type="text" id="voiceover-topic" maxlength="120" style="width:100%;box-sizing:border-box;margin-bottom:8px">' +
-				'<div class="va-note" style="margin-bottom:8px">Voice</div>') +
-			'<label class="quality-select voiceover-voice-label">Voice <select id="voiceover-voice">' +
+			'<div class="modal-title">馃帣 Voiceover (MP3) 鈥� Video ' + n + '</div>' +
+			'<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks the script as an English MP3 (one fixed voice). The MP3 can be uploaded as this video\\'s audio track.</div>' +
+			'<label class="quality-select voiceover-voice-label">Voice <select id="voiceover-voice" disabled title="Always English">' +
 			'<option value="en" selected>English (en)</option>' +
-			'<option value="zh">Chinese (zh)</option>' +
-			'<option value="es">Spanish (es)</option>' +
-			'<option value="fr">French (fr)</option>' +
-			'<option value="hi">Hindi (hi)</option>' +
-			'<option value="it">Italian (it)</option>' +
-			'<option value="ja">Japanese (ja)</option>' +
-			'<option value="ko">Korean (ko)</option>' +
 			'</select></label>' +
 			'<div class="voiceover-label">Script (spoken into the MP3)</div>' +
 			'<textarea id="voiceover-text" class="voiceover-textarea" rows="8" readonly disabled></textarea>' +
 			'<div class="voiceover-actions">' +
-			'<button type="button" class="upload-btn small" id="voiceover-gen" onclick="generateVoiceover(' + n + ')">ðŸŽ§ Generate Voiceover (MP3)</button>' +
+			'<button type="button" class="upload-btn small" id="voiceover-gen" onclick="generateVoiceover(' + n + ')">馃帶 Generate Voiceover (MP3)</button>' +
 			'<button type="button" class="upload-btn small" id="voiceover-subtitles" onclick="toggleSubtitles(' + n + ')">' +
 			(project.subtitles && project.subtitles.length
-				? "âœ… Subtitles ON â€” click to turn off"
-				: "ðŸ“ Apply Subtitles to Video") +
+				? "鉁� Subtitles ON 鈥� click to turn off"
+				: "馃摑 Apply Subtitles to Video") +
 			'</button>' +
 			'</div>' +
 			'<span class="va-note" id="voiceover-status"></span>' +
-			'<button type="button" class="upload-btn small" onclick="closeVoiceoverModal()">âœ• Close</button>' +
+			'<button type="button" class="upload-btn small" onclick="closeVoiceoverModal()">鉁� Close</button>' +
 			'</div>';
 
 		document.body.appendChild(
@@ -18944,34 +18946,12 @@ function createHTML() {
 				"#voiceover-text"
 			);
 
-		if (hasScript) {
-
-			area.value =
-				spokenScriptFromSrt(
-					project.srt
-				);
-
-		} else {
-
-			area.placeholder =
-				"No script yet â€” it will be generated from the topic.";
-
-			const topicInput =
-				modal.querySelector(
-					"#voiceover-topic"
-				);
-
-			if (topicInput) {
-
-				topicInput.value =
-					topicDefault;
-
-			}
-
-		}
+		area.value =
+			spokenScriptFromSrt(
+				project.srt
+			);
 
 	}
-
 	async function generateVoiceover(
 		n
 	) {
@@ -19006,175 +18986,6 @@ function createHTML() {
 			"Preparing...";
 
 		try {
-
-			if (!project.srt) {
-
-				/*
-					* No script yet: the
-					* AI writes one from
-					* the topic, keeps
-					* it on the video
-					* (subtitles +
-					* download unlock),
-					* then it is
-					* spoken.
-					*/
-				const topicInput =
-					document.getElementById(
-						"voiceover-topic"
-					);
-
-				const accTopic =
-					document.getElementById(
-						"va-script-topic-" + n
-					);
-
-				const accTitle =
-					document.getElementById(
-						"va-title-" + n
-					);
-
-				const topic =
-					(topicInput &&
-						topicInput.value.trim()) ||
-					(accTopic &&
-						accTopic.value.trim()) ||
-					(accTitle &&
-						accTitle.value.trim()) ||
-					"my video";
-
-				const minutesEl =
-					document.getElementById(
-						"va-script-minutes-" + n
-					);
-
-				const speedEl =
-					document.getElementById(
-						"va-script-speed-" + n
-					);
-
-				const minutes =
-					Number(
-						minutesEl
-							? minutesEl.value
-							: 1
-					);
-
-				const speed =
-					speedEl
-						? speedEl.value
-						: "medium";
-
-				statusEl.textContent =
-					"Writing your script (AI model)...";
-
-				const scriptResp =
-					await fetch(
-						"/api/script",
-						{
-							method: "POST",
-							headers: {
-								"Content-Type":
-									"application/json"
-							},
-							body:
-								JSON.stringify(
-									{
-										topic: topic,
-										minutes: minutes,
-										speed: speed
-									}
-								)
-						}
-					);
-
-				const scriptData =
-					await scriptResp
-						.json()
-						.catch(
-							() => ({})
-						);
-
-				if (
-					!scriptResp.ok ||
-					!scriptData.success ||
-					!scriptData.srt
-				) {
-
-					throw new Error(
-						(scriptData &&
-							scriptData.error) ||
-						("HTTP " +
-							scriptResp.status)
-					);
-
-				}
-
-				project.srt =
-					scriptData.srt;
-
-				const box =
-					document.getElementById(
-						"va-script-box-" + n
-					);
-
-				if (box) {
-
-					box.textContent =
-						scriptData.srt;
-
-				}
-
-				const dlBtn =
-					document.getElementById(
-						"va-script-dl-" + n
-					);
-
-				if (dlBtn) {
-
-					dlBtn.style.display =
-						"";
-
-				}
-
-				const togBtn =
-					document.getElementById(
-						"va-script-toggle-" + n
-					);
-
-				if (togBtn) {
-
-					togBtn.style.display =
-						"";
-
-				}
-
-				if (
-					typeof showScriptBox ===
-						"function"
-				) {
-
-					showScriptBox(
-						n
-					);
-
-				}
-
-				const area =
-					document.getElementById(
-						"voiceover-text"
-					);
-
-				if (area) {
-
-					area.value =
-						spokenScriptFromSrt(
-							project.srt
-						);
-
-				}
-
-			}
 
 			const text =
 				spokenScriptFromSrt(
@@ -19295,7 +19106,7 @@ function createHTML() {
 				blob;
 
 			statusEl.textContent =
-				"Voiceover MP3 saved â€” upload it as the audio track";
+				"Voiceover MP3 saved 鈥� upload it as the audio track";
 
 		}
 		catch (err) {
@@ -19382,7 +19193,7 @@ function createHTML() {
 			if (subBtn) {
 
 				subBtn.textContent =
-					"ðŸ“ Apply Subtitles to Video";
+					"馃摑 Apply Subtitles to Video";
 
 			}
 
@@ -19416,7 +19227,7 @@ function createHTML() {
 			statusEl.textContent =
 				"Subtitles applied (" +
 				cues.length +
-				" cues) â€” shown below the caption";
+				" cues) 鈥� shown below the caption";
 
 		}
 
@@ -19430,7 +19241,7 @@ function createHTML() {
 		if (subBtn) {
 
 			subBtn.textContent =
-				"âœ… Subtitles ON â€” click to turn off";
+				"鉁� Subtitles ON 鈥� click to turn off";
 
 		}
 
@@ -20844,7 +20655,7 @@ function createHTML() {
 
 
 						statusText.textContent =
-							\`Rendering image \${i + 1}/\${slides.length} â€” \${percent}%\`;
+							\`Rendering image \${i + 1}/\${slides.length} 鈥� \${percent}%\`;
 
 
 						/*
@@ -21059,11 +20870,11 @@ function createHTML() {
 			statusText.textContent =
 				streamingToFile
 					? audioTrack
-						? "âœ“ MP4 saved to disk with audio!"
-						: "âœ“ MP4 saved to disk!"
+						? "鉁� MP4 saved to disk with audio!"
+						: "鉁� MP4 saved to disk!"
 					: audioTrack
-						? "âœ“ MP4 Downloaded with audio!"
-						: "âœ“ MP4 Downloaded!";
+						? "鉁� MP4 Downloaded with audio!"
+						: "鉁� MP4 Downloaded!";
 
 			return "done";
 
@@ -21077,7 +20888,7 @@ function createHTML() {
 
 
 			statusText.textContent =
-				"âš  Video rendering failed.";
+				"鈿� Video rendering failed.";
 
 
 			alert(
