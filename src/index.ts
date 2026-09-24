@@ -301,19 +301,27 @@ export default {
 				i++
 			) {
 
-				await env.KV_BINDING.put(
-					"blob:" + id + ":" + i,
-					new Response(
-						bytes.slice(
-							i * BLOB_CHUNK_SIZE,
-							(i + 1) * BLOB_CHUNK_SIZE
-						)
-					).body,
-					{
-						expirationTtl:
-							7200
-					}
-				);
+			/*
+			 * subarray() is a view over
+			 * the same bytes, not a
+			 * copy: slice() would
+			 * duplicate up to 20 MB
+			 * per chunk for nothing.
+			 */
+
+			await env.KV_BINDING.put(
+				"blob:" + id + ":" + i,
+				new Response(
+					bytes.subarray(
+						i * BLOB_CHUNK_SIZE,
+						(i + 1) * BLOB_CHUNK_SIZE
+					)
+				).body,
+				{
+					expirationTtl:
+						7200
+				}
+			);
 
 			}
 
@@ -352,55 +360,53 @@ export default {
 			const idx =
 				JSON.parse(idxRaw);
 
-			const buffers =
-				[];
-
-			for (
-				let i = 0;
-				i < idx.parts;
-				i++
-			) {
-
-				const body =
-					await env.KV_BINDING.get(
-						"blob:" + id + ":" + i,
-						"stream"
-					);
-
-				buffers.push(
-					body
-						? await
-						new Response(body).arrayBuffer()
-					:
-					new ArrayBuffer(0)
-				);
-
-			}
-
-			const chunks =
-				await Promise.all(buffers);
+			/*
+			 * All parts are fetched in
+			 * parallel (the old loop
+			 * awaited each get, so its
+			 * Promise.all never ran
+			 * concurrently) and every
+			 * chunk is copied straight
+			 * into one preallocated
+			 * buffer. Collecting all
+			 * chunks first and copying
+			 * them again held roughly
+			 * TWICE the file size in
+			 * memory at peak.
+			 */
 
 			const out =
 				new Uint8Array(
 					idx.total
 				);
 
-			let offset =
-				0;
+			await Promise.all(
+				Array.from(
+					{ length: idx.parts },
+					(_, i) =>
+						(async () => {
 
-			for (
-				const chunk of chunks
-			) {
+							const body =
+								await env.KV_BINDING.get(
+									"blob:" + id + ":" + i,
+									"stream"
+								);
 
-				out.set(
-					new Uint8Array(chunk),
-					offset
-				);
+							if (!body) {
+								return;
+							}
 
-				offset +=
-					chunk.byteLength;
+							const chunk =
+								await new Response(body).arrayBuffer();
 
-			}
+							out.set(
+								new Uint8Array(chunk),
+								i * BLOB_CHUNK_SIZE
+							);
+
+						})()
+				)
+			);
 
 			return {
 				bytes:
@@ -420,25 +426,37 @@ export default {
 					{ prefix: "job:" }
 				);
 
-			const jobs =
+			/*
+			 * The gets run in parallel:
+			 * this helper runs on every
+			 * worker poll and every
+			 * render submission, and
+			 * sequential reads would
+			 * stack one KV round-trip
+			 * behind the other.
+			 */
+
+			const jobs: any[] =
 				[];
 
-			for (
-				const key of list.keys
-			) {
+			await Promise.all(
+				list.keys.map(
+					async (key: any) => {
 
-				const raw =
-					await env.KV_BINDING.get(
-						key.name
-					);
+						const raw =
+							await env.KV_BINDING.get(
+								key.name
+							);
 
-				if (raw) {
-					jobs.push(
-						JSON.parse(raw)
-					);
-				}
+						if (raw) {
+							jobs.push(
+								JSON.parse(raw)
+							);
+						}
 
-			}
+					}
+				)
+			);
 
 			return jobs;
 
@@ -3842,9 +3860,28 @@ async function handleAuthApi(
 // FRONTEND
 // =============================================================
 
+/*
+ * The page HTML is a constant (the only
+ * interpolation is the fixed prompts
+ * array), so it is built once per
+ * isolate and reused. Re-building a
+ * ~280 KB string on every request
+ * wastes CPU and creates constant GC
+ * pressure. The /config/uvxyz route
+ * only .replace()es copies of it, so
+ * the cached string is never mutated.
+ */
+
+let CACHED_HTML: string | null =
+	null;
+
 function createHTML() {
 
-	return `
+	if (CACHED_HTML) {
+		return CACHED_HTML;
+	}
+
+	CACHED_HTML = `
 <!DOCTYPE html>
 
 <html lang="en">
@@ -20966,4 +21003,7 @@ function createHTML() {
 
 </html>
 `;
-			  }
+
+	return CACHED_HTML;
+
+		  }
