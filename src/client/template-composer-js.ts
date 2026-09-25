@@ -1,6 +1,7 @@
 /*
  * TEMPLATE_COMPOSER_JS — MODULE 9: the "Add video from
- * template" composer modal (5 TikTok designs, 1-25 s,
+ * template" composer modal (5 designs incl. the animated
+ * Pan & Zoom, portrait 9:16 + landscape 16:9, 1-25 s,
  * WebCodecs + mp4-muxer export, adds the MP4 into the accordion
  * gallery). Self-contained IIFE appended right after APP_JS
  * inside the same <script> tag.
@@ -14,11 +15,12 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 	//
 	// The "Add video from template" text link inside every
 	// Video N accordion opens a modal that composes a
-	// vertical 9:16 TikTok-style MP4 (max 25 seconds) from
-	// up to 5 uploaded images using 5 design templates
+	// portrait 9:16 or landscape 16:9 MP4 (max 25 seconds)
+	// from up to 5 uploaded images using 5 design templates
 	// (Full Focus, Split Story, Triple Stack, Photo Burst,
-	// Film Strip) — the same composer as the standalone
-	// "TikTok 5-Design Video Composer" page.
+	// Pan & Zoom) — the animated Pan & Zoom design reuses
+	// the main engine's Ken Burns pan/zoom strategy
+	// (slide-left, slide-right, slide-down, zoom-in).
 	//
 	// The composed MP4 is added to that accordion's
 	// Images / MP4s gallery as a normal MP4 asset, so it
@@ -33,19 +35,40 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 	//
 	// Export uses the SAME engine as the Video N accordions
 	// (WebCodecs VideoEncoder + mp4-muxer, no FFmpeg): every
-	// preview frame drawn on the 1080x1920 canvas is wrapped
-	// in a VideoFrame and encoded to H.264, then muxed into
-	// an MP4 in memory.
+	// preview frame drawn on the canvas (1080x1920 portrait
+	// or 1920x1080 landscape) is wrapped in a VideoFrame
+	// and encoded to H.264, then muxed into an MP4 in memory.
 
 	(function () {
 
 		"use strict";
 
-		const TPL_W =
+		const TPL_PORTRAIT_W =
 			1080;
 
-		const TPL_H =
+		const TPL_PORTRAIT_H =
 			1920;
+
+		const TPL_LANDSCAPE_W =
+			1920;
+
+		const TPL_LANDSCAPE_H =
+			1080;
+
+		/*
+		 * Current canvas size. Portrait by
+		 * default; setOrientation() swaps
+		 * these to the landscape pair.
+		 */
+
+		let TPL_W =
+			TPL_PORTRAIT_W;
+
+		let TPL_H =
+			TPL_PORTRAIT_H;
+
+		let tplLandscape =
+			false;
 
 		const TPL_FPS =
 			30;
@@ -131,6 +154,12 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		let bgOpacityEl =
 			null;
 
+		let orientEl =
+			null;
+
+		let stageEl =
+			null;
+
 		let images =
 			[];
 
@@ -188,20 +217,155 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				fn: drawPhotoBurst
 			},
 			{
-				name: "Film Strip",
-				desc: "Main photo with moving film-strip accents",
-				fn: drawFilmStrip
+				name: "Pan & Zoom",
+				desc: "Full-screen photos with slow pan & zoom",
+				fn: drawPanZoom
 			}
 		];
 
 		// -------------------------------------------------
 		// Drawing helpers (same maths as the standalone
-		// composer, drawing into the modal's 1080x1920
-		// canvas context).
+		// composer, drawing into the modal's canvas
+		// context, portrait or landscape).
 		// -------------------------------------------------
 
 		function clamp(v, a, b) {
 			return Math.max(a, Math.min(b, v));
+		}
+
+		// -------------------------------------------------
+		// Pan & zoom motion: the SAME Ken Burns strategy
+		// as the main generateMP4 engine — one effect per
+		// photo (slide-left, slide-right, slide-down,
+		// zoom-in), smoothstep easing, 1.15x overscan with
+		// 0.55 of the overflow used for travel. The only
+		// difference is cover-fit (no aspect distortion).
+		// -------------------------------------------------
+
+		const TPL_EFFECTS = [
+			"slide-left",
+			"slide-right",
+			"slide-down",
+			"zoom-in"
+		];
+
+		function tplEase(p) {
+			return p * p * (3 - 2 * p);
+		}
+
+		function drawKenBurns(img, x, y, w, h, effect, p) {
+
+			const ease =
+				tplEase(clamp(p, 0, 1));
+
+			const zoomScale =
+				1.15;
+
+			const drawWidth =
+				w * zoomScale;
+
+			const drawHeight =
+				h * zoomScale;
+
+			const overflowX =
+				drawWidth - w;
+
+			const overflowY =
+				drawHeight - h;
+
+			const movementX =
+				overflowX * 0.55;
+
+			const movementY =
+				overflowY * 0.55;
+
+			let dx =
+				0;
+
+			let dy =
+				0;
+
+			let dw =
+				drawWidth;
+
+			let dh =
+				drawHeight;
+
+			if (effect === "slide-left") {
+
+				dx =
+					x - movementX * ease;
+
+				dy =
+					y - overflowY / 2;
+
+			}
+			else if (effect === "slide-right") {
+
+				dx =
+					x - movementX + movementX * ease;
+
+				dy =
+					y - overflowY / 2;
+
+			}
+			else if (effect === "slide-down") {
+
+				dx =
+					x - overflowX / 2;
+
+				dy =
+					y - movementY * ease;
+
+			}
+			else {
+
+				const currentScale =
+					1.04 + ease * 0.04;
+
+				dw =
+					w * currentScale;
+
+				dh =
+					h * currentScale;
+
+				dx =
+					x + (w - dw) / 2;
+
+				dy =
+					y + (h - dh) / 2;
+
+			}
+
+			ctx.save();
+
+			ctx.beginPath();
+
+			ctx.rect(x, y, w, h);
+
+			ctx.clip();
+
+			const s =
+				Math.max(
+					dw / img.width,
+					dh / img.height
+				);
+
+			const iw =
+				img.width * s;
+
+			const ih =
+				img.height * s;
+
+			ctx.drawImage(
+				img,
+				dx + (dw - iw) / 2,
+				dy + (dh - ih) / 2,
+				iw,
+				ih
+			);
+
+			ctx.restore();
 		}
 
 		function cover(img, x, y, w, h, zoom) {
@@ -409,18 +573,45 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			ctx.shadowBlur =
 				18;
 
+			/*
+			 * Landscape (1080 tall) scales the
+			 * type down so it keeps the same
+			 * share of the frame as portrait
+			 * (1920 tall), and sits closer to
+			 * the top edge.
+			 */
+
+			const textScale =
+				TPL_H / 1920;
+
+			const headlineSize =
+				Math.round(
+					Number(headlineSizeEl.value) * textScale
+				);
+
+			const subSize =
+				Math.round(
+					Number(subSizeEl.value) * textScale
+				);
+
+			const yHeadline =
+				tplLandscape ? 88 : 150;
+
+			const ySub =
+				tplLandscape ? 140 : 215;
+
 			ctx.font =
-				"800 " + headlineSizeEl.value +
+				"800 " + headlineSize +
 				"px " + fontEl.value;
 
 			ctx.fillText(
 				headlineEl.value,
 				TPL_W / 2,
-				150
+				yHeadline
 			);
 
 			ctx.font =
-				"600 " + subSizeEl.value +
+				"600 " + subSize +
 				"px " + fontEl.value;
 
 			ctx.fillStyle =
@@ -429,14 +620,17 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			ctx.fillText(
 				subtextEl.value,
 				TPL_W / 2,
-				215
+				ySub
 			);
 
 			ctx.restore();
 		}
 
 		// -------------------------------------------------
-		// The five design templates.
+		// The five design templates. Each one
+		// draws a portrait 9:16 arrangement by
+		// default and a landscape 16:9
+		// arrangement when tplLandscape is set.
 		// -------------------------------------------------
 
 		function drawFullFocus(t) {
@@ -455,7 +649,12 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 
 			ctx.restore();
 
-			frame(safe(0), 95, 310, 890, 1210, z, 30);
+			if (tplLandscape) {
+				frame(safe(0), 410, 210, 1100, 700, z, 30);
+			}
+			else {
+				frame(safe(0), 95, 310, 890, 1210, z, 30);
+			}
 
 			textOverlay(t);
 		}
@@ -470,30 +669,60 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			const b =
 				safe(1);
 
-			frame(
-				a,
-				75,
-				270,
-				930,
-				720,
-				1 + 0.08 * clamp(t / duration, 0, 1),
-				26
-			);
-
-			frame(
-				b,
-				75,
-				1015,
-				930,
-				720,
+			const zb =
 				1 + 0.10 * clamp(
 					Math.max(0, t - 1) /
 					Math.max(1, duration - 1),
 					0,
 					1
-				),
-				26
-			);
+				);
+
+			if (tplLandscape) {
+
+				frame(
+					a,
+					60,
+					210,
+					880,
+					690,
+					1 + 0.08 * clamp(t / duration, 0, 1),
+					26
+				);
+
+				frame(
+					b,
+					980,
+					210,
+					880,
+					690,
+					zb,
+					26
+				);
+
+			}
+			else {
+
+				frame(
+					a,
+					75,
+					270,
+					930,
+					720,
+					1 + 0.08 * clamp(t / duration, 0, 1),
+					26
+				);
+
+				frame(
+					b,
+					75,
+					1015,
+					930,
+					720,
+					zb,
+					26
+				);
+
+			}
 
 			textOverlay(t);
 		}
@@ -502,25 +731,53 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 
 			drawBackground();
 
-			const ys =
-				[270, 800, 1330];
+			if (tplLandscape) {
 
-			for (let i = 0; i < 3; i++) {
+				const xs =
+					[60, 670, 1280];
 
-				frame(
-					safe(i),
-					85,
-					ys[i],
-					910,
-					470,
-					1 + 0.07 * clamp(
-						(t - i * 0.7) /
-						Math.max(1, duration - 1),
-						0,
-						1
-					),
-					22
-				);
+				for (let i = 0; i < 3; i++) {
+
+					frame(
+						safe(i),
+						xs[i],
+						230,
+						580,
+						640,
+						1 + 0.07 * clamp(
+							(t - i * 0.7) /
+							Math.max(1, duration - 1),
+							0,
+							1
+						),
+						22
+					);
+				}
+
+			}
+			else {
+
+				const ys =
+					[270, 800, 1330];
+
+				for (let i = 0; i < 3; i++) {
+
+					frame(
+						safe(i),
+						85,
+						ys[i],
+						910,
+						470,
+						1 + 0.07 * clamp(
+							(t - i * 0.7) /
+							Math.max(1, duration - 1),
+							0,
+							1
+						),
+						22
+					);
+				}
+
 			}
 
 			textOverlay(t);
@@ -530,7 +787,13 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 
 			drawBackground();
 
-			const specs = [
+			const specs = tplLandscape ? [
+				[120, 190, 400, 470, -0.08],
+				[560, 170, 400, 470, 0.07],
+				[1000, 190, 400, 470, 0.05],
+				[1400, 190, 400, 470, -0.06],
+				[760, 680, 400, 290, 0.015]
+			] : [
 				[95, 300, 430, 520, -0.08],
 				[555, 260, 430, 520, 0.07],
 				[165, 870, 430, 520, 0.05],
@@ -570,39 +833,90 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			textOverlay(t);
 		}
 
-		function drawFilmStrip(t) {
+		/*
+		 * Pan & Zoom: full-screen photos, one
+		 * at a time, each with the main
+		 * engine's Ken Burns motion. Works in
+		 * both orientations because it fills
+		 * the whole canvas.
+		 */
+
+		function drawPanZoom(t) {
 
 			drawBackground();
 
-			const main =
-				safe(0);
+			const n =
+				images.length;
 
-			const z =
-				1 + 0.11 * clamp(t / duration, 0, 1);
+			const seg =
+				duration / n;
 
-			frame(main, 150, 360, 780, 1080, z, 30);
+			const idx =
+				Math.min(
+					n - 1,
+					Math.floor(t / seg)
+				);
 
-			ctx.save();
+			const local =
+				(t - idx * seg) / seg;
 
-			ctx.globalAlpha =
-				0.9;
+			const effect =
+				TPL_EFFECTS[
+					idx % TPL_EFFECTS.length
+				];
 
-			const speed =
-				180 * (t % duration);
-
-			for (let i = 0; i < 5; i++) {
-
-				const x =
-					((i * 250 - speed) % (TPL_W + 300)) - 150;
-
-				frame(safe(i), x, 150, 190, 260, 1, 16);
-
-				frame(safe(i), x, 1510, 190, 260, 1, 16);
-			}
-
-			ctx.restore();
+			drawKenBurns(
+				safe(idx),
+				0,
+				0,
+				TPL_W,
+				TPL_H,
+				effect,
+				local
+			);
 
 			textOverlay(t);
+		}
+
+		// -------------------------------------------------
+		// Portrait / landscape switch. Swaps the
+		// canvas size, the preview stage shape and
+		// the design thumbnails, then redraws.
+		// -------------------------------------------------
+
+		function setOrientation(landscape) {
+
+			tplLandscape =
+				landscape;
+
+			TPL_W =
+				landscape
+					? TPL_LANDSCAPE_W
+					: TPL_PORTRAIT_W;
+
+			TPL_H =
+				landscape
+					? TPL_LANDSCAPE_H
+					: TPL_PORTRAIT_H;
+
+			canvas.width =
+				TPL_W;
+
+			canvas.height =
+				TPL_H;
+
+			if (stageEl) {
+
+				stageEl.classList.toggle(
+					"landscape",
+					landscape
+				);
+
+			}
+
+			renderDesignCards();
+
+			draw(0);
 		}
 
 		// -------------------------------------------------
@@ -627,11 +941,17 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				const c =
 					document.createElement("canvas");
 
+				/*
+				 * Portrait thumbs are tall,
+				 * landscape thumbs are wide,
+				 * matching the export shape.
+				 */
+
 				c.width =
-					180;
+					tplLandscape ? 320 : 180;
 
 				c.height =
-					320;
+					tplLandscape ? 180 : 320;
 
 				el.appendChild(c);
 
@@ -689,13 +1009,26 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 
 				if (images.length) {
 
-					const positions = [
+					const portraitPositions = [
 						[[0, 55, 180, 205]],
 						[[8, 45, 164, 110], [8, 168, 164, 110]],
 						[[8, 35, 164, 78], [8, 121, 164, 78], [8, 207, 164, 78]],
 						[[12, 40, 72, 100], [96, 32, 72, 105], [22, 155, 72, 100], [91, 160, 72, 100], [54, 235, 72, 68]],
-						[[38, 70, 104, 145], [0, 15, 32, 45], [148, 15, 32, 45], [0, 260, 32, 45], [148, 260, 32, 45]]
-					][i];
+						[[6, 48, 168, 215]]
+					];
+
+					const landscapePositions = [
+						[[90, 20, 140, 120]],
+						[[8, 25, 150, 110], [162, 25, 150, 110]],
+						[[8, 35, 100, 90], [110, 35, 100, 90], [212, 35, 100, 90]],
+						[[20, 20, 80, 60], [120, 15, 80, 65], [220, 20, 80, 60], [70, 90, 80, 45], [170, 90, 80, 45]],
+						[[0, 15, 320, 130]]
+					];
+
+					const positions =
+						(tplLandscape
+							? landscapePositions
+							: portraitPositions)[i];
 
 					positions.forEach((q, j) => {
 
@@ -753,7 +1086,11 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				ti.textAlign =
 					"center";
 
-				ti.fillText(d.name, 90, 310);
+				ti.fillText(
+					d.name,
+					tplLandscape ? 160 : 90,
+					tplLandscape ? 170 : 310
+				);
 			});
 		}
 
@@ -1219,7 +1556,10 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 					designs[selectedDesign]
 						.name
 						.toLowerCase()
-						.replaceAll(" ", "_") +
+						.replaceAll(" ", "_")
+						.replaceAll("&", "and") +
+					"_" +
+					(tplLandscape ? "landscape" : "portrait") +
 					".mp4";
 
 				const url =
@@ -1510,10 +1850,11 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				'<div class="modal-title" id="tpl-title">\ud83c\udfac Add Video from Template \u2014 Video ' + n + '</div>' +
 				'<button type="button" class="tpl-x" id="tpl-x" title="Close">\u2715</button>' +
 				'</div>' +
-				'<p class="tpl-sub">Upload up to 5 images, choose one of the five TikTok designs, preview it, then export a vertical 9:16 MP4 (max ' + TPL_MAX_DURATION + ' seconds). The composed clip is added to this video\u2019s Images / MP4s gallery and plays inside the final render like any uploaded MP4.</p>' +
+				'<p class="tpl-sub">Upload up to 5 images, choose Portrait 9:16 or Landscape 16:9, pick one of the five designs, preview it, then export an MP4 (max ' + TPL_MAX_DURATION + ' seconds). The composed clip is added to this video\u2019s Images / MP4s gallery and plays inside the final render like any uploaded MP4.</p>' +
 				'<div class="tpl-controls">' +
 				'<label class="tpl-file">Choose 1\u20135 images<input id="tpl-files" type="file" accept="image/*" multiple></label>' +
 				'<label class="tpl-len">Length <input id="tpl-duration" type="number" min="1" max="25" value="10"></label>' +
+				'<label class="tpl-len">Format <select id="tpl-orientation"><option value="portrait" selected>Portrait 9:16</option><option value="landscape">Landscape 16:9</option></select></label>' +
 				'<button type="button" id="tpl-play">\u25b6 Preview</button>' +
 				'<button type="button" id="tpl-stop">\u25a0 Stop</button>' +
 				'<button type="button" id="tpl-export" class="tpl-primary" disabled>Export MP4</button>' +
@@ -1539,7 +1880,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				'<label class="tpl-range">Opacity <input id="tpl-bg-opacity" type="range" min="0" max="100" value="45"></label>' +
 				'</div>' +
 				'</div>' +
-				'<div class="tpl-stage">' +
+				'<div class="tpl-stage" id="tpl-stage">' +
 				'<canvas id="tpl-canvas" width="1080" height="1920"></canvas>' +
 				'</div>' +
 				'<div class="tpl-timeline"><div class="tpl-progress" id="tpl-progress"></div></div>' +
@@ -1613,6 +1954,12 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			bgOpacityEl =
 				document.getElementById("tpl-bg-opacity");
 
+			orientEl =
+				document.getElementById("tpl-orientation");
+
+			stageEl =
+				document.getElementById("tpl-stage");
+
 			document.getElementById("tpl-files")
 				.addEventListener("change", onTplFiles);
 
@@ -1634,6 +1981,15 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 
 					durationEl.value =
 						duration;
+				}
+			);
+
+			orientEl.addEventListener(
+				"change",
+				() => {
+					setOrientation(
+						orientEl.value === "landscape"
+					);
 				}
 			);
 
