@@ -1,7 +1,7 @@
 /*
  * TEMPLATE_COMPOSER_JS — MODULE 9: the "Add video from
  * template" composer modal (5 TikTok designs, 1-25 s,
- * FFmpeg.wasm export, adds the MP4 into the accordion
+ * WebCodecs + mp4-muxer export, adds the MP4 into the accordion
  * gallery). Self-contained IIFE appended right after APP_JS
  * inside the same <script> tag.
  *
@@ -31,9 +31,11 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 	// window.openTemplateModal / window.closeTemplateModal
 	// are exposed for the accordion link.
 	//
-	// Export uses FFmpeg.wasm (loaded lazily from jsDelivr
-	// with a dynamic import the first time Export MP4 is
-	// clicked), exactly like the standalone composer.
+	// Export uses the SAME engine as the Video N accordions
+	// (WebCodecs VideoEncoder + mp4-muxer, no FFmpeg): every
+	// preview frame drawn on the 1080x1920 canvas is wrapped
+	// in a VideoFrame and encoded to H.264, then muxed into
+	// an MP4 in memory.
 
 	(function () {
 
@@ -46,7 +48,10 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			1920;
 
 		const TPL_FPS =
-			12;
+			30;
+
+		const TPL_VIDEO_BITRATE =
+			6_000_000;
 
 		const TPL_MAX_DURATION =
 			25;
@@ -54,10 +59,10 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		/*
 		 * The modal is built once and then
 		 * reused: closing only hides it, so the
-		 * loaded images, chosen design, FFmpeg
-		 * instance and last composed MP4 survive
-		 * between opens (the link can retarget
-		 * the modal at another Video N).
+		 * loaded images, chosen design and last
+		 * composed MP4 survive between opens
+		 * (the link can retarget the modal at
+		 * another Video N).
 		 */
 
 		let modal =
@@ -151,15 +156,6 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			null;
 
 		let backgroundObjectUrl =
-			null;
-
-		let ffmpeg =
-			null;
-
-		let ffmpegLoaded =
-			false;
-
-		let fetchFileFn =
 			null;
 
 		/*
@@ -967,58 +963,40 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		}
 
 		// -------------------------------------------------
-		// Export (FFmpeg.wasm, loaded on first export).
+		// Export (SAME engine as the Video N accordions:
+		// WebCodecs VideoEncoder + mp4-muxer, no FFmpeg).
 		// -------------------------------------------------
-
-		async function loadFFmpeg() {
-
-			if (ffmpegLoaded) {
-				return;
-			}
-
-			statusEl.textContent =
-				"Loading FFmpeg\u2026";
-
-			const ffmpegMod =
-				await import(
-					"https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js"
-				);
-
-			const utilMod =
-				await import(
-					"https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js"
-				);
-
-			ffmpeg =
-				new ffmpegMod.FFmpeg();
-
-			const base =
-				"https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
-
-			await ffmpeg.load({
-				coreURL:
-					await utilMod.toBlobURL(
-						base + "/ffmpeg-core.js",
-						"text/javascript"
-					),
-				wasmURL:
-					await utilMod.toBlobURL(
-						base + "/ffmpeg-core.wasm",
-						"application/wasm"
-					)
-			});
-
-			fetchFileFn =
-				utilMod.fetchFile;
-
-			ffmpegLoaded =
-				true;
-		}
 
 		async function exportMP4() {
 
 			if (!images.length) {
 				return;
+			}
+
+			if (
+				typeof VideoEncoder ===
+					"undefined"
+			) {
+
+				alert(
+					"Your browser does not support WebCodecs. Please use modern Chrome, Edge, or Safari."
+				);
+
+				return;
+
+			}
+
+			if (
+				typeof Mp4Muxer ===
+					"undefined"
+			) {
+
+				alert(
+					"The MP4 muxer failed to load. Reload the page and try again."
+				);
+
+				return;
+
 			}
 
 			exportBtn.disabled =
@@ -1035,9 +1013,10 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			downloadHost.innerHTML =
 				"";
 
-			try {
+			let videoEncoder =
+				null;
 
-				await loadFFmpeg();
+			try {
 
 				const total =
 					Math.ceil(duration * TPL_FPS);
@@ -1045,54 +1024,193 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				statusEl.textContent =
 					"Rendering " + total + " frames\u2026";
 
+				/*
+				 * Same muxer setup as generateMP4():
+				 * H.264 video track, built in memory.
+				 * fastStart "in-memory" is safe here
+				 * because the clip is tiny (max 25 s),
+				 * so the file plays instantly in the
+				 * gallery; the main engine uses false
+				 * to save RAM on long videos.
+				 */
+
+				const muxer =
+					new Mp4Muxer.Muxer({
+
+						target:
+							new Mp4Muxer.ArrayBufferTarget(),
+
+						video: {
+
+							codec:
+								"avc",
+
+							width:
+								TPL_W,
+
+							height:
+								TPL_H
+
+						},
+
+						fastStart:
+							"in-memory"
+
+					});
+
+				let encoderError =
+					null;
+
+				videoEncoder =
+					new VideoEncoder({
+
+						output:
+							(chunk, meta) => {
+
+								muxer.addVideoChunk(
+									chunk,
+									meta
+									);
+
+							},
+
+						error:
+							(error) => {
+
+								console.error(
+									"VideoEncoder error:",
+									error
+									);
+
+								encoderError =
+									error;
+
+							}
+
+					});
+
+				videoEncoder.configure({
+
+					codec:
+						"avc1.4d002a",
+
+					width:
+						TPL_W,
+
+					height:
+						TPL_H,
+
+					bitrate:
+						TPL_VIDEO_BITRATE,
+
+					framerate:
+						TPL_FPS
+
+					});
+
+				/*
+				 * Same keyframe + backpressure
+				 * policy as generateMP4().
+				 */
+
+				const KEYFRAME_INTERVAL =
+					TPL_FPS *
+					10;
+
+				const MAX_ENCODE_QUEUE =
+					12;
+
 				for (let i = 0; i < total; i++) {
 
 					draw(i / TPL_FPS);
 
-					const blob =
+					const timestamp =
+						(
+							i *
+							1_000_000
+						) /
+						TPL_FPS;
+
+					const frame =
+						new VideoFrame(
+							canvas,
+							{
+								timestamp:
+									timestamp
+							}
+						);
+
+					videoEncoder.encode(
+						frame,
+						{
+
+							keyFrame:
+								i %
+								KEYFRAME_INTERVAL ===
+								0
+
+						}
+					);
+
+					frame.close();
+
+					while (
+						videoEncoder.encodeQueueSize >
+							MAX_ENCODE_QUEUE
+					) {
+
 						await new Promise(
-							(r) =>
-								canvas.toBlob(
-									r,
-									"image/jpeg",
-									0.82
+							(resolve) =>
+								setTimeout(
+										resolve,
+									8
 								)
 						);
 
-					await ffmpeg.writeFile(
-						"frame_" +
-						String(i).padStart(5, "0") +
-						".jpg",
-						await fetchFileFn(blob)
-					);
+					}
+
+					if (encoderError) {
+						throw encoderError;
+					}
 
 					progressEl.style.width =
-						((i + 1) / total * 70) + "%";
+						((i + 1) / total * 100) + "%";
+
+					if (
+						i %
+							15 ===
+						0
+					) {
+
+						statusEl.textContent =
+							"Rendering frame " + (i + 1) + " / " + total;
+
+						await new Promise(
+							(resolve) =>
+								setTimeout(
+										resolve,
+									0
+								)
+						);
+
+					}
+
 				}
 
 				statusEl.textContent =
-					"Encoding MP4\u2026";
+					"Finalizing MP4\u2026";
 
-				await ffmpeg.exec([
-					"-y",
-					"-framerate", String(TPL_FPS),
-					"-i", "frame_%05d.jpg",
-					"-c:v", "libx264",
-					"-preset", "ultrafast",
-					"-crf", "25",
-					"-pix_fmt", "yuv420p",
-					"-movflags", "+faststart",
-					"output.mp4"
-				]);
+				await videoEncoder.flush();
 
-				const data =
-					await ffmpeg.readFile(
-						"output.mp4"
-					);
+				if (encoderError) {
+					throw encoderError;
+				}
+
+				muxer.finalize();
 
 				const blob =
 					new Blob(
-						[data.buffer],
+						[muxer.target.buffer],
 						{ type: "video/mp4" }
 					);
 
@@ -1106,6 +1224,17 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 
 				const url =
 					URL.createObjectURL(blob);
+
+				if (
+					lastVideo &&
+					lastVideo.url
+				) {
+
+					URL.revokeObjectURL(
+						lastVideo.url
+					);
+
+				}
 
 				lastVideo = {
 					blob: blob,
@@ -1144,26 +1273,6 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				addBtn.textContent =
 					"\u2795 Add to Video " + modalVideo;
 
-				for (let i = 0; i < total; i++) {
-
-					try {
-
-						await ffmpeg.deleteFile(
-							"frame_" +
-							String(i).padStart(5, "0") +
-							".jpg"
-						);
-					}
-					catch (cleanupError) { }
-				}
-
-				try {
-
-					await ffmpeg.deleteFile(
-						"output.mp4"
-					);
-				}
-				catch (cleanupError) { }
 			}
 			catch (err) {
 
@@ -1174,14 +1283,31 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 					((err && err.message) || err);
 
 				alert(
-					"FFmpeg export failed. If this is the first export, reload the page and try again. Details: " +
+					"Video export failed: " +
 					((err && err.message) || err)
 				);
+
 			}
 			finally {
 
+				if (
+					videoEncoder &&
+					videoEncoder.state !==
+						"closed"
+				) {
+
+					try {
+
+						videoEncoder.close();
+
+					}
+					catch (cleanupError) { }
+
+				}
+
 				exportBtn.disabled =
 					images.length === 0;
+
 			}
 		}
 
