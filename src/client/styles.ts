@@ -3376,6 +3376,35 @@ export const APP_CSS = `
 		}
 
 
+		#tpl-modal .tpl-len select {
+
+			background:
+				#29292e;
+
+			color:
+				#fff;
+
+			border:
+				1px solid #3b3b42;
+
+			border-radius:
+				8px;
+
+			padding:
+				9px;
+
+			cursor:
+				pointer;
+		}
+
+
+		/*
+		 * The design picker cards are 18%
+		 * narrower (max-width 82%) so the
+		 * modal's bottom buttons stay
+		 * visible without scrolling.
+		 */
+
 		#tpl-modal .tpl-designs {
 
 			display:
@@ -3387,8 +3416,11 @@ export const APP_CSS = `
 			gap:
 				10px;
 
-			margin-bottom:
-				14px;
+			max-width:
+				82%;
+
+			margin:
+				0 auto 14px auto;
 		}
 
 
@@ -3613,10 +3645,19 @@ export const APP_CSS = `
 		}
 
 
+		/*
+		 * Portrait preview stage, 18%
+		 * narrower than before (443px
+		 * instead of 540px) so the
+		 * Add / Close buttons at the
+		 * bottom of the modal stay in
+		 * view.
+		 */
+
 		#tpl-modal .tpl-stage {
 
 			width:
-				min(100%, 540px);
+				min(100%, 443px);
 
 			margin:
 				auto;
@@ -3632,6 +3673,21 @@ export const APP_CSS = `
 
 			box-shadow:
 				0 18px 55px rgba(0, 0, 0, 0.6);
+		}
+
+
+		/*
+		 * Landscape preview stage
+		 * (16:9 canvas): wider than the
+		 * portrait stage but still
+		 * compact so the bottom
+		 * buttons stay visible.
+		 */
+
+		#tpl-modal .tpl-stage.landscape {
+
+			width:
+				min(100%, 660px);
 		}
 
 
@@ -3727,6 +3783,12 @@ export const APP_CSS = `
 		}
 
 
+		/*
+		 * Stuck to the bottom of the
+		 * scroll area so Add / Close
+		 * are always reachable.
+		 */
+
 		#tpl-modal .tpl-actions {
 
 			display:
@@ -3743,6 +3805,18 @@ export const APP_CSS = `
 
 			margin-top:
 				14px;
+
+			position:
+				sticky;
+
+			bottom:
+				0;
+
+			background:
+				#0d0d0f;
+
+			padding:
+				10px 0 2px;
 		}
 
 

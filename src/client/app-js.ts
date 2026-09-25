@@ -6439,7 +6439,7 @@ export const APP_JS = `
 		'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
 		'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
 		'<span class="va-note">Max 5 GIF \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
-		'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a TikTok-style vertical MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
+		'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 		'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
 		'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
 			'</div>' +
