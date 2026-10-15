@@ -1,0 +1,12 @@
+{
+	"$schema": "../node_modules/wrangler/config-schema.json",
+	"name": "text-to-image-bench",
+	"main": "harness-worker.ts",
+	"compatibility_date": "2025-10-08",
+	"kv_namespaces": [
+		{
+			"binding": "KV_BINDING",
+			"id": "bench_local_kv_namespace"
+		}
+	]
+}

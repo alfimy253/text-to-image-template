@@ -6245,7 +6245,7 @@ export const APP_JS = `
 
 	/*
 	 * The red + button: adds one "Video N"
-	 * accordion to the stack (max 7).
+	 * accordion to the stack (max 10).
 	 */
 	function addVideoAccordion() {
 
@@ -6435,57 +6435,59 @@ export const APP_JS = `
 			'</div>' +
 			'<div class="va-body" id="va-body-' + n + '">' +
 			'<div class="va-left">' +
-			'<div class="va-section">' +
-		'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
-		'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
-		'<span class="va-note">Max 5 GIF \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
-		'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
-		'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
-		'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
+				'<div class="va-section">' +
+				'<div class="va-section-title">Generate SEO Script With AI</div>' +
+				'<span class="va-note">SEO rule: 2 long-tail keywords \u00b7 2\u20135 short keywords \u00b7 every short keyword is said 2\u20135 times</span>' +
+				'<input type="text" id="va-script-topic-' + n + '" maxlength="120" placeholder="Topic (uses the video title if empty)">' +
+				'<div class="va-row">' +
+				'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
+				'<label class="quality-select">Speech <select id="va-script-speed-' + n + '"><option value="super fast">Super fast</option><option value="fast">Fast</option><option value="medium" selected>Medium</option><option value="slow">Slow</option></select></label>' +
+				'</div>' +
+				'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px" title="AI plans 2 long-tail keywords and 2-5 short keywords (each short said 2-5 times) and writes the SRT script around them">\u2728 Generate SEO Script</button>' +
+				'<span class="va-note" id="va-script-status-' + n + '"></span>' +
+				'<div class="va-seo-keywords" id="va-script-keywords-' + n + '" style="display:none"></div>' +
+				'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">\u25bc Script (SRT)</button>' +
+				'<div class="va-script-box" id="va-script-box-' + n + '" style="display:none"></div>' +
+				'<div class="va-row va-script-actions">' +
+				'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">\u2b07 Download .srt</button>' +
+				'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled title="Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles">\ud83c\udf99 Generate Voiceover</button>' +
+				'</div>' +
+				'</div>' +
+				'<div class="va-section">' +
+				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
+				'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
+				'<span class="va-note">Max 5 GIF \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
+				'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
+				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
+				'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
+				'</div>' +
+				'<div class="va-section">' +
+				'<div class="va-section-title">Audio \u2014 one MP3 (the video is as long as the MP3)</div>' +
+				'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">\ud83c\udfb5 Upload MP3 Audio</button>' +
+				'<span class="va-audio-line" id="va-audio-line-' + n + '"></span>' +
+				'</div>' +
+				'<div class="va-section">' +
+				'<div class="va-section-title">Title (top left)</div>' +
+				'<input type="text" id="va-title-' + n + '" maxlength="70" placeholder="Enter your video title...">' +
+				'<div class="va-row">' +
+				'<label class="quality-select">Font <select id="va-font-' + n + '">' + FONT_OPTIONS + '</select></label>' +
+				'<label class="quality-select">Colour <select id="va-color-' + n + '">' + COLOR_OPTIONS + '</select></label>' +
+				'</div>' +
+				'</div>' +
+				'<div class="va-section">' +
+				'<div class="va-section-title">Captions (bottom)</div>' +
+				'<div id="va-captions-' + n + '"></div>' +
+				'<button type="button" class="upload-btn" onclick="addVaCaptionRow(' + n + ')">+ Add Caption</button>' +
+				'</div>' +
+				'<div class="va-section">' +
+				'<div class="va-section-title">Sticker (bottom right)</div>' +
+				'<select id="va-sticker-' + n + '" class="quality-select">' + STICKER_OPTIONS + '</select>' +
+				'</div>' +
+				'<div class="va-section">' +
+				'<div class="va-section-title">Quality</div>' +
+				'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
+				'</div>' +
 			'</div>' +
-			'<div class="va-section">' +
-			'<div class="va-section-title">Audio \u2014 one MP3 (the video is as long as the MP3)</div>' +
-			'<button type="button" class="upload-btn audio" onclick="clickVaAudio(' + n + ')">\ud83c\udfb5 Upload MP3 Audio</button>' +
-			'<span class="va-audio-line" id="va-audio-line-' + n + '"></span>' +
-			'</div>' +
-			'<div class="va-section">' +
-			'<div class="va-section-title">Title (top left)</div>' +
-			'<input type="text" id="va-title-' + n + '" maxlength="70" placeholder="Enter your video title...">' +
-			'<div class="va-row">' +
-			'<label class="quality-select">Font <select id="va-font-' + n + '">' + FONT_OPTIONS + '</select></label>' +
-			'<label class="quality-select">Colour <select id="va-color-' + n + '">' + COLOR_OPTIONS + '</select></label>' +
-			'</div>' +
-			'</div>' +
-			'<div class="va-section">' +
-			'<div class="va-section-title">Captions (bottom)</div>' +
-			'<div id="va-captions-' + n + '"></div>' +
-			'<button type="button" class="upload-btn" onclick="addVaCaptionRow(' + n + ')">+ Add Caption</button>' +
-			'</div>' +
-			'<div class="va-section">' +
-			'<div class="va-section-title">Sticker (bottom right)</div>' +
-			'<select id="va-sticker-' + n + '" class="quality-select">' + STICKER_OPTIONS + '</select>' +
-			'</div>' +
-		'<div class="va-section">' +
-		'<div class="va-section-title">Quality</div>' +
-		'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
-		'</div>' +
-		'<div class="va-section">' +
-		'<div class="va-section-title">Script (SRT) \u2014 AI model</div>' +
-		'<input type="text" id="va-script-topic-' + n + '" maxlength="120" placeholder="Topic (uses the video title if empty)">' +
-		'<div class="va-row">' +
-		'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
-		'<label class="quality-select">Speech <select id="va-script-speed-' + n + '"><option value="super fast">Super fast</option><option value="fast">Fast</option><option value="medium" selected>Medium</option><option value="slow">Slow</option></select></label>' +
-		'</div>' +
-		'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px">\u2728 Generate Script</button>' +
-		'<span class="va-note" id="va-script-status-' + n + '"></span>' +
-		'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">\u25bc Script (SRT)</button>' +
-		'<div class="va-script-box" id="va-script-box-' + n + '" style="display:none"></div>' +
-		'<div class="va-row va-script-actions">' +
-		'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">\u2b07 Download .srt</button>' +
-		'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled title="Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles">\ud83c\udf99 Generate Voiceover</button>' +
-		'</div>' +
-		'</div>' +
-		'</div>' +
 		'<div class="va-right">' +
 			'<div class="va-section">' +
 			'<div class="va-section-title">AI Images \u2014 Cloudflare</div>' +
@@ -8814,7 +8816,7 @@ export const APP_JS = `
 
 	// =========================================================
 	// MODULE 6: auth
-	// (KV-backed login/signup, max 7 users)
+	// (KV-backed login/signup, unlimited users)
 	//
 	// Flow on load:
 	//   GET /api/session
@@ -8830,9 +8832,6 @@ export const APP_JS = `
 	//
 	// The overlay is built with DOM APIs (no HTML edit).
 	// =========================================================
-
-	const AUTH_MAX_USERS =
-		7;
 
 	const AUTH_CONTACT_EMAIL =
 		"ytvibemotions.business@gmail.com";
@@ -8875,7 +8874,7 @@ export const APP_JS = `
 		overlay.innerHTML =
 			'<div class="auth-box">' +
 			'<div class="auth-title">\ud83c\udfac YouTube Vibe Studio</div>' +
-			'<div class="auth-sub">Sign in to use the studio (max ' + AUTH_MAX_USERS + ' user accounts)</div>' +
+			'<div class="auth-sub">Sign in to use the studio</div>' +
 			'<div class="auth-error" id="auth-error"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
 			'<label for="auth-email">Email</label>' +
@@ -10971,6 +10970,99 @@ export const APP_JS = `
 
 	}
 
+	/*
+	 * Shows the two long-tail keywords plus the
+	 * short keywords (with how often each one
+	 * actually appears in the spoken script).
+	 * The counts come from the worker, which
+	 * counts them after stripping cue numbers
+	 * and timestamps.
+	 */
+
+	function renderSeoKeywords(
+		n,
+		keywords
+	) {
+
+		const box =
+			document.getElementById(
+				"va-script-keywords-" + n
+			);
+
+		if (!box) {
+			return;
+		}
+
+		const longs =
+			keywords &&
+			Array.isArray(keywords.longTail)
+				? keywords.longTail
+				: [];
+
+		const shorts =
+			keywords &&
+			Array.isArray(keywords.short)
+				? keywords.short
+				: [];
+
+		if (!longs.length && !shorts.length) {
+
+			box.style.display = "none";
+
+			box.innerHTML = "";
+
+			return;
+
+		}
+
+		let html =
+			'<div class="va-seo-heading">SEO keywords \u2014 counted in the script</div>';
+
+		html +=
+			'<div class="va-seo-row">' +
+			'<span class="va-seo-label">Long-tail</span>';
+
+		longs.forEach(
+			(item) => {
+
+				html +=
+					'<span class="va-seo-chip long" title="Long-tail keyword \u2014 must be said at least 1\u00d7">' +
+					escapeHTML(item.keyword) +
+					" <b>" +
+					item.count +
+					"\u00d7</b></span>";
+
+			}
+		);
+
+		html +=
+			'</div><div class="va-seo-row">' +
+			'<span class="va-seo-label">Short</span>';
+
+		shorts.forEach(
+			(item) => {
+
+				html +=
+					'<span class="va-seo-chip short" title="Short keyword \u2014 must be said 2\u20135\u00d7">' +
+					escapeHTML(item.keyword) +
+					" <b>" +
+					item.count +
+					"\u00d7</b></span>";
+
+			}
+		);
+
+		html +=
+			"</div>";
+
+		box.innerHTML =
+			html;
+
+		box.style.display =
+			"";
+
+	}
+
 	async function generateScript(
 		n
 	) {
@@ -11036,7 +11128,7 @@ export const APP_JS = `
 		btn.disabled = true;
 
 		statusEl.textContent =
-			"Writing your script (AI model)...";
+			"Planning SEO keywords + writing your script (AI model)...";
 
 		try {
 
@@ -11083,6 +11175,11 @@ export const APP_JS = `
 
 			project.srt = data.srt;
 
+			renderSeoKeywords(
+				n,
+				data.keywords
+			);
+
 			const box =
 				document.getElementById(
 					"va-script-box-" + n
@@ -11110,6 +11207,18 @@ export const APP_JS = `
 					)
 					.length;
 
+			const longCount =
+				data.keywords &&
+				data.keywords.longTail
+					? data.keywords.longTail.length
+					: 0;
+
+			const shortCount =
+				data.keywords &&
+				data.keywords.short
+					? data.keywords.short.length
+					: 0;
+
 			statusEl.textContent =
 				"Script ready \u2014 " +
 				lineCount +
@@ -11117,7 +11226,11 @@ export const APP_JS = `
 				speed +
 				" speech, " +
 				minutes +
-				")";
+				" min) \u00b7 SEO: " +
+				longCount +
+				" long-tail + " +
+				shortCount +
+				" short keywords";
 
 		}
 		catch (err) {

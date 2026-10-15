@@ -2068,6 +2068,124 @@ export const APP_CSS = `
 		}
 
 
+			/*
+			 * The SEO keywords the worker
+			 * counted in the spoken script:
+			 * two long-tail keywords and the
+			 * short ones with their 2-5x hits.
+			 */
+
+		.va-seo-keywords {
+
+			margin-top:
+				10px;
+
+			padding:
+				8px 10px;
+
+			background:
+				#0b0e14;
+
+			border:
+				1px solid
+				#374151;
+
+			border-radius:
+				6px;
+		}
+
+
+		.va-seo-heading {
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.78rem;
+
+			margin-bottom:
+				6px;
+		}
+
+
+		.va-seo-row {
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			flex-wrap:
+				wrap;
+
+			gap:
+				6px;
+
+			margin-top:
+				6px;
+		}
+
+
+		.va-seo-label {
+
+			color:
+				#9ca3af;
+
+			font-size:
+				0.72rem;
+
+			text-transform:
+				uppercase;
+
+			letter-spacing:
+				0.04em;
+
+			min-width:
+				58px;
+		}
+
+
+		.va-seo-chip {
+
+			display:
+				inline-block;
+
+			padding:
+				2px 8px;
+
+			border-radius:
+				999px;
+
+			font-size:
+				0.78rem;
+
+			color:
+				#e5e7eb;
+
+			background:
+				#1f2937;
+
+			border:
+				1px solid
+				#374151;
+		}
+
+
+		.va-seo-chip b {
+
+			color:
+				#22d3ee;
+		}
+
+
+		.va-seo-chip.long {
+
+			border-color:
+				#4b5563;
+		}
+
+
 		.va-script-actions {
 
 			justify-content:
@@ -2555,7 +2673,7 @@ export const APP_CSS = `
 
 		/*
 		 * Fix 5: sign-in / sign-up
-		 * overlay (KV-backed, max 7
+		 * overlay (KV-backed, unlimited
 		 * users).
 		 */
 
@@ -3885,6 +4003,869 @@ export const APP_CSS = `
 				margin-left:
 					0;
 			}
+		}
+
+
+
+		/* =====================================================
+		 * THEMES — optional skins for the whole studio.
+		 *
+		 *  html[data-theme="strata"]   light content surfaces on a
+		 *      dark backdrop, teal accents, hairline borders and
+		 *      upper-case letter-spaced labels.
+		 *  html[data-theme="stellar"]  pink-to-violet gradient
+		 *      backdrop with frosted translucent panels.
+		 *  (no attribute)              the built-in amber studio.
+		 *
+		 * Design language borrowed from the HTML5UP demos "Strata"
+		 * and "Stellar" (html5up.net, @ajlkn, CC BY 3.0); the rules
+		 * below are written for this app, not copied from them.
+		 *
+		 * Every token is re-declared per theme, then one shared
+		 * block re-skins the components from those tokens.
+		 * ===================================================== */
+
+		html[data-theme="strata"] {
+			--bg: #2f3238;
+			--card: #ffffff;
+			--accent: #49bf9d;
+			--text: #787878;
+
+			--t-backdrop:
+				#2f3238;
+			--t-panel:
+				#ffffff;
+			--t-panel-2:
+				#f7f7f7;
+			--t-panel-3:
+				#efefef;
+			--t-line:
+				#e5e5e5;
+			--t-line-2:
+				#d9d9d9;
+			--t-ink:
+				#787878;
+			--t-ink-out:
+				#d9d9d9;
+			--t-heading:
+				#787878;
+			--t-heading-out:
+				#ffffff;
+			--t-muted:
+				#7a7a7a;
+			--t-muted-out:
+				#a8adb5;
+			--t-accent-ink:
+				#1a9c74;
+			--t-input:
+				#fbfbfb;
+			--t-btn-bg:
+				transparent;
+			--t-btn-ink:
+				#49bf9d;
+			--t-btn-line:
+				#49bf9d;
+			--t-btn-bg-hover:
+				#49bf9d;
+			--t-btn-ink-hover:
+				#ffffff;
+			--t-btn2-bg:
+				transparent;
+			--t-btn2-ink:
+				#787878;
+			--t-btn2-line:
+				#d9d9d9;
+			--t-btn2-bg-hover:
+				#efefef;
+			--t-on-accent:
+				#ffffff;
+			--t-shadow:
+				0 1px 3px rgba(0, 0, 0, 0.14);
+			--t-radius:
+				8px;
+			--t-radius-sm:
+				4px;
+			--t-ok:
+				#1a9c74;
+			--t-track:
+				rgba(0, 0, 0, 0.12);
+		}
+
+		html[data-theme="stellar"] {
+			--bg: #5f4d93;
+			--card: rgba(255, 255, 255, 0.12);
+			--accent: #ffffff;
+			--text: rgba(255, 255, 255, 0.92);
+
+			--t-backdrop:
+				#5f4d93;
+			--t-panel:
+				rgba(255, 255, 255, 0.12);
+			--t-panel-2:
+				rgba(255, 255, 255, 0.075);
+			--t-panel-3:
+				rgba(0, 0, 0, 0.18);
+			--t-line:
+				rgba(255, 255, 255, 0.3);
+			--t-line-2:
+				rgba(255, 255, 255, 0.35);
+			--t-ink:
+				#ffffff;
+			--t-ink-out:
+				rgba(255, 255, 255, 0.8);
+			--t-heading:
+				#ffffff;
+			--t-heading-out:
+				#ffffff;
+			--t-muted:
+				rgba(255, 255, 255, 0.72);
+			--t-muted-out:
+				rgba(255, 255, 255, 0.8);
+			--t-accent-ink:
+				#ffffff;
+			--t-input:
+				rgba(255, 255, 255, 0.075);
+			--t-btn-bg:
+				rgba(255, 255, 255, 0.85);
+			--t-btn-ink:
+				#5f4d93;
+			--t-btn-line:
+				transparent;
+			--t-btn-bg-hover:
+				#ffffff;
+			--t-btn-ink-hover:
+				#4a3a78;
+			--t-btn2-bg:
+				rgba(255, 255, 255, 0.1);
+			--t-btn2-ink:
+				#ffffff;
+			--t-btn2-line:
+				rgba(255, 255, 255, 0.35);
+			--t-btn2-bg-hover:
+				rgba(255, 255, 255, 0.24);
+			--t-on-accent:
+				#5f4d93;
+			--t-shadow:
+				0 1px 3px rgba(0, 0, 0, 0.18);
+			--t-radius:
+				10px;
+			--t-radius-sm:
+				8px;
+			--t-ok:
+				#ffffff;
+			--t-track:
+				rgba(0, 0, 0, 0.28);
+		}
+
+
+		/* ---- backdrop + hero ------------------------------- */
+
+		html[data-theme="strata"] body {
+			background-color:
+				var(--t-backdrop);
+			background-image:
+				radial-gradient(
+					1100px 520px at 50% -8%,
+					rgba(255, 255, 255, 0.07),
+					rgba(255, 255, 255, 0) 62%
+				),
+				repeating-linear-gradient(
+					45deg,
+					rgba(255, 255, 255, 0.014) 0,
+					rgba(255, 255, 255, 0.014) 2px,
+					rgba(0, 0, 0, 0) 2px,
+					rgba(0, 0, 0, 0) 7px
+				);
+			background-attachment:
+				fixed;
+			color:
+				var(--t-ink-out);
+		}
+
+		html[data-theme="stellar"] body {
+			background-color:
+				var(--t-backdrop);
+			background-image:
+				radial-gradient(
+					rgba(255, 255, 255, 0.22) 1px,
+					rgba(255, 255, 255, 0) 1px
+				),
+				linear-gradient(
+					45deg,
+					#e37682 15%,
+					#5f4d93 85%
+				);
+			background-size:
+				24px 24px, 100% 100%;
+			background-attachment:
+				fixed, fixed;
+			color:
+				var(--t-ink-out);
+		}
+
+		html[data-theme] body {
+			font-family:
+				"Source Sans Pro",
+				"Segoe UI",
+				Helvetica,
+				Arial,
+				sans-serif;
+			font-weight:
+				400;
+		}
+
+		html[data-theme="strata"] .header {
+			padding:
+				44px 16px 26px 16px;
+			margin-bottom:
+				20px;
+		}
+
+		html[data-theme="stellar"] .header {
+			max-width:
+				900px;
+			margin:
+				0 auto 22px auto;
+			padding:
+				34px 24px;
+			background:
+				var(--t-panel);
+			border:
+				1px solid var(--t-line);
+			border-radius:
+				var(--t-radius);
+			backdrop-filter:
+				blur(8px);
+		}
+
+		html[data-theme] .header h1 {
+			color:
+				var(--t-heading-out);
+			font-size:
+				2.45rem;
+			font-weight:
+				300;
+			letter-spacing:
+				-0.02em;
+			margin-bottom:
+				10px;
+			border-bottom:
+				0;
+			padding-bottom:
+				0;
+		}
+
+		html[data-theme] .header p {
+			color:
+				var(--t-muted-out);
+			font-size:
+				0.78rem;
+			letter-spacing:
+				0.18em;
+			text-transform:
+				uppercase;
+		}
+
+		html[data-theme="strata"] .header::after {
+			content:
+				"";
+			display:
+				block;
+			width:
+				72px;
+			height:
+				2px;
+			margin:
+				20px auto 0 auto;
+			background:
+				var(--accent);
+		}
+
+		html[data-theme="stellar"] .header::after {
+			content:
+				"";
+			display:
+				block;
+			width:
+				100%;
+			height:
+				1px;
+			margin:
+				18px 0 0 0;
+			background:
+				var(--t-line);
+		}
+
+
+		/* ---- surfaces ------------------------------------- */
+
+		html[data-theme] .studio,
+		html[data-theme] .video-accordion,
+		html[data-theme] .bulk-panel,
+		html[data-theme] .modal-box,
+		html[data-theme] .auth-box,
+		html[data-theme] #tpl-modal .tpl-box {
+			background:
+				var(--t-panel);
+			border:
+				1px solid var(--t-line);
+			border-radius:
+				var(--t-radius);
+			color:
+				var(--t-ink);
+			backdrop-filter:
+				blur(8px);
+			box-shadow:
+				var(--t-shadow);
+		}
+
+		html[data-theme] .audio-panel,
+		html[data-theme] .va-seo-keywords,
+		html[data-theme] .va-script-box,
+		html[data-theme] .voiceover-textarea,
+		html[data-theme] .cfg-status {
+			background:
+				var(--t-panel-2);
+			border:
+				1px solid var(--t-line);
+			color:
+				var(--t-ink);
+		}
+
+		html[data-theme] .auth-account-box {
+			color:
+				var(--t-ink);
+		}
+
+		html[data-theme] .va-header {
+			background:
+				var(--t-panel-2);
+			border-bottom:
+				1px solid var(--t-line);
+			color:
+				var(--t-ink);
+		}
+
+		html[data-theme] .va-card,
+		html[data-theme] .va-ai-card,
+		html[data-theme] .auth-account-box,
+		html[data-theme] #tpl-modal .tpl-design,
+		html[data-theme] .card {
+			background:
+				var(--t-panel-2);
+			border-color:
+				var(--t-line);
+			color:
+				var(--t-ink);
+		}
+
+		html[data-theme] #tpl-modal .tpl-design.selected,
+		html[data-theme] .card.in-video {
+			border-color:
+				var(--accent);
+		}
+
+		html[data-theme] .va-section,
+		html[data-theme] .bulk-slot,
+		html[data-theme] h2,
+		html[data-theme] .estimate,
+		html[data-theme] .auth-footer-hr {
+			border-color:
+				var(--t-line);
+		}
+
+		html[data-theme] .canvas-container {
+			background:
+				#0b0d11;
+			border:
+				1px solid var(--t-line);
+			box-shadow:
+				none;
+		}
+
+		html[data-theme] .cfg-box {
+			background:
+				var(--t-panel);
+			border:
+				1px solid var(--t-line);
+			color:
+				var(--t-ink);
+		}
+
+		html[data-theme] .ai-fullscreen-overlay {
+			background:
+				rgba(0, 0, 0, 0.92);
+		}
+
+
+		/* ---- type ----------------------------------------- */
+
+		html[data-theme] h2 {
+			color:
+				var(--t-heading);
+			font-weight:
+				400;
+			border-bottom:
+				1px solid var(--t-line);
+			padding-bottom:
+				10px;
+		}
+
+		html[data-theme] .va-section-title,
+		html[data-theme] .audio-title,
+		html[data-theme] .cfg-group-title,
+		html[data-theme] .va-seo-label,
+		html[data-theme] .voiceover-label {
+			color:
+				var(--t-heading);
+			font-weight:
+				600;
+			text-transform:
+				uppercase;
+			letter-spacing:
+				0.08em;
+			font-size:
+				0.78rem;
+		}
+
+		html[data-theme] .va-title,
+		html[data-theme] .modal-title,
+		html[data-theme] .auth-title,
+		html[data-theme] .cfg-title,
+		html[data-theme] .tpl-head,
+		html[data-theme] #tpl-modal .tpl-box,
+		html[data-theme] .tpl-status {
+			color:
+				var(--t-heading);
+		}
+
+		html[data-theme] .va-note,
+		html[data-theme] .audio-note,
+		html[data-theme] .caption-count,
+		html[data-theme] .caption-chars,
+		html[data-theme] .estimate,
+		html[data-theme] .quality-select,
+		html[data-theme] .va-summary,
+		html[data-theme] .prompt,
+		html[data-theme] .audio-empty,
+		html[data-theme] .va-card-label,
+		html[data-theme] .va-seo-heading,
+		html[data-theme] .cfg-note,
+		html[data-theme] .cfg-sub,
+		html[data-theme] .auth-sub,
+		html[data-theme] .auth-field label,
+		html[data-theme] .cfg-field label,
+		html[data-theme] #tpl-modal .tpl-sub,
+		html[data-theme] #tpl-modal .tpl-tips,
+		html[data-theme] .tpl-len span,
+		html[data-theme] .bulk-summary,
+		html[data-theme] .bulk-caption-wrap,
+		html[data-theme] .va-ai-label,
+		html[data-theme] .voiceover-voice-label {
+			color:
+				var(--t-muted);
+		}
+
+		html[data-theme] .audio-title,
+		html[data-theme] .action-hint {
+			color:
+				var(--t-muted-out);
+		}
+
+		html[data-theme] .status-text {
+			color:
+				var(--t-ok);
+		}
+
+		html[data-theme] .va-template-link,
+		html[data-theme] .estimate b,
+		html[data-theme] .auth-footer-link {
+			color:
+				var(--t-accent-ink);
+		}
+
+
+		/* ---- controls ------------------------------------- */
+
+		html[data-theme] .upload-btn,
+		html[data-theme] .auth-submit,
+		html[data-theme] .va-seo-chip,
+		html[data-theme] .cfg-btn {
+			background:
+				var(--t-btn-bg);
+			color:
+				var(--t-btn-ink);
+			border:
+				1px solid var(--t-btn-line);
+			border-radius:
+				var(--t-radius-sm);
+			font-weight:
+				600;
+			letter-spacing:
+				0.06em;
+			text-transform:
+				uppercase;
+			font-size:
+				0.82rem;
+			box-shadow:
+				none;
+		}
+
+		html[data-theme] .upload-btn:not(.small),
+		html[data-theme] .cfg-btn {
+			padding:
+				11px 20px;
+		}
+
+		html[data-theme] .upload-btn:hover:not(:disabled),
+		html[data-theme] .auth-submit:hover:not(:disabled),
+		html[data-theme] .cfg-btn:hover {
+			background:
+				var(--t-btn-bg-hover);
+			color:
+				var(--t-btn-ink-hover);
+			transform:
+				none;
+			opacity:
+				1;
+		}
+
+		html[data-theme] .upload-btn:disabled,
+		html[data-theme] .cfg-btn:disabled {
+			background:
+				var(--t-btn2-bg);
+			color:
+				var(--t-muted);
+			border-color:
+				var(--t-line);
+			opacity:
+				0.6;
+		}
+
+		html[data-theme] .va-api-btn,
+		html[data-theme] .va-scroll-toggle,
+		html[data-theme] .toggle-btn,
+		html[data-theme] .add-caption-btn,
+		html[data-theme] .caption-remove,
+		html[data-theme] .remove-audio-btn,
+		html[data-theme] .auth-switch,
+		html[data-theme] .auth-logout,
+		html[data-theme] .cfg-btn.alt,
+		html[data-theme] #tpl-modal .tpl-actions button,
+		html[data-theme] #tpl-modal label.tpl-file,
+		html[data-theme] #tpl-modal a.tpl-download,
+		html[data-theme] #tpl-modal .tpl-x {
+			background:
+				var(--t-btn2-bg);
+			color:
+				var(--t-btn2-ink);
+			border:
+				1px solid var(--t-btn2-line);
+			border-radius:
+				var(--t-radius-sm);
+			letter-spacing:
+				0.03em;
+		}
+
+		html[data-theme] .va-arrow {
+			color:
+				var(--t-muted);
+		}
+
+		html[data-theme] .va-api-btn:hover,
+		html[data-theme] .va-scroll-toggle:hover,
+		html[data-theme] .toggle-btn:hover,
+		html[data-theme] .add-caption-btn:hover,
+		html[data-theme] .auth-switch:hover,
+		html[data-theme] .auth-logout:hover,
+		html[data-theme] .cfg-btn.alt:hover,
+		html[data-theme] #tpl-modal .tpl-actions button:hover,
+		html[data-theme] #tpl-modal a.tpl-download:hover {
+			background:
+				var(--t-btn2-bg-hover);
+			color:
+				var(--t-btn2-ink);
+		}
+
+		html[data-theme] .bulk-toggle {
+			background:
+				var(--accent);
+			color:
+				var(--t-on-accent);
+			border:
+				2px solid var(--t-btn-line);
+			box-shadow:
+				var(--t-shadow);
+		}
+
+		html[data-theme="stellar"] .bulk-toggle {
+			border-color:
+				rgba(255, 255, 255, 0.5);
+		}
+
+		html[data-theme] .badge {
+			background:
+				var(--accent);
+			color:
+				var(--t-on-accent);
+		}
+
+		html[data-theme] #tpl-modal button.tpl-primary {
+			background:
+				var(--t-btn-bg-hover);
+			color:
+				var(--t-btn-ink-hover);
+			border:
+				1px solid var(--t-btn-line);
+		}
+
+		html[data-theme] .va-status,
+		html[data-theme] .bulk-status {
+			background:
+				var(--t-panel-3);
+			color:
+				var(--t-ink);
+			border:
+				1px solid var(--t-line);
+		}
+
+		html[data-theme="strata"] .va-status,
+		html[data-theme="strata"] .bulk-status {
+			background:
+				#f0f0f0;
+			color:
+				#6b6b6b;
+		}
+
+		html[data-theme] .progress-bar-container {
+			background:
+				var(--t-track);
+		}
+
+		html[data-theme] .progress-bar {
+			background:
+				var(--accent);
+		}
+
+		html[data-theme="stellar"] .progress-bar {
+			background:
+				#ffffff;
+		}
+
+		html[data-theme] .va-seo-chip b {
+			color:
+				var(--t-accent-ink);
+		}
+
+
+		/* ---- form fields ---------------------------------- */
+
+		html[data-theme] input[type="text"],
+		html[data-theme] input[type="number"],
+		html[data-theme] input[type="password"],
+		html[data-theme] input[type="color"],
+		html[data-theme] select,
+		html[data-theme] textarea,
+		html[data-theme] .title-row input[type="text"],
+		html[data-theme] .caption-text,
+		html[data-theme] .caption-time input,
+		html[data-theme] .va-ai-prompt,
+		html[data-theme] .quality-select select,
+		html[data-theme] select.quality-select,
+		html[data-theme] .cfg-field input,
+		html[data-theme] .cfg-field select,
+		html[data-theme] .auth-field input,
+		html[data-theme] .voiceover-voice-label select {
+			background:
+				var(--t-input);
+			color:
+				var(--t-ink);
+			border:
+				1px solid var(--t-line-2);
+			border-radius:
+				var(--t-radius-sm);
+		}
+
+		html[data-theme] input[type="text"]::placeholder,
+		html[data-theme] textarea::placeholder {
+			color:
+				var(--t-muted);
+		}
+
+		html[data-theme] input[type="text"]:focus,
+		html[data-theme] select:focus,
+		html[data-theme] textarea:focus,
+		html[data-theme] .cfg-field input:focus,
+		html[data-theme] .cfg-field select:focus {
+			border-color:
+				var(--accent);
+			outline:
+				none;
+		}
+
+		html[data-theme] select option {
+			background:
+				var(--t-panel);
+			color:
+				var(--t-ink);
+		}
+
+		html[data-theme="strata"] .va-script-box,
+		html[data-theme="strata"] .voiceover-textarea {
+			color:
+				#4a4a4a;
+		}
+
+		html[data-theme] .caption-sample,
+		html[data-theme] .caption-sample * {
+			background:
+				#ffffff;
+			color:
+				#000000;
+		}
+
+		html[data-theme] .bulk-banner {
+			background:
+				rgba(127, 29, 29, 0.92);
+			color:
+				#ffffff;
+			border:
+				1px solid rgba(255, 255, 255, 0.25);
+			border-radius:
+				var(--t-radius-sm);
+		}
+
+
+		/* ---- theme picker (settings page) ----------------- */
+
+		.cfg-themes {
+			display:
+				flex;
+			gap:
+				8px;
+			margin:
+				8px 0 4px 0;
+		}
+
+		.cfg-theme {
+			flex:
+				1 1 0;
+			display:
+				flex;
+			flex-direction:
+				column;
+			gap:
+				6px;
+			padding:
+				8px;
+			background:
+				#14171c;
+			border:
+				2px solid #2e3440;
+			border-radius:
+				10px;
+			cursor:
+				pointer;
+		}
+
+		.cfg-theme:hover {
+			border-color:
+				#4b5563;
+		}
+
+		.cfg-theme.active {
+			border-color:
+				#f59e0b;
+		}
+
+		.cfg-theme input {
+			position:
+				absolute;
+			opacity:
+				0;
+			pointer-events:
+				none;
+		}
+
+		.cfg-theme-name {
+			font-size:
+				0.82rem;
+			font-weight:
+				600;
+			color:
+				#f3f4f6;
+		}
+
+		.cfg-theme-sub {
+			font-size:
+				0.7rem;
+			line-height:
+				1.35;
+			color:
+				#9ca3af;
+		}
+
+		.cfg-theme-preview {
+			height:
+				34px;
+			border-radius:
+				6px;
+			border:
+				1px solid rgba(255, 255, 255, 0.18);
+		}
+
+		.cfg-preview-default {
+			background:
+				linear-gradient(
+					135deg,
+					#0f1115 0%,
+					#181b20 55%,
+					#f59e0b 55%,
+					#f59e0b 70%,
+					#181b20 70%
+				);
+		}
+
+		.cfg-preview-strata {
+			background:
+				linear-gradient(
+					135deg,
+					#2f3238 0%,
+					#2f3238 38%,
+					#ffffff 38%,
+					#ffffff 100%
+				);
+		}
+
+		.cfg-preview-stellar {
+			background:
+				linear-gradient(
+					135deg,
+					#e37682 0%,
+					#5f4d93 100%
+				);
+		}
+
+		html[data-theme] .cfg-theme {
+			background:
+				var(--t-panel-2);
+			border-color:
+				var(--t-line);
+		}
+
+		html[data-theme] .cfg-theme.active {
+			border-color:
+				var(--accent);
+		}
+
+		html[data-theme] .cfg-theme-name {
+			color:
+				var(--t-heading);
+		}
+
+		html[data-theme] .cfg-theme-sub {
+			color:
+				var(--t-muted);
 		}
 
 `;
