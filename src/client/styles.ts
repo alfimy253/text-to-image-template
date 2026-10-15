@@ -1,3 +1,5 @@
+import { AERIAL_BACKGROUND } from "./aerial-background";
+
 /*
  * APP_CSS — every byte of the page CSS (studio + video
  * accordions + modals + the template-composer modal).
@@ -3517,113 +3519,33 @@ export const APP_CSS = `
 
 
 		/*
-		 * The design picker cards are 18%
-		 * narrower (max-width 82%) so the
-		 * modal's bottom buttons stay
-		 * visible without scrolling.
+		 * Compact template selection replaces the preview-card grid.
 		 */
 
-		#tpl-modal .tpl-designs {
-
-			display:
-				grid;
-
-			grid-template-columns:
-				repeat(5, 1fr);
-
-			gap:
-				10px;
-
-			max-width:
-				82%;
-
-			margin:
-				0 auto 14px auto;
+		#tpl-modal .tpl-design-picker {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+			margin: 0 0 14px;
 		}
-
-
-		#tpl-modal .tpl-design {
-
-			background:
-				#1b1b20;
-
-			border:
-				2px solid transparent;
-
-			border-radius:
-				12px;
-
-			padding:
-				8px;
-
-			cursor:
-				pointer;
+		#tpl-modal .tpl-design-picker select {
+			padding: 10px;
+			border: 1px solid #374151;
+			border-radius: 8px;
+			background: #19191e;
+			color: #fff;
 		}
-
-
-		#tpl-modal .tpl-design.selected {
-
-			border-color:
-				#ffd83d;
-
-			background:
-				#24242a;
+		#tpl-modal .tpl-design-picker small { color: #aaa; }
+		#tpl-modal .tpl-field,
+		#tpl-modal .tpl-len,
+		#tpl-modal .tpl-row label.tpl-range {
+			display: flex;
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 5px;
 		}
-
-
-		#tpl-modal .tpl-design canvas {
-
-			width:
-				100%;
-
-			height:
-				auto;
-
-			display:
-				block;
-
-			border-radius:
-				8px;
-
-			background:
-				#111;
-		}
-
-
-		#tpl-modal .tpl-design b {
-
-			display:
-				block;
-
-			font-size:
-				13px;
-
-			margin:
-				7px 2px 2px;
-
-			color:
-				#fff;
-		}
-
-
-		#tpl-modal .tpl-design small {
-
-			display:
-				block;
-
-			color:
-				#999;
-
-			font-size:
-				11px;
-
-			line-height:
-				1.3;
-
-			margin:
-				0 2px 3px;
-		}
-
+		#tpl-modal .tpl-field span,
+		#tpl-modal .tpl-range span { font-size: 12px; }
 
 		#tpl-modal .tpl-editor {
 
@@ -3764,12 +3686,7 @@ export const APP_CSS = `
 
 
 		/*
-		 * Portrait preview stage, 18%
-		 * narrower than before (443px
-		 * instead of 540px) so the
-		 * Add / Close buttons at the
-		 * bottom of the modal stay in
-		 * view.
+		 * Preview sizing is constrained to 80px below for both formats.
 		 */
 
 		#tpl-modal .tpl-stage {
@@ -3976,23 +3893,10 @@ export const APP_CSS = `
 		}
 
 
-		@media (max-width: 800px) {
-
-			#tpl-modal .tpl-designs {
-
-				grid-template-columns:
-					repeat(3, 1fr);
-			}
-		}
 
 
 		@media (max-width: 520px) {
 
-			#tpl-modal .tpl-designs {
-
-				grid-template-columns:
-					repeat(2, 1fr);
-			}
 
 
 			#tpl-modal .tpl-status {
@@ -4010,14 +3914,13 @@ export const APP_CSS = `
 		/* =====================================================
 		 * THEMES — optional skins for the whole studio.
 		 *
-		 *  html[data-theme="strata"]   light content surfaces on a
-		 *      dark backdrop, teal accents, hairline borders and
-		 *      upper-case letter-spaced labels.
+		 *  html[data-theme="strata"]   Aerial-inspired sky, mountains,
+		 *      diagonal overlays and white type (legacy storage key).
 		 *  html[data-theme="stellar"]  pink-to-violet gradient
 		 *      backdrop with frosted translucent panels.
 		 *  (no attribute)              the built-in amber studio.
 		 *
-		 * Design language borrowed from the HTML5UP demos "Strata"
+		 * Design language borrowed from the HTML5UP demos "Aerial"
 		 * and "Stellar" (html5up.net, @ajlkn, CC BY 3.0); the rules
 		 * below are written for this app, not copied from them.
 		 *
@@ -4026,59 +3929,59 @@ export const APP_CSS = `
 		 * ===================================================== */
 
 		html[data-theme="strata"] {
-			--bg: #2f3238;
-			--card: #ffffff;
-			--accent: #49bf9d;
-			--text: #787878;
+			--bg: #348cb2;
+			--card: rgba(12, 46, 66, 0.48);
+			--accent: #ffffff;
+			--text: #ffffff;
 
 			--t-backdrop:
-				#2f3238;
+				#348cb2;
 			--t-panel:
-				#ffffff;
+				rgba(12, 46, 66, 0.48);
 			--t-panel-2:
-				#f7f7f7;
+				rgba(255, 255, 255, 0.06);
 			--t-panel-3:
-				#efefef;
+				rgba(255, 255, 255, 0.12);
 			--t-line:
-				#e5e5e5;
+				rgba(255, 255, 255, 0.22);
 			--t-line-2:
-				#d9d9d9;
+				rgba(255, 255, 255, 0.7);
 			--t-ink:
-				#787878;
+				#ffffff;
 			--t-ink-out:
-				#d9d9d9;
+				rgba(255, 255, 255, 0.7);
 			--t-heading:
-				#787878;
+				#ffffff;
 			--t-heading-out:
 				#ffffff;
 			--t-muted:
-				#7a7a7a;
+				rgba(255, 255, 255, 0.8);
 			--t-muted-out:
-				#a8adb5;
+				rgba(255, 255, 255, 0.8);
 			--t-accent-ink:
-				#1a9c74;
+				#ffffff;
 			--t-input:
-				#fbfbfb;
+				rgba(8, 36, 54, 0.55);
 			--t-btn-bg:
 				transparent;
 			--t-btn-ink:
-				#49bf9d;
-			--t-btn-line:
-				#49bf9d;
-			--t-btn-bg-hover:
-				#49bf9d;
-			--t-btn-ink-hover:
 				#ffffff;
+			--t-btn-line:
+				#ffffff;
+			--t-btn-bg-hover:
+				#ffffff;
+			--t-btn-ink-hover:
+				#245b75;
 			--t-btn2-bg:
 				transparent;
 			--t-btn2-ink:
-				#787878;
-			--t-btn2-line:
-				#d9d9d9;
-			--t-btn2-bg-hover:
-				#efefef;
-			--t-on-accent:
 				#ffffff;
+			--t-btn2-line:
+				rgba(255, 255, 255, 0.7);
+			--t-btn2-bg-hover:
+				rgba(255, 255, 255, 0.12);
+			--t-on-accent:
+				#245b75;
 			--t-shadow:
 				0 1px 3px rgba(0, 0, 0, 0.14);
 			--t-radius:
@@ -4086,7 +3989,7 @@ export const APP_CSS = `
 			--t-radius-sm:
 				4px;
 			--t-ok:
-				#1a9c74;
+				#ffffff;
 			--t-track:
 				rgba(0, 0, 0, 0.12);
 		}
@@ -4158,28 +4061,34 @@ export const APP_CSS = `
 		}
 
 
+		.aerial-credit { display: none; }
+		html[data-theme="strata"] .aerial-credit { display: block; text-align: center; font-size: 11px; margin: -10px 0 20px; color: rgba(255,255,255,.8); }
+		html[data-theme="strata"] .aerial-credit a { color: inherit; }
+
 		/* ---- backdrop + hero ------------------------------- */
 
+		/* Aerial by HTML5 UP / @ajlkn (CC BY 3.0).
+		 * Adapted for a scrolling studio, not a fixed landing page.
+		 * Background bundled inline so the theme has no remote image dependency.
+		 */
 		html[data-theme="strata"] body {
-			background-color:
-				var(--t-backdrop);
+			background-color: #348cb2;
 			background-image:
-				radial-gradient(
-					1100px 520px at 50% -8%,
-					rgba(255, 255, 255, 0.07),
-					rgba(255, 255, 255, 0) 62%
-				),
-				repeating-linear-gradient(
-					45deg,
-					rgba(255, 255, 255, 0.014) 0,
-					rgba(255, 255, 255, 0.014) 2px,
-					rgba(0, 0, 0, 0) 2px,
-					rgba(0, 0, 0, 0) 7px
-				);
-			background-attachment:
-				fixed;
-			color:
-				var(--t-ink-out);
+				linear-gradient(135deg, rgba(255,255,255,.14) 25%, transparent 25%, transparent 75%, rgba(255,255,255,.08) 75%),
+				url("data:image/jpeg;base64,${AERIAL_BACKGROUND}");
+			background-size: 640px 640px, auto 100vh;
+			background-position: center, 0 bottom;
+			background-repeat: repeat, repeat-x;
+			background-attachment: fixed;
+			color: var(--t-ink-out);
+			animation: aerial-drift 90s linear infinite;
+		}
+		@keyframes aerial-drift {
+			from { background-position: center, 0 bottom; }
+			to { background-position: center, -1500px bottom; }
+		}
+		@media (prefers-reduced-motion: reduce) {
+			html[data-theme="strata"] body { animation: none; }
 		}
 
 		html[data-theme="stellar"] body {
@@ -4234,6 +4143,7 @@ export const APP_CSS = `
 				1px solid var(--t-line);
 			border-radius:
 				var(--t-radius);
+			-webkit-backdrop-filter: blur(8px);
 			backdrop-filter:
 				blur(8px);
 		}
@@ -4313,6 +4223,7 @@ export const APP_CSS = `
 				var(--t-radius);
 			color:
 				var(--t-ink);
+			-webkit-backdrop-filter: blur(8px);
 			backdrop-filter:
 				blur(8px);
 			box-shadow:
@@ -4397,6 +4308,34 @@ export const APP_CSS = `
 				rgba(0, 0, 0, 0.92);
 		}
 
+
+		/* Relative 10% alpha reduction: .12 × .9 = .108.
+		 * Backdrop blur +20%: 8px × 1.2 = 9.6px (content stays sharp).
+		 */
+		html[data-theme="stellar"] .studio,
+		html[data-theme="stellar"] .video-accordion {
+			background: rgba(255, 255, 255, 0.108);
+		}
+		html[data-theme="stellar"] .video-accordion {
+			-webkit-backdrop-filter: blur(9.6px);
+			backdrop-filter: blur(9.6px);
+		}
+		html[data-theme="strata"] .header h1 {
+			font-weight: 900;
+			letter-spacing: -0.035em;
+			font-size: clamp(2rem, 5vw, 3.8rem);
+			text-shadow: 0 2px 12px rgba(0, 0, 0, .15);
+		}
+		html[data-theme="strata"] .header p {
+			text-transform: none;
+			letter-spacing: .02em;
+			font-size: 1rem;
+		}
+		html[data-theme="strata"] .va-status,
+		html[data-theme="strata"] .bulk-status {
+			background: rgba(8, 36, 54, .55);
+			color: #ffffff;
+		}
 
 		/* ---- type ----------------------------------------- */
 
@@ -4629,13 +4568,6 @@ export const APP_CSS = `
 				1px solid var(--t-line);
 		}
 
-		html[data-theme="strata"] .va-status,
-		html[data-theme="strata"] .bulk-status {
-			background:
-				#f0f0f0;
-			color:
-				#6b6b6b;
-		}
 
 		html[data-theme] .progress-bar-container {
 			background:
@@ -4704,16 +4636,14 @@ export const APP_CSS = `
 		}
 
 		html[data-theme] select option {
-			background:
-				var(--t-panel);
-			color:
-				var(--t-ink);
+			background: var(--t-backdrop);
+			color: var(--t-ink);
 		}
 
 		html[data-theme="strata"] .va-script-box,
 		html[data-theme="strata"] .voiceover-textarea {
 			color:
-				#4a4a4a;
+				#ffffff;
 		}
 
 		html[data-theme] .caption-sample,
@@ -4827,14 +4757,7 @@ export const APP_CSS = `
 		}
 
 		.cfg-preview-strata {
-			background:
-				linear-gradient(
-					135deg,
-					#2f3238 0%,
-					#2f3238 38%,
-					#ffffff 38%,
-					#ffffff 100%
-				);
+			background: linear-gradient(135deg, rgba(255,255,255,.22) 25%, transparent 25%, transparent 75%, rgba(255,255,255,.12) 75%), linear-gradient(#348cb2, #b5d5df);
 		}
 
 		.cfg-preview-stellar {
@@ -4866,6 +4789,38 @@ export const APP_CSS = `
 		html[data-theme] .cfg-theme-sub {
 			color:
 				var(--t-muted);
+		}
+
+		#tpl-modal .tpl-stage,
+		#tpl-modal .tpl-stage.landscape {
+			width: 100%;
+			height: 80px;
+			min-height: 80px;
+			max-height: 80px;
+			border-radius: 8px;
+		}
+		#tpl-modal #tpl-canvas {
+			width: 100%;
+			height: 80px;
+			min-height: 80px;
+			max-height: 80px;
+			object-fit: contain;
+		}
+		#tpl-modal .tpl-actions {
+			justify-content: center;
+			align-items: center;
+			min-height: 64px;
+			padding: 10px 0;
+			z-index: 1;
+		}
+		html[data-theme] #tpl-modal .tpl-actions {
+			background: var(--t-backdrop);
+		}
+		html[data-theme] #tpl-modal .tpl-editor {
+			background: var(--t-panel-2);
+		}
+		html[data-theme] #tpl-modal .tpl-design-picker small {
+			color: var(--t-muted);
 		}
 
 `;

@@ -49,7 +49,7 @@ export const PAGE_MARKUP = `
 	>
 
 	<link
-		href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&family=Source+Sans+Pro:wght@300;400;600&display=swap"
+		href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&family=Source+Sans+Pro:wght@300;400;600;900&display=swap"
 		rel="stylesheet"
 	>
 
@@ -86,6 +86,8 @@ export const PAGE_MARKUP = `
 		</p>
 
 	</div>
+
+	<div class="aerial-credit">Theme adapted from <a href="https://html5up.net/aerial" target="_blank" rel="noopener noreferrer">Aerial by HTML5 UP</a> / @ajlkn · <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener noreferrer">CC BY 3.0</a></div>
 
 	<div
 		id="bulk-banner"

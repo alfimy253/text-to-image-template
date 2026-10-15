@@ -100,7 +100,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		let ctx =
 			null;
 
-		let thumbsHost =
+		let designSelect =
 			null;
 
 		let titleEl =
@@ -914,184 +914,28 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 
 			}
 
-			renderDesignCards();
+			renderDesignOptions();
 
 			draw(0);
 		}
 
 		// -------------------------------------------------
-		// Design picker cards (miniature previews of each
-		// layout using the loaded images).
+		// One accessible dropdown replaces the preview-card grid.
+		// Options are built once; the selection survives modal reopen.
 		// -------------------------------------------------
 
-		function renderDesignCards() {
-
-			thumbsHost.innerHTML =
-				"";
-
-			designs.forEach((d, i) => {
-
-				const el =
-					document.createElement("div");
-
-				el.className =
-					"tpl-design" +
-					(i === selectedDesign ? " selected" : "");
-
-				const c =
-					document.createElement("canvas");
-
-				/*
-				 * Portrait thumbs are tall,
-				 * landscape thumbs are wide,
-				 * matching the export shape.
-				 */
-
-				c.width =
-					tplLandscape ? 320 : 180;
-
-				c.height =
-					tplLandscape ? 180 : 320;
-
-				el.appendChild(c);
-
-				const label =
-					document.createElement("b");
-
-				label.textContent =
-					(i + 1) + ". " + d.name;
-
-				el.appendChild(label);
-
-				const sm =
-					document.createElement("small");
-
-				sm.textContent =
-					d.desc;
-
-				el.appendChild(sm);
-
-				el.onclick = () => {
-
-					selectedDesign =
-						i;
-
-					const all =
-						thumbsHost.querySelectorAll(
-							".tpl-design"
-						);
-
-					for (const x of all) {
-
-						x.classList.remove(
-							"selected"
-						);
-					}
-
-					el.classList.add(
-						"selected"
-					);
-
-					draw(0);
-				};
-
-				thumbsHost.appendChild(el);
-
-				const ti =
-					c.getContext("2d");
-
-				ti.clearRect(0, 0, c.width, c.height);
-
-				ti.fillStyle =
-					"#161616";
-
-				ti.fillRect(0, 0, c.width, c.height);
-
-				if (images.length) {
-
-					const portraitPositions = [
-						[[0, 55, 180, 205]],
-						[[8, 45, 164, 110], [8, 168, 164, 110]],
-						[[8, 35, 164, 78], [8, 121, 164, 78], [8, 207, 164, 78]],
-						[[12, 40, 72, 100], [96, 32, 72, 105], [22, 155, 72, 100], [91, 160, 72, 100], [54, 235, 72, 68]],
-						[[6, 48, 168, 215]]
-					];
-
-					const landscapePositions = [
-						[[90, 20, 140, 120]],
-						[[8, 25, 150, 110], [162, 25, 150, 110]],
-						[[8, 35, 100, 90], [110, 35, 100, 90], [212, 35, 100, 90]],
-						[[20, 20, 80, 60], [120, 15, 80, 65], [220, 20, 80, 60], [70, 90, 80, 45], [170, 90, 80, 45]],
-						[[0, 15, 320, 130]]
-					];
-
-					const positions =
-						(tplLandscape
-							? landscapePositions
-							: portraitPositions)[i];
-
-					positions.forEach((q, j) => {
-
-						const im =
-							images[j % images.length];
-
-						const s =
-							Math.max(
-								q[2] / im.width,
-								q[3] / im.height
-							);
-
-						const dw =
-							im.width * s;
-
-						const dh =
-							im.height * s;
-
-						ti.fillStyle =
-							"#fff";
-
-						ti.fillRect(
-							q[0] - 3,
-							q[1] - 3,
-							q[2] + 6,
-							q[3] + 6
-						);
-
-						ti.save();
-
-						ti.beginPath();
-
-						ti.rect(q[0], q[1], q[2], q[3]);
-
-						ti.clip();
-
-						ti.drawImage(
-							im,
-							q[0] + (q[2] - dw) / 2,
-							q[1] + (q[3] - dh) / 2,
-							dw,
-							dh
-						);
-
-						ti.restore();
-					});
-				}
-
-				ti.fillStyle =
-					"#fff";
-
-				ti.font =
-					"bold 11px Arial";
-
-				ti.textAlign =
-					"center";
-
-				ti.fillText(
-					d.name,
-					tplLandscape ? 160 : 90,
-					tplLandscape ? 170 : 310
-				);
-			});
+		function renderDesignOptions() {
+			if (!designSelect.options.length) {
+				designs.forEach((design, i) => {
+					const option = document.createElement("option");
+					option.value = String(i);
+					option.textContent = design.name;
+					designSelect.appendChild(option);
+				});
+			}
+			designSelect.value = String(selectedDesign);
+			document.getElementById("tpl-design-description").textContent =
+				designs[selectedDesign].desc;
 		}
 
 		// -------------------------------------------------
@@ -1257,7 +1101,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			exportBtn.disabled =
 				images.length === 0;
 
-			renderDesignCards();
+			renderDesignOptions();
 
 			draw(0);
 		}
@@ -1853,31 +1697,31 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				'<p class="tpl-sub">Upload up to 5 images, choose Portrait 9:16 or Landscape 16:9, pick one of the five designs, preview it, then export an MP4 (max ' + TPL_MAX_DURATION + ' seconds). The composed clip is added to this video\u2019s Images / MP4s gallery and plays inside the final render like any uploaded MP4.</p>' +
 				'<div class="tpl-controls">' +
 				'<label class="tpl-file">Choose 1\u20135 images<input id="tpl-files" type="file" accept="image/*" multiple></label>' +
-				'<label class="tpl-len">Length <input id="tpl-duration" type="number" min="1" max="25" value="10"></label>' +
-				'<label class="tpl-len">Format <select id="tpl-orientation"><option value="portrait" selected>Portrait 9:16</option><option value="landscape">Landscape 16:9</option></select></label>' +
+				'<label class="tpl-len"><input id="tpl-duration" type="number" min="1" max="25" value="10"><span>Length (seconds)</span></label>' +
+				'<label class="tpl-len"><select id="tpl-orientation"><option value="portrait" selected>Portrait 9:16</option><option value="landscape">Landscape 16:9</option></select><span>Format</span></label>' +
 				'<button type="button" id="tpl-play">\u25b6 Preview</button>' +
 				'<button type="button" id="tpl-stop">\u25a0 Stop</button>' +
 				'<button type="button" id="tpl-export" class="tpl-primary" disabled>Export MP4</button>' +
 				'<span id="tpl-status" class="tpl-status">Choose images first</span>' +
 				'</div>' +
-				'<div class="tpl-designs" id="tpl-designs"></div>' +
+				'<div class="tpl-design-picker"><label for="tpl-design">Template</label><select id="tpl-design" aria-describedby="tpl-design-description"></select><small id="tpl-design-description"></small></div>' +
 				'<div class="tpl-editor">' +
 				'<div class="tpl-row">' +
-				'<input id="tpl-headline" type="text" value="GOOD VIBES" placeholder="Headline">' +
-				'<input id="tpl-subtext" type="text" value="NEW ADVENTURES" placeholder="Subtext">' +
-				'<input id="tpl-headline-size" type="number" min="30" max="180" value="82" title="Headline size">' +
-				'<input id="tpl-sub-size" type="number" min="20" max="100" value="42" title="Subtext size">' +
-				'<input id="tpl-text-color" type="color" value="#ffffff" title="Text color">' +
-				'<select id="tpl-font"><option>Arial</option><option>Georgia</option><option>Impact</option><option>Trebuchet MS</option><option>Courier New</option></select>' +
-				'<select id="tpl-bg-mode" title="Background">' +
+				'<label class="tpl-field"><input id="tpl-headline" type="text" value="GOOD VIBES" placeholder="Headline"><span>Headline</span></label>' +
+				'<label class="tpl-field"><input id="tpl-subtext" type="text" value="NEW ADVENTURES" placeholder="Subtext"><span>Subtext</span></label>' +
+				'<label class="tpl-field"><input id="tpl-headline-size" type="number" min="30" max="180" value="82" title="Headline size"><span>Headline size (px)</span></label>' +
+				'<label class="tpl-field"><input id="tpl-sub-size" type="number" min="20" max="100" value="42" title="Subtext size"><span>Subtext size (px)</span></label>' +
+				'<label class="tpl-field"><input id="tpl-text-color" type="color" value="#ffffff" title="Text color"><span>Text color</span></label>' +
+				'<label class="tpl-field"><select id="tpl-font"><option>Arial</option><option>Georgia</option><option>Impact</option><option>Trebuchet MS</option><option>Courier New</option></select><span>Font</span></label>' +
+				'<label class="tpl-field"><select id="tpl-bg-mode" title="Background">' +
 				'<option value="image">First image</option>' +
 				'<option value="color">Solid color</option>' +
 				'<option value="upload">Uploaded photo</option>' +
-				'</select>' +
-				'<input id="tpl-bg-color" type="color" value="#161616" title="Background color">' +
+				'</select><span>Background</span></label>' +
+				'<label class="tpl-field"><input id="tpl-bg-color" type="color" value="#161616" title="Background color"><span>Background color</span></label>' +
 				'<label class="tpl-file tpl-file-sm">Upload background<input id="tpl-bg-file" type="file" accept="image/*"></label>' +
-				'<label class="tpl-range">Blur <input id="tpl-bg-blur" type="range" min="0" max="24" value="10"></label>' +
-				'<label class="tpl-range">Opacity <input id="tpl-bg-opacity" type="range" min="0" max="100" value="45"></label>' +
+				'<label class="tpl-range"><input id="tpl-bg-blur" type="range" min="0" max="24" value="10"><span>Blur <output id="tpl-blur-value" for="tpl-bg-blur">10px</output></span></label>' +
+				'<label class="tpl-range"><input id="tpl-bg-opacity" type="range" min="0" max="100" value="45"><span>Opacity <output id="tpl-opacity-value" for="tpl-bg-opacity">45%</output></span></label>' +
 				'</div>' +
 				'</div>' +
 				'<div class="tpl-stage" id="tpl-stage">' +
@@ -1900,8 +1744,14 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			ctx =
 				canvas.getContext("2d");
 
-			thumbsHost =
-				document.getElementById("tpl-designs");
+			designSelect =
+				document.getElementById("tpl-design");
+
+			designSelect.addEventListener("change", () => {
+				selectedDesign = Number(designSelect.value);
+				renderDesignOptions();
+				draw(0);
+			});
 
 			titleEl =
 				document.getElementById("tpl-title");
@@ -2007,12 +1857,20 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 
 				el.addEventListener(
 					"input",
-					() => draw(0)
+					() => {
+						document.getElementById("tpl-blur-value").textContent = bgBlurEl.value + "px";
+						document.getElementById("tpl-opacity-value").textContent = bgOpacityEl.value + "%";
+						draw(0);
+					}
 				);
 
 				el.addEventListener(
 					"change",
-					() => draw(0)
+					() => {
+						document.getElementById("tpl-blur-value").textContent = bgBlurEl.value + "px";
+						document.getElementById("tpl-opacity-value").textContent = bgOpacityEl.value + "%";
+						draw(0);
+					}
 				);
 			}
 
@@ -2082,7 +1940,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				}
 			);
 
-			renderDesignCards();
+			renderDesignOptions();
 
 			draw(0);
 		}
