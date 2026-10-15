@@ -6115,7 +6115,7 @@ export const APP_JS = `
 	 *                              add-to-video + fullscreen)
 	 *   MODULE 7: api-render      (POST /api/render with all of a
 	 *                              video's elements; background-worker
-	 *                              mode for /config/uvxyz)
+	 *                              mode for the current-day settings route)
 	 *   MODULE 8: script-srt      (AI script generation -> SRT with
 	 *                              timestamps; INSTRUCT model;
 	 *                              minutes 1-6 + speech speed; the
@@ -8820,11 +8820,11 @@ export const APP_JS = `
 	//
 	// Flow on load:
 	//   GET /api/session
-	//     200 -> already signed in: show the
-	//            footer (username + links +
-	//            Logout (username))
-	//     401 -> show the sign-in overlay
-	//     503 -> KV not configured: open access
+	//     200 -> show the signed-in studio + account footer
+	//     401 -> show the public landing; the studio stays gated
+	//            until login/signup succeeds
+	//     503/network -> keep the public landing; the studio is
+	//                    available from its primary action
 	//   POST /api/login    (username, password)
 	//   POST /api/signup   (username, email,
 	//                       password)
@@ -8840,6 +8840,12 @@ export const APP_JS = `
 		false;
 
 	let authIsSignup =
+		false;
+
+	let authAccess =
+		"checking";
+
+	let pendingStudioEntry =
 		false;
 
 	/*
@@ -8871,11 +8877,17 @@ export const APP_JS = `
 		overlay.style.display =
 			"none";
 
+		overlay.setAttribute(
+			"aria-hidden",
+			"true"
+		);
+
 		overlay.innerHTML =
-			'<div class="auth-box">' +
-			'<div class="auth-title">\ud83c\udfac YouTube Vibe Studio</div>' +
-			'<div class="auth-sub">Sign in to use the studio</div>' +
-			'<div class="auth-error" id="auth-error"></div>' +
+			'<div class="auth-box" role="dialog" aria-modal="true" aria-labelledby="auth-title" aria-describedby="auth-sub">' +
+			'<button type="button" class="auth-close" id="auth-close" aria-label="Close">&times;</button>' +
+			'<div class="auth-title" id="auth-title">\ud83c\udfac YouTube Vibe Studio</div>' +
+			'<div class="auth-sub" id="auth-sub">Sign in to use the studio</div>' +
+			'<div class="auth-error" id="auth-error" role="alert"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
 			'<label for="auth-email">Email</label>' +
 			'<input type="email" id="auth-email" maxlength="64" autocomplete="email">' +
@@ -8910,6 +8922,11 @@ export const APP_JS = `
 				"auth-switch"
 			);
 
+		const closeBtn =
+			document.getElementById(
+				"auth-close"
+			);
+
 		submitBtn.addEventListener(
 			"click",
 			submitAuth
@@ -8919,37 +8936,40 @@ export const APP_JS = `
 			"click",
 			() => {
 
-				authIsSignup =
-					!authIsSignup;
-
-				document.getElementById(
-					"auth-confirm-wrap"
-				).style.display =
-					authIsSignup
-						? "block"
-						: "none";
-
-				document.getElementById(
-					"auth-email-wrap"
-				).style.display =
-					authIsSignup
-						? "block"
-						: "none";
-
-				submitBtn.textContent =
-					authIsSignup
-						? "Create account"
-						: "Sign in";
-
-				switchBtn.textContent =
-					authIsSignup
-						? "Have an account? Sign in"
-						: "New here? Create an account";
+				setAuthMode(
+					!authIsSignup
+				);
 
 				setAuthError(
 					""
 				);
 
+			}
+		);
+
+		closeBtn.addEventListener(
+			"click",
+			hideAuthOverlay
+		);
+
+		overlay.addEventListener(
+			"click",
+			(event) => {
+				if (event.target === overlay) {
+					hideAuthOverlay();
+				}
+			}
+		);
+
+		document.addEventListener(
+			"keydown",
+			(event) => {
+				if (
+					e.key === "Escape" &&
+					overlay.style.display === "flex"
+				) {
+					hideAuthOverlay();
+				}
 			}
 		);
 
@@ -9003,13 +9023,118 @@ export const APP_JS = `
 
 	}
 
-	function showAuthOverlay() {
+	function setAuthMode(isSignup) {
+
+		authIsSignup =
+			Boolean(isSignup);
+
+		const submitBtn =
+			document.getElementById(
+				"auth-submit"
+			);
+
+		const switchBtn =
+			document.getElementById(
+				"auth-switch"
+			);
+
+		const subtitle =
+			document.getElementById(
+				"auth-sub"
+			);
+
+		const emailWrap =
+			document.getElementById(
+				"auth-email-wrap"
+			);
+
+		const confirmWrap =
+			document.getElementById(
+				"auth-confirm-wrap"
+			);
+
+		const password =
+			document.getElementById(
+				"auth-password"
+			);
+
+		if (submitBtn) {
+			submitBtn.textContent =
+				authIsSignup
+					? "Create account"
+					: "Sign in";
+		}
+
+		if (switchBtn) {
+			switchBtn.textContent =
+				authIsSignup
+					? "Have an account? Sign in"
+					: "New here? Create an account";
+		}
+
+		if (subtitle) {
+			subtitle.textContent =
+				authIsSignup
+					? "Create an account to start making videos"
+					: "Sign in to open your video studio";
+		}
+
+		if (emailWrap) {
+			emailWrap.style.display =
+				authIsSignup
+					? "block"
+					: "none";
+		}
+
+		if (confirmWrap) {
+			confirmWrap.style.display =
+				authIsSignup
+					? "block"
+					: "none";
+		}
+
+		if (password) {
+			password.autocomplete =
+				authIsSignup
+					? "new-password"
+					: "current-password";
+		}
+
+	}
+
+	function showAuthOverlay(mode) {
 
 		const overlay =
 			buildAuthOverlay();
 
+		if (mode === "signup") {
+			setAuthMode(true);
+		}
+		else if (mode === "login") {
+			setAuthMode(false);
+		}
+
+		setAuthError("");
+		overlay.setAttribute(
+			"aria-hidden",
+			"false"
+		);
 		overlay.style.display =
 			"flex";
+
+		const firstField =
+			document.getElementById(
+				authIsSignup
+					? "auth-email"
+					: "auth-username"
+			);
+
+		if (firstField) {
+			setTimeout(
+				() => firstField.focus(),
+				0
+			);
+		}
 
 	}
 
@@ -9023,6 +9148,126 @@ export const APP_JS = `
 		if (overlay) {
 			overlay.style.display =
 				"none";
+			overlay.setAttribute(
+				"aria-hidden",
+				"true"
+			);
+		}
+
+	}
+
+	function showLandingView() {
+
+		const landing =
+			document.getElementById(
+				"landing-page"
+			);
+
+		const studio =
+			document.getElementById(
+				"studio-app"
+			);
+
+		if (landing) {
+			landing.hidden = false;
+		}
+
+		if (studio) {
+			studio.hidden = true;
+		}
+
+		window.scrollTo(0, 0);
+
+	}
+
+	function showStudioView() {
+
+		const landing =
+			document.getElementById(
+				"landing-page"
+			);
+
+		const studio =
+			document.getElementById(
+				"studio-app"
+			);
+
+		if (landing) {
+			landing.hidden = true;
+		}
+
+		if (studio) {
+			studio.hidden = false;
+		}
+
+		window.scrollTo(0, 0);
+
+	}
+
+	function enterStudioFromLanding() {
+
+		if (authAccess === "checking") {
+			pendingStudioEntry = true;
+			return;
+		}
+
+		if (authAccess === "required") {
+			showAuthOverlay("signup");
+			return;
+		}
+
+		showStudioView();
+
+	}
+
+	function bindLandingActions() {
+
+		document.querySelectorAll(
+			"[data-auth-open]"
+		).forEach(
+			(element) => {
+				element.addEventListener(
+					"click",
+					(event) => {
+						event.preventDefault();
+						showAuthOverlay(
+							element.getAttribute(
+								"data-auth-open"
+							)
+						);
+					}
+				);
+			}
+		);
+
+		document.querySelectorAll(
+			"[data-studio-open]"
+		).forEach(
+			(element) => {
+				element.addEventListener(
+					"click",
+					enterStudioFromLanding
+				);
+			}
+		);
+
+	}
+
+	function resumeLandingEntry() {
+
+		if (!pendingStudioEntry) {
+			return;
+		}
+
+		pendingStudioEntry =
+			false;
+
+		if (authAccess === "required") {
+			showAuthOverlay("signup");
+		}
+		else if (authAccess === "open") {
+			hideAuthOverlay();
+			showStudioView();
 		}
 
 	}
@@ -9466,7 +9711,9 @@ export const APP_JS = `
 
 				if (response.ok) {
 
+					authAccess = "authenticated";
 					hideAuthOverlay();
+					showStudioView();
 
 					showUserBadge(
 						data.user &&
@@ -9549,7 +9796,10 @@ export const APP_JS = `
 				"none";
 		}
 
-		showAuthOverlay();
+		authAccess = "required";
+		pendingStudioEntry = false;
+		hideAuthOverlay();
+		showLandingView();
 
 	}
 
@@ -9557,7 +9807,7 @@ export const APP_JS = `
 	// MODULE 7: api-render + background worker
 	// (POST /api/render takes ALL of a video's elements and
 	//  outputs the finished MP4; the background-worker mode
-	//  at /config/uvxyz renders those jobs in this browser)
+	//  on the current-day settings route renders those jobs in this browser)
 	// =========================================================
 
 	function apiSleep(ms) {
@@ -10358,7 +10608,7 @@ export const APP_JS = `
 	 * job (from /api/worker/poll) through the
 	 * hidden engine, then POSTs the finished
 	 * MP4 to /api/worker/deliver. Used by the
-	 * /config/uvxyz page in worker mode.
+	 * day-prefixed settings page in worker mode.
 	 */
 	async function workerRunJob(
 		job
@@ -10595,6 +10845,7 @@ export const APP_JS = `
 
 			(
 				p.captions ||
+			ns ||
 				[]
 			).forEach(
 				(c) => {
@@ -10780,7 +11031,7 @@ export const APP_JS = `
 
 	/*
 	 * On load: ask the worker who we
-	 * are. The /config/uvxyz page skips the
+	 * are. The current-day settings page skips the
 	 * auth lock (it has its own password
 	 * gate) and may run as a background
 	 * worker.
@@ -10788,6 +11039,8 @@ export const APP_JS = `
 	async function initAuth() {
 
 		if (window.__CONFIG_PAGE) {
+			authAccess = "open";
+			showStudioView();
 			return;
 		}
 
@@ -10802,15 +11055,21 @@ export const APP_JS = `
 					}
 				);
 
-			if (
-				response.status ===
-					503
-			) {
+			/* A successful sign-in may finish while the session check is in flight. */
+			if (authAccess === "authenticated") {
+				return;
+			}
+
+			if (response.status === 503) {
 
 				/*
-				 * KV not configured yet:
-				 * open access (no lock).
+				 * KV is not configured: keep the public
+				 * landing visible and allow the studio
+				 * through its primary action, matching
+				 * the previous open-access behavior.
 				 */
+				authAccess = "open";
+				resumeLandingEntry();
 				return;
 
 			}
@@ -10832,6 +11091,10 @@ export const APP_JS = `
 
 				}
 
+				authAccess = "authenticated";
+				hideAuthOverlay();
+				showStudioView();
+
 				showUserBadge(
 					data.user &&
 					data.user.username
@@ -10847,16 +11110,17 @@ export const APP_JS = `
 
 			}
 
-			/* 401: show sign-in */
-			showAuthOverlay();
+			/* A missing/invalid session leaves the public landing open. */
+			authAccess = "required";
+			showLandingView();
+			resumeLandingEntry();
 
 		}
 		catch (netError) {
 
-			/*
-			 * Network error: do not lock
-			 * the user out.
-			 */
+			/* A session endpoint outage must not lock out open access. */
+			authAccess = "open";
+			resumeLandingEntry();
 
 		}
 
@@ -11880,7 +12144,7 @@ export const APP_JS = `
 	}
 
 	initVideoStudio();
-
+	bindLandingActions();
 	initAuth();
 
 	async function generateMP4() {

@@ -1,7 +1,8 @@
 # Bug & inconsistency audit
 
-Audit of the whole repository (commit `e450ce5` + the unlimited-signup change + the SEO-script
-change + the theme feature), performed 2026-10-15.
+Full repository audit originally performed 2026-10-15, including the unlimited-signup,
+SEO-script and theme changes. The settings-route finding below was rechecked on 2026-10-16 to
+reflect the current day-rotating URL.
 
 **How the audit was done**
 
@@ -198,13 +199,15 @@ TTL), a login attempt counter with backoff, and a hard cap on concurrent unauthe
 
 ### 5 — Settings password is hard-coded and enforced client-side
 
-**Evidence.** `CONFIG_PASSWORD = "#123admin%"` exists in `src/index.ts:248` **and** in
+**Evidence.** `CONFIG_PASSWORD = "#123admin%"` exists in `src/index.ts:355` **and** in
 `src/client/config-page-js.ts`; the gate is a JS `===` comparison in the browser, so the value
-ships in the page source. The only server-side check is `POST /api/config/workers`
-(`body.pw !== CONFIG_PASSWORD → 403`).
+ships in the page source. The only server-side checks are `POST /api/config/workers` and
+`POST /api/config/theme` (`body.pw !== CONFIG_PASSWORD → 403`).
 
-**Impact.** `/config/uvxyz` presents itself as password-protected but the "protection" is
-decoration; the only real effect is hiding the settings UI from casual visitors.
+**Impact.** The current settings path is `/{current-day}/config/uvxyz`, with the day taken from
+Asia/Taipei on each request; the old bare `/config/uvxyz` path and stale day paths return `404`.
+The rotating path is still only obscurity, not authentication: the password "protection" on the
+current route remains client-side decoration and the password is visible in the served source.
 
 **Recommended fix.** Move the secret into a Worker secret (`env.CONFIG_PASSWORD`) and issue a
 short-lived signed token after a server-side check; rotate by updating the secret only.

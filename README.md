@@ -1,8 +1,8 @@
 # YouTube Vibe Studio
 
-A single-page video studio that runs **entirely in the browser** and is served by one Cloudflare
-Worker. Turn images, GIFs, MP4 clips and an MP3 into a finished MP4 with a title, sticker,
-timestamp captions, AI-written SRT subtitles and a MeloTTS voiceover.
+A creator landing page and video studio served by one Cloudflare Worker. The studio runs
+**entirely in the browser**: turn images, GIFs, MP4 clips and an MP3 into a finished MP4 with a
+title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voiceover.
 
 > The repository started life as Cloudflare's `text-to-image-template`; the only part of the
 > original that remains is the Workers AI image route. The README below describes **this**
@@ -10,6 +10,9 @@ timestamp captions, AI-written SRT subtitles and a MeloTTS voiceover.
 
 ## What it does
 
+- **Public landing page.** A responsive introduction explains the studio; the top **Sign up** link
+  and bottom **Log in** menu open the existing KV-backed account flow. A signed-out visitor can
+  explore the landing page before entering the studio.
 - **Videos stack, not one timeline.** Press **+ Add Video** to create up to **10** independent
   "Video N" accordions, each with its own images/GIFs/MP4s, MP3, title, sticker, captions,
   quality, script and AI image panel. **🎬 Generate Videos** renders them one after another.
@@ -21,14 +24,16 @@ timestamp captions, AI-written SRT subtitles and a MeloTTS voiceover.
   script that *says* those keywords the required number of times — every rule enforced
   server-side), and a MeloTTS voiceover (`/api/voiceover`) with a free fallback TTS engine.
 - **Optional server-side rendering.** **☁️ API** uploads a video's whole payload to KV and a
-  background worker tab (the same app opened at `/config/uvxyz`) claims the job, renders it in
-  *its* browser and delivers the MP4 back — the studio polls and downloads it. If 10 jobs are
-  already in flight the app renders the video locally instead.
+  background worker tab (the same app opened at its current-day settings URL, e.g.
+  `/16/config/uvxyz` on 2026-10-16 in Asia/Taipei) claims the job, renders it in *its* browser
+  and delivers the MP4 back — the studio polls and downloads it. If 10 jobs are already in
+  flight the app renders the video locally instead.
 - **Accounts.** KV-backed sign-up/sign-in, unlimited accounts (each with an `email:<address>`
   uniqueness index).
-- **Three UI themes.** `/config/uvxyz` → **Appearance** switches the whole studio between the
-  built-in dark look, **Aerial** (blue sky, mountain backdrop, white accents) and **Stellar** (violet gradient,
-  frosted panels) — HTML5UP-inspired skins, applied server-side so there is no flash.
+- **Three UI themes.** The current-day settings page → **Appearance** switches the whole studio
+  between the built-in dark look, **Aerial** (blue sky, mountain backdrop, white accents), and
+  **Stellar** (violet gradient, frosted panels) — HTML5UP-inspired skins, applied server-side so
+  there is no flash.
   Aerial retains the legacy `strata` API/storage value, so saved selections still work.
   See `THIRD_PARTY_NOTICES.md` for the Aerial background attribution.
 - **Template composer.** The "Add video from template" link builds a portrait 9:16 or landscape
@@ -94,18 +99,23 @@ Bindings in `wrangler.json`:
 
 - `ai` → Workers AI (required by `/image/*`, `/api/script`, `/api/voiceover`)
 - `kv_namespaces` → `KV_BINDING` (required by accounts, the render API and the worker queue; the
-  app answers `503` on those routes when it is missing, and the sign-in overlay stays open)
+  landing page remains available if it is missing, and the studio can still be opened through its
+  primary CTA. Account and render routes answer `503` without KV.)
 
-The settings page at **`/config/uvxyz`** is password-gated. It picks the **theme** for every
-visitor (Appearance → *Studio / Aerial / Stellar* → **Save theme**), registers background worker
-URLs, and can switch a tab into "Background worker" mode to consume the render queue.
+The settings page is password-gated and uses **`/{current-day}/config/uvxyz`**, where
+`{current-day}` is the unpadded day of month (1–31) in **Asia/Taipei**. For example, on
+2026-10-16 the URL is **`/16/config/uvxyz`**; it changes at midnight Asia/Taipei. The old bare
+`/config/uvxyz` path and any stale day-prefixed path return `404`. The page picks the **theme**
+for every visitor (Appearance → *Studio / Aerial / Stellar* → **Save theme**), registers
+background worker URLs, and can switch a tab into "Background worker" mode to consume the render
+queue.
 
 ## Routes
 
 | Route | Purpose |
 | --- | --- |
-| `GET /` | The studio |
-| `GET /config/uvxyz` | Settings / background-worker page |
+| `GET /` | Public landing page; studio view when signed in or opened from the CTA |
+| `GET /{current-day}/config/uvxyz` | Settings / background-worker page; current Asia/Taipei day only (e.g. `/16/config/uvxyz` on 2026-10-16) |
 | `GET /image/:i` · `GET /image/gen?prompt=&variant=` | Workers AI images |
 | `POST /api/script` | SEO keyword plan + AI script → validated SRT (with keyword counts) |
 | `POST /api/voiceover` · `GET /tts` | MeloTTS voiceover / fallback TTS proxy |

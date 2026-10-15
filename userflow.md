@@ -1,14 +1,14 @@
 # YouTube Vibe Studio — User Flow Documentation
 
-> Reconstructed from a full code read of this repository (commit `e450ce5`, branch
-> `arena/f83a7b6e-text-to-image-template`).
+> Reconstructed from a full code read of the working tree on **2026-10-16**.
 >
-> Evidence base: `src/index.ts` (4 679 lines, all routes/APIs/KV logic), `src/page.ts`,
+> Evidence base: `src/index.ts` (4,922 lines, all routes/APIs/KV logic), `src/page.ts`,
 > `src/prompts.ts`, `src/client/markup.ts`, `src/client/styles.ts`,
-> `src/client/app-js.ts` (13 596 lines, the whole studio UI + render engine),
-> `src/client/template-composer-js.ts` (2 151 lines), `src/client/config-page-js.ts`,
-> `wrangler.json`, `package.json`, `e2e/index.ts`. Revision of **2026-10-15**: the SEO script
-> is now two AI stages (see §4.2 and `system-rules.md` RULE 7 / RULE 18).
+> `src/client/app-js.ts` (13,860 lines, the whole studio UI + render engine),
+> `src/client/template-composer-js.ts` (2,009 lines), `src/client/config-page-js.ts`,
+> `wrangler.json`, `package.json`, `e2e/index.ts`. The SEO script has two AI stages (see §4.2
+> and `system-rules.md` RULE 7 / RULE 18). This revision documents the day-rotating settings
+> route and its Asia/Taipei date boundary.
 >
 > Companion document: **`system-rules.md`** — the high-level system rules with the
 > indented technical detail, invariants and restrictions behind every flow below.
@@ -21,7 +21,7 @@ A single-page **browser-side video studio** served by one Cloudflare Worker.
 
 | Piece | Where it runs | What it does |
 | --- | --- | --- |
-| Page + all UI code | Worker (`GET /`) | Serves one ~280 KB HTML string (CSS + JS inlined) |
+| Page + all UI code | Worker (`GET /`) | Serves one ~640 KB HTML string (landing, studio, CSS + JS inlined) |
 | Video rendering | **The user's browser** (WebCodecs `VideoEncoder`/`AudioEncoder` + `mp4-muxer`) | Draws Ken-Burns slides, overlays, captions, subtitles and muxes an MP4 |
 | AI images | Workers AI `@cf/stabilityai/stable-diffusion-xl-base-1.0` | `/image/:i` (demo prompts) and `/image/gen?prompt=` (per-video AI panel) |
 | AI script (SRT) | Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8`, **two stages** | `/api/script` — stage 1 plans the SEO keywords, stage 2 writes the SRT around them |
@@ -35,8 +35,8 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 
 | Actor | Entry point | Capabilities |
 | --- | --- | --- |
-| **Studio user** | `GET /` | Must sign in (or KV unbound → open access). Builds up to 10 videos, uploads media, generates images/scripts/voiceovers, renders MP4s locally, can push a video to the render API |
-| **Background worker operator** | `GET /config/uvxyz` | Password-gated settings page; runs an extra browser tab that polls `/api/worker/poll` and renders other users' queued jobs |
+| **Studio user** | `GET /` | Sees the public landing page; signs in to enter the studio (or, if KV is unbound, enters through the primary CTA). Builds up to 10 videos, uploads media, generates images/scripts/voiceovers, renders MP4s locally, can push a video to the render API |
+| **Background worker operator** | `GET /{current-day}/config/uvxyz` | Password-gated settings page; the current day-of-month in Asia/Taipei must match; runs an extra browser tab that polls `/api/worker/poll` and renders other users' queued jobs |
 | **Anonymous caller** | Any route | All data routes (`/api/script`, `/api/voiceover`, `/api/render`, `/tts`, `/image/*`, `GET /api/config/workers`) are unauthenticated *(see restrictions)* |
 
 ---
@@ -45,12 +45,12 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 
 | Route | Method | Gate | Result |
 | --- | --- | --- | --- |
-| `/` | GET | none (client-side auth overlay) | Studio HTML |
-| `/config/uvxyz` | GET | client-side password overlay | Studio HTML + `window.__CONFIG_PAGE=true` + injected settings script |
+| `/` | GET | none (public landing; client-side studio entry gate) | Landing page + studio HTML |
+| `/{current-day}/config/uvxyz` | GET | client-side password overlay; day must match Asia/Taipei today | Studio HTML + `window.__CONFIG_PAGE=true` + injected settings script; stale-day and bare legacy paths are `404` |
 | `/image/:index` | GET | none | PNG (`X-Image-Index`); `400` if index outside `prompts[]`; `500` on AI error |
 | `/image/gen?prompt=&variant=` | GET | none | PNG (`X-Image-Variant`); `400` if prompt empty |
 | `/api/session` | GET | none | `200 {authenticated:true,user}` / `401` / `503` if KV unbound |
-| `/api/signup` | POST | none | `200` + `Set-Cookie: yvs_session` / `400` / `403` (full) / `409` |
+| `/api/signup` | POST | none | `200` + `Set-Cookie: yvs_session` / `400` / `409` (duplicate) / `503` (KV unbound); no account cap |
 | `/api/login` | POST | none | `200` + cookie / `401` |
 | `/api/logout` | POST | none | `200`, cookie cleared (`Max-Age=0`) |
 | `/api/script` | POST | none | `{success:true,srt}` / `400` / `500` / `503` |
@@ -84,9 +84,15 @@ User opens /
    │    5. initAuth() → GET /api/session
    │
    └─ Branch on /api/session
-        ├─ 200 OK ....... signed in → footer badge "👤 name" + Account link + Contact us + "Logout (name)"
-        ├─ 401 .......... auth overlay (Sign in / Create account) — blocks the UI until success
-        └─ 503 or network error → NO lock; studio is usable anonymously
+        ├─ 200 OK ....... signed in → hide landing, show studio + footer badge "👤 name" + Account / Contact / Logout
+        ├─ 401 .......... keep public landing visible; keep studio hidden until authentication succeeds
+        └─ 503 or network error → keep landing visible; primary CTA opens the studio (open-access fallback)
+
+Landing actions:
+   top "Sign up" link → auth overlay in create-account mode
+   bottom "Log in" menu → auth overlay in sign-in mode
+   primary "Start creating" action → signup overlay when authentication is required,
+                                     otherwise show the studio
 ```
 
 **Sign in / sign up (overlay, Module 6)**
@@ -99,9 +105,9 @@ overlay → submitAuth()
      password  length >= 6
      confirm   must equal password          (sign-up only)
    POST /api/signup  {username,email,password}   or   POST /api/login {username,password}
-     ├─ 200 → hide overlay, showUserBadge(username,email)
+     ├─ 200 → hide overlay, open studio, showUserBadge(username,email)
      └─ else → setAuthError(data.error || "Request failed (<status>)")
-Logout → POST /api/logout → footer hidden, overlay shown again (UI still locks even if the call fails)
+Logout → POST /api/logout → hide studio and return to the landing page; login stays available in the footer
 ```
 
 ---
@@ -360,7 +366,7 @@ empty ──▶ rendering ──▶ done
 ### Who renders the job? A background worker tab.
 
 ```
-/config/uvxyz  → password gate → [Instance mode: Background worker] → [▶ Start worker]
+/{current-day}/config/uvxyz  → password gate → [Instance mode: Background worker] → [▶ Start worker]
    pollOnce() every 3 s (5 s after a network error) while polling is on:
      GET /api/worker/poll
         server first expires any "running" job older than 10 min → failed("worker timed out")
@@ -383,10 +389,15 @@ The studio user's polling loop then sees `200 + video/mp4` and the file download
 
 ---
 
-## 7. Flow 4 — Settings page `/config/uvxyz`
+## 7. Flow 4 — Day-rotating settings page
+
+The route is `/{current-day}/config/uvxyz`, where `{current-day}` is the unpadded day of month
+(1–31) in **Asia/Taipei**. For example, the valid URL on 2026-10-16 is
+`/16/config/uvxyz`; it changes at midnight Asia/Taipei. A stale day and the old bare
+`/config/uvxyz` route both return `404`.
 
 ```
-GET /config/uvxyz
+GET /{current-day}/config/uvxyz
   ├─ same studio HTML (including the theme chosen under Appearance), with
   │  <script>window.__CONFIG_PAGE = true;</script> prepended
   │  and the CONFIG_PAGE_SCRIPT injected before </body>
@@ -414,7 +425,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 ```
 
 > The registered worker URLs are **stored only**. Nothing in the codebase ever contacts
-> them — each operator opens its own `/config/uvxyz` tab and that tab polls the API itself.
+> them — each operator opens its own current-day settings URL and that tab polls the API itself.
 
 ---
 
@@ -422,7 +433,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 
 | Situation | Detected by | User-visible behaviour |
 | --- | --- | --- |
-| KV namespace not bound | worker route guards | Auth: `503` → client leaves the app **open, no lock**. Render API: `503 "Render storage not configured (bind the KV namespace)"` |
+| KV namespace not bound | worker route guards | Auth: `503` → landing stays public; primary CTA opens the studio. Render API: `503 "Render storage not configured (bind the KV namespace)"` |
 | AI binding missing | `/api/script`, `/api/voiceover` | `503 "AI binding not configured"` |
 | Image index out of range | `/image/:i` | `400 {success:false,error:"Invalid image index"}` |
 | Empty prompt | `/image/gen` | `400 "Missing prompt"` |
@@ -437,7 +448,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Voiceover text empty | `/api/voiceover` | `400 "No script text to speak"` |
 | Theme not in `CONFIG_THEMES` | `POST /api/config/theme` | `400 "Unknown theme"`, nothing written |
 | Theme KV write fails | `POST /api/config/theme` | `503 "Theme storage unavailable"` (JSON, shown in the status line) |
-| Theme KV missing or erroring | `GET /`, `GET /config/uvxyz` | falls back to the built-in look, page still `200` |
+| Theme KV missing or erroring | `GET /`, `GET /{current-day}/config/uvxyz` | falls back to the built-in look, page still `200` |
 | Voiceover language not in `VOICE_LANGS` | `/api/voiceover` | `400 "Unknown voice language"` (UI only offers `en`) |
 | `/tts` text over 2 000 chars | `/tts` | `400 "Text too long (max 2000 chars)"` |
 | Upstream TTS HTTP error | `/tts` | `502 "TTS service error (<status>)"` / `502 "TTS proxy failed: …"` |
@@ -454,7 +465,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Large GIF | `buildGifSlideFrames()` | frames downscaled (scale ≥ 0.15) to stay under a 120 MB buffer budget |
 | MP4 clip > 60 s | `onVideoFiles()` probe | alert + that file is skipped |
 | Upload over a per-kind cap | `onVideoFiles()` | alert + the rest of the batch stops |
-| Session cookie invalid | `/api/session` | `401` → overlay |
+| Session cookie invalid | `/api/session` | `401` → landing page stays visible; studio entry opens the auth overlay |
 | Email already registered | `/api/signup` | `409 "Email already in use"` (1 keyed read of the `email:` index; accounts predating the index are covered by a bounded scan while the namespace holds <= 200 accounts) |
 | Duplicate username / email | `/api/signup` | `409 "Username already taken"` / `409 "Email already in use"` |
 | Wrong sign-in credentials | `/api/login` | `401 "Invalid username or password"` (never reveals which field) |
@@ -466,14 +477,14 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Flow | Primary code |
 | --- | --- |
 | Page assembly / caching | `src/page.ts`, `src/client/markup.ts`, `src/client/styles.ts` |
-| Routes, KV, jobs, auth | `src/index.ts` (`/` ~L34, `/image/:i` ~L56, `/image/gen` ~L144, KV guard + render/worker gate ~L482, `/config/uvxyz` ~L509, `/api/script` ~L566 — SEO constants/helpers ~L1075-1600, keyword stage ~L1650, SRT stage ~L1776-1990, `/api/voiceover` ~L2036, `/tts` ~L3205, `/api/render` ~L3324 and `/api/render/:id` ~L3480, `/api/worker/*` ~L3600-3900, `/api/config/workers` ~L4168, auth API ~L4161-4679) |
-| Accordions, gallery, queue | `src/client/app-js.ts` MODULE 1-4 (`initVideoStudio` L6176, `addVideoAccordion` L6250, `onVideoFiles` L6687, `runGenerationQueue` L7902) |
-| AI images panel | MODULE 5 (`submitAiImages` L8298, `addAiResultCard` L8495, `addAiToVideo` L8666) |
-| Auth UI | MODULE 6 (`buildAuthOverlay` L8850, `submitAuth` L9298, `initAuth` L10789) |
-| Render API + worker | MODULE 7 (`collectVideoPayload` L9655, `apiRenderVideo` L9766, `renderVideoLocally` L10060, `workerRunJob` L10364) |
-| Script / subtitles / voiceover | MODULE 8-9 (`renderSeoKeywords` L10982, `generateScript` L11066, `openVoiceoverModal` L11513, `generateVoiceover` L11587, `toggleSubtitles` L11769) — the accordion markup itself is `videoAccordionHTML()` L6424, with the SEO section first in `.va-left` |
-| Render engine | `generateMP4` L11773 → encode/mux/finalize L12302-13340; audio `encodeAudioTrack` L3177; GIF decoder L5200-6160 |
-| Template composer | `src/client/template-composer-js.ts` (`exportMP4` L1307, `addTemplateToVideo` L1660, modal L1836-2151) |
+| Routes, KV, jobs, auth | `src/index.ts` (ordered route handler; `getCurrentConfigPath()` builds the current-day settings URL, which is matched only by the settings-page GET route; unmatched paths return `404`) |
+| Accordions, gallery, queue | `src/client/app-js.ts` MODULE 1-4 (`initVideoStudio` L6176, `addVideoAccordion` L6250, `videoAccordionHTML` L6424, `onVideoFiles` L6689, `runGenerationQueue` L7904) |
+| AI images panel | MODULE 5 (`submitAiImages` L8300, `addAiResultCard` L8497, `addAiToVideo` L8668) |
+| Auth UI | MODULE 6 (`buildAuthOverlay` L8855, `submitAuth` L9542, `initAuth` L11039) |
+| Render API + worker | MODULE 7 (`collectVideoPayload` L9904, `apiRenderVideo` L10015, `renderVideoLocally` L10309, `workerRunJob` L10613) |
+| Script / subtitles / voiceover | MODULE 8-9 (`renderSeoKeywords` L11246, `generateScript` L11330, `openVoiceoverModal` L11777, `generateVoiceover` L11851, `toggleSubtitles` L12033) — the accordion markup puts the SEO section first in `.va-left` (`videoAccordionHTML()` L6424) |
+| Render engine | `generateMP4()` L12150; audio helper `encodeAudioTrack()` L3177; GIF frame decoder `buildGifSlideFrames()` L5639 |
+| Template composer | `src/client/template-composer-js.ts` (`exportMP4` L1151, `addTemplateToVideo` L1504, `openTemplateModal` L1948) |
 | Themes | `src/client/styles.ts` (token blocks + shared reskin, appended at the end of `APP_CSS`), `src/index.ts` (`CONFIG_THEMES`, `normalizeTheme`/`readTheme`/`applyTheme` at the top of the module) |
 | Settings page | `src/client/config-page-js.ts` (single escaped string) |
 
@@ -490,7 +501,7 @@ draws Ken-Burns slides with title/sticker/captions/subtitles, muxes an MP4 and s
 the status pill turns green *done* and the summary reads "Bulk complete: 1 saved, 0 skipped, 0 failed."
 
 Or, for server-mediated rendering: press **☁️ API** on that video, leave the tab polling, and let a
-`/config/uvxyz` worker tab (Flow 3) pick the job up, render it in *its* browser and deliver the MP4
+current-day settings-route worker tab (Flow 3) pick the job up, render it in *its* browser and deliver the MP4
 back — the original tab downloads `API_Video1.mp4`.
 
 ## UI update — Aerial / Stellar / template modal (2026-10-15)

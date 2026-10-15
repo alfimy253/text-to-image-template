@@ -1,14 +1,15 @@
 # YouTube Vibe Studio — System Rules
 
-> Every rule below was verified against the code in this repository (commit `e450ce5`,
-> re-verified in the working tree on **2026-10-15**). Each high-level rule is followed by
+> Every rule below was verified against the current working tree on **2026-10-16**. Each
+> high-level rule is followed by
 > **indented** sub-points: the technical detail that implements it, then the restrictions,
 > invariants and side-effects that follow from it. File references use `path:line` where a
 > single anchor exists.
 >
 > 2026-10-15 revisions: RULE 7 was reworked for the two-stage SEO script (keyword planner +
 > SRT writer), RULE 18 (the user-visible hint inventory) was added, and RULE 19 (the three
-> skins) was added when the settings page gained its Appearance group.
+> skins) was added when the settings page gained its Appearance group. On 2026-10-16, RULE 3
+> was updated for the Asia/Taipei day-rotating settings route.
 >
 > Companion documents: `userflow.md` (the actor-level flows these rules produce),
 > `README.md` (the user-facing summary), `bug-audit.md` and `kv-scale-test.md` (evidence).
@@ -18,9 +19,9 @@
 ## RULE 1 — One Cloudflare Worker serves everything; the browser does the heavy work
 
 - The Worker is a single default-exported `fetch(request, env)` handler with sequential
-  `if` branches and **no router library** (`src/index.ts:25`).
+  `if` branches and **no router library** (`src/index.ts:124`).
   - Routes are matched in a fixed order: `/` → `/image/:i` → `/image/gen` → auth API →
-    KV guard → `/config/uvxyz` → `/api/script` → `/api/voiceover` → `/tts` →
+    KV guard → `/{current-day}/config/uvxyz` → `/api/script` → `/api/voiceover` → `/tts` →
     `/api/render` (POST) → `/api/render/:id` (GET) → `/api/worker/*` →
     `/api/config/theme` → `/api/config/workers`.
   - Unmatched requests fall through to `new Response("Not Found", { status: 404 })`.
@@ -40,7 +41,7 @@
     `__APP_CSS__`, `__APP_JS__`, `__TEMPLATE_COMPOSER_JS__`, `__PROMPTS_JSON__`.
   - Replacements use *replacer functions* so `$&`-style patterns inside the injected
     JS/CSS are never interpreted; the cached string is never mutated afterwards.
-    - Two routes `.replace()` a **copy**: `/config/uvxyz` (prepends
+    - Two routes `.replace()` a **copy**: `/{current-day}/config/uvxyz` (prepends
       `window.__CONFIG_PAGE = true;` and injects the settings script) and, since the theme
       feature, **both** HTML routes, which stamp `data-theme="…"` into the `<html>` tag
       (see RULE 19). The cached string itself is still never mutated.
@@ -107,26 +108,35 @@
   - `GET /api/session` reads the cookie, looks up KV, returns `{authenticated:true,user}`,
     or `401` when the cookie/record is missing.
 - The sign-in gate is **UI-only**.
-  - `initAuth()` runs `GET /api/session`; on `401` it renders a full-screen overlay
-    (`buildAuthOverlay`) that blocks the studio; on `503` (KV unbound) or a network error it
-    deliberately leaves the app **unlocked**.
+  - `initAuth()` runs `GET /api/session`; on `200` it opens the studio and shows the account
+    footer. On `401` it keeps the public landing visible and the studio hidden; the top **Sign up**
+    link, bottom **Log in** link and primary studio CTA open the existing auth modal. On `503`
+    (KV unbound) or a network error, the landing remains visible and the primary CTA opens the
+    studio, preserving the previous open-access fallback.
     - Restriction: no route except the auth endpoints themselves checks a session. Every
       data/rendering endpoint (`/image/*`, `/api/script`, `/api/voiceover`, `/tts`,
       `/api/render*`, `/api/worker/*`, `GET /api/config/workers`) is anonymous. The login
-      overlay is a usability gate, not an authorization boundary.
-  - QR-code / refresh-safe? The overlay is rebuilt on every page load; the cookie is the only
-    persistence (no `localStorage`/`sessionStorage`/IndexedDB anywhere in the client).
+      modal is a usability gate, not an authorization boundary.
+  - The auth modal is built lazily when an account action is used; the HttpOnly cookie is the
+    persistence mechanism (no `localStorage`/`sessionStorage`/IndexedDB anywhere in the client).
     - Restriction: closing the tab loses all unsaved studio state (uploads, prompts, scripts)
       — nothing is persisted client-side.
 
 ---
 
-## RULE 3 — The settings page is a second view of the same Worker, gated by a hard-coded password
+## RULE 3 — The settings page is a day-rotating second view of the same Worker
 
-- `GET /config/uvxyz` returns the studio HTML plus the settings script; `initAuth()` bails out
-  immediately in that page (`window.__CONFIG_PAGE`), so **no account login** is required.
+- `GET /{current-day}/config/uvxyz` returns the studio HTML plus the settings script;
+  `initAuth()` bails out immediately in that page (`window.__CONFIG_PAGE`), so **no account
+  login** is required.
+  - `{current-day}` is the unpadded day of month (1–31) in **Asia/Taipei**, computed per request
+    with `Intl.DateTimeFormat`; for example, the route is `/16/config/uvxyz` on 2026-10-16.
+    It changes at midnight Asia/Taipei. The old bare `/config/uvxyz` path and a stale day path
+    fall through to the normal plain-text `404`.
+  - Restriction: the rotating path is not an authorization boundary. The page still relies on
+    the client-side password gate described below.
 - The settings password is the literal `"#123admin%"`, duplicated in two places:
-  - the Worker constant `CONFIG_PASSWORD` (`src/index.ts:248`), and
+  - the Worker constant `CONFIG_PASSWORD` (`src/index.ts:355`), and
   - the client script `CONFIG_PASSWORD` (`src/client/config-page-js.ts`).
   - Restriction: the gate is a client-side `===` comparison, so it is cosmetic — the value is
     readable in the served HTML/JS. Its server-side uses are `POST /api/config/workers` and
@@ -153,7 +163,7 @@
   - `GET /api/config/workers` returns `{success:true, urls}` with **no password**.
     - Restriction: the registry is readable by anyone and its entries are never contacted by
       the system — dispatching to registered workers does not exist. Each worker operator must
-      open their own `/config/uvxyz` tab and press **Start worker**; that tab polls the queue.
+      open their own current-day settings tab and press **Start worker**; that tab polls the queue.
 
 ---
 
@@ -207,7 +217,7 @@
 
 ---
 
-## RULE 5 — `/config/uvxyz` in worker mode is the only job consumer
+## RULE 5 — The current-day settings route in worker mode is the only job consumer
 
 - The worker tab polls `/api/worker/poll` on a self-rescheduling `setTimeout`: **3 s** on
   success, **5 s** after a network error, and stops immediately when **Stop worker** is pressed.
@@ -278,8 +288,8 @@
     - Word targets per minute: 210 / 170 / 140 / 110 (used only to steer the prompt).
   - `env.AI` missing → `503 "AI binding not configured"`.
 - **Two AI stages per request**, both on `SCRIPT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"`
-  (`src/index.ts:1075` SEO constants, `:1243` keyword parser, `:1540` frequency check,
-  `:1650` keyword stage, `:1776` writer stage).
+  (`src/index.ts:1187` SEO constants, `:1355` keyword parser, `:1652` frequency check,
+   `:1762` keyword stage, `:1888` writer stage).
   1. **Keyword planner** — `max_tokens: 512`, `temperature: 0.6`, **3 attempts**, JSON only:
      `{"longTail":[{"keyword":"…","short":["…","…"]},{…}]}`.
      - exactly **2 long-tail keywords** (`SEO_LONG_TAIL`), each at most **6 words**
@@ -745,7 +755,7 @@
   - `applyTheme(html, theme)` rewrites a **copy** of the cached page at the literal
     `<html lang="en">` → `<html lang="en" data-theme="strata|stellar">`; `default` returns the
     cached string untouched (1 `String.replace` for a themed page, 0 for the default).
-  - Both HTML routes do it: `GET /` and `GET /config/uvxyz`.
+  - Both HTML routes do it: `GET /` and `GET /{current-day}/config/uvxyz`.
   - Restriction: it costs **one extra KV read per page render** (see `kv-scale-test.md` §5) and
     cannot be cached across requests, because a theme change must apply on the next load.
   - Degradation: no `KV_BINDING` → `default`; a throwing `KV_BINDING.get` → `default` (the page

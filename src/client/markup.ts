@@ -1,7 +1,7 @@
 /*
- * PAGE_MARKUP — the HTML skeleton (head + body) of the studio
- * page, copied verbatim out of the old single-file template
- * literal. The four placeholders are substituted in page.ts:
+ * PAGE_MARKUP — the HTML skeleton (head + body) for the
+ * public landing page and studio, adapted from the original
+ * single-file template literal. The placeholders are substituted in page.ts:
  *
  *   __APP_CSS__                -> client/styles.ts
  *   __APP_JS__                 -> client/app-js.ts
@@ -28,9 +28,12 @@ export const PAGE_MARKUP = `
 		content="width=device-width, initial-scale=1.0"
 	>
 
-	<title>
-		YouTube Vibe Studio
-	</title>
+	<title>YouTube Vibe Studio — Create videos from your ideas</title>
+	<meta
+		name="description"
+		content="Turn images, music and ideas into polished videos with YouTube Vibe Studio. Create scenes, scripts, captions and MP4s in one browser-based workspace."
+	>
+	<meta name="theme-color" content="#101116">
 
 
 	<!-- Oswald comes from Google Fonts.
@@ -64,6 +67,137 @@ export const PAGE_MARKUP = `
 
 <body>
 
+	<div class="landing-page" id="landing-page">
+
+		<header class="landing-nav">
+			<a class="landing-brand" href="#landing-home" aria-label="YouTube Vibe Studio home">
+				<span class="landing-brand-mark" aria-hidden="true">V</span>
+				<span class="landing-brand-name">VIBE <b>STUDIO</b></span>
+			</a>
+
+			<nav class="landing-nav-links" aria-label="Main navigation">
+				<a href="#landing-process">How it works</a>
+				<a href="#landing-features">Features</a>
+			</nav>
+
+			<a class="landing-signup" href="#signup" data-auth-open="signup">
+				Sign up <span aria-hidden="true">↗</span>
+			</a>
+		</header>
+
+		<main class="landing-main">
+			<section class="landing-hero" id="landing-home">
+				<div class="landing-hero-copy">
+					<p class="landing-eyebrow"><span aria-hidden="true"></span> YOUR NEXT VIDEO STARTS HERE</p>
+					<h1>Your ideas,<br><span>in motion.</span></h1>
+					<p class="landing-lead">Turn images, music and a spark of imagination into a video worth sharing — all in one creative studio.</p>
+					<div class="landing-actions">
+						<button class="landing-primary" type="button" data-studio-open>
+							Start creating <span aria-hidden="true">↗</span>
+						</button>
+						<a class="landing-secondary" href="#landing-process">
+							<span class="landing-secondary-play" aria-hidden="true">▶</span> See how it works
+						</a>
+					</div>
+					<div class="landing-microcopy">
+						<span>Made for creators</span><i aria-hidden="true"></i><span>Rendered in your browser</span>
+					</div>
+				</div>
+
+				<div class="landing-hero-art" aria-hidden="true">
+					<div class="landing-orbit landing-orbit-one"></div>
+					<div class="landing-orbit landing-orbit-two"></div>
+					<div class="landing-preview-card">
+						<div class="landing-preview-topbar">
+							<div class="preview-window-dots"><i></i><i></i><i></i></div>
+							<span class="preview-project-name">PROJECT PREVIEW</span>
+							<span class="preview-ready"><i></i> READY</span>
+						</div>
+						<div class="landing-preview-canvas">
+							<div class="preview-scene">
+								<span class="preview-sun"></span>
+								<span class="preview-cloud preview-cloud-one"></span>
+								<span class="preview-cloud preview-cloud-two"></span>
+								<span class="preview-mountain preview-mountain-back"></span>
+								<span class="preview-mountain preview-mountain-front"></span>
+								<span class="preview-scene-caption">YOUR STORY, <b>IN MOTION.</b></span>
+								<span class="preview-scene-play">▶</span>
+							</div>
+						</div>
+						<div class="preview-control-row">
+							<span class="preview-play-mini">▶</span>
+							<span class="preview-time">00:18 <i>/</i> 00:42</span>
+							<span class="preview-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+							<span class="preview-export">MP4</span>
+						</div>
+						<div class="preview-timeline">
+							<div class="preview-timeline-label">SCENES</div>
+							<div class="preview-timeline-clips"><span></span><span></span><span></span><span></span></div>
+							<div class="preview-audio-track"><span>♪ AUDIO TRACK</span><i></i></div>
+						</div>
+					</div>
+					<div class="preview-float preview-float-top"><span>✦</span> AI scenes</div>
+					<div class="preview-float preview-float-bottom"><span>♫</span> Your soundtrack</div>
+				</div>
+			</section>
+
+			<section class="landing-proof" aria-label="Studio highlights">
+				<div class="landing-proof-item"><span class="proof-icon">✦</span><div><b>AI when you want it</b><span>Images, scripts and voiceover on demand</span></div></div>
+				<div class="landing-proof-item"><span class="proof-icon">◉</span><div><b>Made for your workflow</b><span>Bring your own images, clips and music</span></div></div>
+				<div class="landing-proof-item"><span class="proof-icon">↗</span><div><b>Ready to share</b><span>Build and export your video in one place</span></div></div>
+			</section>
+
+			<section class="landing-section landing-process" id="landing-process">
+				<div class="landing-section-heading">
+					<p class="landing-eyebrow"><span aria-hidden="true"></span> A SIMPLE CREATIVE FLOW</p>
+					<h2>Less setup.<br><span>More story.</span></h2>
+					<p>Bring the pieces together, then focus on the moments you want people to remember.</p>
+				</div>
+				<div class="landing-steps">
+					<article class="landing-step">
+						<div class="landing-step-top"><span>01 / START</span><span class="step-glyph">▧</span></div>
+						<h3>Gather your moments</h3>
+						<p>Add your images, clips and soundtrack — or create fresh visuals with AI.</p>
+					</article>
+					<article class="landing-step">
+						<div class="landing-step-top"><span>02 / SHAPE</span><span class="step-glyph">✳</span></div>
+						<h3>Make it feel like you</h3>
+						<p>Set the pace, add titles and captions, and build a story with sound.</p>
+					</article>
+					<article class="landing-step">
+						<div class="landing-step-top"><span>03 / SHARE</span><span class="step-glyph">↗</span></div>
+						<h3>Render and take it with you</h3>
+						<p>Preview your project and export a finished MP4 from your browser.</p>
+					</article>
+				</div>
+			</section>
+
+			<section class="landing-feature-band" id="landing-features">
+				<div class="landing-feature-heading">
+					<p class="landing-eyebrow"><span aria-hidden="true"></span> YOUR CREATOR TOOLKIT</p>
+					<h2>Everything you need<br>to <span>tell it your way.</span></h2>
+				</div>
+				<div class="landing-feature-grid">
+					<article class="landing-feature-card"><span class="feature-index">01</span><h3>Visuals with a point of view</h3><p>Generate AI scenes from a prompt or bring in the images and video you already love.</p><span class="feature-arrow" aria-hidden="true">↗</span></article>
+					<article class="landing-feature-card"><span class="feature-index">02</span><h3>A little help with the words</h3><p>Build a script, voiceover and captions around the message you want to share.</p><span class="feature-arrow" aria-hidden="true">↗</span></article>
+					<article class="landing-feature-card"><span class="feature-index">03</span><h3>Your video, ready to go</h3><p>Arrange scenes, add a soundtrack and render your project locally in the browser.</p><span class="feature-arrow" aria-hidden="true">↗</span></article>
+				</div>
+			</section>
+
+			<section class="landing-cta">
+				<div><p class="landing-eyebrow"><span aria-hidden="true"></span> YOUR NEXT IDEA IS WAITING</p><h2>Let’s make something<br><span>worth watching.</span></h2></div>
+				<button class="landing-primary landing-cta-button" type="button" data-studio-open>Open the studio <span aria-hidden="true">↗</span></button>
+			</section>
+		</main>
+
+		<footer class="landing-footer">
+			<div class="landing-footer-brand"><span class="landing-brand-mark" aria-hidden="true">V</span><div><b>VIBE STUDIO</b><span>Make your next idea move.</span></div></div>
+			<nav class="landing-footer-menu" aria-label="Account menu"><span>Already have an account?</span><a href="#login" data-auth-open="login">Log in <span aria-hidden="true">↗</span></a></nav>
+			<div class="landing-footer-bottom"><span>© 2026 YouTube Vibe Studio</span><span>Built for the stories you want to tell.</span></div>
+		</footer>
+	</div>
+
+	<div id="studio-app" class="studio-app" hidden>
 
 	<div class="header">
 
@@ -564,6 +698,8 @@ export const PAGE_MARKUP = `
 		</div>
 	</div>
 
+
+	</div><!-- #studio-app -->
 
 <script>
 __APP_JS____TEMPLATE_COMPOSER_JS__

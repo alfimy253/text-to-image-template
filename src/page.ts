@@ -4,7 +4,7 @@
 //
 // The page HTML is a constant (the only interpolation is the
 // fixed prompts array), so it is built once per isolate and
-// reused. Re-building a ~280 KB string on every request wastes
+// reused. Re-building a ~640 KB string on every request wastes
 // CPU and creates constant GC pressure. The /config/uvxyz route
 // only .replace()es copies of it, so the cached string is never
 // mutated.
@@ -12,8 +12,8 @@
 // The old single template literal now lives in imported text
 // modules (markup + CSS + the two client scripts). The
 // placeholders are substituted here with replacer FUNCTIONS so
-// no $-patterns in the inserted text are ever special, and the
-// result is byte-identical to the single-file version.
+// no $-patterns in the inserted text are ever special. The
+// original studio remains assembled intact alongside the new landing page.
 
 import { prompts } from "./prompts";
 import { PAGE_MARKUP } from "./client/markup";
