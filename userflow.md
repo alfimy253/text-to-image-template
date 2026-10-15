@@ -395,7 +395,7 @@ GET /config/uvxyz
 password overlay ("⚙️ Studio Settings — Enter the settings password")
   wrong  → "Wrong password."
   right  → settings modal
-     ├─ Appearance (app mode only)     → Studio / Strata / Stellar radio cards
+     ├─ Appearance (app mode only)     → Studio / Aerial / Stellar radio cards
      │    GET /api/config/theme preloads the current skin; picking a card previews it
      │    instantly (client-side only, "Preview only — press Save theme …")
      │    [Save theme] → POST /api/config/theme {pw, theme}
@@ -492,3 +492,17 @@ the status pill turns green *done* and the summary reads "Bulk complete: 1 saved
 Or, for server-mediated rendering: press **☁️ API** on that video, leave the tab polling, and let a
 `/config/uvxyz` worker tab (Flow 3) pick the job up, render it in *its* browser and deliver the MP4
 back — the original tab downloads `API_Video1.mp4`.
+
+## UI update — Aerial / Stellar / template modal (2026-10-15)
+
+Appearance now labels the former Strata option **Aerial** (the persisted/API value is still
+`strata` for backwards compatibility). Its bundled mountain background, blue sky, diagonal
+overlay and white typography adapt the HTML5 UP Aerial design to the scrolling studio.
+Stellar's main studio and accordion backgrounds are 10% less opaque relative to their original
+alpha; accordion backdrop blur is 20% stronger.
+
+In **Add video from template**, choose one of the same five designs from the **Template**
+dropdown instead of preview cards. The single canvas preview stays exactly 80px high in both
+formats. Labels sit below editor values, with live blur/opacity readouts. The sticky bottom
+Add/Close buttons are horizontally and vertically centered. Reopening/retargeting the modal,
+image upload, preview playback, MP4 export and gallery insertion retain the existing flow.

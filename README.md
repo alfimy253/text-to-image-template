@@ -27,11 +27,15 @@ timestamp captions, AI-written SRT subtitles and a MeloTTS voiceover.
 - **Accounts.** KV-backed sign-up/sign-in, unlimited accounts (each with an `email:<address>`
   uniqueness index).
 - **Three UI themes.** `/config/uvxyz` → **Appearance** switches the whole studio between the
-  built-in dark look, **Strata** (light panels, teal accents) and **Stellar** (violet gradient,
+  built-in dark look, **Aerial** (blue sky, mountain backdrop, white accents) and **Stellar** (violet gradient,
   frosted panels) — HTML5UP-inspired skins, applied server-side so there is no flash.
+  Aerial retains the legacy `strata` API/storage value, so saved selections still work.
+  See `THIRD_PARTY_NOTICES.md` for the Aerial background attribution.
 - **Template composer.** The "Add video from template" link builds a portrait 9:16 or landscape
   16:9 MP4 (1-25 s) from up to 5 images in 5 designs (Full Focus, Split Story, Triple Stack,
-  Photo Burst, Pan & Zoom) and drops it into the accordion's gallery as a normal clip.
+  Photo Burst, Pan & Zoom) and drops it into the accordion's gallery as a normal clip. The designs use one dropdown,
+  with an exactly 80px-high preview in either orientation, labels beneath editor values,
+  live blur/opacity values, and centered Add/Close buttons.
 
 ## Limits worth knowing
 
@@ -65,7 +69,7 @@ the strings that carry the rules (the full inventory, with the constant each one
 | ☁️ **API** button | tooltip: *Send all of this video's elements to the render API* |
 | Main panel notes | slideshow repeats to cover the track · captions sit 4/7 up from the bottom, 17px Bookman, last one capped at 10 s · sticker is a 435 × 150 white rectangle hanging 40 px past the right edge |
 | Onboarding | `Click the round Add Video button (top left), then press Generate.` |
-| Settings page, Appearance | `Current theme: Strata.` · `Preview only — press Save theme to apply it for everyone.` · `Saved — reload the studio page to see the new theme.` |
+| Settings page, Appearance | `Current theme: Aerial.` · `Preview only — press Save theme to apply it for everyone.` · `Saved — reload the studio page to see the new theme.` |
 | Blocking alerts | only for hard failures and cap breaches (e.g. `You can add at most 25 images (jpg, png, jpeg).`); the AI script instead reports `Script failed: <error>` in its status line so a retry can start immediately |
 
 Status lines (`#va-status-N`, `#va-script-status-N`, `#va-ai-status-N`) are the normal progress
@@ -93,7 +97,7 @@ Bindings in `wrangler.json`:
   app answers `503` on those routes when it is missing, and the sign-in overlay stays open)
 
 The settings page at **`/config/uvxyz`** is password-gated. It picks the **theme** for every
-visitor (Appearance → *Studio / Strata / Stellar* → **Save theme**), registers background worker
+visitor (Appearance → *Studio / Aerial / Stellar* → **Save theme**), registers background worker
 URLs, and can switch a tab into "Background worker" mode to consume the render queue.
 
 ## Routes

@@ -720,9 +720,10 @@
 
 - Three looks, selected by the `data-theme` attribute on `<html>`; **absence of the attribute is
   the default** (the amber-on-charcoal studio look that shipped first).
-  - `strata` — light content surfaces on a dark slate backdrop, teal accent, hairline borders,
-    upper-case letter-spaced labels, `Source Sans Pro` (design language of the HTML5UP demo
-    "Strata" by @ajlkn, CC BY 3.0; the CSS is written for this app).
+  - `strata` — legacy API/storage value for **Aerial**: blue sky and a bundled mountain
+    backdrop, diagonal overlays, white type and translucent blue panels, adapted from
+    HTML5 UP Aerial by @ajlkn (CC BY 3.0; see `THIRD_PARTY_NOTICES.md`). Saved Strata
+    choices get the new look without a KV migration. Motion respects reduced-motion settings.
   - `stellar` — pink-to-violet 45° gradient backdrop with a fixed dot overlay and frosted
     translucent panels (same provenance: HTML5UP "Stellar").
   - Restriction: the CSS is **additive**. Every rule is scoped `html[data-theme=…]` (or
@@ -760,3 +761,16 @@
     example adding a second attribute in `markup.ts`) silently disables theming everywhere.
   - Unrelated to the theme: the studio's *rendered* output (fonts, colours, sticker, captions) is
     fixed in the render engine (RULE 10/11) and never follows the UI skin.
+
+### UI refinements (2026-10-15)
+
+- Stellar `.studio` and `.video-accordion` surface alpha is reduced **relatively by 10%**:
+  `0.12 × 0.9 = 0.108`. This changes background alpha, not element opacity; text remains sharp.
+- Stellar accordion backdrop blur is increased **by 20%**: `8px × 1.2 = 9.6px`.
+  CSS blur has no percentage unit. Other surfaces retain their existing 8px blur.
+- The template composer keeps all five designs in a single native, labelled dropdown.
+  The old grid and miniature canvases are removed. The main preview and its canvas have
+  `height`, `min-height`, and `max-height` of **80px** in both orientations.
+  `object-fit: contain` preserves proportions; export remains 1080×1920 or 1920×1080.
+- Editor values have labels beneath them. Blur/opacity sliders show live numeric values.
+  The sticky Add/Close footer centers its buttons on both axes.
