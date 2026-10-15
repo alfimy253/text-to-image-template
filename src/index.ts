@@ -18,6 +18,93 @@ import { MODEL, prompts } from "./prompts";
 import { createHTML } from "./page";
 import { CONFIG_PAGE_SCRIPT } from "./client/config-page-js";
 
+/*
+ * =============================================================
+ * THEME HELPERS
+ * -------------------------------------------------------------
+ * The studio ships three skins: the built-in look (no
+ * attribute) plus "strata" and "stellar". The settings page
+ * stores the choice in KV; the two HTML routes read it and
+ * write data-theme onto the <html> tag, so the skin is applied
+ * during parse and no default-themed frame is ever painted.
+ * =============================================================
+ */
+
+const CONFIG_THEME_KEY =
+	"config:theme";
+
+/*
+ * The whitelist. "default" is the built-in studio look; the
+ * other two names are the CSS themes in client/styles.ts and
+ * are the ONLY values that ever reach the markup.
+ */
+
+const CONFIG_THEMES = [
+	"default",
+	"strata",
+	"stellar"
+];
+
+function normalizeTheme(value: any) {
+
+	const theme =
+		String(value || "")
+			.trim()
+			.toLowerCase();
+
+	return CONFIG_THEMES.indexOf(theme) === -1
+		? "default"
+		: theme;
+
+}
+
+/*
+ * Reads the stored theme. Never throws: a missing binding
+ * (e2e/dev config), a KV error or a stale value all fall back
+ * to the built-in look.
+ */
+
+async function readTheme(env: any) {
+
+	if (!env || !env.KV_BINDING) {
+		return "default";
+	}
+
+	try {
+
+		return normalizeTheme(
+			await env.KV_BINDING.get(
+				CONFIG_THEME_KEY
+			)
+		);
+
+	}
+	catch (themeError) {
+
+		return "default";
+
+	}
+
+}
+
+/*
+ * Writes data-theme into a copy of the cached page. Only the
+ * three whitelisted names ever reach the markup.
+ */
+
+function applyTheme(html: string, theme: string) {
+
+	if (!theme || theme === "default") {
+		return html;
+	}
+
+	return html.replace(
+		"<html lang=\"en\">",
+		'<html lang="en" data-theme="' + theme + '">'
+	);
+
+}
+
 export default {
 	async fetch(request, env) {
 
@@ -35,7 +122,10 @@ export default {
 		) {
 
 			return new Response(
-				createHTML(),
+				applyTheme(
+					createHTML(),
+					await readTheme(env)
+				),
 				{
 					status: 200,
 
@@ -209,7 +299,7 @@ export default {
 
 
 		// =====================================================
-		// USER AUTH API (KV-backed, max 7 users)
+		// USER AUTH API (KV-backed, unlimited users)
 		// GET  /api/session
 		// POST /api/login
 		// POST /api/signup
@@ -234,10 +324,15 @@ export default {
 		// GET  /api/worker/poll       worker claims a job
 		// POST /api/worker/deliver    worker uploads the MP4
 		// POST /api/worker/failed     worker reports failure
-		// POST /api/script            AI script (SRT) via an
-		//                             INSTRUCT model
+		// POST /api/script            SEO script (SRT) via an
+		//                             INSTRUCT model: 2 long-tail
+		//                             keywords (1-3 short each) are
+		//                             planned first, then the
+		//                             script must use them
 		// POST /api/voiceover         MeloTTS voice -> MP3
 		// GET/POST /api/config/workers  up to 3 worker URLs
+		// GET/POST /api/config/theme  studio theme (default /
+		//                             strata / stellar)
 		// GET  /config/uvxyz          settings page
 		// (password: CONFIG_PASSWORD)
 		// =====================================================
@@ -507,7 +602,10 @@ export default {
 		) {
 
 			let cfgHtml =
-				createHTML();
+				applyTheme(
+					createHTML(),
+					await readTheme(env)
+				);
 
 			cfgHtml =
 				cfgHtml.replace(
@@ -537,20 +635,26 @@ export default {
 		}
 
 		/*
-			* AI script (SRT) generation.
+			* SEO script (SRT) generation.
 			* INSTRUCT model on Workers
-			* AI. POST the topic
-			* + minutes (1-6) + speech
-			* speed; returns the timed
-			* SRT text. The output is
-			* VALIDATED server-side: it
-			* must parse as clean SRT
-			* and its total duration
-			* must stay under the
-			* selected minutes (invalid
-			* output is retried up to 3
-			* times with the problem
-			* spelled out).
+			* AI, in two stages.
+			*
+			*  1. Keywords: 2 long-tail
+			*     keywords, each with 1-3
+			*     short keywords, 2-5 short
+			*     keywords in total (its own
+			*     3 attempts).
+			*  2. Script: SRT built around
+			*     that set. The output is
+			*     VALIDATED server-side -
+			*     clean SRT under the
+			*     selected minutes AND every
+			*     short keyword spoken 2-5
+			*     times, every long-tail
+			*     keyword at least once
+			*     (invalid output is retried
+			*     up to 3 times with the
+			*     problem spelled out).
 		*/
 		if (
 			request.method === "POST" &&
@@ -1039,7 +1143,580 @@ export default {
 
 			}
 
-			const userPrompt =
+			/*
+			 * SEO layer. The script is written around a
+			 * keyword set that is planned first and
+			 * verified afterwards:
+			 *
+			 *   - SEO_LONG_TAIL long-tail keywords,
+			 *     each with 1..SEO_SHORT_PER_LONG_MAX
+			 *     short keywords;
+			 *   - SEO_SHORT_TOTAL_MIN..
+			 *     SEO_SHORT_TOTAL_MAX short keywords in
+			 *     total;
+			 *   - every short keyword must be spoken
+			 *     SEO_SHORT_FREQ_MIN..
+			 *     SEO_SHORT_FREQ_MAX times;
+			 *   - every long-tail keyword must be
+			 *     spoken at least
+			 *     SEO_LONG_FREQ_MIN time.
+			 *
+			 * The model is only asked for the script; the
+			 * frequency rules are counted here and a
+			 * violation is sent back to the model as the
+			 * retry reason (same 3-attempt loop as the
+			 * SRT validation).
+			 */
+			const SEO_LONG_TAIL =
+				2;
+
+			const SEO_SHORT_TOTAL_MIN =
+				2;
+
+			const SEO_SHORT_TOTAL_MAX =
+				5;
+
+			const SEO_SHORT_PER_LONG_MIN =
+				1;
+
+			const SEO_SHORT_PER_LONG_MAX =
+				3;
+
+			const SEO_SHORT_WORDS_MAX =
+				3;
+
+			const SEO_LONG_WORDS_MAX =
+				6;
+
+			const SEO_SHORT_FREQ_MIN =
+				2;
+
+			const SEO_SHORT_FREQ_MAX =
+				5;
+
+			const SEO_LONG_FREQ_MIN =
+				1;
+
+			/*
+			 * Reads the text out of whichever shape the
+			 * model returns: chat array, { response }
+			 * object, or a plain string.
+			 */
+			function aiText(result: any) {
+
+				if (
+					result &&
+					result[0] &&
+					result[0].message
+				) {
+					return String(
+						result[0].message.content ||
+							""
+					).trim();
+				}
+
+				if (
+					result &&
+					typeof result.response ===
+						"string"
+				) {
+					return result.response.trim();
+				}
+
+				if (
+					typeof result === "string"
+				) {
+					return result.trim();
+				}
+
+				return "";
+
+			}
+
+			/*
+			 * Counts how often a keyword is spoken. Matching is
+			 * case-insensitive, tolerates any whitespace between
+			 * the words and uses word boundaries so "ai" is not
+			 * counted inside "said".
+			 */
+			function keywordCount(
+				text: string,
+				keyword: string
+			) {
+
+				const escaped =
+					String(keyword || "")
+						.toLowerCase()
+						.trim()
+						.replace(
+							/[.*+?^${}()|[\]\\]/g,
+							"\\$&"
+						)
+						.replace(
+							/\s+/g,
+							"\\s+"
+						);
+
+				if (!escaped) {
+					return 0;
+				}
+
+				const hits =
+					String(text || "")
+						.toLowerCase()
+						.match(
+							new RegExp(
+								"\\b" +
+									escaped +
+									"\\b",
+								"g"
+							)
+						);
+
+				return hits
+					? hits.length
+					: 0;
+
+			}
+
+			/*
+			 * The spoken words of an SRT block: cue numbers and
+			 * timestamp lines removed. This is what the keyword
+			 * frequencies are counted against, because it is what
+			 * the narrator actually says.
+			 */
+			function srtSpokenText(srt: string) {
+
+				const words =
+					[];
+
+				const lines =
+					String(srt || "").split(
+						/\r?\n/
+					);
+
+				for (
+					let li = 0;
+					li < lines.length;
+					li++
+				) {
+
+					const line =
+						lines[li].trim();
+
+					if (!line) {
+						continue;
+					}
+
+					if (
+						/^[0-9]+$/.test(line)
+					) {
+						continue;
+					}
+
+					if (
+						line.indexOf("-->") !==
+						-1
+					) {
+						continue;
+					}
+
+					words.push(line);
+
+				}
+
+				return words.join(" ");
+
+			}
+
+			/*
+			 * Parses + validates the keyword JSON. Returns
+			 * { ok, error, data }. data = { longTail: [{ keyword,
+			 * short: [...] }], shorts: [...] } with every keyword
+			 * lower-cased and whitespace-collapsed.
+			 */
+			function parseKeywordSet(text: string) {
+
+				let raw =
+					String(text || "")
+						.replace(
+							/[\u0000-\u0008\u000B\u000E-\u001F]/g,
+							""
+						)
+						.trim();
+
+				if (
+					raw.indexOf("```") !== -1
+				) {
+
+					const parts =
+						raw.split("```");
+
+					raw =
+						(parts[1] || raw).trim();
+
+				}
+
+				const start =
+					raw.indexOf("{");
+
+				const end =
+					raw.lastIndexOf("}");
+
+				if (
+					start === -1 ||
+					end <= start
+				) {
+					return {
+						ok: false,
+						error:
+							"no JSON object in the keyword output"
+					};
+				}
+
+				let data =
+					null;
+
+				try {
+
+					data =
+						JSON.parse(
+							raw.slice(
+								start,
+								end + 1
+							)
+						);
+
+				}
+				catch (jsonError) {
+
+					return {
+						ok: false,
+						error:
+							"the keyword reply was not valid JSON"
+					};
+
+				}
+
+				const longTail =
+					data &&
+					Array.isArray(
+						data.longTail
+					)
+						? data.longTail
+						: null;
+
+				if (!longTail) {
+
+					return {
+						ok: false,
+						error:
+							'the JSON needs a "longTail" array'
+					};
+
+				}
+
+				if (
+					longTail.length !==
+					SEO_LONG_TAIL
+				) {
+
+					return {
+						ok: false,
+						error:
+							"there must be exactly " +
+							SEO_LONG_TAIL +
+							" long-tail keywords, not " +
+							longTail.length
+					};
+
+				}
+
+				const shortKeywords =
+					[];
+
+				const clean =
+					[];
+
+				for (
+					const entry of longTail
+				) {
+
+					const keyword =
+						String(
+							(entry && entry.keyword) ||
+								""
+						)
+							.trim()
+							.toLowerCase()
+							.replace(
+								/\s+/g,
+								" "
+							);
+
+					if (!keyword) {
+
+						return {
+							ok: false,
+							error:
+								"a long-tail entry has no keyword"
+						};
+
+					}
+
+					if (
+						keyword.split(" ")
+							.length >
+						SEO_LONG_WORDS_MAX
+					) {
+
+						return {
+							ok: false,
+							error:
+								'the long-tail keyword "' +
+								keyword +
+								'" is longer than ' +
+								SEO_LONG_WORDS_MAX +
+								" words"
+						};
+
+					}
+
+					const shortList =
+						Array.isArray(
+							entry.short
+						)
+							? entry.short
+							: [];
+
+					if (
+						shortList.length <
+							SEO_SHORT_PER_LONG_MIN ||
+						shortList.length >
+							SEO_SHORT_PER_LONG_MAX
+					) {
+
+						return {
+							ok: false,
+							error:
+								'"' +
+								keyword +
+								'" needs ' +
+								SEO_SHORT_PER_LONG_MIN +
+								"-" +
+								SEO_SHORT_PER_LONG_MAX +
+								" short keywords, not " +
+								shortList.length
+						};
+
+					}
+
+					const scrubbed =
+						[];
+
+					for (
+						const shortEntry of shortList
+					) {
+
+						const shortKeyword =
+							String(shortEntry || "")
+								.trim()
+								.toLowerCase()
+								.replace(
+									/\s+/g,
+									" "
+								);
+
+						if (!shortKeyword) {
+
+							return {
+								ok: false,
+								error:
+									'a short keyword under "' +
+									keyword +
+									'" is empty'
+							};
+
+						}
+
+						if (
+							shortKeyword.split(" ")
+								.length >
+							SEO_SHORT_WORDS_MAX
+						) {
+
+							return {
+								ok: false,
+								error:
+									'the short keyword "' +
+									shortKeyword +
+									'" is longer than ' +
+									SEO_SHORT_WORDS_MAX +
+									" words"
+							};
+
+						}
+
+						scrubbed.push(
+							shortKeyword
+						);
+
+						if (
+							shortKeywords.indexOf(
+								shortKeyword
+							) === -1
+						) {
+							shortKeywords.push(
+								shortKeyword
+							);
+						}
+
+					}
+
+					clean.push({
+						keyword:
+							keyword,
+						short:
+							scrubbed
+					});
+
+				}
+
+				if (
+					clean[0].keyword ===
+					clean[1].keyword
+				) {
+
+					return {
+						ok: false,
+						error:
+							"the two long-tail keywords must be different"
+					};
+
+				}
+
+				if (
+					shortKeywords.length <
+						SEO_SHORT_TOTAL_MIN ||
+					shortKeywords.length >
+						SEO_SHORT_TOTAL_MAX
+				) {
+
+					return {
+						ok: false,
+						error:
+							"there must be " +
+							SEO_SHORT_TOTAL_MIN +
+							"-" +
+							SEO_SHORT_TOTAL_MAX +
+							" short keywords in total, not " +
+							shortKeywords.length
+					};
+
+				}
+
+				return {
+					ok: true,
+					data: {
+						longTail:
+							clean,
+						shorts:
+							shortKeywords
+					}
+				};
+
+			}
+
+			/*
+			 * Returns "" when the spoken script honours the
+			 * keyword rules, otherwise the exact problem (used
+			 * as the retry hint).
+			 */
+			function keywordUsageError(
+				spokenText: string,
+				keywordSet: any
+			) {
+
+				for (
+					const long of keywordSet.longTail
+				) {
+
+					const count =
+						keywordCount(
+							spokenText,
+							long.keyword
+						);
+
+					if (
+						count <
+						SEO_LONG_FREQ_MIN
+					) {
+
+						return (
+							'the long-tail keyword "' +
+							long.keyword +
+							'" never appears; say it at least ' +
+							SEO_LONG_FREQ_MIN +
+							" time"
+						);
+
+					}
+
+				}
+
+				for (
+					const shortKeyword of keywordSet.shorts
+				) {
+
+					const count =
+						keywordCount(
+							spokenText,
+							shortKeyword
+						);
+
+					if (
+						count <
+						SEO_SHORT_FREQ_MIN
+					) {
+
+						return (
+							'the short keyword "' +
+							shortKeyword +
+							'" appears ' +
+							count +
+							" time(s); it must appear " +
+							SEO_SHORT_FREQ_MIN +
+							"-" +
+							SEO_SHORT_FREQ_MAX +
+							" times"
+						);
+
+					}
+
+					if (
+						count >
+						SEO_SHORT_FREQ_MAX
+					) {
+
+						return (
+							'the short keyword "' +
+							shortKeyword +
+							'" appears ' +
+							count +
+							" times; use it at most " +
+							SEO_SHORT_FREQ_MAX +
+							" times"
+						);
+
+					}
+
+				}
+
+				return "";
+
+			}
+
+			const basePrompt =
 				"You are a professional video script writer. Answer with ONLY valid SRT subtitle text, nothing else. " +
 				"Write a YouTube narration script as SRT subtitles about: " +
 					topic +
@@ -1063,6 +1740,155 @@ export default {
 				* attempts).
 				*/
 			try {
+
+				/*
+				 * Stage 1: plan the SEO keyword set. The
+				 * planner gets its own 3 attempts, and an
+				 * invalid set never reaches the writer.
+				 */
+				const keywordPrompt =
+					"You are an SEO strategist for YouTube. Answer with ONLY one JSON object, no prose and no code fences. " +
+					"The video topic is: " +
+					topic +
+					". Give exactly " +
+					SEO_LONG_TAIL +
+					" long-tail keywords (2-" +
+					SEO_LONG_WORDS_MAX +
+					" words each, a specific search phrase that expands the topic) and under each one " +
+					SEO_SHORT_PER_LONG_MIN +
+					"-" +
+					SEO_SHORT_PER_LONG_MAX +
+					" short SEO keywords (1-" +
+					SEO_SHORT_WORDS_MAX +
+					" words each) that it covers; the short keywords together must be " +
+					SEO_SHORT_TOTAL_MIN +
+					"-" +
+					SEO_SHORT_TOTAL_MAX +
+					" in total and every keyword must be lower case, unique and closely related to the topic. " +
+					'Reply with exactly this JSON shape: {"longTail":[{"keyword":"first long tail","short":["short one","short two"]},{"keyword":"second long tail","short":["short three"]}]}';
+
+				let keywordSet =
+					null;
+
+				let keywordError =
+					"";
+
+				for (
+					let attempt = 1;
+					attempt <= 3;
+					attempt++
+				) {
+
+					const prompt =
+						keywordPrompt +
+						(attempt > 1
+							?
+								" Your previous attempt was rejected: " +
+								keywordError +
+								" Try again and fix that exact problem."
+							: "");
+
+					console.log(
+						"[script] keywords attempt",
+						{
+							attempt:
+								attempt,
+							promptChars:
+								prompt.length
+						}
+					);
+
+					const result =
+						await env.AI.run(
+							SCRIPT_MODEL,
+							{
+								prompt:
+									prompt,
+								max_tokens:
+									512,
+								temperature:
+									0.6
+							}
+						);
+
+					const check =
+						parseKeywordSet(
+							aiText(result)
+						);
+
+					if (check.ok) {
+
+						keywordSet =
+							check.data;
+
+						break;
+
+					}
+
+					keywordError =
+						check.error;
+
+					console.log(
+						"[script] keywords invalid",
+						{
+							attempt:
+								attempt,
+							reason:
+								keywordError
+						}
+					);
+
+				}
+
+				if (!keywordSet) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"SEO keywords invalid (" +
+								keywordError +
+								") - try again"
+						},
+						500
+					);
+
+				}
+
+				console.log(
+					"[script] keywords ok",
+					{
+						longTail:
+							keywordSet.longTail.map(
+								(l) => l.keyword
+							),
+						shorts:
+							keywordSet.shorts
+					}
+				);
+
+				/*
+				 * Stage 2: the writer gets the keyword set and
+				 * its frequency rules spelled out. The rules are
+				 * also enforced after generation (see below), so
+				 * a script that ignores them is rejected and
+				 * rewritten with the exact problem attached.
+				 */
+				const userPrompt =
+					basePrompt +
+					"SEO keyword requirements, all mandatory: the narration must say each of these long-tail keywords at least once: " +
+					keywordSet.longTail
+						.map((l) => l.keyword)
+						.join("; ") +
+					". It must also say each of these short keywords between " +
+					SEO_SHORT_FREQ_MIN +
+					" and " +
+					SEO_SHORT_FREQ_MAX +
+					" times: " +
+					keywordSet.shorts.join("; ") +
+					". Work every keyword into natural spoken sentences - never read them out as a list - and never use a short keyword more than " +
+					SEO_SHORT_FREQ_MAX +
+					" times. ";
 
 				let lastError =
 					"";
@@ -1105,61 +1931,14 @@ export default {
 							}
 						);
 
-					let srt =
-						"";
-
 					/*
-						* Accept every
-						* response
-						* shape: chat
-						* array,
-						* { response }
-						* object,
-						* or a plain
-						* string.
-						*/
-					if (
-						result &&
-						result[0] &&
-						result[0].message
-					) {
-
-						srt =
-							String(
-								result[0]
-									.message
-									.content ||
-									""
-							).trim();
-
-					}
-
-					if (
-						srt === "" &&
-						result &&
-						typeof result
-							.response ===
-							"string"
-					) {
-
-						srt =
-							result
-								.response
-								.trim();
-
-					}
-
-					if (
-						srt === "" &&
-						typeof result ===
-							"string"
-					) {
-
-						srt =
-							result
-								.trim();
-
-					}
+					 * Same response shapes as the
+					 * keyword stage: chat array,
+					 * { response } object or a plain
+					 * string.
+					 */
+					const srt =
+						aiText(result);
 
 					const check =
 						validateSrt(
@@ -1167,9 +1946,68 @@ export default {
 							minutes
 						);
 
-					if (
+					/*
+					 * A script only passes when the SRT
+					 * is valid AND the spoken words hit
+					 * the keyword frequencies. The rule
+					 * that failed becomes the retry
+					 * reason handed back to the model.
+					 */
+					const spokenText =
+						check.ok && check.srt
+							? srtSpokenText(
+									check.srt
+								)
+							: "";
+
+					const problem =
 						check.ok
-					) {
+							? keywordUsageError(
+									spokenText,
+									keywordSet
+								)
+							: check.error;
+
+					if (!problem) {
+
+						/*
+						 * The counts are measured on
+						 * the final script, so the web
+						 * app can show what was really
+						 * written.
+						 */
+						const keywords = {
+							longTail:
+								keywordSet.longTail.map(
+									(l) => ({
+										keyword:
+											l.keyword,
+										count:
+											keywordCount(
+												spokenText,
+												l.keyword
+											),
+										short:
+											l.short
+									})
+								),
+							short:
+								keywordSet.shorts.map(
+									(kw) => ({
+										keyword:
+											kw,
+										count:
+											keywordCount(
+												spokenText,
+												kw
+											),
+										min:
+											SEO_SHORT_FREQ_MIN,
+										max:
+											SEO_SHORT_FREQ_MAX
+									})
+								)
+						};
 
 						console.log(
 							"[script] ok",
@@ -1178,7 +2016,14 @@ export default {
 									attempt,
 								srtChars:
 									check
-									.srt.length
+										.srt.length,
+								keywords:
+									keywords.short.map(
+										(x) =>
+											x.keyword +
+											" x" +
+											x.count
+									)
 							}
 						);
 
@@ -1189,6 +2034,8 @@ export default {
 								srt:
 									check
 										.srt,
+								keywords:
+									keywords,
 								model:
 									SCRIPT_MODEL
 							}
@@ -1197,8 +2044,7 @@ export default {
 					}
 
 					lastError =
-						check
-							.error;
+						problem;
 
 					console.log(
 						"[script] invalid",
@@ -3118,6 +3964,137 @@ export default {
 		}
 
 		/*
+			* Studio theme: "default", "strata"
+			* or "stellar". The GET is open
+			* (the page itself already carries
+			* the theme), the POST needs the
+			* settings password.
+		*/
+		if (
+			url.pathname ===
+				"/api/config/theme"
+		) {
+
+			if (
+				request.method ===
+					"GET"
+			) {
+
+				return json(
+					{
+						success: true,
+						theme:
+							await readTheme(env),
+						themes:
+							CONFIG_THEMES
+					}
+				);
+
+			}
+
+			if (
+				request.method ===
+					"POST"
+			) {
+
+				const body =
+					await request.json().catch(
+						() => ({})
+					);
+
+				if (
+					body.pw !==
+						CONFIG_PASSWORD
+				) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Wrong password"
+						},
+						403
+					);
+
+				}
+
+				const raw =
+					String(
+						body.theme || ""
+					)
+						.trim()
+						.toLowerCase();
+
+				if (
+					CONFIG_THEMES.indexOf(
+						raw
+					) === -1
+				) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Unknown theme"
+						},
+						400
+					);
+
+				}
+
+				if (!env.KV_BINDING) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Theme storage not configured (bind the KV namespace)"
+						},
+						503
+					);
+
+				}
+
+				/*
+				 * A KV failure is reported as JSON so the
+				 * settings page can show the real reason
+				 * instead of a bare 500.
+				 */
+				try {
+
+					await env.KV_BINDING.put(
+						CONFIG_THEME_KEY,
+						raw
+					);
+
+				}
+				catch (themeSaveError) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Theme storage unavailable"
+						},
+						503
+					);
+
+				}
+
+				return json(
+					{
+						success: true,
+						theme:
+							raw
+					}
+				);
+
+			}
+
+		}
+
+
+		/*
 			* Registered background workers
 			* (up to 3 URLs, optional).
 		*/
@@ -3292,11 +4269,29 @@ function json(data, status = 200, setCookie = null) {
 
 
 // =============================================================
-// USER AUTH HELPERS (KV-backed, max 7 users)
+// USER AUTH HELPERS (KV-backed, unlimited users)
 // =============================================================
 
-const AUTH_MAX_USERS =
-	7;
+/*
+ * Email uniqueness used to be checked by
+ * listing every user: record and reading
+ * each one. That breaks down twice as the
+ * namespace grows - KV list() only returns
+ * 1000 keys per page (1000 is the default
+ * AND the maximum), and one get per user
+ * trips the 1000-operations-per-invocation
+ * limit at ~1000 accounts. So the check is
+ * now a single keyed read of
+ * email:<address>; accounts created before
+ * this index existed are still covered by
+ * a bounded scan that only runs while the
+ * namespace is small.
+ */
+const AUTH_EMAIL_PREFIX =
+	"email:";
+
+const AUTH_LEGACY_SCAN_MAX =
+	200;
 
 
 function authToHex(bytes) {
@@ -3483,7 +4478,7 @@ async function handleAuthApi(
 		}
 
 		/*
-		 * Create an account (max 7).
+		 * Create an account (no cap).
 		 */
 		if (
 			path === "/api/signup" &&
@@ -3557,24 +4552,25 @@ async function handleAuthApi(
 				);
 			}
 
-			const list =
-				await env.KV_BINDING.list(
-					{ prefix: "user:" }
-				);
-
+			/*
+			 * Unlimited accounts: there is no user
+			 * cap any more. Email uniqueness is a
+			 * single keyed read of the index that
+			 * signup writes below.
+			 */
 			if (
-				list.keys.length >=
-					AUTH_MAX_USERS
+				await env.KV_BINDING.get(
+					AUTH_EMAIL_PREFIX +
+					email
+				)
 			) {
 				return json(
 					{
 						success: false,
 						error:
-							"Full: max " +
-							AUTH_MAX_USERS +
-							" users"
+							"Email already in use"
 					},
-					403
+					409
 				);
 			}
 
@@ -3594,32 +4590,60 @@ async function handleAuthApi(
 				);
 			}
 
-			for (
-				const key of list.keys
+			/*
+			 * Accounts created before the email
+			 * index existed have no email: key.
+			 * While the namespace is small enough
+			 * to scan inside the per-invocation
+			 * operation budget, look for their
+			 * email the old way. A namespace with
+			 * more than AUTH_LEGACY_SCAN_MAX
+			 * users can only have been created
+			 * after the index landed, so every
+			 * account in it is already indexed
+			 * and the scan is skipped.
+			 */
+			const legacyUsers =
+				await env.KV_BINDING.list(
+					{
+						prefix: "user:",
+						limit:
+							AUTH_LEGACY_SCAN_MAX +
+							1
+					}
+				);
+
+			if (
+				legacyUsers.keys.length <=
+				AUTH_LEGACY_SCAN_MAX
 			) {
-				const existingRaw =
-					await env.KV_BINDING.get(
-						key.name
-					);
-
-				if (existingRaw) {
-					const existing =
-						JSON.parse(
-							existingRaw
+				for (
+					const key of legacyUsers.keys
+				) {
+					const existingRaw =
+						await env.KV_BINDING.get(
+							key.name
 						);
 
-					if (
-						existing &&
-						existing.email === email
-					) {
-						return json(
-							{
-								success: false,
-								error:
-									"Email already in use"
-							},
-							409
-						);
+					if (existingRaw) {
+						const existing =
+							JSON.parse(
+								existingRaw
+							);
+
+						if (
+							existing &&
+							existing.email === email
+						) {
+							return json(
+								{
+									success: false,
+									error:
+										"Email already in use"
+								},
+								409
+							);
+						}
 					}
 				}
 			}
@@ -3655,6 +4679,22 @@ async function handleAuthApi(
 					username.toLowerCase(),
 				JSON.stringify(
 					user
+				)
+			);
+
+			/*
+			 * The email index is what makes the
+			 * uniqueness check a single read; it
+			 * is written for every new account.
+			 */
+			await env.KV_BINDING.put(
+				AUTH_EMAIL_PREFIX +
+					email,
+				JSON.stringify(
+					{
+						username:
+							username
+					}
 				)
 			);
 

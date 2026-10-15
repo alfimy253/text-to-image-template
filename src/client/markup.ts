@@ -16,6 +16,9 @@ export const PAGE_MARKUP = `
 
 <html lang="en">
 
+<!-- index.ts writes data-theme="strata" / "stellar" into the
+     html element above when the settings page has picked a theme. -->
+
 <head>
 
 	<meta charset="UTF-8">
@@ -46,7 +49,7 @@ export const PAGE_MARKUP = `
 	>
 
 	<link
-		href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&display=swap"
+		href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&family=Source+Sans+Pro:wght@300;400;600&display=swap"
 		rel="stylesheet"
 	>
 
@@ -180,8 +183,8 @@ export const PAGE_MARKUP = `
 				<div class="audio-actions">
 
 					<span class="audio-note">
-						Slideshow timing will stretch
-						to match this track.
+						The slideshow repeats to cover
+						the whole track.
 					</span>
 
 
@@ -207,7 +210,7 @@ export const PAGE_MARKUP = `
 					id="estimate-source"
 					style="color:#6b7280;"
 				>
-					(8s per image)
+					(9s per image)
 				</span>
 
 				<span
@@ -366,7 +369,7 @@ export const PAGE_MARKUP = `
 
 
 			<div class="audio-note">
-				White 200 \u00d7 80 rectangle, square
+				White 435 \u00d7 150 rectangle, square
 				corners, flush with the bottom
 				right corner and hanging 40px
 				past the right edge. Drawn on
@@ -462,8 +465,8 @@ export const PAGE_MARKUP = `
 				class="action-hint"
 				id="action-hint"
 			>
-				Click the red Add Video button (top left),
-				then press Generate.
+				Click the round Add Video button (top
+				left), then press Generate.
 			</span>
 		</div>
 
