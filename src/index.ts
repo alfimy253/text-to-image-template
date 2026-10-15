@@ -9,9 +9,9 @@
  *   ./client/styles              page CSS
  *   ./client/app-js              main studio client script
  *   ./client/template-composer-js  "Add video from template" modal
- *   ./client/config-page-js      /config/uvxyz settings overlay
+ *   ./client/config-page-js      day-prefixed settings overlay
  *
- * All routes, APIs and KV logic below are unchanged.
+ * Route, API and KV logic is implemented below.
  */
 
 import { MODEL, prompts } from "./prompts";
@@ -32,6 +32,21 @@ import { CONFIG_PAGE_SCRIPT } from "./client/config-page-js";
 
 const CONFIG_THEME_KEY =
 	"config:theme";
+
+/*
+ * The settings URL uses Asia/Taipei's day of month. Workers default
+ * to UTC, so set the time zone explicitly for consistent rotation
+ * across deployment locations.
+ */
+const CONFIG_DAY_FORMATTER =
+	new Intl.DateTimeFormat("en-US", {
+		day: "numeric",
+		timeZone: "Asia/Taipei"
+	});
+
+function getCurrentConfigPath() {
+	return "/" + CONFIG_DAY_FORMATTER.format(new Date()) + "/config/uvxyz";
+}
 
 /*
  * The whitelist. "default" is the built-in studio look; the
@@ -333,8 +348,8 @@ export default {
 		// GET/POST /api/config/workers  up to 3 worker URLs
 		// GET/POST /api/config/theme  studio theme (default /
 		//                             strata / stellar)
-		// GET  /config/uvxyz          settings page
-		// (password: CONFIG_PASSWORD)
+		// GET  /{current-day}/config/uvxyz settings page (Asia/Taipei)
+		// (password: CONFIG_PASSWORD; stale/bare paths return 404)
 		// =====================================================
 
 		const CONFIG_PASSWORD =
@@ -594,11 +609,13 @@ export default {
 		}
 
 		/*
-			* Settings page (password gated).
+			* Settings page (password gated). The day is evaluated per
+			* request in Asia/Taipei; the bare legacy path and any stale
+			* day path fall through to the normal 404 response.
 		*/
 		if (
 			request.method === "GET" &&
-			url.pathname === "/config/uvxyz"
+			url.pathname === getCurrentConfigPath()
 		) {
 
 			let cfgHtml =
