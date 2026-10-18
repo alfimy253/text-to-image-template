@@ -531,18 +531,34 @@
 - Everything lives in an IIFE (`src/client/template-composer-js.ts`) so its helpers cannot
   collide with the studio's globals; only `window.openTemplateModal` and
   `window.closeTemplateModal` are exported.
-- Inputs: at most **5 images** (`files.slice(0,5)`, extras silently ignored), a portrait
-  9:16 (1080 × 1920) or landscape 16:9 (1920 × 1080) canvas, one of **5 designs**
-  (Full Focus, Split Story, Triple Stack, Photo Burst, Pan & Zoom), and a length of
-  **1–25 s** (`TPL_MAX_DURATION = 25`, default 10, clamped).
-  - Pan & Zoom reuses the main engine's Ken-Burns pan/zoom strategies.
-- Export: WebCodecs `VideoEncoder` `avc1.4d002a`, `TPL_FPS = 30`,
-  `TPL_VIDEO_BITRATE = 6 000 000`, muxed with `mp4-muxer` — no FFmpeg.
+- The modal has two views:
+  - **Gallery** — a 4-column grid of live animated previews of the **8 motion-typography
+    templates** (19 Halo Warp, 20 Terminal Fracture, 21 Ribbon Editorial, 22 Portal Type,
+    23 Comic Burst, 24 Dream Echo, 25 Perspective Fold, 26 Liquid Bloom — ported from the
+    uploaded Typography Motion Studio III HTML; gallery thumbnails run the same `drawScene()`
+    as the export).
+  - **Editor** — a live canvas preview plus controls:
+    - **Text layers accordion** (dynamic): each layer has its own text (≤12 chars),
+      30-colour palette, 9 positions, 9 text animations (None + the 8 template motions)
+      and a size slider (3–18, % readout against the template's base size); `+` adds a
+      layer (next free position from the POS cycle), × removes (disabled at 1 layer).
+    - **Motion & transitions**: photo entry transition (9), entry speed (6), photo motion
+      (10 looping motions), background (**Template default** = the template's own look, or
+      the blurred first photo, 10 colours, 3 neo-brutalist, 3 Swiss grids, 4 animated CSS
+      patterns), and an animation-speed slider (0.5×–2×) that scales every loop.
+    - **Photos**: at most **2 images** (`files.slice(0,2)`, extras silently ignored).
+- Inputs: a portrait 9:16 (1080 × 1920) or landscape 16:9 (1920 × 1080) canvas and a length of
+  **1–25 s** (`TPL_MAX_DURATION = 25`, default 6, clamped).
+- Export renders the SAME canvas engine as the preview — WebCodecs `VideoEncoder`
+  `avc1.4d002a`, `TPL_FPS = 30`, `TPL_VIDEO_BITRATE = 6 000 000`, muxed with `mp4-muxer`,
+  no FFmpeg and **no screen capture**. The MP4 downloads to disk automatically (plus a
+  `Download MP4` link for a re-download).
   - Missing `VideoEncoder` or missing `Mp4Muxer` (CDN failed) → `alert` + abort.
-- The exported MP4 is appended to the target accordion's gallery as a normal MP4 asset, so it
+- The exported MP4 can be appended to the target accordion's gallery as a normal MP4 asset, so it
   plays inside the final render like an uploaded clip and obeys the 5-clip cap.
-- The modal is built once and reused: closing hides it, so images/design/last composition
-  survive; the accordion link retargets the same modal at another Video N.
+- The modal is built once and reused: closing hides it, so photos/last export survive; the
+  accordion link retargets the same modal at another Video N. Per-template editing state
+  (layers + controls) is remembered for the life of the tab.
 
 ---
 
@@ -647,12 +663,12 @@
   `class="…note…"` / `class="…hint…"` / `class="…tip…"` in the three template literals that become
   the page — `src/client/app-js.ts` (`APP_JS`), `src/client/markup.ts` (`PAGE_MARKUP`) and
   `src/client/template-composer-js.ts` (`TEMPLATE_COMPOSER_JS`).
-- Counts, measured on the two served pages on 2026-10-15: **20 tooltips · 8 placeholders ·
+- Counts, measured on the two served pages on 2026-10-18: **21 tooltips · 7 placeholders ·
   34 `alert()` call sites** (32 in the studio script: 26 `app-js.ts` + 6 `template-composer-js.ts`;
   2 in the settings script) **· 13 note/hint/tip class usages** in the studio markup plus
   **7 notes/status elements** built by the settings script — ≈ 82 user-visible hint strings.
   - Per source file: `app-js.ts` 26/13/5 (alerts/tooltips/placeholders), `template-composer-js.ts`
-    6/6/2, `markup.ts` 0/1/1, `config-page-js.ts` 2/0/0.
+    6/7/1, `markup.ts` 0/1/1, `config-page-js.ts` 2/0/0.
   - Restriction: every one of them is a literal inside a template literal, and the client has no
     access to the Worker's constants - each number in a hint is a **hand-copied duplicate** of a
     constant, i.e. the same drift risk as the hard-coded settings password (RULE 3) and the
@@ -676,7 +692,7 @@
 | `Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles` | **🎙 Generate Voiceover** tooltip | the two modal actions (voiceover + subtitles toggle) |
 | `Send all of this video's elements to the render API` | **☁️ API** tooltip | the `/api/render` payload (RULE 4) |
 | `Compose a portrait or landscape MP4 (max 25 seconds) from a design template …` | `Add video from template` tooltip | the composer caps 1-25 s (RULE 13) |
-| `Tip: the default background uses the first uploaded image with blur and opacity…` | composer panel (`.tpl-tips`) | composer background modes (RULE 13) |
+| `Tip: each template is a looping motion design … The clip is silent …` | composer panel (`.tpl-tips`) | composer motion controls + the silent-clip rule (RULE 13) |
 | `Theme for the studio page — every visitor sees it. Strata and Stellar follow the HTML5UP designs of the same name.` | settings page, Appearance group (`.cfg-note`) | RULE 19 (three skins, global setting) |
 | `Built-in dark studio (default)` · `Light panels, teal accents` · `Violet gradient, frosted panels` | theme cards (`.cfg-theme-sub`) | what each skin in `CONFIG_THEMES` looks like |
 | `Current theme: Studio (default).` / `Current theme: Strata.` | Appearance status line | the value stored under `config:theme` |
@@ -700,7 +716,10 @@
   `Video rendering failed: <error>\n\nTry reducing the number of images or closing other browser tabs.`
 - Render API (**☁️ API**): `API error: <error>`, `API: <message>`, `API: job expired or not found.`
 - Composer: `The MP4 muxer failed to load. Reload the page and try again.`,
-  `Video export failed: <error>`, `The composed file is <n>s long. Each MP4 clip must be at most 1:00.`
+  `Your browser does not support WebCodecs. Please use modern Chrome, Edge, or Safari.`,
+  `Video export failed: <error>`, `Video N: you can add at most 5 MP4 clips.`,
+  `The composed file could not be read as an MP4 clip.`,
+  `The composed file is <n>s long. Each MP4 clip must be at most 1:00.`
 - Restriction: **the AI script never alerts.** A failed script writes `Script failed: <error>` into
   the section's `.va-note` status line, so the previous SRT, its chips and the download button stay
   on screen (do not "fix" this into an alert — it is deliberate, so a retry can start immediately).
@@ -713,9 +732,11 @@
 - `Click the round Add Video button (top left), then press Generate.` (`.action-hint` in the
   main panel; it said "red" until the theme work — the button is amber in the default skin
   but teal or white in the other two).
-- `Choose images first` (composer status), `Preview:` (main panel caption preview).
+- `Pick a template — each preview is the real animation` (composer status),
+  `Preview:` (main panel caption preview).
 - Placeholders: `Enter your video title...` (main panel + accordion), `Topic (uses the video title
-  if empty)`, `Describe the image (always 480px landscape)`, `Headline`, `Subtext`.
+  if empty)`, `Describe the image (always 480px landscape)`, `Text (max 12 chars)` (composer
+  text-layer input).
 - Restriction: the settings page breaks the alert convention on purpose — it reports through
   status lines (`.cfg-note`, `.cfg-status`) instead of `alert()`s, so a failed theme save
   leaves the picker usable.
@@ -782,5 +803,8 @@
   The old grid and miniature canvases are removed. The main preview and its canvas have
   `height`, `min-height`, and `max-height` of **80px** in both orientations.
   `object-fit: contain` preserves proportions; export remains 1080×1920 or 1920×1080.
+  **Superseded 2026-10-18** — the composer was rebuilt around the 8 motion-typography
+  templates (RULE 13): a 4-column live-preview gallery replaces the design dropdown and the
+  80px strip; the five photo designs are gone.
 - Editor values have labels beneath them. Blur/opacity sliders show live numeric values.
   The sticky Add/Close footer centers its buttons on both axes.

@@ -36,11 +36,16 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   there is no flash.
   Aerial retains the legacy `strata` API/storage value, so saved selections still work.
   See `THIRD_PARTY_NOTICES.md` for the Aerial background attribution.
-- **Template composer.** The "Add video from template" link builds a portrait 9:16 or landscape
-  16:9 MP4 (1-25 s) from up to 5 images in 5 designs (Full Focus, Split Story, Triple Stack,
-  Photo Burst, Pan & Zoom) and drops it into the accordion's gallery as a normal clip. The designs use one dropdown,
-  with an exactly 80px-high preview in either orientation, labels beneath editor values,
-  live blur/opacity values, and centered Add/Close buttons.
+- **Template composer.** The "Add video from template" link opens a modal with a **4-column
+  gallery of live animated previews** of 8 motion-typography templates (Halo Warp, Terminal
+  Fracture, Ribbon Editorial, Portal Type, Comic Burst, Dream Echo, Perspective Fold, Liquid
+  Bloom — ported from the uploaded Typography Motion Studio III HTML). Picking one opens an
+  editor with a live canvas preview and studio-styled controls: **dynamic text layers** (each
+  with its own text, colour, position, animation and size — the + button adds more), animation
+  speed (0.5×–2×), photo entry transitions and motion, up to 2 photos, and 21 animated
+  backgrounds. **⬇ Export MP4** renders the same canvas engine to a real H.264 MP4
+  (WebCodecs + mp4-muxer, no screen capture) and downloads it; **➕ Add to Video N** drops it
+  into the accordion's gallery as a normal clip. Portrait 9:16 or landscape 16:9, 1–25 s.
 
 ## Limits worth knowing
 
@@ -68,7 +73,7 @@ the strings that carry the rules (the full inventory, with the constant each one
 | Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule: 2 long-tail keywords · 2–5 short keywords · every short keyword is said 2–5 times` |
 | ✨ **Generate SEO Script** button | tooltip: *AI plans 2 long-tail keywords and 2-5 short keywords (each short said 2-5 times) and writes the SRT script around them* |
 | Keyword chips (after a successful run) | `long-tail keyword — must be said at least 1×` · `short keyword — must be said 2–5×`, each chip showing the measured count, e.g. `coffee brewing 4×` |
-| Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds* |
+| Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the template modal's tip line says each template is a looping motion design and the clip is silent |
 | Video accordion, **AI Images** | `2 images per submit · 480px landscape` (also the status line for failures) |
 | 🎙 **Generate Voiceover** | tooltip: *Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
 | ☁️ **API** button | tooltip: *Send all of this video's elements to the render API* |
