@@ -5,7 +5,7 @@
 > Evidence base: `src/index.ts` (4,922 lines, all routes/APIs/KV logic), `src/page.ts`,
 > `src/prompts.ts`, `src/client/markup.ts`, `src/client/styles.ts`,
 > `src/client/app-js.ts` (13,860 lines, the whole studio UI + render engine),
-> `src/client/template-composer-js.ts` (2,009 lines), `src/client/config-page-js.ts`,
+> `src/client/template-composer-js.ts` (2,312 lines), `src/client/config-page-js.ts`,
 > `wrangler.json`, `package.json`, `e2e/index.ts`. The SEO script has two AI stages (see §4.2
 > and `system-rules.md` RULE 7 / RULE 18). This revision documents the day-rotating settings
 > route and its Asia/Taipei date boundary.
@@ -174,16 +174,34 @@ type prompt → [✨ Generate 2 Images]
 **C. Template composer (`Add video from template` link → #tpl-modal)**
 
 ```
-upload up to 5 images (extra files ignored — slice(0,5))
-pick orientation: Portrait 9:16 (1080×1920)  |  Landscape 16:9 (1920×1080)
-pick 1 of 5 designs: Full Focus · Split Story · Triple Stack · Photo Burst · Pan & Zoom
-set Length (1–25 s, default 10, clamped)
-[▶ Preview] loops the design on a canvas · [■ Stop]
-[Export] → WebCodecs H.264 avc1.4d002a @ 6 Mbps, 30 fps, mp4-muxer in memory
-        → MP4 added to THIS accordion's gallery as a normal MP4 asset
-          (counts against the 5-MP4 cap; ≤25 s so always under the 60 s cap)
-the modal is built once and reused: images/design/last export survive closing;
-the link can retarget the same modal at another Video N
+GALLERY view — 4-column grid of live animated previews of the 8 motion-typography
+templates (adapted from the uploaded Typography Motion Studio III HTML):
+  19 Halo Warp · 20 Terminal Fracture · 21 Ribbon Editorial · 22 Portal Type ·
+  23 Comic Burst · 24 Dream Echo · 25 Perspective Fold · 26 Liquid Bloom
+click a card → EDITOR view for that template
+EDITOR view
+  toolbar: [← Templates] · template name · Format (Portrait 9:16 1080×1920 |
+           Landscape 16:9 1920×1080) · Length (1–25 s, default 6, clamped) ·
+           [⏸ Pause]/[▶ Play] · [↺ Restart]
+  left    : live canvas preview (the SAME drawScene() that renders the export)
+            + timeline loop bar
+  right   : Photos (optional, max 2 — extras silently ignored, slice(0,2))
+            Motion & transitions: photo entry (9 transitions), entry speed,
+              photo motion (10 looping motions), background (Template default |
+              blurred photo | 10 colours | 3 neo-brutalist | 3 swiss grids |
+              4 animated CSS patterns), animation speed (0.5×–2×, scales every
+              text/photo/background animation)
+            Text layers accordion — dynamic: [+] adds a layer (up to any number,
+              each with its own text ≤12 chars, 30-colour palette, 9 positions,
+              9 text animations, size slider 3–18 vw with % readout); every layer
+              collapses; × removes (disabled at 1 layer)
+[⬇ Export MP4] → WebCodecs H.264 avc1.4d002a @ 6 Mbps, 30 fps, mp4-muxer in memory
+        → the MP4 downloads to disk automatically (Download MP4 link for re-download)
+[➕ Add to Video N] → adds the exported MP4 to THIS accordion's gallery as a normal
+        MP4 asset (counts against the 5-MP4 cap; ≤25 s so always under the 60 s cap)
+the modal is built once and reused: photos/last export survive closing;
+the link can retarget the same modal at another Video N (title + Add button update)
+per-template editing state (layers + controls) is remembered while the tab is open
 ```
 
 ### 4.2 Generate SEO Script With AI
@@ -484,7 +502,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Render API + worker | MODULE 7 (`collectVideoPayload` L9904, `apiRenderVideo` L10015, `renderVideoLocally` L10309, `workerRunJob` L10613) |
 | Script / subtitles / voiceover | MODULE 8-9 (`renderSeoKeywords` L11246, `generateScript` L11330, `openVoiceoverModal` L11777, `generateVoiceover` L11851, `toggleSubtitles` L12033) — the accordion markup puts the SEO section first in `.va-left` (`videoAccordionHTML()` L6424) |
 | Render engine | `generateMP4()` L12150; audio helper `encodeAudioTrack()` L3177; GIF frame decoder `buildGifSlideFrames()` L5639 |
-| Template composer | `src/client/template-composer-js.ts` (`exportMP4` L1151, `addTemplateToVideo` L1504, `openTemplateModal` L1948) |
+| Template composer | `src/client/template-composer-js.ts` (`drawScene` L1244, `exportMP4` L1799, `addTemplateToVideo` L1991, `openTemplateModal` L2270) |
 | Themes | `src/client/styles.ts` (token blocks + shared reskin, appended at the end of `APP_CSS`), `src/index.ts` (`CONFIG_THEMES`, `normalizeTheme`/`readTheme`/`applyTheme` at the top of the module) |
 | Settings page | `src/client/config-page-js.ts` (single escaped string) |
 
@@ -512,8 +530,14 @@ overlay and white typography adapt the HTML5 UP Aerial design to the scrolling s
 Stellar's main studio and accordion backgrounds are 10% less opaque relative to their original
 alpha; accordion backdrop blur is 20% stronger.
 
-In **Add video from template**, choose one of the same five designs from the **Template**
-dropdown instead of preview cards. The single canvas preview stays exactly 80px high in both
-formats. Labels sit below editor values, with live blur/opacity readouts. The sticky bottom
-Add/Close buttons are horizontally and vertically centered. Reopening/retargeting the modal,
-image upload, preview playback, MP4 export and gallery insertion retain the existing flow.
+In **Add video from template**, the modal now has two views (2026-10-18 redesign). First a
+**4-column gallery** of live animated previews of the 8 motion-typography templates (Halo Warp,
+Terminal Fracture, Ribbon Editorial, Portal Type, Comic Burst, Dream Echo, Perspective Fold,
+Liquid Bloom — ported from the uploaded Typography Motion Studio III HTML). Choosing a template
+opens the **editor**: a live canvas preview beside studio-styled controls for dynamic text layers
+(each layer has its own text, colour, position, animation and size, with a + button to add more),
+animation speed, photo entry transitions / motion, up to 2 photos and animated backgrounds.
+**⬇ Export MP4** renders the same canvas engine the preview uses to a real H.264 MP4
+(WebCodecs + mp4-muxer, no screen capture) and downloads it; **➕ Add to Video N** still drops it
+into the accordion gallery. Reopening/retargeting the modal and the export/gallery-insertion flow
+retain the existing behaviour.
