@@ -178,6 +178,10 @@ whole site.
 - **`bug-audit.md`** — the current bug and inconsistency audit, with severity and fixes.
 - **`bug-fix-session-206.md`** — Bug Fix Session #206: plan-based URLs (`/free`, `/studio`,
   `/paid`), freemium guest access, the per-IP credits table and its verification evidence.
+- **`bug-fix-session-211.md`** — Bug Fix Session #211: the two runtime defects found by the
+  2026-10-22 register — a guest refund erasing the IP row's identity, and
+  `GET /api/config/workers` throwing without a KV binding — with the before/after code and the
+  77-check verification.
 
 ## Notes for contributors
 

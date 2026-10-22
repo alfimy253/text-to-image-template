@@ -156,7 +156,8 @@ Queue depth effect on one poll:
 10 jobs: 1 list + 12 gets + 1 put
 ```
 
-Daily budgets on the free plan, from these numbers:
+Daily budgets on the free plan, from these numbers (2026-10-15, before the credits work — §8
+re-derives the session/login costs that changed):
 
 - **Background worker mode dies in ~50 minutes.** It polls every 3 s = 28,800 polls/day; each
   poll costs 1 list against the 1,000 lists/day allowance → `1000 × 3 s = 50 min`. After that

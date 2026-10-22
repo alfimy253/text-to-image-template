@@ -134,6 +134,9 @@ lazy reset are reused:
   never written to KV.
 - Guest records are written only when someone actually generates/transcribes, so an idle
   crawler does not create rows.
+- The identity fields survive a failed generation: the refund path re-merges them after the
+  counter update (fixed in **Bug Fix Session #211**, `bug-fix-session-211.md` §2). Before that
+  fix, a model error rewrote the row as counters only and the table lost its masked address.
 
 ### 5.3 Operator table
 

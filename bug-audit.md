@@ -19,6 +19,13 @@ reflect the current day-rotating URL.
 Severity: **S1** security/abuse · **S2** correctness/data loss · **S3** dead code / wrong
 documentation · **S4** cosmetic.
 
+**2026-10-23 — Bug Fix Session #211.** The documentation-vs-code register in `system-rules.md`
+found two runtime defects, both fixed in `src/index.ts` and recorded in
+`bug-fix-session-211.md`: a guest credit refund used to rewrite `ipcredits:<hash>` without the
+`ip`/`maskedIp`/`hash`/`scope` fields, and `GET /api/config/workers` used to throw a `TypeError`
+when the Worker ran without a KV binding. The other 20 register findings were prose drift and are
+listed in that register's resolution table.
+
 | # | Severity | Finding | Status |
 | --- | --- | --- | --- |
 | 1 | S1 | Most data routes are anonymous (render, worker, `/api/script`, `/api/voiceover`, config GETs). **`/image/gen` is metered per account (RULE 20) or per IP for `/free` guests (RULE 21)** | partially fixed |

@@ -62,7 +62,7 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | `/tts?text=&lang=` | GET | none | Proxied audio (`audio/mpeg`), max 2 000 chars |
 | `/api/render` | POST | none, **needs KV** | `{jobId}` / `{status:"busy"}` / `413` / `503` |
 | `/api/render/:jobId` | GET | none, needs KV | job JSON, or the finished MP4 (`attachment`) / `404` / `500` |
-| `/api/worker/poll` | GET | none, needs KV | `{job}` or `{job:null}` (claims the first `queued` key in KV list order) |
+| `/api/worker/poll` | GET | none, needs KV | `{job}` or `{job:null}` (claims the first `queued` record in the order `listRenderJobs()` returned them — parallel reads push as they resolve, so there is no FIFO guarantee) |
 | `/api/worker/deliver?job=` | POST | none, needs KV | stores raw MP4, job → `done` |
 | `/api/worker/failed?job=` | POST | none, needs KV | job → `failed` with error text |
 | `/api/config/theme` | GET / POST | GET: none · POST: `pw` body field | `{success,theme,themes:[default,strata,stellar]}` / `400 Unknown theme` / `403` / `503` |
@@ -490,8 +490,9 @@ empty ──▶ rendering ──▶ done
    pollOnce() every 3 s (5 s after a network error) while polling is on:
      GET /api/worker/poll
         server first expires any "running" job older than 10 min → failed("worker timed out")
-        then claims the first queued job in KV's key order (ids are time-prefixed, so that is
-        usually but not guaranteed the oldest): status → "running", claimedAt = now
+        then claims the first queued job in the array `listRenderJobs()` built — the parallel
+        gets push in completion order, not key order, so no FIFO guarantee: status → "running",
+        claimedAt = now
         returns { job:{id,name,project,assets(base64),audio} }   (or {job:null})
      → window.workerRunJob(job)
           rebuild File objects from base64, probe MP4s, rebuild caption rows,
@@ -554,7 +555,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 
 | Situation | Detected by | User-visible behaviour |
 | --- | --- | --- |
-| KV namespace not bound | worker route guards | Auth: `503` → landing stays public; primary CTA opens the studio. Render API: `503 "Render storage not configured (bind the KV namespace)"` |
+| KV namespace not bound | worker route guards | Auth: `503` → landing stays public; primary CTA opens the studio. Render API: `503 "Render storage not configured (bind the KV namespace)"`. `GET /api/config/workers`: `200 {urls:[]}`; its `POST`: `503 "User storage not configured (bind the KV namespace)"` (Bug Fix Session #211) |
 | AI binding missing | `/api/script`, `/api/voiceover` | `503 "AI binding not configured"` |
 | Image index out of range | `/image/:i` | `400 {success:false,error:"Invalid image index"}` |
 | Empty prompt | `/image/gen` | `400 "Missing prompt"` |

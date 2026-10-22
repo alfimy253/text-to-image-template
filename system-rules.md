@@ -18,13 +18,14 @@
 > the settings page. The full session record is `bug-fix-session-206.md`.
 > **2026-10-23 documentation consistency pass:** the 22 findings from the 2026-10-22 audit were
 > fixed across `system-rules.md`, `README.md`, `userflow.md`, `bug-audit.md`, `kv-scale-test.md`
-> and `bug-fix-session-206.md`; the resolved register is at the end of this file. Two small code
-> fixes ride along: a guest refund now preserves the IP row's identity fields (§3.3), and
-> `GET /api/config/workers` no longer throws when no KV binding exists (§6.1).
+> and `bug-fix-session-206.md`; the resolved register is at the end of this file.
+> **Bug Fix Session #211 (2026-10-23):** the two runtime defects that pass found — a guest refund
+> erasing the IP row's identity (§3.3) and `GET /api/config/workers` throwing without a KV
+> binding (§6.1) — were fixed in `src/index.ts`. The full record is `bug-fix-session-211.md`.
 >
 > Companion documents: `userflow.md` (the actor-level flows these rules produce),
-> `README.md` (the user-facing summary), `bug-audit.md`, `kv-scale-test.md` and
-> `bug-fix-session-206.md` (evidence).
+> `README.md` (the user-facing summary), `bug-audit.md`, `kv-scale-test.md`,
+> `bug-fix-session-206.md` and `bug-fix-session-211.md` (evidence).
 
 ---
 
@@ -636,6 +637,9 @@
   namespace binding `KV_BINDING` with a **hard-coded production namespace id**.
   - Restriction: without `KV_BINDING` the app still boots, but auth answers `503` and all
     render/worker routes answer `503 "Render storage not configured (bind the KV namespace)"`.
+    The two open config GETs keep working: `/api/config/theme` self-defaults to `"default"` and
+    `/api/config/workers` returns `200 {success:true,urls:[]}` (Bug Fix Session #211); their
+    `POST`s answer `503`.
   - Restriction: TypeScript types come from `worker-configuration.d.ts` via
     `"types": ["./worker-configuration.d.ts"]`; run `npm run cf-typegen` after changing bindings.
 - Scripts: `dev` (`wrangler dev`), `deploy` (`wrangler deploy`), `check` (`tsc && wrangler
@@ -1034,11 +1038,11 @@ addresses and gives visitors without an account a small, IP-metered allowance.
 | 2.5 | RULE 2 and `kv-scale-test.md` §8 use 3-read session, 3-op login and 6-op signup (2 gets + 1 list + 3 puts). |
 | 3.1 | RULE 15 lists all nine key families and their TTLs; the "permanent" sentence is scoped to the non-credit keys. |
 | 3.2 | `bug-audit.md`'s verified list points at RULE 15's nine families. |
-| 3.3 | **Code fixed:** `creditRefundKey(env,key,kind,amount=1,meta=null)` merges the identity back after the state read, and the guest failure path passes `guestCreditMeta(creditGuest)`. Harness: a throwing `AI.run` returns `500` and the `ipcredits:` row keeps `ip`/`maskedIp`/`hash`/`scope`. |
+| 3.3 | **Code fixed (Bug Fix Session #211):** `creditRefundKey(env,key,kind,amount=1,meta=null)` merges the identity back after the state read, and the guest failure path passes `guestCreditMeta(creditGuest)`. Harness: a throwing `AI.run` returns `500` and the `ipcredits:` row keeps `ip`/`maskedIp`/`hash`/`scope`. Record: `bug-fix-session-211.md` §2. |
 | 4.1 | `userflow.md` §3c shows `usertype:"guest"` plus the plan object. |
 | 4.2 | `userflow.md` §3b/§3c describe the `<n> of 2 failed: <error>` status line and the final alert. |
 | 4.3 | `userflow.md` §8 adds the `/free` guest boot and lists all five theme routes. |
-| 4.4 | `userflow.md` §2/§6 and `bug-audit.md` #7 now describe KV list order (no FIFO guarantee). |
+| 4.4 | `userflow.md` §2/§6 and `bug-audit.md` #7 now describe the completion-order claim (no FIFO guarantee). |
 | 5.1 | `userflow.md` header re-measured (≈7,200 / 14,832 lines, ~700 KB) and the `src/page.ts` comment was updated. |
 | 5.2 | Drifted `path:line` references were replaced with function/constant names in RULE 3/11/19, `userflow.md` §9, `bug-audit.md` and `kv-scale-test.md` §4a; the table above is kept as the historical record. |
 | 5.3 | `kv-scale-test.md` §2/§5 are labelled pre-fix measurements, §8's signup row is corrected to 2 gets + 1 list + 3 puts, and §4a now cites the pre-fix signup handler. |
@@ -1263,7 +1267,8 @@ Fix: mark §2/§5 as pre-fix measurements (they are valuable history) and re-anc
 These were not in the original 22; they surfaced while editing the affected sections and are
 fixed in the same pass.
 
-**6.1 `GET /api/config/workers` crashed without a KV binding. [M] — fixed in code.** RULE 3
+**6.1 `GET /api/config/workers` crashed without a KV binding. [M] — fixed in code (Bug Fix
+Session #211, `bug-fix-session-211.md` §3).** RULE 3
 documented it as an open endpoint and RULE 16 promises the app boots without KV, but the handler
 dereferenced `env.KV_BINDING` unguarded: a KV-less request threw a `TypeError` out of `fetch()`
 (`500`/Workers error 1101) instead of returning a list. It now returns `{success:true,urls:[]}`
