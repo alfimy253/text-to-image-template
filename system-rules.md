@@ -16,6 +16,9 @@
 > **Bug Fix Session #206 (2026-10-22):** RULE 21 was added — plan-based URLs (`/free`, `/studio`,
 > `/paid`), the freemium guest plan (10 AI images/day per IP), and the `ipcredits:` table behind
 > the settings page. The full session record is `bug-fix-session-206.md`.
+> **2026-10-22 documentation audit:** a register at the end of this file lists every claim in the
+> Markdown docs that no longer matches the working tree (access gates, counts, KV key families,
+> UI strings and line anchors). It is a to-fix list, not a change to the rules above.
 >
 > Companion documents: `userflow.md` (the actor-level flows these rules produce),
 > `README.md` (the user-facing summary), `bug-audit.md`, `kv-scale-test.md` and
@@ -959,3 +962,241 @@ addresses and gives visitors without an account a small, IP-metered allowance.
     the freemium studio.
 - **Documentation.** The complete session record (matrix, payloads, privacy notes, test
   evidence) is `bug-fix-session-206.md`.
+
+---
+
+## Documentation vs code — inconsistency register (2026-10-22)
+
+> Produced by reading every Markdown file against the working tree at commit `e53796f`
+> (`src/index.ts` 7,156 lines · `src/client/app-js.ts` 14,832 lines · served page 708,110 B with
+> 1 inline script · CSS 420,563 B). Behavioural claims were re-checked by bundling the worker with
+> esbuild and running it against a counting mock KV; counts were re-measured on the source with
+> `grep`/`wc`; sizes come from `createHTML()` and the CSS parse.
+>
+> Severity: **H** = would give a reader the wrong access-control or data-retention model ·
+> **M** = wrong behaviour, number, or API shape · **L** = stale copy, anchor, or historical table.
+> Nothing below has been fixed yet: each entry names the document and section to edit.
+
+### 1. Access control, gates and routes
+
+**1.1 "Every data route is anonymous" — RULE 2, RULE 17, `userflow.md` §1. [H]**
+Doc says: RULE 2's heading promises *client-side-only enforcement* and its restriction says
+"no route except the auth endpoints themselves checks a session. Every data/rendering endpoint
+(`/image/*`, …) is anonymous"; RULE 17 repeats "every data route is anonymous"; userflow's actor
+table says "All data routes (… `/image/*` …) are unauthenticated".
+Code does: `/image/gen` resolves the session before generating (`src/index.ts:355–424`), `/studio`
+and `/paid` resolve it before serving the shell (`:167–216`), and `/api/credits` reads it as well.
+Still anonymous: `/image/:i`, `/api/script`, `/api/voiceover`, `/tts`, `/api/render*`,
+`/api/worker/*`, `GET /api/config/theme`, `GET /api/config/workers`.
+Fix: replace the three passages with that list.
+
+**1.2 `/image/gen` documented as session-only — RULE 20 and `bug-audit.md` "Credits & plans". [H]**
+Doc says: "with KV bound it requires a session (`401` otherwise)" and "requires `yvs_session` …
+(`401` signed out, `429` at the daily limit)".
+Code does: session → `yvs_free` cookie → guest plan (`GUEST_PLAN`, 10/day per IP) → only a request
+with neither gets `401` (`src/index.ts:341–424`). Success also carries `X-Credit-Scope`
+(`:496`). The audit bullet also contradicts its own "Bug Fix Session #206" section a few lines
+below it.
+Fix: add the guest step and `X-Credit-Scope` to RULE 20; reword the audit bullet.
+
+**1.3 The `401` is documented as unconditional — `README.md` routes table + freemium bullet. [M]**
+Doc says: "`401` cold anonymous" and "Anonymous image generation is only unlocked by the
+`yvs_free=1` cookie that `/free` sets".
+Code does: when `KV_BINDING` is unbound the whole gate is skipped (`if (env && env.KV_BINDING)`,
+`src/index.ts:355`) and generation stays free and unmetered — exactly as RULE 20 and
+`bug-fix-session-206.md` §6 (resolution order, item 4) say. `userflow.md` §2 repeats the absolute claim.
+Fix: write "with KV bound" in both places.
+
+**1.4 Route order list — RULE 1. [M]**
+Doc says: `/` → `/image/:i` → `/image/gen` → auth API → KV guard → settings → `/api/script` →
+`/api/voiceover` → `/tts` → `/api/render` → `/api/render/:id` → `/api/worker/*` →
+`/api/config/theme` → `/api/config/workers`.
+Code does: `/free` `/studio` `/paid` are matched immediately after `/` (`src/index.ts:167`), and
+`/api/config/users` (`:4651`) and `/api/config/ipcredits` (`:5013`) are matched after
+`/api/config/workers`, before the 404 (`:5207`).
+Fix: extend the list (order is load-bearing: `/image/gen` is matched after `/image/:i`).
+
+**1.5 Only two endpoints use the settings password — RULE 3 and `bug-audit.md` #5. [M]**
+Doc says: "Its server-side uses are `POST /api/config/workers` and `POST /api/config/theme`"; the
+audit says "The only server-side checks are `POST /api/config/workers` and
+`POST /api/config/theme`".
+Code does: six endpoints compare the same constant — `POST /api/config/theme`
+(`src/index.ts:4410`), `POST /api/config/workers` (`:4559`), `GET|POST /api/config/users`
+(`:4662`/`:4668`) and `GET|POST /api/config/ipcredits` (`:5023`/`:5029`) — each returning
+`403 Wrong password`.
+Fix: list all six and keep the "the gate is not a real auth boundary" conclusion.
+
+**1.6 `GET|POST /api/config/*` marked password-only — `bug-fix-session-206.md` §3. [L]**
+Doc says: a single row, "`GET|POST /api/config/*` | password | password | password".
+Code does: `GET /api/config/theme` (`src/index.ts:4378`) and `GET /api/config/workers` (`:4506`)
+answer anonymously; only the two GETs for users/ipcredits need `?pw=`. RULE 3, RULE 19 and
+`userflow.md` §2 already say this correctly.
+Fix: split the row into "theme/workers GET open, everything else password".
+
+**1.7 "Both HTML routes" — RULE 1, RULE 19, `userflow.md` §7. [L]**
+Doc says: "Two routes `.replace()` a copy … and **both** HTML routes, which stamp
+`data-theme="…"`"; "Both HTML routes do it: `GET /` and `GET /{current-day}/config/uvxyz`"; "(both
+HTML routes stamp data-theme on `<html>` from then on)".
+Code does: five routes serve the shell and all call `applyTheme()` — `/` (`src/index.ts:140`),
+`/free` `/studio` `/paid` (through `appPageResponse`, `:6363`) and the settings page (`:898`).
+Fix: say "every HTML route (5 today)" and stop counting them.
+
+### 2. Credits, counts and UI contract text
+
+**2.1 `alert()` counts and inventory — RULE 18. [M]**
+Doc says: "34 `alert()` call sites (32 in the studio script: 26 `app-js.ts` + 6
+`template-composer-js.ts`; 2 in the settings script)", while the section heading says
+"Blocking `alert()` boxes (31 …)".
+Code does: 27 in `app-js.ts` + 6 in `template-composer-js.ts` = 33 in the page, plus 2 in
+`config-page-js.ts` = **35**; `app-js.ts` is the file that is off (27, not 26; the quota alert at
+`app-js.ts:8365` is one of the call sites the old count missed). The bullet list also omits the per-video cap alerts
+(`Video N: you can add at most … GIFs/images/MP4 clips`, `:6744`, `:6762`, `:6779`, `:8766`), the
+`Render failed: <error>` alert (`:11211`) and the quota alert itself.
+Fix: recount to 35, and either add the five missing messages or state that the list covers distinct
+messages only.
+
+**2.2 Theme strings — RULE 18 table. [M]**
+Doc says: the theme cards are `Built-in dark studio (default)` · `Light panels, teal accents` ·
+`Violet gradient, frosted panels`; the group note says "Strata and Stellar follow the HTML5UP
+designs"; the status line is "Current theme: … / Current theme: Strata."
+Code does: `Blue sky, mountains, white accents` for the Aerial card, "Aerial and Stellar follow
+the HTML5UP designs of the same name", and "Current theme: Aerial." (the `themeOptions` array and
+`loadTheme` in `config-page-js.ts`).
+Fix: update the three strings (the rest of the repo already uses Aerial).
+
+**2.3 "The settings page never alerts" — RULE 18 restriction. [L]**
+Doc says: "the settings page breaks the alert convention … it reports through status lines
+(`.cfg-note`, `.cfg-status`) instead of `alert()`s".
+Code does: the worker-save handler has two alerts (`alert("Save failed: …")`,
+`alert("Save failed: network error")`) — RULE 18's own per-file line already says
+`config-page-js.ts 2/0/0`.
+Fix: scope the sentence to the theme save, which does use `themeStatus`.
+
+**2.4 Tooltip/placeholder/alert totals — `bug-audit.md` "every claim verified" section. [L]**
+Doc says: "20 tooltips · 8 placeholders · 34 `alert()` call sites … ≈ 82 strings".
+Code does: 21 `title="` · 7 `placeholder="` · 35 alerts. Per file, as alerts/tooltips/
+placeholders: `app-js.ts` 27/13/5, `template-composer-js.ts` 6/7/1, `markup.ts` 0/1/1 and
+`config-page-js.ts` 2/0/0. RULE 18 already quotes 21/7; only its alert number is wrong (see 2.1).
+Fix: reference RULE 18 instead of restating the numbers.
+
+**2.5 Signup and session operation counts — RULE 2 and `kv-scale-test.md`. [L]**
+Doc says: "session/login/signup cost a constant 1 read / 1 read + 1 write / 1 list"; the KV doc's
+credits table says signup is "3 writes + 3 reads".
+Code does: signup at a >200-key namespace is **2 gets + 1 list + 3 puts = 6 ops** (re-measured with
+the counting mock; RULE 2's own bullet states those six ops), and `GET /api/session` has been
+**3 reads** since the credits work (session + `user:` + `credits:`). At ≤200 keys signup adds one
+get per existing account.
+Fix: reuse the six-op sentence and the 3-read session figure in both documents.
+
+### 3. KV records and data lifetime
+
+**3.1 The KV key-family list is incomplete — RULE 15. [M]**
+Doc says: five families — `user:`, `session:`, `job:`, `blob:`, `config:workers`.
+Code does: nine — add `email:<address>` (`src/index.ts:5266`), `config:theme` (`:33`),
+`credits:<username>` (`:5384`) and `ipcredits:<hash>` (`:5476`). The credits/ipcredits records
+carry a **2-day TTL** (`:5692`), so "accounts and sessions are effectively permanent" is no longer
+the whole story.
+Fix: add the four rows, their TTLs, and a note that the two credit families are the only
+TTL-bounded user data.
+
+**3.2 "Sessions, jobs and blobs are the only KV key families" — `bug-audit.md` verified list. [M]**
+Doc says exactly that.
+Code does: the nine families above; even `config:workers` and `email:` contradict the sentence.
+Fix: delete the sentence or point at RULE 15.
+
+**3.3 Guest record shape is not preserved by a refund — RULE 21 and `bug-fix-session-206.md` §5.2. [M]**
+Doc says: the record is
+`{day, videos, images, scripts, voiceovers, updatedAt, ip, maskedIp, hash, scope}`, and the
+operator table always shows the masked address.
+Code does: `creditRefundKey()` rewrites the state without the `meta` object
+(`src/index.ts:5929`), so a failed guest image leaves
+`{day, videos, images, scripts, voiceovers, updatedAt}` — no `ip`/`maskedIp`/`hash`/`scope`. The
+settings query then falls back to `ip: "unknown"` (`:5120`), so the row loses its address after any
+model failure. Verified by running the bundled worker with a throwing `AI.run`: `500`, then the
+`ipcredits:` value above.
+Fix: either pass the identity into the refund so `meta` survives, or document the "unknown" row;
+until then the doc's record shape is aspirational.
+
+### 4. Client flows and failure paths
+
+**4.1 `/api/credits` guest shape — `userflow.md` §3c. [L]**
+Doc says: `→ {plan:"guest", remaining.images:10, scope:"ip", ip:"203.0.113.0"}`.
+Code does: `plan` is an object (`{id:"guest", label:"Guest", limits:{…}}`); the string "guest" is in
+`usertype` (`src/index.ts:6594–6640`, plus `authenticated:false`, `guest:true`, `user:null`).
+Fix: show `usertype:"guest"` and the plan object.
+
+**4.2 401/429 text presented as the status line — `userflow.md` §3b/§3c. [L]**
+Doc says: `401 → "Sign in to generate AI images"` and `429 → "Daily image credits used up (…)"` as
+the visible line.
+Code does: those sentences are the worker's JSON `error` values; the AI panel writes
+`"<n> of 2 failed: <error>"` into `#va-ai-status-N`, and only when both variants fail does it
+`alert("Image generation failed: <error>")` (`app-js.ts:8538–8560`).
+Fix: label them "worker `error`" and add the status-line form.
+
+**4.3 Failure matrix ignores `/free` — `userflow.md` §8. [M]**
+Doc says: "Session cookie invalid → `401` → landing page stays visible; studio entry opens the auth
+overlay", and "Theme KV missing or erroring → `GET /`, `GET /{current-day}/config/uvxyz`".
+Code does: on `/free` an invalid session (or a network error) boots the **guest** studio
+(`app-js.ts:12070–12090`), and the theme fallback covers all five HTML routes (see 1.7).
+Fix: add the `/free` exception and the other routes to those two rows.
+
+**4.4 Worker poll "oldest" vs "not FIFO" — `userflow.md` §2/§6 vs `bug-audit.md` #7. [L]**
+Doc says: the poll "claims the oldest queued job" (userflow), while the audit says claiming is
+"neither FIFO nor atomic" and "Jobs are not processed oldest-first".
+Code does: `jobs.find(j => j.status === "queued")` over the KV `list()` order, with no explicit sort
+(`src/index.ts:4141`). The two documents cannot both be right as written; the code has no ordering
+guarantee of its own.
+Fix: describe it as "the first queued key in KV's lexicographic list (job ids are time-prefixed)"
+and align audit #7.
+
+### 5. Sizes, line anchors and historical tables
+
+**5.1 File sizes and line counts. [L]**
+Doc says: `src/index.ts` (4,922 lines) and `src/client/app-js.ts` (13,860 lines) in
+`userflow.md`'s evidence header; "~640 KB HTML string" in `userflow.md` §1 and the `src/page.ts`
+comment.
+Actual: 7,156 and 14,832 lines; 708,110 bytes (≈692 KiB). The 4,922/13,860 pair predates both the
+credits and the #206 work.
+Fix: re-measure or drop exact numbers; "≈700 KB" is accurate enough for prose.
+
+**5.2 `path:line` anchors have drifted. [L]**
+Of the 15 unique `src/index.ts:NNN` references outside this register, only `:124` (the `fetch`
+handler) still lands on the described code. Representative drift:
+
+| Documented | Described as | What that line is now | Correct line |
+| --- | --- | --- | --- |
+| `src/index.ts:355` (RULE 3, audit #5) | `CONFIG_PASSWORD` | `null;` | 631 |
+| `src/index.ts:4046` (audit #15) | user-auth helpers banner | `headers: {` | 5248 |
+| `src/index.ts:4064` (audit #15) | `AUTH_EMAIL_PREFIX` | `"failed"` | 5266 |
+| `src/index.ts:4383` (kv-scale §4a) | `list({prefix:"user:"})` | `request.method ===` | 6800 |
+| `src/index.ts:3236` (audit #16) | `/tts` 2 000-char cap | blank line | 3735 |
+| `app-js.ts:11039` (userflow §9) | `initAuth` | (credits module) | 11973 |
+| `app-js.ts:12150` (userflow §9) | `generateMP4` | (voiceover modal) | 13122 |
+| `app-js.ts:12155` (RULE 11) | `FPS = 30` | `toggleScriptBox` | 13391 |
+| `app-js.ts:12597` (RULE 11) | `MAX_ENCODE_QUEUE` | `let current` | 13833 |
+| `app-js.ts:9951` (audit #18) | render-API poll loop | `authAccess = "required";` | 11154 |
+
+The same drift affects `userflow.md` §9 (every entry after `addAiToVideo` is 70–1 300 lines low)
+and `bug-audit.md` #15/#16.
+Fix: cite function/constant names instead of line numbers, or re-measure anchors at the end of the
+change (they are the first thing to rot).
+
+**5.3 Pre-fix cap tables still presented as current — `kv-scale-test.md` §2/§5. [M]**
+Doc says: the §2 table shows `signup → 1 list → 403` at 7/100/1,000/3,000/10,000 keys, and §5 has
+"Signup (below the cap)" / "Signup (at/over the cap)" rows.
+Code does: there is no cap (removed in audit #15); signup at 3,000 keys returns `200` in 6 ops
+(2 gets + 1 list + 3 puts). The document's own verdict and §8 say this, so §2/§5 now contradict
+§8; §4a's `src/index.ts:4383` anchor is also stale (see 5.2).
+Fix: mark §2/§5 as pre-fix measurements (they are valuable history) and re-anchor §4a.
+
+### Suggested fix order
+
+1. **Access-control prose first** (1.1–1.3): those three passages define how the system is
+   understood and are now materially wrong.
+2. **Contract text and inventories** (2.1, 2.2, 3.3): the UI strings and the record shape are
+   what future changes copy from.
+3. **Totals, anchors and history** (2.4, 2.5, 5.1–5.3): mechanical, can be batched in one pass.
+
+> Method note for the next audit: the fastest reliable cross-check is the pair of harnesses in
+> `bug-fix-session-206.md` §9 (77 checks) plus `grep -c 'alert('`, `wc -l` and a `createHTML()`
+> byte count. Do not trust a line number written before the last feature branch.
