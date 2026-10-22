@@ -10,9 +10,16 @@
 > SRT writer), RULE 18 (the user-visible hint inventory) was added, and RULE 19 (the three
 > skins) was added when the settings page gained its Appearance group. On 2026-10-16, RULE 3
 > was updated for the Asia/Taipei day-rotating settings route.
+> 2026-10-22 revisions: RULE 20 (daily credits, plans, `/api/credits`, `/api/config/users`) was
+> added, the landing page was re-skinned onto the RULE 19 theme tokens instead of its own palette,
+> and `/image/gen` became session-gated and metered.
+> **Bug Fix Session #206 (2026-10-22):** RULE 21 was added — plan-based URLs (`/free`, `/studio`,
+> `/paid`), the freemium guest plan (10 AI images/day per IP), and the `ipcredits:` table behind
+> the settings page. The full session record is `bug-fix-session-206.md`.
 >
 > Companion documents: `userflow.md` (the actor-level flows these rules produce),
-> `README.md` (the user-facing summary), `bug-audit.md` and `kv-scale-test.md` (evidence).
+> `README.md` (the user-facing summary), `bug-audit.md`, `kv-scale-test.md` and
+> `bug-fix-session-206.md` (evidence).
 
 ---
 
@@ -669,6 +676,9 @@
   **7 notes/status elements** built by the settings script — ≈ 82 user-visible hint strings.
   - Per source file: `app-js.ts` 26/13/5 (alerts/tooltips/placeholders), `template-composer-js.ts`
     6/7/1, `markup.ts` 0/1/1, `config-page-js.ts` 2/0/0.
+  - Bug Fix Session #206 added the credits/guest strings listed below (auth overlay notes, the
+    credits popover, the `401`/`429` bodies, the settings guest table). They are status text and
+    note lines, not new tooltips or alerts, so the 21/7/34 counts above are unchanged.
   - Restriction: every one of them is a literal inside a template literal, and the client has no
     access to the Worker's constants - each number in a hint is a **hand-copied duplicate** of a
     constant, i.e. the same drift risk as the hard-coded settings password (RULE 3) and the
@@ -698,6 +708,14 @@
 | `Current theme: Studio (default).` / `Current theme: Strata.` | Appearance status line | the value stored under `config:theme` |
 | `Preview only — press Save theme to apply it for everyone.` | Appearance status line after picking | the preview is client-side only (RULE 19) |
 | `Saved — reload the studio page to see the new theme.` | Appearance status line after saving | server-side injection on the next page render |
+| `Free plan: 50 AI images every day · unlimited videos, AI scripts and voiceovers.` / `Paid plan (paid_user): 1,200 AI images every day.` | auth overlay (`.auth-plan-note`) | `CREDIT_PLANS.free/paid_user.limits` (RULE 20) |
+| `No account? Open the free studio — 10 AI images a day, counted per IP address.` | auth overlay (`.auth-guest-note`, link to `/free`) | `GUEST_PLAN.limits.images = 10`, `ipcredits:` keying (RULE 21) |
+| `Daily credits` · `Video projects Unlimited` · `AI images N / limit left today` · `AI scripts Unlimited` · `Voiceovers Unlimited` · `Used today: n images · n scripts · n voiceovers` · `Renews in Nh Nm (midnight UTC+8)` | credits pill + popover (`.credit-pill`, `.credit-popover`) | `CREDIT_PLANS`, `creditSummary()`, `creditResetsAt()` (RULE 20) |
+| `Create a free account — 50 images/day` | guest credits popover (`.credit-signup`) | the `free` plan's image limit vs the guest's 10 (RULE 21) |
+| `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).` + `Create a free account for 50 images per day.` (guests) | `429` body, shown in `#va-ai-status-N` and the quota alert | the same plan limits + the guest upgrade path (RULE 20/21) |
+| `Sign in to generate AI images — every free account gets 50 images per day. No account? Open /free for 10 images per day.` | `401` body from `/image/gen` | the `free` and guest image limits |
+| `Free: 50 AI images per day. Paid (paid_user): 1,200 AI images per day. … Counters renew every day at midnight (UTC+8).` | settings page, Plans & credits (`.cfg-note`) | `CREDIT_PLANS` + `creditResetsAt()` (RULE 20) |
+| `Guest credits by IP` / `Visitors who never sign in (GET /free) get 10 AI images per day. …` | settings page, guest table (`.cfg-group-title`, `.cfg-note`) | `GUEST_PLAN`, the `ipcredits:` table (RULE 21) |
 
 ### Blocking `alert()` boxes (31 — the app's only modal feedback)
 
@@ -808,3 +826,136 @@
   80px strip; the five photo designs are gone.
 - Editor values have labels beneath them. Blur/opacity sliders show live numeric values.
   The sticky Add/Close footer centers its buttons on both axes.
+
+---
+
+## RULE 20 — Daily credits are per-account, plan-based and reset in Asia/Taipei
+
+- Every user record (`user:<username>`) carries `usertype`; `free_user` and any missing/unknown
+  value read as the canonical `free` plan (so pre-credits accounts keep working).
+  - `free` — unlimited video projects, unlimited AI scripts, unlimited voiceovers and
+    **50 AI images per day**.
+  - `paid_user` — the same unlimited tools plus **1,200 AI images per day**.
+  - New accounts are written with `usertype: "free"` by `POST /api/signup`.
+- Today's counters live in `credits:<username>`:
+  `{day:"YYYY-MM-DD", videos, images, scripts, voiceovers, updatedAt}` with a 2-day TTL.
+  - The `day` stamp is authoritative: a record from an earlier day parses back as all-zero usage
+    and is rewritten by the next consume, so no cron / scheduled Worker is needed.
+  - The boundary is midnight Asia/Taipei (UTC+8, no DST); `creditDay()` and `creditResetsAt()`
+    use a fixed `+8h` offset and the API reports the next reset as an ISO timestamp.
+  - Restriction: the TTL only garbage-collects dormant accounts; the reset itself is lazy and
+    depends on a request arriving.
+- Enforcement is server-side; the client is only a hint.
+  - `GET /image/gen` — with KV bound it requires a session (`401` otherwise), consumes one
+    `images` credit *before* the model runs, and **refunds** it when `env.AI.run` throws.
+    At the daily limit it answers `429 {success:false,error,credits}`; success responses carry
+    `X-Credit-Plan`, `X-Credit-Images-Limit`, `X-Credit-Images-Remaining`, `X-Credit-Day` and
+    `X-Credit-Reset`.
+  - The two fixed demo prompts on `/image/:i` are samples and stay unmetered (the landing page
+    fetches them before anyone signs in).
+  - `POST /api/script` and `POST /api/voiceover` are unlimited; their counters increment as
+    best-effort telemetry and a credits failure can never fail the route.
+  - With `KV_BINDING` unbound (open-access/e2e mode) there is no gate and no counting, which
+    preserves the previous behavior.
+- `GET /api/credits` returns
+  `{usertype, plan:{id,label,limits}, day, resetsAt, used, remaining}`; a `null` limit/remaining
+  field means "unlimited".
+- Plan changes are a settings-page DB operation:
+  - `GET /api/config/users?pw=…` lists up to 50 accounts with plan, today's usage and remaining
+    allowances (one user read + one credits read per account).
+  - `POST /api/config/users {pw, username, usertype, resetCredits?}` rewrites
+    `user:<name>.usertype` and optionally deletes `credits:<name>`.
+  - Both are password-gated (`403`) and KV-gated (`503`); the plan change applies on the account's
+    next request because every credit read re-reads the user record.
+  - Restriction: there is no payment provider here — "paid" means an operator set
+    `usertype: "paid_user"`.
+  - Restriction: the settings password is a shared constant bundled with the settings page script,
+    so a public deployment cannot treat this route as a secure billing console. It is an operator
+    tool for a trusted instance; real billing needs per-user roles and a payment provider.
+  - Restriction: KV is eventually consistent, so concurrent generations can overshoot by the
+    in-flight count; the overshoot is bounded and self-corrects at the next daily reset.
+- Client:
+  - `/api/session`, signup and login already return `plan` + `credits`; the studio paints the
+    fixed `.credit-pill` (plan + `N / limit left today`) and its popover (unlimited rows, used
+    today, reset countdown).
+  - `submitAiImages()` pre-checks the remaining images, stops the variant loop on `401`/`429`,
+    applies the `credits` payload returned by a `429`, and refreshes `/api/credits` after the pair.
+  - Sign-out clears the pill (`resetCredits()`); the account box shows a
+    "Plan: … — … left today" line.
+
+### UI refinements (2026-10-22)
+
+- The landing page no longer carries a second, hand-mixed palette.
+  `html[data-theme] .landing-page` remaps every `--landing-*` token to the active theme's `--t-*`
+  tokens, makes the landing surface transparent so the skin's own body backdrop (Aerial sky /
+  Stellar gradient) shows through, and re-skins the nav, buttons, preview card, feature cards and
+  the new plan cards.
+- `--landing-accent` now defaults to `var(--accent)` (the studio amber `#f59e0b`, previously
+  `#f5ad57`); themed skins use the theme's heading/accent token (white).
+- New landing section `#landing-plans` (nav link **Plans**) documents both plans and the nightly
+  renewal at midnight UTC+8.
+
+---
+
+## RULE 21 — Plan-based URLs and the freemium (/free) guest tier
+
+**Bug Fix Session #206.** The site serves the same studio shell from three plan-specific
+addresses and gives visitors without an account a small, IP-metered allowance.
+
+- **Actor types.** `anonymous` (no session, no freemium cookie), `guest` (no session, came
+  through `/free`), `free` and `paid_user` (session). `guest` is an actor, not an assignable
+  plan: `GET|POST /api/config/users` still accepts only `free` and `paid_user`.
+- **URL matrix** (`PLAN_MODE_BY_ROUTE` + `appPageResponse()` in `src/index.ts`):
+
+  | Route | anonymous | `free` | `paid_user` |
+  | --- | --- | --- | --- |
+  | `GET /` | landing | landing | landing |
+  | `GET /free` | freemium studio + cookie | studio shell | studio shell |
+  | `GET /studio` | `302 /free` | studio | studio |
+  | `GET /paid` | `302 /free` | `302 /studio` | studio |
+
+  - `/free`, `/studio` and `/paid` return the identical cached HTML plus
+    `window.__PLAN_MODE` (`freemium` / `studio` / `paid`) and `Cache-Control: no-store`.
+  - `/free` answers `200` for signed-in users too; the client keeps the account session, so
+    the same URL works as a "try it" link and as the guest entry.
+  - Restriction: the studio is client-side, so these routes are navigation boundaries, not a
+    security boundary. The data boundary is the credits gate on `/image/gen`.
+- **Freemium cookie.** `GET /free` sets
+  `yvs_free=1; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`.
+  - Anonymous `/image/gen` without the cookie is `401` (message points at `/free`).
+  - The cookie only unlocks the IP bucket; it carries no identity and cannot raise the limit.
+- **Guest plan (`GUEST_PLAN`).** `{id:"guest", label:"Guest", limits:{videos:null, images:10,
+  scripts:null, voiceovers:null}}` — 10 AI images per day, everything else unlimited.
+- **Per-IP counters.** Key `ipcredits:<sha256("yvs-guest:" + ip).hex.slice(0,40)>`.
+  - Address source: `CF-Connecting-IP`, else the first `X-Forwarded-For` hop, else `"unknown"`
+    (one shared bucket — fails closed at 10 images).
+  - Record: `{day, videos, images, scripts, voiceovers, updatedAt, ip, maskedIp, hash, scope}`,
+    TTL 2 days, same lazy Asia/Taipei rollover as `credits:<username>` (RULE 20).
+  - Only the masked address is persisted (`203.0.113.0` / `2001:db8:1:2::`); the raw address is
+    never written.
+  - Restriction: one bucket per egress address — a shared NAT gets 10/day for the whole network.
+  - Restriction: KV is eventually consistent, so concurrent guest requests can overshoot by the
+    in-flight count (same as accounts).
+- **Enforcement.**
+  - `GET /image/gen` resolves session → account plan, else `yvs_free` cookie → guest plan, else
+    `401`. A model failure refunds the credit for both key types; success carries
+    `X-Credit-Scope: account|ip` in addition to the RULE 20 headers.
+  - `POST /api/script` and `POST /api/voiceover` remain unlimited for every actor; guests book
+    usage against the IP record as best-effort telemetry.
+  - `GET /api/credits` returns the guest summary (`authenticated:false, guest:true, scope:"ip"`,
+    masked `ip`) for a freemium cookie instead of `401`.
+- **Operator table.** `GET /api/config/ipcredits?pw=…` lists up to 50 guest rows
+  (masked IP, hash, used, remaining, `updatedAt`); `POST {pw, key}` deletes one row (reset).
+  Both are password-gated (`403`) and KV-gated (`503`). The settings page renders them as the
+  **Guest credits by IP** table and hides the group in background-worker mode.
+- **Client.**
+  - `PLAN_MODE = window.__PLAN_MODE || ""`; on `/free`, a `401` from `/api/session` boots the
+    studio as `authAccess = "freemium"` and paints the guest credits pill
+    (**Guest · 10 / 10 left today**).
+  - The guest popover adds **Create a free account — 50 images/day** (opens the sign-up
+    overlay); the `429` body and pre-submit check add the same upgrade hint.
+  - Signing out of `/free` returns to guest mode rather than the landing page.
+  - The auth overlay links to `/free`; the landing nav, plans section and footer all link to
+    the freemium studio.
+- **Documentation.** The complete session record (matrix, payloads, privacy notes, test
+  evidence) is `bug-fix-session-206.md`.

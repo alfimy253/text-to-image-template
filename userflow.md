@@ -46,12 +46,16 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | Route | Method | Gate | Result |
 | --- | --- | --- | --- |
 | `/` | GET | none (public landing; client-side studio entry gate) | Landing page + studio HTML |
+| `/free` | GET | none — **freemium entry**; sets `yvs_free=1` (1 day) | Studio HTML + `window.__PLAN_MODE="freemium"`; 10 AI images/day per IP, everything else unlimited |
+| `/studio` | GET | session (`free_user` / `paid_user`) | Studio HTML + `window.__PLAN_MODE="studio"`; anonymous → `302 /free` |
+| `/paid` | GET | session, `usertype: paid_user` | Studio HTML + `window.__PLAN_MODE="paid"`; anonymous → `302 /free`, free → `302 /studio` |
 | `/{current-day}/config/uvxyz` | GET | client-side password overlay; day must match Asia/Taipei today | Studio HTML + `window.__CONFIG_PAGE=true` + injected settings script; stale-day and bare legacy paths are `404` |
-| `/image/:index` | GET | none | PNG (`X-Image-Index`); `400` if index outside `prompts[]`; `500` on AI error |
-| `/image/gen?prompt=&variant=` | GET | none | PNG (`X-Image-Variant`); `400` if prompt empty |
-| `/api/session` | GET | none | `200 {authenticated:true,user}` / `401` / `503` if KV unbound |
-| `/api/signup` | POST | none | `200` + `Set-Cookie: yvs_session` / `400` / `409` (duplicate) / `503` (KV unbound); no account cap |
-| `/api/login` | POST | none | `200` + cookie / `401` |
+| `/image/:index` | GET | none | PNG (`X-Image-Index`); `400` if index outside `prompts[]`; `500` on AI error. **Unmetered demo sample** |
+| `/image/gen?prompt=&variant=` | GET | session **or** `yvs_free` guest cookie when KV is bound; **1 image credit** | PNG (`X-Image-Variant`, `X-Credit-*`, `X-Credit-Scope: account\|ip`); `400` if prompt empty; `401` cold anonymous (message points at `/free`); `429 {error,credits}` daily limit spent; `500` on AI error (credit refunded) |
+| `/api/session` | GET | none | `200 {authenticated:true,user,plan,credits}` / `401` / `503` if KV unbound |
+| `/api/credits` | GET | session, or `yvs_free` guest cookie | `200 {usertype,plan,day,resetsAt,used,remaining,user}` / guest `200 {usertype:"guest",authenticated:false,guest:true,scope:"ip",ip,...}` / `401` / `503` |
+| `/api/signup` | POST | none | `200` + `Set-Cookie: yvs_session` + `user{...,usertype:"free"}`, `plan`, `credits` / `400` / `409` (duplicate) / `503` (KV unbound); no account cap |
+| `/api/login` | POST | none | `200` + cookie + `plan` + `credits` / `401` |
 | `/api/logout` | POST | none | `200`, cookie cleared (`Max-Age=0`) |
 | `/api/script` | POST | none | `{success:true,srt}` / `400` / `500` / `503` |
 | `/api/voiceover` | POST | none | audio bytes (`attachment`, `audio/mpeg` or `audio/wav`) / `400` / `500` / `503` |
@@ -63,6 +67,10 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | `/api/worker/failed?job=` | POST | none, needs KV | job → `failed` with error text |
 | `/api/config/theme` | GET / POST | GET: none · POST: `pw` body field | `{success,theme,themes:[default,strata,stellar]}` / `400 Unknown theme` / `403` / `503` |
 | `/api/config/workers` | GET / POST | GET: none · POST: `pw` body field | registered worker URLs (max 3) |
+| `/api/config/users?pw=` | GET | `pw` query param | up to 50 accounts with `usertype`, `plan`, used and remaining credits / `403` / `503` |
+| `/api/config/users` | POST | `pw` body field | sets `usertype` (`free` / `paid_user`), optional `resetCredits` / `400` / `403` / `404` / `503` |
+| `/api/config/ipcredits?pw=` | GET | `pw` query param | up to 50 guest rows: masked IP, hash, used, remaining, `updatedAt` / `403` / `503` |
+| `/api/config/ipcredits` | POST | `pw` body field | `{key}` deletes one guest row (reset) / `400` / `403` / `503` |
 | anything else | — | — | `404 Not Found` (plain text) |
 
 ---
@@ -90,9 +98,15 @@ User opens /
 
 Landing actions:
    top "Sign up" link → auth overlay in create-account mode
+   nav "Plans" → #landing-plans section (Free: 50 AI images/day · Paid: 1,200/day;
+                 unlimited videos, AI scripts and voiceovers on both; renews midnight UTC+8)
+   nav "Free studio" / plans "Open the free studio" / footer "Try the free studio"
+                 → GET /free (no account; 10 AI images/day per IP)
    bottom "Log in" menu → auth overlay in sign-in mode
    primary "Start creating" action → signup overlay when authentication is required,
                                      otherwise show the studio
+   (the landing surface uses the active theme's tokens, so the Aerial/Stellar skin
+    chosen on the settings page covers the landing and the studio alike)
 ```
 
 **Sign in / sign up (overlay, Module 6)**
@@ -108,6 +122,90 @@ overlay → submitAuth()
      ├─ 200 → hide overlay, open studio, showUserBadge(username,email)
      └─ else → setAuthError(data.error || "Request failed (<status>)")
 Logout → POST /api/logout → hide studio and return to the landing page; login stays available in the footer
+```
+
+---
+
+## 3b. Flow 0.5 — Daily credits (plan, meter, renewal)
+
+```
+After signup / login / session restore:
+   response carries { user.usertype, plan, credits }
+   applyCredits() paints the fixed top-right pill:
+        FREE  ·  48 / 50 left today   ▾
+   clicking it opens the popover:
+        Video projects  Unlimited
+        AI images       48 / 50 left today
+        AI scripts      Unlimited
+        Voiceovers      Unlimited
+        Used today: n images · n scripts · n voiceovers
+        Renews in 7h 12m (midnight UTC+8)
+   (the account box under the footer shows the same plan + image line)
+
+Image generation (AI panel, 2 variants per submit):
+   GET /image/gen?prompt=&variant=1
+     ├─ 200  → PNG + X-Credit-Images-Remaining; credit consumed in KV
+     ├─ 401  → "Sign in to generate AI images" (loop stops)
+     ├─ 429  → "Daily image credits used up (50 images/day on the Free plan).
+     │          Credits renew at midnight (UTC+8)." (loop stops, pill drops to 0)
+     └─ 500  → model error; the consumed credit is refunded
+
+Plans (user record user:<name>.usertype):
+   free       unlimited videos · 50 AI images/day · unlimited AI scripts · unlimited voiceovers
+   paid_user  unlimited videos · 1,200 AI images/day · unlimited AI scripts · unlimited voiceovers
+
+KV records:
+   credits:<name> = { day:"YYYY-MM-DD", images, scripts, voiceovers, videos, updatedAt }  (TTL 2 days)
+   a record whose day ≠ today reads as zero and is rewritten by the next generation
+
+Settings page → Plans & credits:
+   lists accounts (≤50) with plan + remaining images
+   set free / paid_user, optional "reset today counters" → POST /api/config/users
+```
+
+---
+
+## 3c. Flow 0.5b — Freemium guest (/free), Bug Fix Session #206
+
+```
+Visitor opens /free (or a landing/footer link to it)
+   │
+   ├─ Worker: 200 HTML + window.__PLAN_MODE="freemium"
+   │          + Set-Cookie: yvs_free=1; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400
+   │
+   ├─ Script: initAuth() → GET /api/session
+   │     ├─ 200 (signed in) → normal account studio (the /free URL is upgrade-safe)
+   │     └─ 401 → authAccess="freemium": hide landing, show studio, GET /api/credits
+   │                → {plan:"guest", remaining.images:10, scope:"ip", ip:"203.0.113.0"}
+   │                → pill "Guest · 10 / 10 left today"
+   │
+   ├─ AI images: GET /image/gen  (cookie present, no session)
+   │     → worker hashes CF-Connecting-IP, spends ipcredits:<hash> with the guest plan
+   │       200 → PNG + X-Credit-Plan: guest, X-Credit-Images-Limit: 10,
+   │              X-Credit-Images-Remaining, X-Credit-Scope: ip
+   │       429 → "Daily image credits used up (10 images/day on the Guest plan)...
+   │              Create a free account for 50 images per day."
+   │       500 → credit refunded
+   │
+   ├─ AI scripts / voiceovers / videos: unlimited for guests; usage is booked to the IP row
+   │
+   └─ Popover CTA "Create a free account — 50 images/day" → sign-up overlay
+        (or the auth-overlay link back to /free)
+
+Settings page → Guest credits by IP
+   GET  /api/config/ipcredits?pw=…  → rows: 203.0.113.0 · images · scripts · voiceovers ·
+                                        left today · last seen · [Reset]
+   POST /api/config/ipcredits {pw,key} → delete that row
+```
+
+URL access for the same shell:
+
+```
+anonymous                     free_user                    paid_user
+   /        landing             /        landing             /        landing
+   /free    freemium             /free    studio              /free    studio
+   /studio  → 302 /free          /studio  studio              /studio  studio
+   /paid    → 302 /free          /paid    → 302 /studio       /paid    studio
 ```
 
 ---

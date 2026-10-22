@@ -33,7 +33,7 @@ export const PAGE_MARKUP = `
 		name="description"
 		content="Turn images, music and ideas into polished videos with YouTube Vibe Studio. Create scenes, scripts, captions and MP4s in one browser-based workspace."
 	>
-	<meta name="theme-color" content="#101116">
+	<meta name="theme-color" content="#0f1115">
 
 
 	<!-- Oswald comes from Google Fonts.
@@ -78,6 +78,8 @@ export const PAGE_MARKUP = `
 			<nav class="landing-nav-links" aria-label="Main navigation">
 				<a href="#landing-process">How it works</a>
 				<a href="#landing-features">Features</a>
+				<a href="#landing-plans">Plans</a>
+				<a href="/free">Free studio</a>
 			</nav>
 
 			<a class="landing-signup" href="#signup" data-auth-open="signup">
@@ -100,7 +102,7 @@ export const PAGE_MARKUP = `
 						</a>
 					</div>
 					<div class="landing-microcopy">
-						<span>Made for creators</span><i aria-hidden="true"></i><span>Rendered in your browser</span>
+						<span>Made for creators</span><i aria-hidden="true"></i><span>50 free AI images daily</span><i aria-hidden="true"></i><span>Rendered in your browser</span>
 					</div>
 				</div>
 
@@ -184,6 +186,51 @@ export const PAGE_MARKUP = `
 				</div>
 			</section>
 
+
+			<section class="landing-plans" id="landing-plans">
+				<div class="landing-plans-heading">
+					<p class="landing-eyebrow"><span aria-hidden="true"></span> DAILY CREDITS, NO SURPRISES</p>
+					<h2>Start free.<br><span>Go bigger when you're ready.</span></h2>
+					<p>Unlimited video projects, AI scripts and voiceovers on every plan. Image credits renew every day, so tomorrow is always a fresh canvas.</p>
+				</div>
+				<div class="landing-plan-grid">
+					<article class="landing-plan-card">
+						<div class="landing-plan-top">
+							<span class="landing-plan-badge">FREE PLAN</span>
+							<span class="landing-plan-price">$0</span>
+						</div>
+						<h3>Free</h3>
+						<p>For creators trying ideas and shipping their first videos.</p>
+						<ul class="landing-plan-list">
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> video projects</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>50</b> AI images every day</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> AI script generation</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> voiceovers</span></li>
+						</ul>
+						<button class="landing-primary" type="button" data-auth-open="signup">Create a free account <span aria-hidden="true">↗</span></button>
+						<p class="landing-plan-note">No card required. Every new account starts on the free plan.</p>
+					</article>
+					<article class="landing-plan-card landing-plan-featured">
+						<div class="landing-plan-top">
+							<span class="landing-plan-badge">PAID PLAN</span>
+							<span class="landing-plan-price">1,200<span>images / day</span></span>
+						</div>
+						<h3>Paid</h3>
+						<p>For channel builders who generate every single day.</p>
+						<ul class="landing-plan-list">
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> video projects</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>1,200</b> AI images every day</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> AI script generation</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> voiceovers</span></li>
+						</ul>
+						<button class="landing-primary" type="button" data-auth-open="signup">Request paid access <span aria-hidden="true">↗</span></button>
+						<p class="landing-plan-note">Paid accounts are activated by the studio team after signup.</p>
+					</article>
+				</div>
+				<p class="landing-plans-reset">All credits renew every day at midnight (UTC+8).</p>
+			<p class="landing-plans-guest">No account yet? <a href="/free">Open the free studio <span aria-hidden="true">↗</span></a> — 10 AI images a day, counted per IP address.</p>
+			</section>
+
 			<section class="landing-cta">
 				<div><p class="landing-eyebrow"><span aria-hidden="true"></span> YOUR NEXT IDEA IS WAITING</p><h2>Let’s make something<br><span>worth watching.</span></h2></div>
 				<button class="landing-primary landing-cta-button" type="button" data-studio-open>Open the studio <span aria-hidden="true">↗</span></button>
@@ -192,7 +239,7 @@ export const PAGE_MARKUP = `
 
 		<footer class="landing-footer">
 			<div class="landing-footer-brand"><span class="landing-brand-mark" aria-hidden="true">V</span><div><b>VIBE STUDIO</b><span>Make your next idea move.</span></div></div>
-			<nav class="landing-footer-menu" aria-label="Account menu"><span>Already have an account?</span><a href="#login" data-auth-open="login">Log in <span aria-hidden="true">↗</span></a></nav>
+			<nav class="landing-footer-menu" aria-label="Account menu"><a href="/free">Try the free studio <span aria-hidden="true">↗</span></a><span>Already have an account?</span><a href="#login" data-auth-open="login">Log in <span aria-hidden="true">↗</span></a></nav>
 			<div class="landing-footer-bottom"><span>© 2026 YouTube Vibe Studio</span><span>Built for the stories you want to tell.</span></div>
 		</footer>
 	</div>

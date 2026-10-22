@@ -30,6 +30,23 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   flight the app renders the video locally instead.
 - **Accounts.** KV-backed sign-up/sign-in, unlimited accounts (each with an `email:<address>`
   uniqueness index).
+- **Daily credits.** Every account is on a plan (`usertype`): **free** — unlimited video projects,
+  unlimited AI scripts, unlimited voiceovers and **50 AI images per day**; **paid_user** —
+  everything in free plus **1,200 AI images per day**. Counters live in KV
+  (`credits:<username>`) and renew at midnight Asia/Taipei (UTC+8). The studio shows a credits
+  pill with today's allowance, the image route returns `429` with the counters when the allowance
+  is spent, and the settings page can promote an account to `paid_user` (or reset its counters).
+  The landing page documents both plans and follows the active theme.
+- **Freemium access (`/free`).** No account? `GET /free` opens the same studio with a **guest**
+  plan: **10 AI images per day**, unlimited videos, AI scripts and voiceovers. Guest counters are
+  keyed by a salted hash of the visitor's IP address (`ipcredits:<hash>`, 2-day TTL), so the limit
+  is per network and cannot be reset by clearing cookies. Anonymous image generation is only
+  unlocked by the `yvs_free=1` cookie that `/free` sets; everything else stays sign-up-first.
+  The settings page has a **Guest credits by IP** table (masked address, usage, remaining, last
+  seen, reset). See `bug-fix-session-206.md`.
+- **Plan-based URLs.** `/free` (everyone), `/studio` (`free_user` / `paid_user`) and `/paid`
+  (`paid_user` only) serve the same shell in a different plan mode; guests are redirected to
+  `/free`, free accounts to `/studio` (RULE 21).
 - **Three UI themes.** The current-day settings page → **Appearance** switches the whole studio
   between the built-in dark look, **Aerial** (blue sky, mountain backdrop, white accents), and
   **Stellar** (violet gradient, frosted panels) — HTML5UP-inspired skins, applied server-side so
@@ -60,6 +77,12 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 | Voiceover | 8,000 characters max, chunked at 500; English in the UI |
 | Render API | 10 in-flight jobs, 60 MB payload, outputs kept 2 h (job records 1 h) |
 | Theme | one setting for the whole deployment: `default` · `strata` · `stellar` |
+| Free plan (`usertype: free`) | unlimited videos · 50 AI images/day · unlimited AI scripts · unlimited voiceovers |
+| Paid plan (`usertype: paid_user`) | unlimited videos · 1,200 AI images/day · unlimited AI scripts · unlimited voiceovers |
+| Free-plan alias | `free_user` (or any value other than `paid_user`) is read as `free` |
+| Guest plan (`/free`, no account) | unlimited videos · **10 AI images/day per IP address** · unlimited AI scripts · unlimited voiceovers |
+| Credit renewal | daily at midnight Asia/Taipei (UTC+8); `credits:<username>` and `ipcredits:<hash>` records expire after 2 days |
+| Guest IP records | only a salted SHA-256 hash + masked address (`203.0.113.0`) are stored, never the raw IP |
 | Quality | 480p/1.2 Mbps · 720p/2.5 Mbps · 720p/5 Mbps, 30 fps |
 
 ## Hints you will see in the UI
@@ -111,24 +134,34 @@ The settings page is password-gated and uses **`/{current-day}/config/uvxyz`**, 
 `{current-day}` is the unpadded day of month (1–31) in **Asia/Taipei**. For example, on
 2026-10-16 the URL is **`/16/config/uvxyz`**; it changes at midnight Asia/Taipei. The old bare
 `/config/uvxyz` path and any stale day-prefixed path return `404`. The page picks the **theme**
-for every visitor (Appearance → *Studio / Aerial / Stellar* → **Save theme**), registers
+for every visitor (Appearance → *Studio / Aerial / Stellar* → **Save theme**), manages **plans
+& credits** (set an account to `free` or `paid_user`, optionally reset today's counters), reviews
+**guest credits by IP** (masked address, today's usage, remaining images, reset), registers
 background worker URLs, and can switch a tab into "Background worker" mode to consume the render
-queue.
+queue. The landing page uses the same theme tokens as the studio, so the chosen skin covers the
+whole site.
 
 ## Routes
 
 | Route | Purpose |
 | --- | --- |
 | `GET /` | Public landing page; studio view when signed in or opened from the CTA |
+| `GET /free` | Freemium studio for everyone; sets `yvs_free=1` so guests can spend 10 image credits/day per IP |
+| `GET /studio` | Account studio (`free_user` / `paid_user`); guests are redirected to `/free` |
+| `GET /paid` | Paid-tier studio (`paid_user` only); guests → `/free`, free accounts → `/studio` |
 | `GET /{current-day}/config/uvxyz` | Settings / background-worker page; current Asia/Taipei day only (e.g. `/16/config/uvxyz` on 2026-10-16) |
-| `GET /image/:i` · `GET /image/gen?prompt=&variant=` | Workers AI images |
+| `GET /image/:i` | Workers AI demo image (unmetered, index into `prompts[]`) |
+| `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` cold anonymous, `429` at the limit, `X-Credit-*` headers on success |
 | `POST /api/script` | SEO keyword plan + AI script → validated SRT (with keyword counts) |
 | `POST /api/voiceover` · `GET /tts` | MeloTTS voiceover / fallback TTS proxy |
-| `GET /api/session` · `POST /api/signup` · `POST /api/login` · `POST /api/logout` | Accounts |
+| `GET /api/session` · `POST /api/signup` · `POST /api/login` · `POST /api/logout` | Accounts (session/signup/login include `usertype`, `plan` and `credits`) |
+| `GET /api/credits` | Today's plan, used counters, remaining allowances and `resetsAt` — for the signed-in user, or the IP-keyed guest plan after `/free` |
 | `POST /api/render` · `GET /api/render/:jobId` | Submit a render job / poll and download |
 | `GET /api/worker/poll` · `POST /api/worker/deliver` · `POST /api/worker/failed` | Background worker queue |
 | `GET`/`POST /api/config/workers` | Registered worker URLs (max 3, `POST` needs the settings password) |
 | `GET`/`POST /api/config/theme` | Current UI theme / set it (`default`, `strata`, `stellar`; `POST` needs the settings password) |
+| `GET`/`POST /api/config/users` | Accounts with plan + today's usage / set `usertype` (`free`, `paid_user`) and reset counters — both need the settings password |
+| `GET`/`POST /api/config/ipcredits` | Guest credits table (masked IP, usage, remaining) / delete one IP row (reset) — both need the settings password |
 
 ## Documentation
 
@@ -141,6 +174,8 @@ queue.
 - **`kv-scale-test.md`** — measured KV behaviour (operations per request, list-page caps,
   free-tier allowance maths) with the reproduction commands.
 - **`bug-audit.md`** — the current bug and inconsistency audit, with severity and fixes.
+- **`bug-fix-session-206.md`** — Bug Fix Session #206: plan-based URLs (`/free`, `/studio`,
+  `/paid`), freemium guest access, the per-IP credits table and its verification evidence.
 
 ## Notes for contributors
 

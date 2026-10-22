@@ -153,6 +153,72 @@ export default {
 		}
 
 
+		/*
+		 * User-type based URL restrictions (RULE 21).
+		 *
+		 *   GET /free    freemium studio, every visitor; sets the
+		 *                yvs_free cookie that unlocks the guest
+		 *                image allowance (10/day per IP).
+		 *   GET /studio  free_user / paid_user only.
+		 *   GET /paid    paid_user only.
+		 *
+		 * Guests are redirected to /free, not to the landing
+		 * page, because /free is the no-account entry point.
+		 */
+		if (
+			request.method === "GET" &&
+			PLAN_MODE_BY_ROUTE[
+				url.pathname
+			]
+		) {
+
+			const planMode =
+				PLAN_MODE_BY_ROUTE[
+					url.pathname
+				];
+
+			if (
+				planMode !==
+				"freemium"
+			) {
+
+				const routeUser =
+					await creditSessionUser(
+						request,
+						env
+					);
+
+				if (!routeUser) {
+
+					return redirectResponse(
+						"/free"
+					);
+
+				}
+
+				if (
+					planMode ===
+						"paid" &&
+					routeUser.usertype !==
+						"paid_user"
+				) {
+
+					return redirectResponse(
+						"/studio"
+					);
+
+				}
+
+			}
+
+			return appPageResponse(
+				env,
+				planMode
+			);
+
+		}
+
+
 		// =====================================================
 		// AI IMAGE GENERATION
 		// =====================================================
@@ -266,6 +332,174 @@ export default {
 				);
 			}
 
+			/*
+			 * Daily image credits. This is the only metered
+			 * generation route: the two fixed demo prompts on
+			 * /image/:i are samples and stay unmetered.
+			 *
+			 * One HTTP response is one image, so one credit.
+			 * The counter is taken before the model runs and
+			 * refunded if the model fails, so a failed call
+			 * never costs the user an image.
+			 *
+			 * When the KV binding is missing the app runs in
+			 * its open-access mode and generation stays free.
+			 */
+			let creditUser: any =
+				null;
+
+			let creditGuest: any =
+				null;
+
+			let creditGate: any =
+				null;
+
+			if (
+				env &&
+				env.KV_BINDING
+			) {
+
+				try {
+
+					creditUser =
+						await creditSessionUser(
+							request,
+							env
+						);
+
+					if (creditUser) {
+
+						creditGate =
+							await creditConsume(
+								env,
+								creditUser.username,
+								creditUser.usertype,
+								"images"
+							);
+
+					}
+					else if (
+						hasFreemiumCookie(
+							request
+						)
+					) {
+
+						/*
+						 * No account, but this browser
+						 * came through /free: spend from
+						 * the IP-keyed guest allowance.
+						 */
+						creditGuest =
+							await guestCreditIdentity(
+								request
+							);
+
+						creditGate =
+							await guestCreditConsume(
+								env,
+								creditGuest,
+								"images"
+							);
+
+					}
+					else {
+
+						return json(
+							{
+								success: false,
+								authenticated: false,
+								error:
+									"Sign in to generate AI images \u2014 every free account gets 50 images per day. No account? Open /free for 10 images per day."
+							},
+							401
+						);
+
+					}
+
+				}
+				catch (creditError) {
+
+					/*
+					 * A credits outage must not take image
+					 * generation down with it.
+					 */
+					creditUser = null;
+					creditGuest = null;
+					creditGate = null;
+
+				}
+
+			}
+
+			if (
+				creditGate &&
+				!creditGate.allowed
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Daily image credits used up (" +
+							creditGate.plan.limits.images +
+							" images/day on the " +
+							creditGate.plan.label +
+							" plan). Credits renew at midnight (UTC+8)." +
+							(creditGuest
+								? " Create a free account for 50 images per day."
+								: ""),
+						credits:
+							creditGate.summary
+					},
+					429
+				);
+
+			}
+
+			/*
+			 * The X-Credit-* response headers let the studio
+			 * update its credits pill without a second fetch.
+			 */
+			const imageHeaders: any = {
+				"Content-Type":
+					"image/png",
+				"Cache-Control":
+					"no-store",
+				"X-Image-Variant":
+					variant
+			};
+
+			if (
+				creditGate &&
+				creditGate.allowed
+			) {
+
+				imageHeaders["X-Credit-Plan"] =
+					creditGate.plan.id;
+
+				imageHeaders["X-Credit-Images-Limit"] =
+					String(
+						creditGate.plan.limits.images
+					);
+
+				imageHeaders["X-Credit-Images-Remaining"] =
+					String(
+						creditGate.summary.remaining.images
+					);
+
+				imageHeaders["X-Credit-Day"] =
+					creditGate.summary.day;
+
+				imageHeaders["X-Credit-Reset"] =
+					creditGate.summary.resetsAt;
+
+				imageHeaders["X-Credit-Scope"] =
+					creditGuest
+						? "ip"
+						: "account";
+
+			}
+
 			try {
 
 				const result =
@@ -285,19 +519,61 @@ export default {
 					result,
 					{
 						status: 200,
-						headers: {
-							"Content-Type":
-								"image/png",
-							"Cache-Control":
-								"no-store",
-							"X-Image-Variant":
-								variant
-						}
+						headers:
+							imageHeaders
 					}
 				);
 
 			}
 			catch (error) {
+
+				/*
+				 * The model failed: give the credit back.
+				 */
+				if (
+					creditGate &&
+					creditGate.allowed &&
+					creditUser
+				) {
+
+					try {
+
+						await creditRefund(
+							env,
+							creditUser.username,
+							"images"
+						);
+
+					}
+					catch (refundError) {
+
+						/* best effort */
+
+					}
+
+				}
+				else if (
+					creditGate &&
+					creditGate.allowed &&
+					creditGuest
+				) {
+
+					try {
+
+						await creditRefundKey(
+							env,
+							creditGuest.key,
+							"images"
+						);
+
+					}
+					catch (refundError) {
+
+						/* best effort */
+
+					}
+
+				}
 
 				return json(
 					{
@@ -677,6 +953,64 @@ export default {
 			request.method === "POST" &&
 			url.pathname === "/api/script"
 		) {
+
+			/*
+			 * AI scripts are unlimited on both plans (free and
+			 * paid_user). The counter is informational, so a
+			 * credits read/write failure must never fail the
+			 * script itself.
+			 */
+			if (
+				env &&
+				env.KV_BINDING
+			) {
+
+				try {
+
+					const scriptCreditUser =
+						await creditSessionUser(
+							request,
+							env
+						);
+
+					if (scriptCreditUser) {
+
+						await creditConsume(
+							env,
+							scriptCreditUser.username,
+							scriptCreditUser.usertype,
+							"scripts"
+						);
+
+					}
+					else if (
+						hasFreemiumCookie(
+							request
+						)
+					) {
+
+						/*
+						 * Guest scripts are unlimited; the
+						 * IP row records usage only.
+						 */
+						await guestCreditConsume(
+							env,
+							await guestCreditIdentity(
+								request
+							),
+							"scripts"
+						);
+
+					}
+
+				}
+				catch (creditError) {
+
+					/* usage tracking is best-effort */
+
+				}
+
+			}
 
 			const body =
 				await request.json().catch(
@@ -2147,6 +2481,59 @@ export default {
 			request.method === "POST" &&
 			url.pathname === "/api/voiceover"
 		) {
+		/*
+		 * Voiceovers are unlimited on both plans; the counter
+		 * is informational and never blocks generation.
+		 */
+		if (
+			env &&
+			env.KV_BINDING
+		) {
+
+			try {
+
+				const voiceCreditUser =
+					await creditSessionUser(
+						request,
+						env
+					);
+
+				if (voiceCreditUser) {
+
+					await creditConsume(
+						env,
+						voiceCreditUser.username,
+						voiceCreditUser.usertype,
+						"voiceovers"
+					);
+
+				}
+				else if (
+					hasFreemiumCookie(
+						request
+					)
+				) {
+
+					/* Unlimited for guests; usage only. */
+					await guestCreditConsume(
+						env,
+						await guestCreditIdentity(
+							request
+						),
+						"voiceovers"
+					);
+
+				}
+
+			}
+			catch (creditError) {
+
+				/* usage tracking is best-effort */
+
+			}
+
+		}
+
 		try {
 			const body =
 				await request.json().catch(
@@ -4246,6 +4633,578 @@ export default {
 		}
 
 
+		/*
+		 * Plans & credits (settings page).
+		 *
+		 * GET  /api/config/users?pw=...  list the newest accounts with
+		 *                                their plan and today's usage
+		 * POST /api/config/users         set a user's usertype and
+		 *                                optionally reset today's counts
+		 *
+		 * This is the DB operation behind the paid plan: writing
+		 * user:<name>.usertype = "paid_user" gives that account
+		 * 1,200 AI images per day on its next request; "free" puts it
+		 * back on 50. Both values share the same daily reset record,
+		 * so a plan change never loses today's usage.
+		 */
+		if (
+			url.pathname ===
+				"/api/config/users"
+		) {
+
+			const body =
+				request.method === "POST"
+					? await request.json().catch(
+							() => ({})
+						)
+					: {};
+
+			const suppliedPassword =
+				request.method === "POST"
+					? body.pw
+					: url.searchParams.get("pw");
+
+			if (
+				suppliedPassword !==
+					CONFIG_PASSWORD
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Wrong password"
+					},
+					403
+				);
+
+			}
+
+			if (!env.KV_BINDING) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"User storage not configured (bind the KV namespace)"
+					},
+					503
+				);
+
+			}
+
+			if (
+				request.method ===
+					"GET"
+			) {
+
+				/*
+				 * Limit 50: each account costs one record read
+				 * plus one credits read, so the whole listing
+				 * stays well inside the per-invocation budget.
+				 */
+				const listed =
+					await env.KV_BINDING.list(
+						{
+							prefix: "user:",
+							limit: 50
+						}
+					);
+
+				const users =
+					(
+						await Promise.all(
+							listed.keys.map(
+								async (key: any) => {
+
+									const raw =
+										await env.KV_BINDING.get(
+											key.name
+										);
+
+									if (!raw) {
+										return null;
+									}
+
+									let record: any;
+
+									try {
+
+										record =
+											JSON.parse(
+												raw
+											);
+
+									}
+									catch (parseError) {
+
+										return null;
+
+									}
+
+									const username =
+										record.username ||
+										key.name.substring(
+											"user:".length
+										);
+
+									const usertype =
+										creditNormalizeUsertype(
+											record.usertype
+										);
+
+									let state: any;
+
+									try {
+
+										state =
+											await creditReadState(
+												env,
+												username
+											);
+
+									}
+									catch (creditReadError) {
+
+										state =
+											creditFreshState(
+												creditDay()
+											);
+
+									}
+
+									const summary =
+										creditSummary(
+											usertype,
+											state
+										);
+
+									return {
+										username:
+											username,
+										email:
+											record.email ||
+											"",
+										usertype:
+											usertype,
+										plan:
+											summary.plan,
+										day:
+											summary.day,
+										used:
+											summary.used,
+										remaining:
+											summary.remaining,
+										createdAt:
+											record.createdAt ||
+											""
+									};
+
+								}
+							)
+						)
+					).filter(
+						(user) =>
+							user !== null
+					);
+
+				return json(
+					{
+						success: true,
+						day:
+							creditDay(),
+						resetsAt:
+							creditResetsAt(),
+						users:
+							users,
+						plans: [
+							CREDIT_PLANS.free,
+							CREDIT_PLANS.paid_user
+						]
+					}
+				);
+
+			}
+
+			if (
+				request.method ===
+					"POST"
+			) {
+
+				const username =
+					String(
+						body.username ||
+						""
+					)
+						.trim()
+						.toLowerCase();
+
+				const usertype =
+					String(
+						body.usertype ||
+						""
+					)
+						.trim()
+						.toLowerCase();
+
+				if (
+					!/^[a-zA-Z0-9_]{3,20}$/.test(
+						username
+					)
+				) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Enter a valid username"
+						},
+						400
+					);
+
+				}
+
+				if (
+					CREDIT_USERTYPES.indexOf(
+						usertype
+					) === -1
+				) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Unknown plan (use free or paid_user)"
+						},
+						400
+					);
+
+				}
+
+				const key =
+					"user:" + username;
+
+				const raw =
+					await env.KV_BINDING.get(
+						key
+					);
+
+				if (!raw) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"User not found"
+						},
+						404
+					);
+
+				}
+
+				let record: any;
+
+				try {
+
+					record =
+						JSON.parse(
+							raw
+						);
+
+				}
+				catch (parseError) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"User record is unreadable"
+						},
+						500
+					);
+
+				}
+
+				record.usertype =
+					usertype;
+
+				await env.KV_BINDING.put(
+					key,
+					JSON.stringify(
+						record
+					)
+				);
+
+				/*
+				 * Optional reset: a fresh account should not
+				 * inherit yesterday's counters after a plan
+				 * change.
+				 */
+				if (body.resetCredits) {
+
+					await env.KV_BINDING.delete(
+						CREDIT_KEY_PREFIX +
+						username
+					);
+
+				}
+
+				let state: any;
+
+				try {
+
+					state =
+						await creditReadState(
+							env,
+							username
+						);
+
+				}
+				catch (creditReadError) {
+
+					state =
+						creditFreshState(
+							creditDay()
+						);
+
+				}
+
+				const summary =
+					creditSummary(
+						usertype,
+						state
+					);
+
+				return json(
+					{
+						success: true,
+						username:
+							record.username ||
+							username,
+						usertype:
+							usertype,
+						plan:
+							summary.plan,
+						credits:
+							summary
+					}
+				);
+
+			}
+
+		}
+
+
+		/*
+		 * Guest credits by IP address — the freemium table.
+		 *
+		 * GET  /api/config/ipcredits?pw=...  today's rows
+		 *                                    (masked IP, usage,
+		 *                                     remaining, last seen)
+		 * POST /api/config/ipcredits         {pw, key} resets one
+		 *                                    row (deletes the record)
+		 *
+		 * Rows live under ipcredits:<sha256(ip)> and share the
+		 * account credit record shape and lazy daily reset, so a
+		 * row from a previous day reads back as zeros.
+		 */
+		if (
+			url.pathname ===
+				"/api/config/ipcredits"
+		) {
+
+			const guestBody =
+				request.method === "POST"
+					? await request.json().catch(
+							() => ({})
+						)
+					: {};
+
+			const guestPassword =
+				request.method === "POST"
+					? guestBody.pw
+					: url.searchParams.get("pw");
+
+			if (
+				guestPassword !==
+				CONFIG_PASSWORD
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Wrong password"
+					},
+					403
+				);
+
+			}
+
+			if (!env.KV_BINDING) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"User storage not configured (bind the KV namespace)"
+					},
+					503
+				);
+
+			}
+
+			if (
+				request.method ===
+					"GET"
+			) {
+
+				const guestRows =
+					await env.KV_BINDING.list(
+						{
+							prefix:
+								IPCREDIT_KEY_PREFIX,
+							limit:
+								IPCREDIT_MAX_ROWS
+						}
+					);
+
+				const rows =
+					(
+						await Promise.all(
+							guestRows.keys.map(
+								async (key: any) => {
+
+									let record: any =
+										null;
+
+									try {
+
+										const raw =
+											await env.KV_BINDING.get(
+												key.name
+											);
+
+										record = raw
+											? JSON.parse(
+													raw
+												)
+											: null;
+
+									}
+									catch (rowError) {
+
+										record = null;
+
+									}
+
+									if (!record) {
+										return null;
+									}
+
+									const summary =
+										creditSummaryFor(
+											GUEST_PLAN,
+											creditParseState(
+												JSON.stringify(
+													record
+												),
+												creditDay()
+											)
+										);
+
+									return {
+										key:
+											key.name,
+										ip:
+											record.ip ||
+											"unknown",
+										hash:
+											String(
+												key.name
+											).substring(
+												IPCREDIT_KEY_PREFIX.length
+											),
+										day:
+											summary.day,
+										used:
+											summary.used,
+										remaining:
+											summary.remaining,
+										updatedAt:
+											record.updatedAt ||
+											""
+									};
+
+								}
+							)
+						)
+					).filter(
+						(row: any) =>
+							row !== null
+					);
+
+				return json(
+					{
+						success: true,
+						day:
+							creditDay(),
+						resetsAt:
+							creditResetsAt(),
+						plan:
+							GUEST_PLAN,
+						rows:
+							rows
+					}
+				);
+
+			}
+
+			if (
+				request.method ===
+					"POST"
+			) {
+
+				const guestKey =
+					String(
+						guestBody.key ||
+						""
+					).trim();
+
+				if (
+					!/^ipcredits:[a-f0-9]{8,64}$/.test(
+						guestKey
+					)
+				) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"Unknown guest row"
+						},
+						400
+					);
+
+				}
+
+				await env.KV_BINDING.delete(
+					guestKey
+				);
+
+				return json(
+					{
+						success: true,
+						key:
+							guestKey
+					}
+				);
+
+			}
+
+		}
+
+
 		return new Response(
 			"Not Found",
 			{
@@ -4401,6 +5360,1043 @@ function authSessionCookie(
 }
 
 
+/* =============================================================
+ * DAILY CREDITS (KV-backed)
+ * -------------------------------------------------------------
+ * Plans:
+ *   free       unlimited videos, AI scripts and voiceovers,
+ *              50 AI images per day
+ *   paid_user  unlimited videos, AI scripts and voiceovers,
+ *              1,200 AI images per day
+ *
+ * Usage lives in credits:<username> and rolls over at midnight
+ * Asia/Taipei (UTC+8, no DST, so a fixed offset is exact).
+ * The day stamp inside the record is the source of truth: a
+ * record from an earlier day reads back as zero usage and is
+ * rewritten by the next consume. Records expire after two days
+ * so dormant accounts do not accumulate keys forever.
+ *
+ * The plan itself is an attribute of the user record
+ * (user:<username>.usertype). Accounts created before the
+ * credits system, and any unknown value, read as "free".
+ * ============================================================= */
+
+const CREDIT_KEY_PREFIX =
+	"credits:";
+
+const CREDIT_DAY_OFFSET_MS =
+	8 * 60 * 60 * 1000;
+
+const CREDIT_RECORD_TTL =
+	2 * 24 * 60 * 60;
+
+const CREDIT_KINDS = [
+	"videos",
+	"images",
+	"scripts",
+	"voiceovers"
+];
+
+const CREDIT_USERTYPES = [
+	"free",
+	"paid_user"
+];
+
+const CREDIT_PLANS = {
+	free: {
+		id: "free",
+		label: "Free",
+		limits: {
+			videos: null,
+			images: 50,
+			scripts: null,
+			voiceovers: null
+		}
+	},
+	paid_user: {
+		id: "paid_user",
+		label: "Paid",
+		limits: {
+			videos: null,
+			images: 1200,
+			scripts: null,
+			voiceovers: null
+		}
+	}
+};
+
+
+/*
+ * The freemium (no-account) plan used by GET /free.
+ *
+ * A visitor who has not signed in gets one metered slice of the
+ * studio: 10 AI images per day, unlimited video projects, AI
+ * scripts and voiceovers. Its counters use the same daily state
+ * record as accounts, but are keyed by a hash of the visitor's
+ * IP address (ipcredits:<hash>) instead of a username, so the
+ * limit cannot be reset by clearing cookies.
+ *
+ * GUEST_PLAN is deliberately NOT in CREDIT_USERTYPES: it is an
+ * actor type, not something the settings page can assign to an
+ * account.
+ */
+const GUEST_PLAN = {
+	id: "guest",
+	label: "Guest",
+	limits: {
+		videos: null,
+		images: 10,
+		scripts: null,
+		voiceovers: null
+	}
+};
+
+/*
+ * User-type based URL restrictions (RULE 21). Each of these
+ * routes serves the studio shell in a different plan mode:
+ *
+ *   /free    everyone (freemium, sets the yvs_free cookie)
+ *   /studio  signed-in free_user / paid_user; guests -> /free
+ *   /paid    paid_user only; guests -> /free, free -> /studio
+ *
+ * The shell is client-side, so these gates are navigation
+ * boundaries. The data boundary is the credits gate on
+ * /image/gen, which enforces the plan for the API itself.
+ */
+const PLAN_MODE_BY_ROUTE: any = {
+	"/free": "freemium",
+	"/studio": "studio",
+	"/paid": "paid"
+};
+
+/* Marks a browser as a freemium visitor (set by GET /free). */
+const FREEMIUM_COOKIE =
+	"yvs_free=1; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400";
+
+const IPCREDIT_KEY_PREFIX =
+	"ipcredits:";
+
+const IPCREDIT_MAX_ROWS =
+	50;
+
+
+function creditNormalizeUsertype(
+	value: any
+): any {
+
+	return (
+		String(value || "")
+			.trim()
+			.toLowerCase() ===
+		"paid_user"
+			? "paid_user"
+			: "free"
+	);
+
+}
+
+
+function creditPlanFor(
+	usertype: any
+): any {
+
+	/*
+	 * `guest` is an actor type, never a stored account plan, but
+	 * resolving it here keeps every helper safe: a guest call site
+	 * that forgets to pass GUEST_PLAN explicitly still gets the
+	 * 10-image plan instead of silently inheriting free's 50.
+	 */
+	if (
+		String(usertype || "")
+			.trim()
+			.toLowerCase() ===
+		"guest"
+	) {
+
+		return GUEST_PLAN;
+
+	}
+
+	return (CREDIT_PLANS as any)[
+		creditNormalizeUsertype(usertype)
+	];
+
+}
+
+
+/* YYYY-MM-DD in Asia/Taipei. */
+function creditDay(
+	now: any = Date.now()
+): string {
+
+	const shifted =
+		new Date(
+			Number(now) +
+			CREDIT_DAY_OFFSET_MS
+		);
+
+	const month =
+		shifted.getUTCMonth() + 1;
+
+	const day =
+		shifted.getUTCDate();
+
+	return (
+		shifted.getUTCFullYear() +
+		"-" +
+		(month < 10 ? "0" : "") +
+		month +
+		"-" +
+		(day < 10 ? "0" : "") +
+		day
+	);
+
+}
+
+
+/* ISO timestamp of the next midnight Asia/Taipei. */
+function creditResetsAt(
+	now: any = Date.now()
+): string {
+
+	const shifted =
+		new Date(
+			Number(now) +
+			CREDIT_DAY_OFFSET_MS
+		);
+
+	const nextMidnight =
+		Date.UTC(
+			shifted.getUTCFullYear(),
+			shifted.getUTCMonth(),
+			shifted.getUTCDate() + 1
+		) -
+		CREDIT_DAY_OFFSET_MS;
+
+	return new Date(
+		nextMidnight
+	).toISOString();
+
+}
+
+
+function creditFreshState(
+	day: any
+): any {
+
+	return {
+		day: day,
+		videos: 0,
+		images: 0,
+		scripts: 0,
+		voiceovers: 0,
+		updatedAt:
+			new Date().toISOString()
+	};
+
+}
+
+
+/*
+ * A record is trusted only for the day it was written on.
+ * Anything unreadable, partial or stale becomes a fresh
+ * counter for today.
+ */
+function creditParseState(
+	raw: any,
+	day: any
+): any {
+
+	let parsed: any =
+		null;
+
+	try {
+
+		parsed = raw
+			? JSON.parse(raw)
+			: null;
+
+	}
+	catch (parseError) {
+
+		parsed = null;
+
+	}
+
+	const state =
+		creditFreshState(day);
+
+	if (
+		!parsed ||
+		typeof parsed !== "object" ||
+		parsed.day !== day
+	) {
+
+		return state;
+
+	}
+
+	for (
+		const kind of CREDIT_KINDS
+	) {
+
+		const value =
+			Number(parsed[kind]);
+
+		state[kind] =
+			Number.isFinite(value) &&
+			value > 0
+				? Math.floor(value)
+				: 0;
+
+	}
+
+	return state;
+
+}
+
+
+/*
+ * Key-level primitives. Accounts are keyed credits:<username>;
+ * freemium visitors are keyed ipcredits:<sha256(ip)>. Both
+ * share the same record shape, TTL and lazy daily reset.
+ */
+async function creditReadKey(
+	env: any,
+	key: any
+): Promise<any> {
+
+	const raw =
+		await env.KV_BINDING.get(
+			key
+		);
+
+	return creditParseState(
+		raw,
+		creditDay()
+	);
+
+}
+
+
+async function creditWriteKey(
+	env: any,
+	key: any,
+	state: any
+): Promise<void> {
+
+	await env.KV_BINDING.put(
+		key,
+		JSON.stringify(state),
+		{
+			expirationTtl:
+				CREDIT_RECORD_TTL
+		}
+	);
+
+}
+
+
+async function creditReadState(
+	env: any,
+	username: any
+): Promise<any> {
+
+	return creditReadKey(
+		env,
+		CREDIT_KEY_PREFIX +
+			String(username || "")
+				.toLowerCase()
+	);
+
+}
+
+
+async function creditWriteState(
+	env: any,
+	username: any,
+	state: any
+): Promise<void> {
+
+	await creditWriteKey(
+		env,
+		CREDIT_KEY_PREFIX +
+			String(username || "")
+				.toLowerCase(),
+		state
+	);
+
+}
+
+
+/*
+ * The JSON shape every credits-aware route returns.
+ * `null` inside limits/remaining means "unlimited".
+ */
+function creditSummary(
+	usertype: any,
+	state: any
+): any {
+
+	return creditSummaryFor(
+		creditPlanFor(usertype),
+		state
+	);
+
+}
+
+
+/*
+ * Plan-object variant used by the IP-keyed guest counters, which
+ * have no usertype of their own.
+ */
+function creditSummaryFor(
+	plan: any,
+	state: any
+): any {
+
+	const used: any =
+		{};
+
+	const remaining: any =
+		{};
+
+	for (
+		const kind of CREDIT_KINDS
+	) {
+
+		const limit =
+			plan.limits[kind];
+
+		used[kind] =
+			Number(state[kind]) ||
+			0;
+
+		remaining[kind] =
+			limit === null
+				? null
+				: Math.max(
+						0,
+						limit -
+							used[kind]
+					);
+
+	}
+
+	return {
+		success: true,
+		usertype: plan.id,
+		plan: {
+			id: plan.id,
+			label: plan.label,
+			limits: plan.limits
+		},
+		day: state.day,
+		resetsAt: creditResetsAt(),
+		used: used,
+		remaining: remaining
+	};
+
+}
+
+
+/*
+ * Counts one use of `kind`. A finite limit is enforced
+ * atomically enough for KV (read, check, write); returning
+ * allowed:false never increments.
+ */
+async function creditConsume(
+	env: any,
+	username: any,
+	usertype: any,
+	kind: any,
+	amount: any = 1
+): Promise<any> {
+
+	return creditConsumeKey(
+		env,
+		CREDIT_KEY_PREFIX +
+			String(username || "")
+				.toLowerCase(),
+		creditPlanFor(usertype),
+		kind,
+		amount
+	);
+
+}
+
+
+/*
+ * Key + plan variant. `meta` (masked IP, hash, scope) is merged
+ * into the stored record so the settings page can show a table
+ * of guest rows without storing the raw address.
+ */
+async function creditConsumeKey(
+	env: any,
+	key: any,
+	plan: any,
+	kind: any,
+	amount: any = 1,
+	meta: any = null
+): Promise<any> {
+
+	const limit =
+		plan.limits[kind];
+
+	const state =
+		await creditReadKey(
+			env,
+			key
+		);
+
+	const used =
+		Number(state[kind]) ||
+		0;
+
+	if (
+		limit !== null &&
+		used + amount > limit
+	) {
+
+		return {
+			allowed: false,
+			plan: plan,
+			state: state,
+			summary:
+				creditSummaryFor(
+					plan,
+					state
+				)
+		};
+
+	}
+
+	state[kind] =
+		used + amount;
+
+	state.updatedAt =
+		new Date().toISOString();
+
+	if (meta) {
+
+		Object.assign(
+			state,
+			meta
+		);
+
+	}
+
+	await creditWriteKey(
+		env,
+		key,
+		state
+	);
+
+	return {
+		allowed: true,
+		plan: plan,
+		state: state,
+		summary:
+			creditSummaryFor(
+				plan,
+				state
+			)
+	};
+
+}
+
+
+/* Used when an AI call fails after its credit was taken. */
+async function creditRefund(
+	env: any,
+	username: any,
+	kind: any,
+	amount: any = 1
+): Promise<void> {
+
+	await creditRefundKey(
+		env,
+		CREDIT_KEY_PREFIX +
+			String(username || "")
+				.toLowerCase(),
+		kind,
+		amount
+	);
+
+}
+
+
+async function creditRefundKey(
+	env: any,
+	key: any,
+	kind: any,
+	amount: any = 1
+): Promise<void> {
+
+	const state =
+		await creditReadKey(
+			env,
+			key
+		);
+
+	state[kind] =
+		Math.max(
+			0,
+			(Number(state[kind]) || 0) -
+				amount
+		);
+
+	state.updatedAt =
+		new Date().toISOString();
+
+	await creditWriteKey(
+		env,
+		key,
+		state
+	);
+
+}
+
+
+async function authSessionFromRequest(
+	request: any,
+	env: any
+): Promise<any> {
+
+	if (!env || !env.KV_BINDING) {
+		return null;
+	}
+
+	const cookie =
+		request.headers.get(
+			"Cookie"
+		) ||
+		"";
+
+	const match =
+		cookie.match(
+			/yvs_session=([a-f0-9]+)/
+		);
+
+	if (!match) {
+		return null;
+	}
+
+	const raw =
+		await env.KV_BINDING.get(
+			"session:" + match[1]
+		);
+
+	if (!raw) {
+		return null;
+	}
+
+	try {
+
+		return JSON.parse(raw);
+
+	}
+	catch (parseError) {
+
+		return null;
+
+	}
+
+}
+
+
+/*
+ * Session -> fresh user record. The record is read (not the
+ * session snapshot) so a plan change made in the settings page
+ * applies on the very next generation.
+ */
+async function creditSessionUser(
+	request: any,
+	env: any
+): Promise<any> {
+
+	const session =
+		await authSessionFromRequest(
+			request,
+			env
+		);
+
+	if (
+		!session ||
+		!session.username
+	) {
+
+		return null;
+
+	}
+
+	let record: any =
+		null;
+
+	const raw =
+		await env.KV_BINDING.get(
+			"user:" +
+			String(session.username)
+				.toLowerCase()
+		);
+
+	if (raw) {
+
+		try {
+
+			record =
+				JSON.parse(raw);
+
+		}
+		catch (parseError) {
+
+			record = null;
+
+		}
+
+	}
+
+	return {
+		username:
+			record &&
+			record.username
+				? record.username
+				: session.username,
+		email:
+			record &&
+			record.email
+				? record.email
+				: session.email || "",
+		usertype:
+			creditNormalizeUsertype(
+				record &&
+				record.usertype
+			)
+	};
+
+}
+
+
+/*
+ * ---- Freemium (no-account) identity ----------------------------
+ *
+ * GET /free sets `yvs_free=1`; after that, an anonymous request
+ * may spend from the guest plan. The counter key is a SHA-256 of
+ * the visitor's address with a fixed app salt, so the KV table
+ * never holds a raw IP. Requests with no address at all (local
+ * dev, some e2e harnesses) share one "unknown" bucket.
+ */
+
+function hasFreemiumCookie(
+	request: any
+): boolean {
+
+	const cookie =
+		request.headers.get(
+			"Cookie"
+		) ||
+		"";
+
+	return (
+		/(?:^|;\s*)yvs_free=1(?:;|$)/.test(
+			cookie
+		)
+	);
+
+}
+
+
+function guestRequestIp(
+	request: any
+): string {
+
+	const cfIp =
+		request.headers.get(
+			"CF-Connecting-IP"
+		);
+
+	if (
+		cfIp &&
+		cfIp.trim()
+	) {
+
+		return cfIp.trim();
+
+	}
+
+	const forwarded =
+		request.headers.get(
+			"X-Forwarded-For"
+		);
+
+	if (forwarded) {
+
+		const first =
+			forwarded.split(",")[0];
+
+		if (
+			first &&
+			first.trim()
+		) {
+
+			return first.trim();
+
+		}
+
+	}
+
+	return "";
+
+}
+
+
+/*
+ * Only the network part is persisted (203.0.113.0 / 2001:db8:
+ * 1:2:3::), which is what the settings table shows.
+ */
+function guestMaskedIp(
+	ip: any
+): string {
+
+	const value =
+		String(ip || "")
+			.trim();
+
+	if (!value) {
+
+		return "unknown";
+
+	}
+
+	if (
+		value.indexOf(".") !== -1
+	) {
+
+		const parts =
+			value.split(".");
+
+		if (parts.length === 4) {
+
+			return (
+				parts[0] +
+				"." +
+				parts[1] +
+				"." +
+				parts[2] +
+				".0"
+			);
+
+		}
+
+		return value;
+
+	}
+
+	if (
+		value.indexOf(":") !== -1
+	) {
+
+		const groups =
+			value
+				.split(":")
+				.filter(
+					(group: any) =>
+						group.length > 0
+				);
+
+		return (
+			groups
+				.slice(0, 4)
+				.join(":") +
+			"::"
+		);
+
+	}
+
+	return value;
+
+}
+
+
+async function guestCreditIdentity(
+	request: any
+): Promise<any> {
+
+	const rawIp =
+		guestRequestIp(
+			request
+		) ||
+		"unknown";
+
+	const digest =
+		await crypto.subtle.digest(
+			"SHA-256",
+			new TextEncoder().encode(
+				"yvs-guest:" +
+					rawIp
+			)
+		);
+
+	const hash =
+		authToHex(
+			new Uint8Array(
+				digest
+			)
+		).slice(0, 40);
+
+	const masked =
+		guestMaskedIp(
+			rawIp
+		);
+
+	return {
+		ip:
+			masked,
+		masked:
+			masked,
+		hash:
+			hash,
+		key:
+			IPCREDIT_KEY_PREFIX +
+			hash,
+		scope:
+			"ip"
+	};
+
+}
+
+
+function guestCreditMeta(
+	identity: any
+): any {
+
+	return {
+		ip:
+			identity.ip,
+		maskedIp:
+			identity.masked,
+		hash:
+			identity.hash,
+		scope:
+			"ip"
+	};
+
+}
+
+
+/*
+ * One guest use. Unlimited kinds (scripts, voiceovers, videos)
+ * still record usage for the table but never return allowed:false.
+ */
+async function guestCreditConsume(
+	env: any,
+	identity: any,
+	kind: any,
+	amount: any = 1
+): Promise<any> {
+
+	return creditConsumeKey(
+		env,
+		identity.key,
+		GUEST_PLAN,
+		kind,
+		amount,
+		guestCreditMeta(
+			identity
+		)
+	);
+
+}
+
+
+/* ---- User-type based URL routes ------------------------------ */
+
+function redirectResponse(
+	location: string,
+	status: any = 302
+): Response {
+
+	return new Response(
+		"",
+		{
+			status:
+				status,
+			headers: {
+				Location:
+					location,
+				"Cache-Control":
+					"no-store"
+			}
+		}
+	);
+
+}
+
+
+function applyPlanMode(
+	html: string,
+	mode: string
+): string {
+
+	return html.replace(
+		"<script>",
+		"<script>window.__PLAN_MODE = \"" +
+			mode +
+			"\";</" +
+			"script>\r\n<script>"
+	);
+
+}
+
+
+/*
+ * The studio shell served by /free, /studio and /paid. The mode
+ * is read by the client (window.__PLAN_MODE) so the same cached
+ * page can boot as a guest or an account session.
+ */
+async function appPageResponse(
+	env: any,
+	mode: string
+): Promise<Response> {
+
+	let html =
+		applyTheme(
+			createHTML(),
+			await readTheme(env)
+		);
+
+	html =
+		applyPlanMode(
+			html,
+			mode
+		);
+
+	const headers: any = {
+		"Content-Type":
+			"text/html; charset=UTF-8",
+		"Cache-Control":
+			"no-store"
+	};
+
+	if (mode === "freemium") {
+
+		headers["Set-Cookie"] =
+			FREEMIUM_COOKIE;
+
+	}
+
+	return new Response(
+		html,
+		{
+			status: 200,
+			headers:
+				headers
+		}
+	);
+
+}
+
+
 async function handleAuthApi(
 	request,
 	url,
@@ -4412,6 +6408,7 @@ async function handleAuthApi(
 
 	if (
 		path !== "/api/session" &&
+		path !== "/api/credits" &&
 		path !== "/api/login" &&
 		path !== "/api/signup" &&
 		path !== "/api/logout"
@@ -4480,6 +6477,73 @@ async function handleAuthApi(
 					raw
 				);
 
+			/*
+			 * Plan and today's credit counters ride along with
+			 * the session so the studio can paint the credits
+			 * chip without a second round-trip. A KV hiccup must
+			 * never turn a valid session into a 500, so both
+			 * reads fall back to the free plan / empty counters.
+			 */
+			let userRecord: any =
+				null;
+
+			try {
+
+				const userRaw =
+					await env.KV_BINDING.get(
+						"user:" +
+						String(session.username)
+							.toLowerCase()
+					);
+
+				if (userRaw) {
+
+					userRecord =
+						JSON.parse(
+							userRaw
+						);
+
+				}
+
+			}
+			catch (userReadError) {
+
+				userRecord = null;
+
+			}
+
+			const usertype =
+				creditNormalizeUsertype(
+					userRecord &&
+					userRecord.usertype
+				);
+
+			let creditState: any;
+
+			try {
+
+				creditState =
+					await creditReadState(
+						env,
+						session.username
+					);
+
+			}
+			catch (creditReadError) {
+
+				creditState =
+					creditFreshState(
+						creditDay()
+					);
+
+			}
+
+			const summary =
+				creditSummary(
+					usertype,
+					creditState
+				);
+
 			return json(
 				{
 					authenticated: true,
@@ -4487,9 +6551,119 @@ async function handleAuthApi(
 						username:
 							session.username,
 						email:
-							session.email
-					}
+							(userRecord &&
+							userRecord.email)
+								? userRecord.email
+								: session.email,
+						usertype:
+							usertype
+					},
+					plan:
+						summary.plan,
+					credits:
+						summary
 				}
+			);
+
+		}
+
+		/*
+		 * Today's credits for the signed-in user.
+		 * GET /api/credits
+		 */
+		if (
+			path === "/api/credits" &&
+			request.method === "GET"
+		) {
+
+			const creditUser =
+				await creditSessionUser(
+					request,
+					env
+				);
+
+			if (!creditUser) {
+
+				/*
+				 * A freemium browser is not signed in, but it
+				 * still has a plan and IP-keyed counters, so
+				 * it gets the same summary shape as an
+				 * account instead of a 401.
+				 */
+				if (
+					hasFreemiumCookie(
+						request
+					)
+				) {
+
+					const guestIdentity =
+						await guestCreditIdentity(
+							request
+						);
+
+					const guestState =
+						await creditReadKey(
+							env,
+							guestIdentity.key
+						);
+
+					return json(
+						Object.assign(
+							creditSummaryFor(
+								GUEST_PLAN,
+								guestState
+							),
+							{
+								authenticated: false,
+								guest: true,
+								scope: "ip",
+								ip: guestIdentity.ip,
+								user: null
+							}
+						)
+					);
+
+				}
+
+				return json(
+					{
+						success: false,
+						authenticated: false,
+						error:
+							"Not signed in"
+					},
+					401
+				);
+
+			}
+
+			const state =
+				await creditReadState(
+					env,
+					creditUser.username
+				);
+
+			const summary =
+				creditSummary(
+					creditUser.usertype,
+					state
+				);
+
+			return json(
+				Object.assign(
+					summary,
+					{
+						authenticated: true,
+						user: {
+							username:
+								creditUser.username,
+							email:
+								creditUser.email,
+							usertype:
+								creditUser.usertype
+						}
+					}
+				)
 			);
 
 		}
@@ -4687,6 +6861,15 @@ async function handleAuthApi(
 					),
 				hash:
 					hash,
+				/*
+				 * Every new account starts on the free
+				 * plan: unlimited videos, AI scripts and
+				 * voiceovers plus 50 AI images per day.
+				 * The settings page can promote it to
+				 * paid_user (1,200 images/day).
+				 */
+				usertype:
+					"free",
 				createdAt:
 					new Date().toISOString()
 			};
@@ -4736,6 +6919,14 @@ async function handleAuthApi(
 				)
 			);
 
+			const signupCredits =
+				creditSummary(
+					"free",
+					creditFreshState(
+						creditDay()
+					)
+				);
+
 			return json(
 				{
 					success: true,
@@ -4743,8 +6934,14 @@ async function handleAuthApi(
 						username:
 							username,
 						email:
-							email
-					}
+							email,
+						usertype:
+							"free"
+					},
+					plan:
+						signupCredits.plan,
+					credits:
+						signupCredits
 				},
 				200,
 				authSessionCookie(
@@ -4841,6 +7038,37 @@ async function handleAuthApi(
 				)
 			);
 
+			const loginUsertype =
+				creditNormalizeUsertype(
+					user.usertype
+				);
+
+			let loginCreditState: any;
+
+			try {
+
+				loginCreditState =
+					await creditReadState(
+						env,
+						user.username
+					);
+
+			}
+			catch (creditReadError) {
+
+				loginCreditState =
+					creditFreshState(
+						creditDay()
+					);
+
+			}
+
+			const loginCredits =
+				creditSummary(
+					loginUsertype,
+					loginCreditState
+				);
+
 			return json(
 				{
 					success: true,
@@ -4848,8 +7076,14 @@ async function handleAuthApi(
 						username:
 							user.username,
 						email:
-							user.email
-					}
+							user.email,
+						usertype:
+							loginUsertype
+					},
+					plan:
+						loginCredits.plan,
+					credits:
+						loginCredits
 				},
 				200,
 				authSessionCookie(

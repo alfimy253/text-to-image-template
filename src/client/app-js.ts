@@ -8339,6 +8339,34 @@ export const APP_JS = `
 		}
 
 		/*
+		 * Daily image credits (50 on the free plan,
+		 * 1,200 on paid_user). The worker enforces
+		 * the real limit; this pre-check just avoids
+		 * a doomed pair of requests.
+		 */
+		if (
+			creditState &&
+			creditState.remaining &&
+			creditState.remaining.images !== null &&
+			creditState.remaining.images <= 0
+		) {
+			const quotaMessage =
+				"Daily image credits used up (" +
+				creditImagesLimit() +
+				" per day on the " +
+				creditPlanLabel() +
+				" plan). Credits renew at midnight (UTC+8)." +
+				(PLAN_MODE === "freemium"
+					? " Create a free account for 50 images per day."
+					: "");
+			if (statusEl) {
+				statusEl.textContent = quotaMessage;
+			}
+			alert(quotaMessage);
+			return;
+		}
+
+		/*
 		 * Max 4 images in the results
 		 * panel. If it already holds 4
 		 * and the user generates again,
@@ -8379,6 +8407,14 @@ export const APP_JS = `
 
 		let lastError =
 			"";
+
+		/*
+		 * Set when the worker answers 401 (not signed
+		 * in) or 429 (credits exhausted): the next
+		 * variant would fail the same way.
+		 */
+		let stopGenerating =
+			false;
 
 		for (
 			let variant = 1;
@@ -8425,10 +8461,38 @@ export const APP_JS = `
 
 						}
 
+						/*
+						 * 429 carries the authoritative
+						 * counters, so the pill can
+						 * drop to zero immediately.
+						 */
+						if (
+							errJson &&
+							errJson.credits
+						) {
+
+							applyCredits(
+								errJson.credits
+							);
+
+						}
+
 					}
 					catch (jsonError) {
 
 						/* keep default */
+
+					}
+
+					if (
+						response.status ===
+							401 ||
+						response.status ===
+							429
+					) {
+
+						stopGenerating =
+							true;
 
 					}
 
@@ -8460,6 +8524,10 @@ export const APP_JS = `
 				);
 			}
 
+			if (stopGenerating) {
+				break;
+			}
+
 		}
 
 		if (btn) {
@@ -8477,6 +8545,13 @@ export const APP_JS = `
 						lastError
 					: "Done \u2014 480px landscape";
 		}
+
+		/*
+		 * Pick up the counters the worker just wrote
+		 * (and the remaining images after a partial
+		 * success).
+		 */
+		refreshCredits();
 
 		if (failures === AI_IMAGES_PER_PROMPT) {
 			alert(
@@ -8849,6 +8924,18 @@ export const APP_JS = `
 		false;
 
 	/*
+	 * Which URL served this shell (RULE 21):
+	 *   ""          the landing page at /
+	 *   "freemium"  /free  (no account, 10 images/day per IP)
+	 *   "studio"    /studio (free_user or paid_user)
+	 *   "paid"      /paid  (paid_user only)
+	 * The worker injects window.__PLAN_MODE before this script.
+	 */
+	const PLAN_MODE =
+		window.__PLAN_MODE ||
+		"";
+
+	/*
 	 * Build (once) and show the sign-in
 	 * overlay.
 	 */
@@ -8887,6 +8974,8 @@ export const APP_JS = `
 			'<button type="button" class="auth-close" id="auth-close" aria-label="Close">&times;</button>' +
 			'<div class="auth-title" id="auth-title">\ud83c\udfac YouTube Vibe Studio</div>' +
 			'<div class="auth-sub" id="auth-sub">Sign in to use the studio</div>' +
+			'<div class="auth-plan-note">Free plan: 50 AI images every day \u00b7 unlimited videos, AI scripts and voiceovers.<br>Paid plan (paid_user): 1,200 AI images every day.</div>' +
+			'<div class="auth-guest-note">No account? <a href="/free">Open the free studio</a> \u2014 10 AI images a day, counted per IP address.</div>' +
 			'<div class="auth-error" id="auth-error" role="alert"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
 			'<label for="auth-email">Email</label>' +
@@ -9176,6 +9265,8 @@ export const APP_JS = `
 			studio.hidden = true;
 		}
 
+		hideCreditPill();
+
 		window.scrollTo(0, 0);
 
 	}
@@ -9198,6 +9289,10 @@ export const APP_JS = `
 
 		if (studio) {
 			studio.hidden = false;
+		}
+
+		if (creditState) {
+			renderCreditPill();
 		}
 
 		window.scrollTo(0, 0);
@@ -9514,6 +9609,23 @@ export const APP_JS = `
 				"Email: " +
 				email;
 
+			/*
+			 * Plan + today's image credits. The line is
+			 * filled by updateAccountCreditLine() from the
+			 * latest /api/credits payload (or left empty
+			 * until the first load finishes).
+			 */
+			const cLine =
+				document.createElement(
+					"div"
+				);
+
+			cLine.className =
+				"auth-account-line";
+
+			cLine.id =
+				"auth-account-credits";
+
 			box.appendChild(
 				uLine
 			);
@@ -9521,6 +9633,12 @@ export const APP_JS = `
 			box.appendChild(
 				eLine
 			);
+
+			box.appendChild(
+				cLine
+			);
+
+			updateAccountCreditLine();
 
 			box.style.display =
 				"block";
@@ -9726,6 +9844,24 @@ export const APP_JS = `
 							: email
 					);
 
+					/*
+					 * Signup/login return the plan and today's
+					 * counters, so the pill paints instantly;
+					 * otherwise fetch them.
+					 */
+					if (data.credits) {
+
+						applyCredits(
+							data.credits
+						);
+
+					}
+					else {
+
+						refreshCredits();
+
+					}
+
 				}
 			else {
 
@@ -9796,12 +9932,810 @@ export const APP_JS = `
 				"none";
 		}
 
-		authAccess = "required";
 		pendingStudioEntry = false;
 		hideAuthOverlay();
+		resetCredits();
+
+		/*
+		 * Signing out of /free drops back to guest mode
+		 * instead of the landing page: the freemium studio
+		 * stays usable without an account.
+		 */
+		if (PLAN_MODE === "freemium") {
+			authAccess = "freemium";
+			showStudioView();
+			refreshCredits();
+			return;
+		}
+
+		authAccess = "required";
 		showLandingView();
 
 	}
+
+	// =========================================================
+	// MODULE 6b: credits
+	// (daily credits shown as a pill in the studio and in the
+	//  account box. The worker is the source of truth:
+	//  GET /api/credits returns the plan and today's counters,
+	//  /image/gen returns 429 + the counters when the daily
+	//  image allowance is spent.
+	//
+	//  free       unlimited videos / AI scripts / voiceovers,
+	//             50 AI images per day
+	//  paid_user  unlimited videos / AI scripts / voiceovers,
+	//             1,200 AI images per day
+	//  Every counter renews at midnight Asia/Taipei (UTC+8).
+	// =========================================================
+
+	let creditState =
+		null;
+
+	function creditPlanLabel() {
+
+		return creditState &&
+			creditState.plan
+			? creditState.plan.label
+			: "Free";
+
+	}
+
+	function creditImagesLeft() {
+
+		if (
+			!creditState ||
+			!creditState.remaining
+		) {
+
+			return null;
+
+		}
+
+		return creditState
+			.remaining.images;
+
+	}
+
+	function creditImagesLimit() {
+
+		return creditState &&
+			creditState.plan &&
+			creditState.plan.limits
+			? creditState.plan.limits.images
+			: 50;
+
+	}
+
+	function creditImagesValue() {
+
+		const left =
+			creditImagesLeft();
+
+		if (
+			left === null
+		) {
+
+			return "Unlimited";
+
+		}
+
+		return (
+			left +
+			" / " +
+			creditImagesLimit() +
+			" left today"
+		);
+
+	}
+
+	function creditResetText() {
+
+		if (
+			!creditState ||
+			!creditState.resetsAt
+		) {
+
+			return "Renews daily at midnight (UTC+8)";
+
+		}
+
+		const left =
+			new Date(
+				creditState.resetsAt
+			).getTime() -
+			Date.now();
+
+		if (
+			!isFinite(left) ||
+			left <= 0
+		) {
+
+			return "Renewing now (midnight UTC+8)";
+
+		}
+
+		const hours =
+			Math.floor(
+				left / 3600000
+			);
+
+		const minutes =
+			Math.floor(
+				(left % 3600000) / 60000
+			);
+
+		return (
+			"Renews in " +
+			hours +
+			"h " +
+			minutes +
+			"m (midnight UTC+8)"
+		);
+
+	}
+
+	function closeCreditPopover() {
+
+		const popover =
+			document.getElementById(
+				"credit-popover"
+			);
+
+		const button =
+			document.getElementById(
+				"credit-pill-btn"
+			);
+
+		if (popover) {
+			popover.hidden = true;
+		}
+
+		if (button) {
+			button.setAttribute(
+				"aria-expanded",
+				"false"
+			);
+		}
+
+	}
+
+	function creditCountText(
+		count,
+		singular,
+		plural
+	) {
+
+		return (
+			count +
+			" " +
+			(Number(count) === 1
+				? singular
+				: plural)
+		);
+
+	}
+
+	function creditRow(
+		label,
+		value
+	) {
+
+		const row =
+			document.createElement(
+				"div"
+			);
+
+		row.className =
+			"credit-row";
+
+		const name =
+			document.createElement(
+				"span"
+			);
+
+		name.textContent =
+			label;
+
+		const amount =
+			document.createElement(
+				"b"
+			);
+
+		amount.textContent =
+			value;
+
+		row.appendChild(
+			name
+		);
+
+		row.appendChild(
+			amount
+		);
+
+		return row;
+
+	}
+
+	function renderCreditPopover() {
+
+		const popover =
+			document.getElementById(
+				"credit-popover"
+			);
+
+		if (!popover) {
+			return;
+		}
+
+		popover.innerHTML =
+			"";
+
+		const head =
+			document.createElement(
+				"div"
+			);
+
+		head.className =
+			"credit-popover-head";
+
+		const title =
+			document.createElement(
+				"span"
+			);
+
+		title.textContent =
+			"Daily credits";
+
+		const plan =
+			document.createElement(
+				"span"
+			);
+
+		plan.className =
+			"credit-plan-tag";
+
+		plan.textContent =
+			creditPlanLabel();
+
+		head.appendChild(
+			title
+		);
+
+		head.appendChild(
+			plan
+		);
+
+		popover.appendChild(
+			head
+		);
+
+		popover.appendChild(
+			creditRow(
+				"\\ud83c\\udfac Video projects",
+				"Unlimited"
+			)
+		);
+
+		popover.appendChild(
+			creditRow(
+				"\\ud83d\\uddbc AI images",
+				creditImagesValue()
+			)
+		);
+
+		popover.appendChild(
+			creditRow(
+				"\\u2728 AI scripts",
+				"Unlimited"
+			)
+		);
+
+		popover.appendChild(
+			creditRow(
+				"\\ud83c\\udfa4 Voiceovers",
+				"Unlimited"
+			)
+		);
+
+		if (
+			creditState &&
+			creditState.used
+		) {
+
+			const used =
+				document.createElement(
+					"div"
+				);
+
+			used.className =
+				"credit-used";
+
+			used.textContent =
+				"Used today: " +
+				creditCountText(
+					creditState.used.images,
+					"image",
+					"images"
+				) +
+				" \u00b7 " +
+				creditCountText(
+					creditState.used.scripts,
+					"script",
+					"scripts"
+				) +
+				" \u00b7 " +
+				creditCountText(
+					creditState.used.voiceovers,
+					"voiceover",
+					"voiceovers"
+				);
+
+			popover.appendChild(
+				used
+			);
+
+		}
+
+		const reset =
+			document.createElement(
+				"div"
+			);
+
+		reset.className =
+			"credit-reset";
+
+		reset.textContent =
+			creditResetText();
+
+		popover.appendChild(
+			reset
+		);
+
+		/*
+		 * A guest can turn the 10/day IP allowance into a
+		 * 50/day account at any time.
+		 */
+		if (
+			creditState &&
+			creditState.plan &&
+			creditState.plan.id ===
+				"guest"
+		) {
+
+			const cta =
+				document.createElement(
+					"button"
+				);
+
+			cta.type =
+				"button";
+
+			cta.className =
+				"credit-signup";
+
+			cta.textContent =
+				"Create a free account \u2014 50 images/day";
+
+			cta.addEventListener(
+				"click",
+				(event) => {
+
+					event.stopPropagation();
+					closeCreditPopover();
+					showAuthOverlay("signup");
+
+				}
+			);
+
+			popover.appendChild(
+				cta
+			);
+
+		}
+
+	}
+
+	function toggleCreditPopover() {
+
+		const popover =
+			document.getElementById(
+				"credit-popover"
+			);
+
+		const button =
+			document.getElementById(
+				"credit-pill-btn"
+			);
+
+		if (!popover) {
+			return;
+		}
+
+		const open =
+			popover.hidden;
+
+		popover.hidden =
+			!open;
+
+		if (button) {
+			button.setAttribute(
+				"aria-expanded",
+				open
+					? "true"
+					: "false"
+			);
+		}
+
+		if (open) {
+
+			renderCreditPopover();
+
+			/*
+			 * Opening the popover is a cheap moment to
+			 * re-read the server counters.
+			 */
+			refreshCredits();
+
+		}
+
+	}
+
+	function renderCreditPill() {
+
+		if (!creditState) {
+
+			hideCreditPill();
+
+			return;
+
+		}
+
+		let pill =
+			document.getElementById(
+				"credit-pill"
+			);
+
+		if (!pill) {
+
+			pill =
+				document.createElement(
+					"div"
+				);
+
+			pill.id =
+				"credit-pill";
+
+			pill.className =
+				"credit-pill";
+
+			const button =
+				document.createElement(
+					"button"
+				);
+
+			button.type =
+				"button";
+
+			button.id =
+				"credit-pill-btn";
+
+			button.className =
+				"credit-pill-btn";
+
+			button.setAttribute(
+				"aria-haspopup",
+				"true"
+			);
+
+			button.setAttribute(
+				"aria-expanded",
+				"false"
+			);
+
+			button.setAttribute(
+				"aria-controls",
+				"credit-popover"
+			);
+
+			const dot =
+				document.createElement(
+					"span"
+				);
+
+			dot.className =
+				"credit-pill-dot";
+
+			const plan =
+				document.createElement(
+					"span"
+				);
+
+			plan.className =
+				"credit-pill-plan";
+
+			plan.id =
+				"credit-pill-plan";
+
+			const separator =
+				document.createElement(
+					"span"
+				);
+
+			separator.className =
+				"credit-pill-sep";
+
+			const images =
+				document.createElement(
+					"span"
+				);
+
+			images.className =
+				"credit-pill-images";
+
+			images.id =
+				"credit-pill-images";
+
+			const caret =
+				document.createElement(
+					"span"
+				);
+
+			caret.className =
+				"credit-pill-caret";
+
+			caret.setAttribute(
+				"aria-hidden",
+				"true"
+			);
+
+			caret.textContent =
+				"\\u25be";
+
+			button.appendChild(
+				dot
+			);
+
+			button.appendChild(
+				plan
+			);
+
+			button.appendChild(
+				separator
+			);
+
+			button.appendChild(
+				images
+			);
+
+			button.appendChild(
+				caret
+			);
+
+			button.addEventListener(
+				"click",
+				(event) => {
+
+					event.stopPropagation();
+
+					toggleCreditPopover();
+
+				}
+			);
+
+			const popover =
+				document.createElement(
+					"div"
+				);
+
+			popover.id =
+				"credit-popover";
+
+			popover.className =
+				"credit-popover";
+
+			popover.hidden =
+				true;
+
+			pill.appendChild(
+				button
+			);
+
+			pill.appendChild(
+				popover
+			);
+
+			document.body.appendChild(
+				pill
+			);
+
+		}
+
+		const planEl =
+			document.getElementById(
+				"credit-pill-plan"
+			);
+
+		const imagesEl =
+			document.getElementById(
+				"credit-pill-images"
+			);
+
+		if (planEl) {
+
+			planEl.textContent =
+				creditPlanLabel();
+
+		}
+
+		if (imagesEl) {
+
+			imagesEl.textContent =
+				creditImagesValue();
+
+		}
+
+		renderCreditPopover();
+
+		pill.hidden =
+			false;
+
+	}
+
+	function hideCreditPill() {
+
+		closeCreditPopover();
+
+		const pill =
+			document.getElementById(
+				"credit-pill"
+			);
+
+		if (pill) {
+			pill.hidden = true;
+		}
+
+	}
+
+	function updateAccountCreditLine() {
+
+		const line =
+			document.getElementById(
+				"auth-account-credits"
+			);
+
+		if (!line) {
+			return;
+		}
+
+		line.textContent =
+			creditState
+				? "Plan: " +
+					creditPlanLabel() +
+					" \\u2014 " +
+					creditImagesValue()
+				: "";
+
+	}
+
+	function applyCredits(
+		data
+	) {
+
+		if (
+			!data ||
+			!data.plan ||
+			!data.remaining
+		) {
+
+			return;
+
+		}
+
+		creditState =
+			data;
+
+		renderCreditPill();
+
+		updateAccountCreditLine();
+
+	}
+
+	function resetCredits() {
+
+		creditState =
+			null;
+
+		hideCreditPill();
+
+		updateAccountCreditLine();
+
+	}
+
+	async function refreshCredits() {
+
+		try {
+
+			const response =
+				await fetch(
+					"/api/credits",
+					{
+						credentials:
+							"same-origin",
+
+						cache:
+							"no-store",
+					}
+				);
+
+			if (!response.ok) {
+
+				resetCredits();
+
+				return null;
+
+			}
+
+			let data =
+				null;
+
+			try {
+
+				data =
+					await response.json();
+
+			}
+			catch (jsonError) {
+
+				data = null;
+
+			}
+
+			applyCredits(data);
+
+			return data;
+
+		}
+		catch (netError) {
+
+			return null;
+
+		}
+
+	}
+
+	document.addEventListener(
+		"click",
+		(event) => {
+
+			const pill =
+				document.getElementById(
+					"credit-pill"
+				);
+
+			if (
+				pill &&
+				!pill.contains(
+					event.target
+				)
+			) {
+
+				closeCreditPopover();
+
+			}
+
+		}
+	);
+
+	document.addEventListener(
+		"keydown",
+		(event) => {
+
+			if (event.key === "Escape") {
+				closeCreditPopover();
+			}
+
+		}
+	);
 
 	// =========================================================
 	// MODULE 7: api-render + background worker
@@ -11106,8 +12040,39 @@ export const APP_JS = `
 						: ""
 				);
 
+				/*
+				 * GET /api/session carries the plan and the
+				 * day's counters; fall back to /api/credits
+				 * for an older worker response.
+				 */
+				if (data.credits) {
+
+					applyCredits(
+						data.credits
+					);
+
+				}
+				else {
+
+					refreshCredits();
+
+				}
+
 				return;
 
+			}
+
+			/*
+			 * /free is the freemium entry: no account
+			 * needed, boot the studio with the IP-keyed
+			 * guest credits (10 images per day).
+			 */
+			if (PLAN_MODE === "freemium") {
+				authAccess = "freemium";
+				hideAuthOverlay();
+				showStudioView();
+				refreshCredits();
+				return;
 			}
 
 			/* A missing/invalid session leaves the public landing open. */
@@ -11117,6 +12082,13 @@ export const APP_JS = `
 
 		}
 		catch (netError) {
+
+			if (PLAN_MODE === "freemium") {
+				authAccess = "freemium";
+				showStudioView();
+				refreshCredits();
+				return;
+			}
 
 			/* A session endpoint outage must not lock out open access. */
 			authAccess = "open";

@@ -21,10 +21,10 @@ documentation · **S4** cosmetic.
 
 | # | Severity | Finding | Status |
 | --- | --- | --- | --- |
-| 1 | S1 | Every data route is anonymous (render, worker, AI, config) | open |
+| 1 | S1 | Most data routes are anonymous (render, worker, `/api/script`, `/api/voiceover`, config GETs). **`/image/gen` is metered per account (RULE 20) or per IP for `/free` guests (RULE 21)** | partially fixed |
 | 2 | S1 | `POST /api/worker/deliver` lets anyone overwrite any job's output | open |
 | 3 | S1 | Sessions never expire in KV; cookie has no `Secure` | open |
-| 4 | S1 | No rate limiting on login/signup/AI routes | open |
+| 4 | S1 | No rate limiting on login/signup/AI routes. **Images are capped per account per day** (50 free / 1,200 paid) **and per IP for guests** (10); scripts and voiceovers remain unlimited by design | partially fixed |
 | 5 | S1 | Settings password hard-coded + client-side only | open (documented) |
 | 6 | S2 | `getBlobStore()` silently zero-fills missing parts → corrupt MP4 | open |
 | 7 | S2 | Job claiming is neither FIFO nor atomic | open |
@@ -429,3 +429,44 @@ code enumerated exactly those records — but if that matters for compliance, ha
 5. **Repair the toolchain** (#11, #12, #17) so regressions can be caught: green `tsc`, delete the
    stale duplicate, parameterise the namespace id.
 6. **Small clean-ups** (#8, #9, #10, #16, #18, #19) — one line each, mostly deletions.
+
+---
+
+## Credits & plans (2026-10-22)
+
+- `/image/gen` is no longer anonymous: when `KV_BINDING` is bound it requires `yvs_session` and
+  consumes one image credit (`401` signed out, `429` at the daily limit, refund on model error).
+  `/image/:i` (the two fixed demo prompts) stays unmetered so the landing page can render its
+  sample cards before sign-in.
+- Per-account counters live in `credits:<username>` and are lazy-reset by comparing the stored
+  `day` with the current Asia/Taipei date — there is no scheduled Worker.
+- Plans are stored on the user record (`user:<username>.usertype`, `free` | `paid_user`) and are
+  changed from the settings page via `/api/config/users`. "Paid" is operator-assigned; no payment
+  provider is integrated.
+- Remaining risk: KV is eventually consistent, so parallel generations can overshoot a limit by
+  the number of in-flight requests. Bounded and self-correcting at the daily reset.
+
+---
+
+## Bug Fix Session #206 — freemium access and per-IP credits (2026-10-22)
+
+Full record: `bug-fix-session-206.md`; system rule: `system-rules.md` RULE 21.
+
+- **New public surface.** `GET /free` serves the studio to anyone and marks the browser with
+  `yvs_free=1`. `GET /studio` (accounts) and `GET /paid` (`paid_user`) are the plan-restricted
+  variants; guests are redirected to `/free`.
+- **Guest plan.** 10 AI images/day per IP; videos, scripts and voiceovers unlimited. A cold
+  anonymous `/image/gen` without the cookie stays `401`, so the freemium tier is reachable only
+  through the documented URL.
+- **IP table.** Guest counters live in `ipcredits:<sha256("yvs-guest:"+ip)>` (2-day TTL) and are
+  surfaced to operators by `GET /api/config/ipcredits` + the settings **Guest credits by IP**
+  table. Only the masked address (`203.0.113.0`) is stored; the raw IP is never written.
+- **Known limits (accepted, documented):**
+  - Rotating IP addresses multiplies the 10/day allowance. The bucket is a product limit, not
+    anti-abuse; a WAF/rate-limit rule is the right control for that.
+  - Shared NAT (office, school, carrier) gets 10 images/day for the whole egress address.
+  - `/paid` and `/studio` are navigation gates on a client-side shell; API metering remains the
+    real boundary.
+  - KV eventual consistency can overshoot the guest limit by the number of in-flight requests.
+- **Privacy.** No raw address is persisted. The hash is salted (`yvs-guest:`) and truncated to
+  40 hex characters; the operator view shows the network-masked address only.
