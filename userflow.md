@@ -2,9 +2,9 @@
 
 > Reconstructed from a full code read of the working tree on **2026-10-16**.
 >
-> Evidence base: `src/index.ts` (4,922 lines, all routes/APIs/KV logic), `src/page.ts`,
+> Evidence base: `src/index.ts` (≈7,200 lines, all routes/APIs/KV logic), `src/page.ts`,
 > `src/prompts.ts`, `src/client/markup.ts`, `src/client/styles.ts`,
-> `src/client/app-js.ts` (13,860 lines, the whole studio UI + render engine),
+> `src/client/app-js.ts` (14,832 lines, the whole studio UI + render engine),
 > `src/client/template-composer-js.ts` (2,312 lines), `src/client/config-page-js.ts`,
 > `wrangler.json`, `package.json`, `e2e/index.ts`. The SEO script has two AI stages (see §4.2
 > and `system-rules.md` RULE 7 / RULE 18). This revision documents the day-rotating settings
@@ -21,7 +21,7 @@ A single-page **browser-side video studio** served by one Cloudflare Worker.
 
 | Piece | Where it runs | What it does |
 | --- | --- | --- |
-| Page + all UI code | Worker (`GET /`) | Serves one ~640 KB HTML string (landing, studio, CSS + JS inlined) |
+| Page + all UI code | Worker (`GET /`) | Serves one ~700 KB HTML string (landing, studio, CSS + JS inlined) |
 | Video rendering | **The user's browser** (WebCodecs `VideoEncoder`/`AudioEncoder` + `mp4-muxer`) | Draws Ken-Burns slides, overlays, captions, subtitles and muxes an MP4 |
 | AI images | Workers AI `@cf/stabilityai/stable-diffusion-xl-base-1.0` | `/image/:i` (demo prompts) and `/image/gen?prompt=` (per-video AI panel) |
 | AI script (SRT) | Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8`, **two stages** | `/api/script` — stage 1 plans the SEO keywords, stage 2 writes the SRT around them |
@@ -37,7 +37,7 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | --- | --- | --- |
 | **Studio user** | `GET /` | Sees the public landing page; signs in to enter the studio (or, if KV is unbound, enters through the primary CTA). Builds up to 10 videos, uploads media, generates images/scripts/voiceovers, renders MP4s locally, can push a video to the render API |
 | **Background worker operator** | `GET /{current-day}/config/uvxyz` | Password-gated settings page; the current day-of-month in Asia/Taipei must match; runs an extra browser tab that polls `/api/worker/poll` and renders other users' queued jobs |
-| **Anonymous caller** | Any route | All data routes (`/api/script`, `/api/voiceover`, `/api/render`, `/tts`, `/image/*`, `GET /api/config/workers`) are unauthenticated *(see restrictions)* |
+| **Anonymous caller** | Any route | `/api/script`, `/api/voiceover`, `/api/render`, `/tts`, `/image/:i` and `GET /api/config/workers` are unauthenticated. `/image/gen` is the exception: it needs a session or the `/free` guest cookie, and `/studio` + `/paid` need a session (RULE 21) |
 
 ---
 
@@ -51,7 +51,7 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | `/paid` | GET | session, `usertype: paid_user` | Studio HTML + `window.__PLAN_MODE="paid"`; anonymous → `302 /free`, free → `302 /studio` |
 | `/{current-day}/config/uvxyz` | GET | client-side password overlay; day must match Asia/Taipei today | Studio HTML + `window.__CONFIG_PAGE=true` + injected settings script; stale-day and bare legacy paths are `404` |
 | `/image/:index` | GET | none | PNG (`X-Image-Index`); `400` if index outside `prompts[]`; `500` on AI error. **Unmetered demo sample** |
-| `/image/gen?prompt=&variant=` | GET | session **or** `yvs_free` guest cookie when KV is bound; **1 image credit** | PNG (`X-Image-Variant`, `X-Credit-*`, `X-Credit-Scope: account\|ip`); `400` if prompt empty; `401` cold anonymous (message points at `/free`); `429 {error,credits}` daily limit spent; `500` on AI error (credit refunded) |
+| `/image/gen?prompt=&variant=` | GET | session **or** `yvs_free` guest cookie when KV is bound; **1 image credit** | PNG (`X-Image-Variant`, `X-Credit-*`, `X-Credit-Scope: account\|ip`); `400` if prompt empty; `401` only when both a session and the cookie are absent (message points at `/free`); `429 {error,credits}` daily limit spent; `500` on AI error (credit refunded) |
 | `/api/session` | GET | none | `200 {authenticated:true,user,plan,credits}` / `401` / `503` if KV unbound |
 | `/api/credits` | GET | session, or `yvs_free` guest cookie | `200 {usertype,plan,day,resetsAt,used,remaining,user}` / guest `200 {usertype:"guest",authenticated:false,guest:true,scope:"ip",ip,...}` / `401` / `503` |
 | `/api/signup` | POST | none | `200` + `Set-Cookie: yvs_session` + `user{...,usertype:"free"}`, `plan`, `credits` / `400` / `409` (duplicate) / `503` (KV unbound); no account cap |
@@ -62,11 +62,11 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | `/tts?text=&lang=` | GET | none | Proxied audio (`audio/mpeg`), max 2 000 chars |
 | `/api/render` | POST | none, **needs KV** | `{jobId}` / `{status:"busy"}` / `413` / `503` |
 | `/api/render/:jobId` | GET | none, needs KV | job JSON, or the finished MP4 (`attachment`) / `404` / `500` |
-| `/api/worker/poll` | GET | none, needs KV | `{job}` or `{job:null}` (claims the oldest queued job) |
+| `/api/worker/poll` | GET | none, needs KV | `{job}` or `{job:null}` (claims the first `queued` key in KV list order) |
 | `/api/worker/deliver?job=` | POST | none, needs KV | stores raw MP4, job → `done` |
 | `/api/worker/failed?job=` | POST | none, needs KV | job → `failed` with error text |
 | `/api/config/theme` | GET / POST | GET: none · POST: `pw` body field | `{success,theme,themes:[default,strata,stellar]}` / `400 Unknown theme` / `403` / `503` |
-| `/api/config/workers` | GET / POST | GET: none · POST: `pw` body field | registered worker URLs (max 3) |
+| `/api/config/workers` | GET / POST | GET: none · POST: `pw` body field | registered worker URLs (max 3); `GET` returns `{urls:[]}` without KV, `POST` is `503` |
 | `/api/config/users?pw=` | GET | `pw` query param | up to 50 accounts with `usertype`, `plan`, used and remaining credits / `403` / `503` |
 | `/api/config/users` | POST | `pw` body field | sets `usertype` (`free` / `paid_user`), optional `resetCredits` / `400` / `403` / `404` / `503` |
 | `/api/config/ipcredits?pw=` | GET | `pw` query param | up to 50 guest rows: masked IP, hash, used, remaining, `updatedAt` / `403` / `503` |
@@ -121,7 +121,8 @@ overlay → submitAuth()
    POST /api/signup  {username,email,password}   or   POST /api/login {username,password}
      ├─ 200 → hide overlay, open studio, showUserBadge(username,email)
      └─ else → setAuthError(data.error || "Request failed (<status>)")
-Logout → POST /api/logout → hide studio and return to the landing page; login stays available in the footer
+Logout → POST /api/logout → on `/` the landing page returns and login stays available in the footer;
+         on `/free` the page drops back to guest mode and re-reads the IP counters
 ```
 
 ---
@@ -145,9 +146,10 @@ After signup / login / session restore:
 Image generation (AI panel, 2 variants per submit):
    GET /image/gen?prompt=&variant=1
      ├─ 200  → PNG + X-Credit-Images-Remaining; credit consumed in KV
-     ├─ 401  → "Sign in to generate AI images" (loop stops)
-     ├─ 429  → "Daily image credits used up (50 images/day on the Free plan).
-     │          Credits renew at midnight (UTC+8)." (loop stops, pill drops to 0)
+     ├─ 401  → the worker's error ("Sign in to generate AI images — … Open /free …")
+     │          appears as "1 of 2 failed: …" in the AI status line (loop stops)
+     ├─ 429  → same status-line form for "Daily image credits used up (50 images/day on the
+     │          Free plan). Credits renew at midnight (UTC+8)." (loop stops, pill drops to 0)
      └─ 500  → model error; the consumed credit is refunded
 
 Plans (user record user:<name>.usertype):
@@ -176,15 +178,16 @@ Visitor opens /free (or a landing/footer link to it)
    ├─ Script: initAuth() → GET /api/session
    │     ├─ 200 (signed in) → normal account studio (the /free URL is upgrade-safe)
    │     └─ 401 → authAccess="freemium": hide landing, show studio, GET /api/credits
-   │                → {plan:"guest", remaining.images:10, scope:"ip", ip:"203.0.113.0"}
+   │                → {usertype:"guest", plan:{id:"guest",…}, remaining.images:10,
+   │                   scope:"ip", ip:"203.0.113.0"}
    │                → pill "Guest · 10 / 10 left today"
    │
    ├─ AI images: GET /image/gen  (cookie present, no session)
    │     → worker hashes CF-Connecting-IP, spends ipcredits:<hash> with the guest plan
    │       200 → PNG + X-Credit-Plan: guest, X-Credit-Images-Limit: 10,
    │              X-Credit-Images-Remaining, X-Credit-Scope: ip
-   │       429 → "Daily image credits used up (10 images/day on the Guest plan)...
-   │              Create a free account for 50 images per day."
+   │       429 → same "1 of 2 failed: …" status line with "Daily image credits used up
+   │              (10 images/day on the Guest plan)... Create a free account for 50 images per day."
    │       500 → credit refunded
    │
    ├─ AI scripts / voiceovers / videos: unlimited for guests; usage is booked to the IP row
@@ -327,7 +330,8 @@ speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
   ├─ STAGE 2  SRT writer (same model, max_tokens 2048, temp 0.7), prompt = basePrompt + SEO brief
   │      prompt lists the long-tails ("say each at least once") and the shorts
   │      ("say each between 2 and 5 times") + "work every keyword into natural spoken sentences"
-  │      validateSrt: SRT shape, ≤42-char cues, no overlap, 10 s … minutes*60 s + 1.5 s
+  │      validateSrt: SRT shape, no overlap, 10 s … minutes*60 s + 1.5 s
+  │      (the ≤42-char cue target is prompt text only — the validator does not enforce it)
   │      then keyword counts on the SPOKEN text only (cue numbers/timestamps stripped):
   │        every short 2-5× (both bounds fail) · every long-tail ≥1× (no upper bound)
   │      any violation → retry up to 3× with the exact reason attached
@@ -451,7 +455,7 @@ empty ──▶ rendering ──▶ done
 ```
 
 > `STATUS_COLORS` also defines `queued` (blue), but no code path ever assigns it to a
-> video project — it is dead in the client (`app-js.ts:6152` region). The **job** statuses
+> video project — it is dead in the client. The **job** statuses
 > used by the server are a different set: `queued → running → done | failed`.
 
 ---
@@ -486,7 +490,8 @@ empty ──▶ rendering ──▶ done
    pollOnce() every 3 s (5 s after a network error) while polling is on:
      GET /api/worker/poll
         server first expires any "running" job older than 10 min → failed("worker timed out")
-        then claims the oldest queued job: status → "running", claimedAt = now
+        then claims the first queued job in KV's key order (ids are time-prefixed, so that is
+        usually but not guaranteed the oldest): status → "running", claimedAt = now
         returns { job:{id,name,project,assets(base64),audio} }   (or {job:null})
      → window.workerRunJob(job)
           rebuild File objects from base64, probe MP4s, rebuild caption rows,
@@ -528,7 +533,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
      │    [Save theme] → POST /api/config/theme {pw, theme}
      │        server: pw must match, theme must be in the whitelist → stored as config:theme
      │        → "Saved — reload the studio page to see the new theme."
-     │        (both HTML routes stamp data-theme on <html> from then on — no flash)
+     │        (every HTML route stamps data-theme on <html> from then on — no flash)
      ├─ Instance mode: [Web app]        → "Background workers" group
      │    3 optional URL inputs (placeholder https://your-worker.workers.dev)
      │    GET /api/config/workers preloads the list → "Registered: …" / "None registered."
@@ -564,7 +569,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Voiceover text empty | `/api/voiceover` | `400 "No script text to speak"` |
 | Theme not in `CONFIG_THEMES` | `POST /api/config/theme` | `400 "Unknown theme"`, nothing written |
 | Theme KV write fails | `POST /api/config/theme` | `503 "Theme storage unavailable"` (JSON, shown in the status line) |
-| Theme KV missing or erroring | `GET /`, `GET /{current-day}/config/uvxyz` | falls back to the built-in look, page still `200` |
+| Theme KV missing or erroring | all five HTML routes (`/`, `/free`, `/studio`, `/paid`, `/{current-day}/config/uvxyz`) | falls back to the built-in look, page still `200` |
 | Voiceover language not in `VOICE_LANGS` | `/api/voiceover` | `400 "Unknown voice language"` (UI only offers `en`) |
 | `/tts` text over 2 000 chars | `/tts` | `400 "Text too long (max 2000 chars)"` |
 | Upstream TTS HTTP error | `/tts` | `502 "TTS service error (<status>)"` / `502 "TTS proxy failed: …"` |
@@ -581,7 +586,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Large GIF | `buildGifSlideFrames()` | frames downscaled (scale ≥ 0.15) to stay under a 120 MB buffer budget |
 | MP4 clip > 60 s | `onVideoFiles()` probe | alert + that file is skipped |
 | Upload over a per-kind cap | `onVideoFiles()` | alert + the rest of the batch stops |
-| Session cookie invalid | `/api/session` | `401` → landing page stays visible; studio entry opens the auth overlay |
+| Session cookie invalid | `/api/session` | `401` → on `/` the landing stays visible and studio entry opens the auth overlay; on `/free` the same answer boots the guest studio |
 | Email already registered | `/api/signup` | `409 "Email already in use"` (1 keyed read of the `email:` index; accounts predating the index are covered by a bounded scan while the namespace holds <= 200 accounts) |
 | Duplicate username / email | `/api/signup` | `409 "Username already taken"` / `409 "Email already in use"` |
 | Wrong sign-in credentials | `/api/login` | `401 "Invalid username or password"` (never reveals which field) |
@@ -594,13 +599,13 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | --- | --- |
 | Page assembly / caching | `src/page.ts`, `src/client/markup.ts`, `src/client/styles.ts` |
 | Routes, KV, jobs, auth | `src/index.ts` (ordered route handler; `getCurrentConfigPath()` builds the current-day settings URL, which is matched only by the settings-page GET route; unmatched paths return `404`) |
-| Accordions, gallery, queue | `src/client/app-js.ts` MODULE 1-4 (`initVideoStudio` L6176, `addVideoAccordion` L6250, `videoAccordionHTML` L6424, `onVideoFiles` L6689, `runGenerationQueue` L7904) |
-| AI images panel | MODULE 5 (`submitAiImages` L8300, `addAiResultCard` L8497, `addAiToVideo` L8668) |
-| Auth UI | MODULE 6 (`buildAuthOverlay` L8855, `submitAuth` L9542, `initAuth` L11039) |
-| Render API + worker | MODULE 7 (`collectVideoPayload` L9904, `apiRenderVideo` L10015, `renderVideoLocally` L10309, `workerRunJob` L10613) |
-| Script / subtitles / voiceover | MODULE 8-9 (`renderSeoKeywords` L11246, `generateScript` L11330, `openVoiceoverModal` L11777, `generateVoiceover` L11851, `toggleSubtitles` L12033) — the accordion markup puts the SEO section first in `.va-left` (`videoAccordionHTML()` L6424) |
-| Render engine | `generateMP4()` L12150; audio helper `encodeAudioTrack()` L3177; GIF frame decoder `buildGifSlideFrames()` L5639 |
-| Template composer | `src/client/template-composer-js.ts` (`drawScene` L1244, `exportMP4` L1799, `addTemplateToVideo` L1991, `openTemplateModal` L2270) |
+| Accordions, gallery, queue | `src/client/app-js.ts` MODULE 1-4 (`initVideoStudio()`, `addVideoAccordion()`, `videoAccordionHTML()`, `onVideoFiles()`, `runGenerationQueue()`) |
+| AI images panel | MODULE 5 (`submitAiImages()`, `addAiResultCard()`, `addAiToVideo()`) |
+| Auth UI | MODULE 6 (`buildAuthOverlay()`, `submitAuth()`, `initAuth()`) |
+| Render API + worker | MODULE 7 (`collectVideoPayload()`, `apiRenderVideo()`, `renderVideoLocally()`, `workerRunJob()`) |
+| Script / subtitles / voiceover | MODULE 8-9 (`renderSeoKeywords()`, `generateScript()`, `openVoiceoverModal()`, `generateVoiceover()`, `toggleSubtitles()`) — the accordion markup puts the SEO section first in `.va-left` (`videoAccordionHTML()`) |
+| Render engine | `generateMP4()`; audio helper `encodeAudioTrack()`; GIF frame decoder `buildGifSlideFrames()` |
+| Template composer | `src/client/template-composer-js.ts` (`drawScene()`, `exportMP4()`, `addTemplateToVideo()`, `openTemplateModal()`) |
 | Themes | `src/client/styles.ts` (token blocks + shared reskin, appended at the end of `APP_CSS`), `src/index.ts` (`CONFIG_THEMES`, `normalizeTheme`/`readTheme`/`applyTheme` at the top of the module) |
 | Settings page | `src/client/config-page-js.ts` (single escaped string) |
 

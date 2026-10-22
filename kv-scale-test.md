@@ -49,7 +49,9 @@ curl "http://127.0.0.1:8788/__wipe"
 
 Real worker, instrumented KV. `session` = `GET /api/session` with a valid cookie,
 `login` = `POST /api/login` with valid credentials, `signup` = `POST /api/signup` with a new
-username/email.
+username/email. **These columns are the pre-fix measurements (2026-10-15)**: the `403` rows show
+the removed 7-user cap, and session/login have cost more since the credits work — see the
+2026-10-22 table in §8 for current counts.
 
 | Users in namespace | session | login | signup |
 | --- | --- | --- | --- |
@@ -93,8 +95,8 @@ Both blockers appear only if the 7-user cap is raised, making the signup path re
 GET /__stats  →  {"firstPageKeys":1000,"list_complete":false,"hasCursor":true}
 ```
 
-measured in the real runtime with 3,000 *and* 10,000 user records. `src/index.ts:4383` calls
-`KV_BINDING.list({ prefix: "user:" })` and never follows `cursor`/`list_complete`, so:
+measured in the real runtime with 3,000 *and* 10,000 user records. The pre-fix signup handler
+called `KV_BINDING.list({ prefix: "user:" })` and never followed `cursor`/`list_complete`, so:
 
 - the 7-user cap check only ever sees `min(real_users, 1000)` — any list-based count in the app
   saturates at 1,000;
@@ -128,7 +130,8 @@ Free-plan KV allowances (Cloudflare docs): **100,000 reads/day · 1,000 writes/d
 fail with an error until 00:00 UTC. API routes on this worker also do up to 1,000 external
 operations per invocation.
 
-Measured cost per action:
+Measured cost per action (2026-10-15, **before** the accounts-cap fix and the credits work; the
+current numbers are in §8):
 
 | Action | reads | writes | lists | deletes |
 | --- | --- | --- | --- | --- |
@@ -223,7 +226,8 @@ only inside the request).
 | Duplicate username | **409** |
 | `POST /api/login` afterwards | **200** |
 
-**Operation cost per request (instrumented harness):**
+**Operation cost per request (instrumented harness, 2026-10-15 — before the credits work; the
+2026-10-22 table below supersedes the session/login rows):**
 
 | Request | KV ops | Detail |
 | --- | --- | --- |
@@ -255,7 +259,7 @@ failing the page (`system-rules.md` RULE 19).
 | --- | --- | --- |
 | `GET /api/session` | **3 reads** | session + `user:<name>` (for `usertype`) + `credits:<name>` |
 | `POST /api/login` | **3** | 1 user read + 1 session write + 1 credits read (the plan comes from the record already read) |
-| `POST /api/signup` | **3 writes + 3 reads** | unchanged writes (user, email index, session); credits start empty (plus the bounded legacy scan) |
+| `POST /api/signup` | **3 writes + 2 reads + 1 list** | user + email-index reads, the bounded legacy `list()`, then user, email index and session writes |
 | `GET /api/credits` | **3 reads** | session + user + credits |
 | `GET /image/gen` | **4 ops** | session read + user read + credits read + credits write (1 image) |
 | `POST /api/script` · `/api/voiceover` | **+4 ops** each when signed in | session + user reads, credits read + write |

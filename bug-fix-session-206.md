@@ -58,7 +58,8 @@ Implemented by `PLAN_MODE_BY_ROUTE` + `appPageResponse()` in `src/index.ts` (RUL
 | `POST /api/voiceover` | ✅ unlimited | ✅ unlimited | ✅ unlimited | Usage counted when identifiable |
 | `POST /api/render` | ✅ (needs KV) | ✅ | ✅ | No credential change |
 | `GET /api/credits` | ✅ guest summary after `/free` | ✅ | ✅ | `401` for a cold anonymous visitor |
-| `GET\|POST /api/config/*` | password | password | password | Operator surface, unchanged |
+| `GET /api/config/theme`, `GET /api/config/workers` | ✅ open | ✅ open | ✅ open | Read-only operator settings |
+| `POST /api/config/theme`, `POST /api/config/workers`, `GET\|POST /api/config/users`, `GET\|POST /api/config/ipcredits` | password | password | password | Operator surface, `403` on a wrong/missing `pw` |
 
 The `/free` route returns `200` for signed-in users too: the shell detects the session and keeps
 the account's plan, which makes `/free` a safe "try it" link for everybody.
@@ -346,7 +347,7 @@ result is verified through the DOM harness and the CSS parse (0 errors), not by 
   with a pool of addresses gets 10 images per address. Cloudflare WAF/rate-limit rules are the
   right layer for that.
 - **Durable counters.** KV is eventually consistent and the free plan is write-bound; see
-  `kv-scale-test.md` §9. Durable Objects or D1 would make the bucket exact.
+  `kv-scale-test.md` §8. Durable Objects or D1 would make the bucket exact.
 - **IPv6 granularity.** Masking to 4 groups is intentionally coarse; a subscriber usually
   controls a /64 or larger, so one bucket per /64 would be closer to "one visitor". The current
   mask is documented in `guestMaskedIp()`.

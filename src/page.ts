@@ -4,9 +4,9 @@
 //
 // The page HTML is a constant (the only interpolation is the
 // fixed prompts array), so it is built once per isolate and
-// reused. Re-building a ~640 KB string on every request wastes
-// CPU and creates constant GC pressure. The /config/uvxyz route
-// only .replace()es copies of it, so the cached string is never
+// reused. Re-building a ~700 KB string on every request wastes
+// CPU and creates constant GC pressure. The HTML routes only
+// .replace() copies of it, so the cached string is never
 // mutated.
 //
 // The old single template literal now lives in imported text

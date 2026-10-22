@@ -563,7 +563,11 @@ export default {
 						await creditRefundKey(
 							env,
 							creditGuest.key,
-							"images"
+							"images",
+							1,
+							guestCreditMeta(
+								creditGuest
+							)
 						);
 
 					}
@@ -4512,6 +4516,23 @@ export default {
 					"GET"
 			) {
 
+				/*
+				 * Without KV there are no stored
+				 * URLs. Returning an empty list
+				 * keeps the settings page usable
+				 * in the KV-less (e2e) mode instead
+				 * of throwing on the missing binding.
+				 */
+				if (!env.KV_BINDING) {
+
+					return json(
+						{
+							success: true,
+							urls: []
+						}
+					);
+				}
+
 				const raw =
 					await env.KV_BINDING.get(
 						CONFIG_WORKERS_KEY
@@ -4567,6 +4588,19 @@ export default {
 								"Wrong password"
 						},
 						403
+					);
+
+				}
+
+				if (!env.KV_BINDING) {
+
+					return json(
+						{
+							success: false,
+							error:
+								"User storage not configured (bind the KV namespace)"
+						},
+						503
 					);
 
 				}
@@ -5930,7 +5964,8 @@ async function creditRefundKey(
 	env: any,
 	key: any,
 	kind: any,
-	amount: any = 1
+	amount: any = 1,
+	meta: any = null
 ): Promise<void> {
 
 	const state =
@@ -5948,6 +5983,20 @@ async function creditRefundKey(
 
 	state.updatedAt =
 		new Date().toISOString();
+
+	/*
+	 * `creditReadKey()` rebuilds the state without the guest
+	 * metadata, so the IP row must be merged back or a refund
+	 * would erase the masked address the table shows.
+	 */
+	if (meta) {
+
+		Object.assign(
+			state,
+			meta
+		);
+
+	}
 
 	await creditWriteKey(
 		env,

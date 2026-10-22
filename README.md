@@ -40,8 +40,10 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 - **Freemium access (`/free`).** No account? `GET /free` opens the same studio with a **guest**
   plan: **10 AI images per day**, unlimited videos, AI scripts and voiceovers. Guest counters are
   keyed by a salted hash of the visitor's IP address (`ipcredits:<hash>`, 2-day TTL), so the limit
-  is per network and cannot be reset by clearing cookies. Anonymous image generation is only
-  unlocked by the `yvs_free=1` cookie that `/free` sets; everything else stays sign-up-first.
+  is per network and cannot be reset by clearing cookies. With KV bound, anonymous image
+  generation is only unlocked by the `yvs_free=1` cookie that `/free` sets; everything else stays
+  sign-up-first. (Without a KV binding the gate is skipped and generation is unmetered — the same
+  open-access mode as the other routes.)
   The settings page has a **Guest credits by IP** table (masked address, usage, remaining, last
   seen, reset). See `bug-fix-session-206.md`.
 - **Plan-based URLs.** `/free` (everyone), `/studio` (`free_user` / `paid_user`) and `/paid`
@@ -151,7 +153,7 @@ whole site.
 | `GET /paid` | Paid-tier studio (`paid_user` only); guests → `/free`, free accounts → `/studio` |
 | `GET /{current-day}/config/uvxyz` | Settings / background-worker page; current Asia/Taipei day only (e.g. `/16/config/uvxyz` on 2026-10-16) |
 | `GET /image/:i` | Workers AI demo image (unmetered, index into `prompts[]`) |
-| `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` cold anonymous, `429` at the limit, `X-Credit-*` headers on success |
+| `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` for a cold anonymous request when KV is bound, `429` at the limit, `X-Credit-*` headers on success |
 | `POST /api/script` | SEO keyword plan + AI script → validated SRT (with keyword counts) |
 | `POST /api/voiceover` · `GET /tts` | MeloTTS voiceover / fallback TTS proxy |
 | `GET /api/session` · `POST /api/signup` · `POST /api/login` · `POST /api/logout` | Accounts (session/signup/login include `usertype`, `plan` and `credits`) |
