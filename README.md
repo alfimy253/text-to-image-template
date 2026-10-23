@@ -64,16 +64,19 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   sections inside) beside a sticky preview monitor that takes 35% — the same split in every theme.
   The grid reads the same project array the engine renders; it has no bulk operations, and the
   view choice is memory-only. There is deliberately **no timeline**.
-- **Template composer.** The "Add video from template" link opens a modal with a **4-column
-  gallery of live animated previews** of 8 motion-typography templates (Halo Warp, Terminal
-  Fracture, Ribbon Editorial, Portal Type, Comic Burst, Dream Echo, Perspective Fold, Liquid
-  Bloom — ported from the uploaded Typography Motion Studio III HTML). Picking one opens an
-  editor with a live canvas preview and studio-styled controls: **dynamic text layers** (each
-  with its own text, colour, position, animation and size — the + button adds more), animation
-  speed (0.5×–2×), photo entry transitions and motion, up to 2 photos, and 21 animated
-  backgrounds. **⬇ Export MP4** renders the same canvas engine to a real H.264 MP4
-  (WebCodecs + mp4-muxer, no screen capture) and downloads it; **➕ Add to Video N** drops it
-  into the accordion's gallery as a normal clip. Portrait 9:16 or landscape 16:9, 1–25 s.
+- **Template composer.** The "Add video from template" link opens a modal with two galleries:
+  **8 motion-typography templates** (Halo Warp, Terminal Fracture, Ribbon Editorial, Portal
+  Type, Comic Burst, Dream Echo, Perspective Fold, Liquid Bloom — adapted from the uploaded
+  Typography Motion Studio III HTML) and **14 interactive Reel scenes** (Kinetic Typography,
+  Duotone, Neon, Glitch Art and Vox Magazine — adapted from the uploaded Reel Editor v4 HTML).
+  Motion templates retain dynamic text layers, photo entry/motion controls, animation speed,
+  up to 2 photos and animated backgrounds. In Reel scenes, click a text layer, shape or
+  background in the preview to load the matching inspector; drag it to reposition, edit its
+  content, colour, font, size, animation, transition and speed, add text, and choose a sticker
+  or background image. Both editors render through the same canvas used for the live preview
+  and H.264 MP4 export (WebCodecs + mp4-muxer, no screen capture). **⬇ Export MP4** downloads
+  the result; **➕ Add to Video N** inserts it into that accordion's gallery as a normal clip.
+  Portrait 9:16 or landscape 16:9, 1–25 s.
 
 ## Limits worth knowing
 
@@ -107,7 +110,7 @@ the strings that carry the rules (the full inventory, with the constant each one
 | Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading` |
 | ✨ **Generate SEO Script** button | tooltip: *AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them* |
 | SEO plan chips (after a successful run) | Title row · Headings row · `long-tail keyword — must be said exactly 2×` · `short keyword — must be said exactly 2×; one short keyword is in the title and one in a heading`, each keyword chip showing the measured count, e.g. `coffee brewing 2×` |
-| Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the template modal's tip line says each template is a looping motion design and the clip is silent |
+| Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the modal explains the selected editor's motion controls and reminds users the exported clip is silent |
 | Video accordion, **AI Images** | `2 images per submit · 480px landscape` (also the status line for failures) |
 | 🎙 **Generate Voiceover** | tooltip: *Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
 | ☁️ **API** button | tooltip: *Send all of this video's elements to the render API* |

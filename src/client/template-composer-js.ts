@@ -1,7 +1,7 @@
 /*
  * TEMPLATE_COMPOSER_JS — MODULE 9: the "Add video from
- * template" composer modal (8 motion-typography templates
- * with a live 4-column preview gallery, dynamic text layers,
+ * template" composer modal (8 motion-typography templates plus
+ * 14 click-to-edit Reel Editor scenes, with live preview, dynamic text layers,
  * photo transitions / motion, animated backgrounds, and
  * WebCodecs + mp4-muxer MP4 export / download). The exported
  * MP4 can also be dropped into the accordion gallery as a
@@ -17,6 +17,8 @@
  *
  * Escapes inside this string are intentional — do not reformat.
  */
+
+import { REEL_SCENE_EDITOR_JS } from "./template-scene-editor";
 
 export const TEMPLATE_COMPOSER_JS = `	// =========================================================
 	// MODULE 9: template-composer
@@ -2105,7 +2107,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				'<div class="modal-title" id="tpl-title">\\ud83c\\udfac Add Video from Template \\u2014 Video ' + n + "</div>" +
 				'<button type="button" class="tpl-x" id="tpl-x" title="Close">\\u2715</button>' +
 				"</div>" +
-				'<p class="tpl-sub" id="tpl-sub">Pick one of the 8 animated motion templates, then design it: dynamic text layers (each with its own text, colour, position, animation and size), animation speed, photo entry transitions and motion, and animated backgrounds. Export a portrait 9:16 or landscape 16:9 MP4 (max ' + TPL_MAX_DURATION + ' seconds) straight to disk, or add it to this video&rsquo;s Images / MP4s gallery like any uploaded clip.</p>' +
+				'<p class="tpl-sub" id="tpl-sub">Choose a motion template or one of 14 interactive Reel scenes. Edit text layers, positions, colours, stickers, animations, transitions, photos and backgrounds; Reel scenes have click-to-select controls. Export a portrait 9:16 or landscape 16:9 MP4 (max ' + TPL_MAX_DURATION + ' seconds) straight to disk, or add it to this video&rsquo;s Images / MP4s gallery like any uploaded clip.</p>' +
 
 				'<div id="tm-gallery" class="tm-view">' +
 				'<div class="tm-gallery-grid" id="tm-grid"></div>' +
@@ -2308,5 +2310,6 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		window.openTemplateModal = openTemplateModal;
 		window.closeTemplateModal = closeTemplateModal;
 
+		${REEL_SCENE_EDITOR_JS}
 	})();
 `;

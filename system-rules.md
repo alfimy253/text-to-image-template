@@ -607,27 +607,34 @@
 
 ## RULE 13 — The template composer is a self-contained module with its own caps
 
-- Everything lives in an IIFE (`src/client/template-composer-js.ts`) so its helpers cannot
-  collide with the studio's globals; only `window.openTemplateModal` and
-  `window.closeTemplateModal` are exported.
-- The modal has two views:
-  - **Gallery** — a 4-column grid of live animated previews of the **8 motion-typography
-    templates** (19 Halo Warp, 20 Terminal Fracture, 21 Ribbon Editorial, 22 Portal Type,
-    23 Comic Burst, 24 Dream Echo, 25 Perspective Fold, 26 Liquid Bloom — ported from the
-    uploaded Typography Motion Studio III HTML; gallery thumbnails run the same `drawScene()`
-    as the export).
-  - **Editor** — a live canvas preview plus controls:
-    - **Text layers accordion** (dynamic): each layer has its own text (≤12 chars),
-      30-colour palette, 9 positions, 9 text animations (None + the 8 template motions)
-      and a size slider (3–18, % readout against the template's base size); `+` adds a
-      layer (next free position from the POS cycle), × removes (disabled at 1 layer).
-    - **Motion & transitions**: photo entry transition (9), entry speed (6), photo motion
-      (10 looping motions), background (**Template default** = the template's own look, or
-      the blurred first photo, 10 colours, 3 neo-brutalist, 3 Swiss grids, 4 animated CSS
-      patterns), and an animation-speed slider (0.5×–2×) that scales every loop.
-    - **Photos**: at most **2 images** (`files.slice(0,2)`, extras silently ignored).
-- Inputs: a portrait 9:16 (1080 × 1920) or landscape 16:9 (1920 × 1080) canvas and a length of
-  **1–25 s** (`TPL_MAX_DURATION = 25`, default 6, clamped).
+- Composer code executes in an IIFE so helpers cannot collide with the studio's globals; only
+  `window.openTemplateModal` and `window.closeTemplateModal` are exported. Motion-template code
+  lives in `src/client/template-composer-js.ts`; interactive scene logic is injected from
+  `src/client/template-scene-editor.ts`, with its optimized backdrops in
+  `src/client/reel-scene-assets.ts`.
+- The modal has a **gallery** and an **editor**:
+  - **Gallery** — two tabs, each with a 4-column grid of live animated previews:
+    - **8 motion-typography templates** (19 Halo Warp, 20 Terminal Fracture, 21 Ribbon
+      Editorial, 22 Portal Type, 23 Comic Burst, 24 Dream Echo, 25 Perspective Fold,
+      26 Liquid Bloom — ported from the uploaded Typography Motion Studio III HTML).
+    - **14 interactive Reel scenes** (Kinetic Typography, Duotone, Neon, Glitch Art and
+      Vox Magazine — adapted from the user-supplied Reel Editor v4 HTML).
+    - Both galleries render with the same `drawScene()` engine used by MP4 export.
+  - **Editor** — a live canvas preview plus mode-specific controls:
+    - **Motion templates** retain the dynamic text-layers accordion (text ≤12 chars,
+      30-colour palette, 9 positions, 9 text animations, size slider 3–18 with a % readout),
+      the `+`/× layer controls, photo entry/motion, up to 2 photos and animated backgrounds.
+    - **Reel scenes** use click-to-select controls for Background, Eyebrow, Headline, Sub
+      text, Graphic and any added text layers. Clicking the canvas or an object chip swaps
+      the inspector to the matching fields; text, font, colour, size, animation, transition,
+      speed, alignment and X/Y position are editable. Graphic controls include visibility,
+      sticker shape, colour, size, animation and position; background controls include mood
+      or uploaded photo, scene style, animated effect, speed and transition. Elements can
+      be dragged; text can be added, and deleted elements can be restored.
+    - **Photos** in the motion editor remain limited to **2 images** (`files.slice(0,2)`,
+      extras silently ignored); Reel scenes may use those uploads as their background.
+    - Format stays portrait 9:16 (1080 × 1920) or landscape 16:9 (1920 × 1080); length is
+      **1–25 s** (`TPL_MAX_DURATION = 25`, default 6, clamped).
 - Export renders the SAME canvas engine as the preview — WebCodecs `VideoEncoder`
   `avc1.4d002a`, `TPL_FPS = 30`, `TPL_VIDEO_BITRATE = 6 000 000`, muxed with `mp4-muxer`,
   no FFmpeg and **no screen capture**. The MP4 downloads to disk automatically (plus a
@@ -636,8 +643,8 @@
 - The exported MP4 can be appended to the target accordion's gallery as a normal MP4 asset, so it
   plays inside the final render like an uploaded clip and obeys the 5-clip cap.
 - The modal is built once and reused: closing hides it, so photos/last export survive; the
-  accordion link retargets the same modal at another Video N. Per-template editing state
-  (layers + controls) is remembered for the life of the tab.
+  accordion link retargets the same modal at another Video N. Per-template and per-scene editing
+  state is remembered for the life of the tab.
 
 ---
 
@@ -792,7 +799,7 @@
 | `Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles` | **🎙 Generate Voiceover** tooltip | the two modal actions (voiceover + subtitles toggle) |
 | `Send all of this video's elements to the render API` | **☁️ API** tooltip | the `/api/render` payload (RULE 4) |
 | `Compose a portrait or landscape MP4 (max 25 seconds) from a design template …` | `Add video from template` tooltip | the composer caps 1-25 s (RULE 13) |
-| `Tip: each template is a looping motion design … The clip is silent …` | composer panel (`.tpl-tips`) | composer motion controls + the silent-clip rule (RULE 13) |
+| `Tip: each template is a looping motion design … The clip is silent …` (motion editor) / `Scene text, stickers and animated backgrounds are rendered into the exported clip …` (Reel scene editor) | composer panel (`.tpl-tips`, changes with editor mode) | the active editor controls + the silent-clip rule (RULE 13) |
 | `Theme for the studio page — every visitor sees it. Aerial and Stellar follow the HTML5UP designs of the same name; Night Lab, Warm Paper, Swiss and Neo Brutalist are the studio's own skins.` | settings page, Appearance group (`.cfg-note`) | RULE 19 (seven skins, global setting) |
 | `Built-in dark studio (default)` · `Blue sky, mountains, white accents` · `Violet gradient, frosted panels` · `Charcoal lab, lime accent` · `Warm light paper, coral accent` · `Clean white, electric blue` · `Cream, hard black lines, lime` | theme cards (`.cfg-theme-sub`) | what each skin in `CONFIG_THEMES` looks like |
 | `Current theme: Studio (default).` / `Current theme: Night Lab.` / `Current theme: Neo Brutalist.` | Appearance status line (`themeLabel()`) | the value stored under `config:theme` |

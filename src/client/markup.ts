@@ -53,7 +53,7 @@ export const PAGE_MARKUP = `
 	>
 
 	<link
-		href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&family=Source+Sans+Pro:wght@300;400;600;900&display=swap"
+		href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800;900&family=JetBrains+Mono:wght@400;700&family=Oswald:wght@400;700&family=Source+Sans+Pro:wght@300;400;600;900&display=swap"
 		rel="stylesheet"
 	>
 
