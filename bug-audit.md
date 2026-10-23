@@ -119,24 +119,30 @@ All three corrected in `src/client/markup.ts`.
 
 The old accordion section was titled **"Script (SRT) — AI model"**, sat *after* Quality in the
 left column, and said nothing about the requirements the server had started enforcing
-(`/api/script` plans 2 long-tail + 2–5 short SEO keywords and counts them in the spoken SRT). A
-user could only discover the rule from a `500 "Script output invalid (…)"` status line.
+(`/api/script` plans an SEO keyword set and counts it in the spoken SRT). A user could only
+discover the rule from a `500 "Script output invalid (…)"` status line.
 
-**Fixed** in the same change as the API work:
+**Fixed** in the same change as the API work, and kept in step with the **2026-10-23 explainer
+SEO rule set revision** — every pre-2026-10-23 script rule value (2 long-tail keywords, 2-5
+short keywords, "at least 1×" / "2-5×" ranges, 1-3 shorts per long tail) was deleted from all
+documentation; the current rules live in `system-rules.md` RULE 7:
 
 - the block is now the **first** section of `.va-left` and is titled **"Generate SEO Script With
   AI"**;
 - a permanent hint line states the rule before the first click
-  (`SEO rule: 2 long-tail keywords · 2–5 short keywords · every short keyword is said 2–5 times`),
-  and the button tooltip repeats it;
-- after a successful run the keyword chips (`renderSeoKeywords()`, `#va-script-keywords-N`) show
-  each keyword with the **measured** count and its own tooltip (≥1× for long-tail, 2–5× for short);
-- the status line ends with `· SEO: <n> long-tail + <n> short keywords`.
+  (`SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said
+  exactly 2× each · one short keyword is in the title · one is in a heading`), and the button
+  tooltip repeats it;
+- after a successful run the SEO plan chips (`renderSeoKeywords()`, `#va-script-keywords-N`) show
+  the AI title, the headings and every keyword with its **measured** count (each keyword must
+  measure exactly 2×) and its own tooltip;
+- the status line ends with `· SEO: 1 long-tail (2×) + 4 short keywords (2× each) · title + N
+  heading(s)`.
 
-Documentation added in the same change: `system-rules.md` **RULE 7** (rewritten for the two AI
-stages) and **RULE 18** (the ≈71-string user-hint inventory), `userflow.md` §4.2 + §9 + §10,
-`README.md` ("Hints you will see in the UI" + limits table), `kv-scale-test.md` §5/§8 (the
-Workers AI neuron cost doubled; KV is untouched).
+Documentation updated in the same change: `system-rules.md` **RULE 7** (rewritten for the
+explainer SEO rule set) and **RULE 18** (the ≈71-string user-hint inventory), `userflow.md`
+§4.2 + §9 + §10, `README.md` ("Hints you will see in the UI" + limits table), `kv-scale-test.md`
+§5/§8 (the Workers AI neuron cost doubled; KV is untouched).
 
 - New drift risk recorded in `system-rules.md` RULE 17: the SEO hint copy is hand-duplicated from
   the Worker's `SEO_*` constants, so the two must be changed together.

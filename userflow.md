@@ -7,8 +7,10 @@
 > `src/prompts.ts`, `src/client/markup.ts` (897 lines), `src/client/styles.ts` (8,057 lines),
 > `src/client/app-js.ts` (15,308 lines, the whole studio UI + render engine),
 > `src/client/template-composer-js.ts` (2,312 lines), `src/client/config-page-js.ts`,
-> `wrangler.json`, `package.json`, `e2e/index.ts`. The SEO script has two AI stages (see §4.2
-> and `system-rules.md` RULE 7 / RULE 18). This revision documents the day-rotating settings
+> `wrangler.json`, `package.json`, `e2e/index.ts`. The SEO script has two AI stages and follows the
+> **2026-10-23 explainer SEO rule set** (see §4.2 and `system-rules.md` RULE 7 / RULE 18) —
+> every documentation of the AI script written before 2026-10-23 was deleted and replaced.
+> This revision documents the day-rotating settings
 > route, its Asia/Taipei date boundary, the two studio views (§11) and the seven skins.
 >
 > Companion document: **`system-rules.md`** — the high-level system rules with the
@@ -25,7 +27,7 @@ A single-page **browser-side video studio** served by one Cloudflare Worker.
 | Page + all UI code | Worker (`GET /`) | Serves one ~700 KB HTML string (landing, studio, CSS + JS inlined) |
 | Video rendering | **The user's browser** (WebCodecs `VideoEncoder`/`AudioEncoder` + `mp4-muxer`) | Draws Ken-Burns slides, overlays, captions, subtitles and muxes an MP4 |
 | AI images | Workers AI `@cf/stabilityai/stable-diffusion-xl-base-1.0` | `/image/:i` (demo prompts) and `/image/gen?prompt=` (per-video AI panel) |
-| AI script (SRT) | Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8`, **two stages** | `/api/script` — stage 1 plans the SEO keywords, stage 2 writes the SRT around them |
+| AI script (SRT) | Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8`, **two stages** | `/api/script` — stage 1 plans the SEO keywords plus the explainer title and headings, stage 2 writes the SRT around them |
 | Voiceover | Workers AI `@cf/myshell-ai/melotts` + free fallback TTS | `/api/voiceover`, proxied `/tts` |
 | Accounts | KV namespace `KV_BINDING` | `/api/session`, `/api/login`, `/api/signup`, `/api/logout` (unlimited accounts, `email:<address>` uniqueness index) |
 | Render jobs | KV (queued job records + chunked blobs) | `/api/render`, `/api/worker/*` — rendered by **other browser tabs** |
@@ -227,23 +229,27 @@ new project = { n, name:"Video N", assets:[], audioFile:null, audio:null, status
    ▼
 accordion = header + body
    header : 🎬 Video N · status pill · [☁️ API] · summary · ▼ collapse
-   body   : LEFT 60%                              RIGHT 40%
+   body   : ONE COLUMN — every .va-section stacks full width (3px bottom margin each)
             ├ Generate SEO Script With AI  ← FIRST block, with the always-visible hint line
-            │           "SEO rule: 2 long-tail keywords · 2–5 short keywords ·
-            │            every short keyword is said 2–5 times"
+            │           "SEO rule (explainer): 1 long-tail keyword said exactly 2× ·
+            │            exactly 4 short keywords said exactly 2× each · one short
+            │            keyword is in the title · one is in a heading"
             │           topic, minutes 1-6, speech speed, ✨ Generate SEO Script,
-            │           keyword chips (long-tail + short, each with its measured ×),
+            │           SEO plan chips (title + headings + long-tail + 4 shorts,
+            │            each keyword with its measured ×),
             │           collapsible SRT box (220 px), ⬇ Download .srt,
-            │           🎙 Generate Voiceover (disabled until SRT exists)
+            │           🎙 Generate Voiceover (hidden until an SRT exists, then
+            │            revealed + enabled by syncVoiceoverButton())
             ├ Images / MP4s — upload + template link + collapsible gallery
             │           note: "Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)"
+            ├ AI Images — directly under the gallery: prompt textarea +
+            │           "✨ Generate 2 Images" + results panel (thumb grid)
+            │           note: "2 images per submit · 480px landscape"
             ├ Audio — one MP3 (video length = MP3 length)
             ├ Title (top left) — text, font, colour
             ├ Captions (bottom) — up to 10 rows, each hh:mm:ss + ≤40 chars
             ├ Sticker (bottom right) — 7 presets
             └ Quality — 480p Light / 720p Balanced / 720p High
-            └ AI Images — prompt textarea + "✨ Generate 2 Images" + results panel
-                         note: "2 images per submit · 480px landscape"
 ```
 
 ### 4.1 Media intake — three independent entry points
@@ -264,7 +270,7 @@ per file, in order, one at a time
                      → refreshVaTips() renumbers "#n · name · size · kind"
 ```
 
-**B. AI images (right panel)**
+**B. AI images (panel under the gallery)**
 
 ```
 type prompt → [✨ Generate 2 Images]
@@ -313,10 +319,12 @@ per-template editing state (layers + controls) is remembered while the tab is op
 
 The script block is the **first** section of the left column. It starts with the static hint line
 (the only place the SEO rule is stated before the first click) and the button tooltip carries the
-same rule; the keyword chips only appear *after* a successful run.
+same rule; the SEO plan chips only appear *after* a successful run. The rule set below is the
+**2026-10-23 explainer SEO rule set** — every documentation of the older script rules was deleted.
 
 ```
-[hint] "SEO rule: 2 long-tail keywords · 2–5 short keywords · every short keyword is said 2–5 times"
+[hint] "SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords
+        said exactly 2× each · one short keyword is in the title · one is in a heading"
 topic   = script-topic input  OR (if empty) the video's title  OR "my video"
 minutes = 1..6 (default 1)
 speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
@@ -324,43 +332,60 @@ speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
   ▼ POST /api/script {topic,minutes,speed}      ← still the only fields the client sends
   │
   ├─ STAGE 1  keyword planner (llama-3.1-8b-instruct-fp8, max_tokens 512, temp 0.6)
-  │      asks for one JSON object: {"longTail":[{"keyword":…,"short":[…,…]},{…}]}
-  │      accepts exactly 2 long-tail (≤6 words) with 1-3 shorts each (≤3 words),
-  │      2-5 unique shorts in total, two different long-tails
+  │      asks for one JSON object:
+  │        {"title":"…","headings":["…","…"],"longTail":"one long tail keyword",
+  │         "short":["s1","s2","s3","s4"]}
+  │      verified: exactly 1 long-tail (≤6 words) · exactly 4 unique shorts (≤3 words each) ·
+  │      title ≤70 chars including at least one short keyword · ≥1 heading (≤12 words each)
+  │      of which at least one includes a short keyword (the same one as the title's or another)
   │      invalid → retry up to 3× with " Your previous attempt was rejected: <reason> …"
   │      3 failures → 500 "SEO keywords invalid (<reason>) - try again"
   │                  (status line shows "Script failed: SEO keywords invalid (…) - try again")
   │
-  ├─ STAGE 2  SRT writer (same model, max_tokens 2048, temp 0.7), prompt = basePrompt + SEO brief
-  │      prompt lists the long-tails ("say each at least once") and the shorts
-  │      ("say each between 2 and 5 times") + "work every keyword into natural spoken sentences"
+  ├─ STAGE 2  SRT writer (same model, max_tokens 2048, temp 0.7) — an EXPLAINER script
+  │      prompt = basePrompt ("professional video script writer for EXPLAINER videos … ONLY
+  │      valid SRT") + a hard-coded SEO brief that REDUNDANTLY restates every rule: the exact
+  │      title and the exact headings (fixed, in section order, never altered or spelled out),
+  │      the long-tail said EXACTLY 2× ("not 1 time and not 3 times"), each of the 4 shorts
+  │      said EXACTLY 2× + "Work every keyword into natural spoken sentences - never read
+  │      them out as a list"
   │      validateSrt: SRT shape, no overlap, 10 s … minutes*60 s + 1.5 s
   │      (the ≤42-char cue target is prompt text only — the validator does not enforce it)
   │      then keyword counts on the SPOKEN text only (cue numbers/timestamps stripped):
-  │        every short 2-5× (both bounds fail) · every long-tail ≥1× (no upper bound)
+  │        long-tail exactly 2× · each of the 4 shorts exactly 2× (under AND over both fail)
   │      any violation → retry up to 3× with the exact reason attached
   │      3 failures → 500 "Script output invalid (<reason>) - try again"
   │
-  ├─ success → project.srt stored, #va-script-box-N filled with the SRT
-  │            keyword chips rendered in #va-script-keywords-N (escapeHTML'd):
-  │              Long-tail   [easy home coffee brewing 1×] [budget espresso setup 2×]
-  │              Short       [coffee brewing 4×] [home barista 2×] [espresso setup 3×]
-  │            SRT box + ⬇ Download .srt become visible; 🎙 Generate Voiceover enabled
-  │            status line: "Script ready — N lines (medium speech, 1 min) · SEO: 2 long-tail + 4 short keywords"
+  ├─ success → project.srt + project.seoTitle + project.seoHeadings stored
+  │            the video title input #va-title-N is autofilled with title.slice(0,70)
+  │              when it is still empty (the input's maxlength is 70)
+  │            #va-script-box-N filled with the SRT;
+  │            SEO plan chips rendered in #va-script-keywords-N (escapeHTML'd):
+  │              Title     [Easy Home Coffee Brewing: A Beginner Guide]
+  │              Headings  [How does home coffee brewing work?] [What does an espresso setup cost?]
+  │              Long-tail [easy home coffee brewing 2×]
+  │              Short     [coffee brewing 2×] [home barista 2×] [espresso setup 2×] [morning routine 2×]
+  │            SRT box + ⬇ Download .srt become visible; 🎙 Generate Voiceover revealed + enabled
+  │            (syncVoiceoverButton(): the button ships hidden and only appears once project.srt exists)
+  │            status line: "Script ready — N lines (medium speech, 1 min) · SEO: 1 long-tail (2×) +
+  │                          4 short keywords (2× each) · title + 2 headings"
   │
   └─ failure → status line "Script failed: <error>"  (no alert)
                the previous SRT, chips and download button stay on screen
 ```
 
 Hints in this flow (inventory: `system-rules.md` RULE 18): the section hint line, the
-**✨ Generate SEO Script** tooltip, the two chip tooltips
-(`Long-tail keyword — must be said at least 1×` / `Short keyword — must be said 2–5×`), the
+**✨ Generate SEO Script** tooltip, the chip tooltips
+(`Long-tail keyword — must be said exactly 2×` /
+`Short keyword — must be said exactly 2×; one short keyword is in the title and one in a heading` /
+`Explainer title — includes at least one short keyword` /
+`Section heading — at least one heading includes a short keyword`), the
 `Topic (uses the video title if empty)` placeholder and the `Script ready … · SEO: …` status line.
 
 ### 4.3 Voiceover
 
 ```
-[🎙 Generate Voiceover]  (accordion, only when project.srt exists)
+[🎙 Generate Voiceover]  (accordion, hidden until project.srt exists — then revealed + enabled)
    ▼ modal (id voiceover-modal)
      Voice select: "English (en)"    ← fixed + disabled in the UI
      textarea: read-only spoken text = SRT with cue numbers/timestamps stripped
@@ -566,9 +591,9 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Image index out of range | `/image/:i` | `400 {success:false,error:"Invalid image index"}` |
 | Empty prompt | `/image/gen` | `400 "Missing prompt"` |
 | Model error | `/image/:i`, `/image/gen` | `500` with the model's message |
-| Keyword plan not valid JSON / wrong shape | stage-1 planner | up to 3 attempts, then `500 "SEO keywords invalid (<reason>) - try again"` — the SRT writer is never called |
-| Short keyword said fewer than 2× or more than 5× | server `keywordUsageError()` on the spoken text | counts as invalid → retried with the exact reason; after 3 attempts `500 "Script output invalid (<reason>) - try again"` |
-| Long-tail keyword never said | server `keywordUsageError()` | same as above (≥1× required, no upper bound) |
+| Keyword plan not valid JSON / not exactly 1 long-tail + 4 shorts / title or heading rule violated | stage-1 planner | up to 3 attempts, then `500 "SEO keywords invalid (<reason>) - try again"` — the SRT writer is never called |
+| Short keyword said fewer or more than exactly 2× | server `keywordUsageError()` on the spoken text | counts as invalid → retried with the exact reason; after 3 attempts `500 "Script output invalid (<reason>) - try again"` |
+| Long-tail keyword said fewer or more than exactly 2× | server `keywordUsageError()` | same as above (exactly 2× — under and over both fail) |
 | Script output not parseable SRT | server `validateSrt()` | up to 3 attempts, then `500 "Script output invalid (<reason>) - try again"` |
 | Script shorter than 10 s or longer than minutes+1.5 s | server `validateSrt()` | counts as invalid → retried |
 | MeloTTS `AiError 3043` | `/api/voiceover` | 3 retries/chunk → free fallback engine → else `500 "TTS failed (chunk i of n): …"` |
@@ -622,9 +647,10 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 ## 10. End-to-end happy path (one paragraph)
 
 Sign in → `+ Add Video` → drop 3 images, an MP3 and a title → in the first block,
-**Generate SEO Script With AI** (2 min, fast): the AI plans 2 long-tail + 2-5 short keywords and
-writes the SRT around them, and the chips under the button show each keyword with its measured
-count → apply subtitles → optionally generate a voiceover and upload it as the audio track →
+**Generate SEO Script With AI** (2 min, fast): the AI plans 1 long-tail keyword (said exactly
+2×), exactly 4 short keywords (each said exactly 2×) plus the explainer title and headings, and
+writes the SRT around them; the chips under the button show the whole SEO plan with each
+keyword's measured count, and an empty video title is autofilled from the AI title → apply subtitles → optionally generate a voiceover and upload it as the audio track →
 press **🎬 Generate Videos** → the browser decodes everything, encodes audio then video,
 draws Ken-Burns slides with title/sticker/captions/subtitles, muxes an MP4 and saves it to disk →
 the status pill turns green *done* and the summary reads "Bulk complete: 1 saved, 0 skipped, 0 failed."

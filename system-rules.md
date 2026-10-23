@@ -6,8 +6,7 @@
 > invariants and side-effects that follow from it. File references use `path:line` where a
 > single anchor exists.
 >
-> 2026-10-15 revisions: RULE 7 was reworked for the two-stage SEO script (keyword planner +
-> SRT writer), RULE 18 (the user-visible hint inventory) was added, and RULE 19 (the three
+> 2026-10-15 revisions: RULE 18 (the user-visible hint inventory) was added, and RULE 19 (the
 > skins) was added when the settings page gained its Appearance group. On 2026-10-16, RULE 3
 > was updated for the Asia/Taipei day-rotating settings route.
 > 2026-10-22 revisions: RULE 20 (daily credits, plans, `/api/credits`, `/api/config/users`) was
@@ -22,6 +21,14 @@
 > **Bug Fix Session #211 (2026-10-23):** the two runtime defects that pass found — a guest refund
 > erasing the IP row's identity (§3.3) and `GET /api/config/workers` throwing without a KV
 > binding (§6.1) — were fixed in `src/index.ts`. The full record is `bug-fix-session-211.md`.
+> **2026-10-23 explainer SEO rule set (RULE 7 rewritten):** the AI script rules are now — exactly
+> **1 long-tail keyword said exactly 2×**, exactly **4 short keywords said exactly 2× each**, an AI
+> **title (≤70 chars) that includes one of the short keywords**, and **at least 1 section heading**
+> (every default AI script is an **explainer** video) **of which one — the same short keyword as the
+> title's or another — includes a short keyword**. All documentation of the AI script written before
+> 2026-10-23 was **deleted and replaced**: the old plan (2 long-tail keywords, 1-3 shorts under each,
+> 2-5 shorts in total, long tail said ≥1×, shorts said 2-5×) no longer exists in any file. A future
+> non-SEO / non-explainer script mode is documented in RULE 7 (not implemented).
 >
 > Companion documents: `userflow.md` (the actor-level flows these rules produce),
 > `README.md` (the user-facing summary), `bug-audit.md`, `kv-scale-test.md`,
@@ -304,8 +311,25 @@
 
 ---
 
-## RULE 7 — The AI script is an SEO script: a keyword plan (2 long-tail, 2-5 short) gates the SRT writer
+## RULE 7 — The AI script is an EXPLAINER SEO script: 1 long-tail keyword (exactly 2×) + exactly 4 short keywords (exactly 2× each) + an AI title and headings gate the SRT writer
 
+> **Rule set of 2026-10-23.** This rule replaces every earlier SEO keyword plan; all documentation
+> of the older script rules (2 long-tail keywords, 1-3 shorts under each, 2-5 shorts in total,
+> long tail said ≥1×, shorts said 2-5×) was deleted on 2026-10-23 and nothing below predates it.
+
+- **The explainer SEO rules (the complete contract, enforced server-side):**
+  1. Exactly **1 long-tail keyword** (`SEO_LONG_TAIL = 1`), at most **6 words**
+     (`SEO_LONG_WORDS_MAX`), and its spoken frequency is **min = max = exactly 2**
+     (`SEO_LONG_FREQ_MIN = SEO_LONG_FREQ_MAX = 2`) — not 1 time, not 3 times.
+  2. Exactly **4 short keywords** (`SEO_SHORT_TOTAL = 4`), each at most **3 words**
+     (`SEO_SHORT_WORDS_MAX`), and **each one is said exactly 2 times**
+     (`SEO_SHORT_FREQ_MIN = SEO_SHORT_FREQ_MAX = 2`).
+  3. **One of the 4 short keywords must be included in the video title** — the AI-planned title is
+     at most **70 characters** (`SEO_TITLE_MAX`, matching the title input's `maxlength`).
+  4. **Another short keyword — or the same one — must be included in a heading.** Because the
+     default AI script always creates an **explainer video**, there is **at least 1 heading**
+     (`SEO_HEADINGS_MIN = 1`), each at most **12 words** (`SEO_HEADING_WORDS_MAX`); the headings
+     follow the explainer's section order.
 - Request contract (`POST /api/script` with `{topic, minutes, speed}`) is unchanged by the SEO work.
   - `topic` defaults to `"my video"`, trimmed and cut to 160 chars server-side (the dialog's
     `maxlength` is 120).
@@ -315,31 +339,40 @@
   - `env.AI` missing → `503 "AI binding not configured"`.
 - **Two AI stages per request**, both on `SCRIPT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"`
   (`SEO_*` constants, `parseKeywordSet()`, `keywordUsageError()` and the two stage builders
-  in `src/index.ts`).
+  in `src/index.ts`). The rules are **redundant by design**: they are stated to the model in the
+  stage-2 prompt *and* independently re-checked by the server after every generation.
   1. **Keyword planner** — `max_tokens: 512`, `temperature: 0.6`, **3 attempts**, JSON only:
-     `{"longTail":[{"keyword":"…","short":["…","…"]},{…}]}`.
-     - exactly **2 long-tail keywords** (`SEO_LONG_TAIL`), each at most **6 words**
-       (`SEO_LONG_WORDS_MAX`);
-     - **1-3 short keywords under each** long tail (`SEO_SHORT_PER_LONG_MIN/MAX`), each at most
-       **3 words** (`SEO_SHORT_WORDS_MAX`), and **2-5 unique shorts in total**
-       (`SEO_SHORT_TOTAL_MIN/MAX`);
-     - duplicates collapse before the total is counted, so 1 short repeated under both long tails
-       still counts as 1; the two long-tail keywords must differ; an empty keyword or an empty
-       short is rejected.
-     - Restriction: nothing checks that a short keyword is not also a long-tail, and nothing
-       requires a keyword to be a literal substring of the topic - the planner is only *asked* for
-       keywords "closely related to the topic", so that is a prompt rule, not an enforced one.
+     `{"title":"…","headings":["…","…"],"longTail":"one long tail keyword","short":["s1","s2","s3","s4"]}`.
+     - `longTail` is lenient about shape: a bare string, `["one entry"]` or `{keyword:"…"}` all
+       read as the one long-tail keyword (an old-shape answer is not punished with a retry).
+     - the 4 shorts dedupe-collapse first, then must be **exactly 4**; an empty short, a short
+       longer than 3 words, an empty/over-long long tail, a missing/over-long title, a title that
+       carries no short keyword, a missing/empty/over-long heading list or headings of which none
+       carries a short keyword are all rejected (inclusion is tested with `keywordCount()` —
+       `\b`-anchored, case-insensitive).
+     - Restriction: nothing requires a keyword to be a literal substring of the topic — the
+       planner is only *asked* for keywords "closely related to the topic", so that is a prompt
+       rule, not an enforced one.
      - 3 rejected plans → `500 {success:false, error:"SEO keywords invalid (<reason>) - try again"}`
        and **the writer is never called**: a hopeless topic costs only the cheap stage.
        - Reason strings are stable contract text: `no JSON object in the keyword output`,
-         `the keyword reply was not valid JSON`, `the JSON needs a "longTail" array`,
-         `there must be exactly 2 long-tail keywords, not N`,
-         `"<long tail>" needs 1-3 short keywords, not N`, `the short keyword "x" is longer than 3 words`,
-         `there must be 2-5 short keywords in total, not N`, `the two long-tail keywords must be different`.
+         `the keyword reply was not valid JSON`, `the JSON needs a "longTail" keyword`,
+         `the long-tail keyword "x" is longer than 6 words`, `the JSON needs a "short" array`,
+         `a short keyword is empty`, `the short keyword "x" is longer than 3 words`,
+         `there must be exactly 4 short keywords, not N`, `the JSON needs a "title" string`,
+         `the title is longer than 70 characters`,
+         `the title must include at least one of the short keywords`,
+         `the JSON needs a "headings" array with at least 1 heading`, `a heading is empty`,
+         `the heading "x" is longer than 12 words`,
+         `at least one heading must include a short keyword`.
   2. **SRT writer** — `max_tokens: 2048`, `temperature: 0.7`, **3 attempts**; the prompt is
-     `basePrompt` plus a hard-coded SEO brief that names every long tail ("say each … at least
-     once"), every short ("say each … between 2 and 5 times") and closes with
-     `Work every keyword into natural spoken sentences - never read them out as a list`.
+     `basePrompt` ("You are a professional video script writer for **EXPLAINER** videos - every
+     default script explains its topic section by section, in natural spoken English. Answer with
+     ONLY valid SRT subtitle text, nothing else.") plus a hard-coded **SEO brief that redundantly
+     restates every rule**: the exact title text and the exact headings (fixed, in section order,
+     never altered or spelled out aloud), the long-tail keyword said **exactly 2× — "not 1 time
+     and not 3 times"**, each of the 4 short keywords said **exactly 2×**, all worked into natural
+     spoken sentences and never read out as a list.
      - The old `@cf/meta/llama-3.1-8b-instruct` was deprecated (comment dated 2026-05-30), so
        don't "restore" the free model name.
      - Response parsing accepts three shapes: `result[0].message.content`, `result.response`,
@@ -355,39 +388,59 @@
 - **Keyword frequencies are enforced after generation, on the spoken words only**
   (`srtSpokenText()` drops cue numbers and timestamp lines; `keywordCount()` lower-cases, treats a
   run of whitespace as one space and anchors both ends with `\b`):
-  - every **short** keyword must appear **2-5** times (`SEO_SHORT_FREQ_MIN/MAX`); **both** bounds
-    are failures, not trims;
-  - every **long-tail** keyword must appear **>= 1** time (`SEO_LONG_FREQ_MIN`), with no upper bound;
-  - the first violation in list order becomes the retry reason handed to the model, e.g.
-    `the short keyword "x" appears 1 time(s); it must appear 2-5 times`,
-    `the short keyword "x" appears 8 times; use it at most 5 times`,
-    `the long-tail keyword "x" never appears; say it at least 1 time`.
+  - the **long-tail** keyword must appear **exactly 2** times — below *and* above are failures;
+  - **each of the 4 short** keywords must appear **exactly 2** times — below *and* above are
+    failures;
+  - the first violation in rule order (long tail first, then the shorts in list order) becomes the
+    retry reason handed to the model:
+    `the long-tail keyword "x" appears 1 time(s); it must appear exactly 2 times`,
+    `the long-tail keyword "x" appears 3 times; it must appear exactly 2 times`,
+    `the short keyword "x" appears 1 time(s); it must appear exactly 2 times`,
+    `the short keyword "x" appears 3 times; it must appear exactly 2 times`.
   - Restriction: `\b` anchoring means a glued word never counts (`budgetgear` ≠ `budget gear`) and
-    the keyword `ai` is not matched inside `said`.
+    the keyword `ai` is not matched inside `said`. A short keyword that also occurs inside the
+    long-tail phrase counts there too — the writer prompt keeps them separable in practice.
 - Retry policy: **3 attempts per stage**; every writer retry re-sends the same keyword set with
   `" Your previous attempt was rejected: <exact reason> Try again and fix that exact problem."`
   - After 3 writer failures → `500 {success:false, error:"Script output invalid (<reason>) - try again"}`.
 - Success payload:
-  `{success:true, srt, keywords:{longTail:[{keyword,count,short[]}], short:[{keyword,count,min:2,max:5}]}, model}`.
-  - Restriction: `count` is the **measured** frequency in the returned script - the UI displays it,
-    and a keyword can only be listed with a count inside its rule, because the same numbers gate
-    the response.
-  - Restriction: **each request now costs at least 2 Workers AI calls** (up to 6 with retries)
-    against the 10 000 neurons/day free allocation - twice the old price for every script.
+  `{success:true, srt, title, headings, keywords:{longTail:{keyword,count,min:2,max:2}, short:[{keyword,count,min:2,max:2}]}, model}`.
+  - `title` and `headings` are the planner's verified strings; `longTail` is now a **single
+    object** (the old payload listed an array of 2 long tails with nested shorts).
+  - Restriction: `count` is the **measured** frequency in the returned script — the UI displays it,
+    and a keyword can only be listed with `count = 2`, because the same numbers gate the response.
+  - Restriction: **each request costs at least 2 Workers AI calls** (up to 6 with retries)
+    against the 10 000 neurons/day free allocation.
 - Client side (`src/client/app-js.ts`, video accordion):
   - The SEO block is the **first** `.va-section` of `.va-left`, titled
     **"Generate SEO Script With AI"**, with the always-visible hint line
-    `SEO rule: 2 long-tail keywords · 2–5 short keywords · every short keyword is said 2–5 times`
+    `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading`
     and a matching button tooltip. See RULE 18 for the hint inventory.
-  - The client still sends only `{topic, minutes, speed}`: the user never picks keywords, and the
-    UI only reports the ones the model produced.
-  - On success `generateScript()` stores `project.srt`, fills `#va-script-box-N`, renders the
-    keyword chips into `#va-script-keywords-N` (`renderSeoKeywords()`, every keyword passed through
-    `escapeHTML()`), reveals the SRT box + **⬇ Download .srt** and enables **🎙 Generate Voiceover**.
+  - The client still sends only `{topic, minutes, speed}`: the user never picks keywords, title or
+    headings — the UI only reports the ones the model produced and the server verified.
+  - On success `generateScript()` stores `project.srt`, `project.seoTitle` and
+    `project.seoHeadings`; **if the video title input `#va-title-N` is still empty it is autofilled
+    with `title.slice(0, 70)`** (the input's `maxlength` is 70, so the SEO title always fits); it
+    fills `#va-script-box-N`, renders the SEO plan chips into `#va-script-keywords-N`
+    (`renderSeoKeywords(n, data)` — a Title row, a Headings row, the long-tail chip and the 4 short
+    chips, each count shown as `N×`, every string passed through `escapeHTML()`), reveals the SRT
+    box + **⬇ Download .srt** and calls `syncVoiceoverButton(n)`, which reveals + enables
+    **🎙 Generate Voiceover** — the button ships hidden (`style="display:none"` + `disabled`) in the
+    accordion markup and stays hidden for as long as the video has no generated script.
+  - The status line reads
+    `Script ready — N lines (<speed> speech, <minutes> min) · SEO: 1 long-tail (2×) + 4 short keywords (2× each) · title + K heading(s)`.
   - Restriction: on failure the status line becomes `Script failed: <error>` and the previous chips
-    and SRT box stay on screen (same as the old SRT behaviour) - nothing is cleared or replaced.
+    and SRT box stay on screen — nothing is cleared or replaced.
+- **Future: scripts without SEO / non-explainer scripts (documented, NOT implemented).** The whole
+  SEO layer is isolated so a future plain-script mode can bypass it without touching anything
+  else: the rules live only in the `SEO_*` constants, `parseKeywordSet()`, the stage-2 SEO brief
+  and `keywordUsageError()`. A non-SEO mode skips stage 1 (the planner), uses `basePrompt` without
+  the SEO brief, skips `keywordUsageError()`, and returns the payload without
+  `title`/`headings`/`keywords`; request validation, `validateSrt`, the retry loops, the credit
+  telemetry and the client SRT box all stay exactly as they are.
 
 ---
+
 
 ## RULE 8 — Voiceover is MeloTTS with defensive sanitising, chunking, retries and a foreign fallback
 
@@ -693,8 +746,9 @@
 
 > The app explains itself with copy, not with a manual: tooltips (`title=`), grey note lines
 > (`.va-note`, `.audio-note`, `.tpl-tips`, `.action-hint`), fixed placeholders, status lines and
-> blocking `alert()` boxes. The inventory below was taken on **2026-10-15**, after the SEO script
-> change. Changing a limit or a rule without changing these strings leaves the UI lying to the user.
+> blocking `alert()` boxes. The inventory below was taken on **2026-10-15** and re-taken on
+> **2026-10-23** after the explainer SEO rule set revision (RULE 7). Changing a limit or a rule
+> without changing these strings leaves the UI lying to the user.
 
 - Discovery pattern for an audit: search `title="`, `placeholder="`, `alert(` and
   `class="…note…"` / `class="…hint…"` / `class="…tip…"` in the three template literals that become
@@ -724,9 +778,9 @@
 
 | Hint text (abridged) | Where it lives | Mirrors |
 | --- | --- | --- |
-| `SEO rule: 2 long-tail keywords · 2–5 short keywords · every short keyword is said 2–5 times` | video accordion, SEO section (`.va-note`, always visible) | `SEO_LONG_TAIL = 2`, `SEO_SHORT_TOTAL_MIN/MAX = 2/5`, `SEO_SHORT_FREQ_MIN/MAX = 2/5` (RULE 7) |
-| `AI plans 2 long-tail keywords and 2-5 short keywords (each short said 2-5 times) and writes the SRT script around them` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
-| `Long-tail keyword — must be said at least 1×` · `Short keyword — must be said 2–5×` | keyword chips, `renderSeoKeywords()` tooltips | `SEO_LONG_FREQ_MIN = 1`, `SEO_SHORT_FREQ_MIN/MAX = 2/5` |
+| `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading` | video accordion, SEO section (`.va-note`, always visible) | `SEO_LONG_TAIL = 1`, `SEO_SHORT_TOTAL = 4`, `SEO_LONG_FREQ_MIN/MAX = SEO_SHORT_FREQ_MIN/MAX = 2` (RULE 7) |
+| `AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
+| `Long-tail keyword — must be said exactly 2×` · `Short keyword — must be said exactly 2×; one short keyword is in the title and one in a heading` · `Explainer title — includes at least one short keyword` · `Section heading — at least one heading includes a short keyword` | SEO plan chips, `renderSeoKeywords()` tooltips | `SEO_LONG_FREQ_MIN/MAX = 2`, `SEO_SHORT_FREQ_MIN/MAX = 2`, title/heading inclusion rules (RULE 7) |
 | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)` | video accordion, media section (`.va-note`) | `MAX_GIF_UPLOADS = 5`, `MAX_IMAGE_UPLOADS = 25`, `MAX_MP4_UPLOADS = 5`, `MP4_MAX_DURATION_S = 60` |
 | `2 images per submit · 480px landscape` | video accordion, AI images section (`.va-note`, doubles as the status line) | the route always asks SDXL for 2 images; **the 480 is not enforced anywhere** (bug-audit #16) |
 | `Add a video (up to 10)` | `+ Add Video` button tooltip | `VIDEO_MAX_VIDEOS = 10` |
@@ -1042,6 +1096,12 @@ addresses and gives visitors without an account a small, IP-metered allowance.
     (number, title, prompt excerpt, scene counts, MP3 length, state, **Open ↗**).
   - `#view-editor` — the **Editor**: `.studio-card.editor-build` (`#video-accordions`) beside
     `.studio-card.preview-card` (canvas, progress, status, action bar). It is the boot view.
+    The `#studio-app .studio` grid — shared by **every theme** — gives the preview monitor
+    **35%** of the row (`minmax(0, 35fr)`) and the build column the wider **65%**
+    (`minmax(320px, 65fr)`; `minmax(280px, 65fr)` at ≤1100px, stacked `1fr` at ≤860px).
+    Inside each accordion, `.va-body` is **one column**: every `.va-section` (SEO script,
+    Images / MP4s, **AI Images directly under the gallery**, Audio, Title, Captions, Sticker,
+    Quality) stacks full width in `.va-left` with a 3px bottom margin.
 - The switch is `#view-switch` → `[data-layout="table"|"editor"]`, handled by
   `setStudioLayout()`. The choice is a **module variable**; RULE 15 forbids client storage, so a
   reload always starts in the Editor.
