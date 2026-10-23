@@ -1,9 +1,1906 @@
 /*
- * CONFIG_PAGE_SCRIPT — the password-gated Studio Settings
- * overlay for the current-day settings route. index.ts injects it before
- * </body> and flips the page into worker mode.
+ * Dynamic Site Configuration — Real Full Page (`src/client/config-page-js.ts`)
  *
- * Verbatim copy (single-quoted string with \r\n escapes).
+ * Rendered ONLY when the Worker serves `/{Asia-Taipei-day}/config/uvxyz`.
+ *
+ * Key architectural guarantees:
+ *   1. Real full page (`#cfg-page` on `body.cfg-real-page`), NEVER a modal
+ *      overlay (`position: fixed` backdrop).
+ *   2. Hidden `#studio-app` + `#video-canvas` remain in the DOM so Background
+ *      Worker mode (`window.workerRunJob`) continues to render WebCodecs MP4s.
+ *   3. All 4 admin sections live under the SAME dynamic config URL:
+ *        - General & Themes (7 themes, workers, worker mode, plans, guest IPs)
+ *        - Local Payment Gateway (gateway details + upload instructions for /upgrade)
+ *        - Payment Transactions (paginated screenshots, click-to-fullscreen,
+ *          transaction-number verification -> sets `usertype = "paid_user"`)
+ *        - CMS Pages (max 8 flat pages, required Page URL, `Page Link` dropdown,
+ *          `+ Add Paragraph` with `min-height: 200px`, URL-only images max 2 per
+ *          line with click-to-fullscreen, and right-hand Live Preview)
  */
 
-export const CONFIG_PAGE_SCRIPT = '<script>\r\n(function() {\r\n\t"use strict";\r\n\tvar CONFIG_PASSWORD = "#123admin%";\r\n\tvar style = document.createElement("style");\r\n\tstyle.textContent = ".cfg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;z-index:300;}"\r\n\t\t+ ".cfg-box{background:#181b20;border:1px solid #2e3440;border-radius:12px;padding:24px;width:90%;max-width:440px;color:#f3f4f6;font-size:14px;}"\r\n\t\t+ ".cfg-title{font-size:1.15rem;font-weight:700;margin-bottom:6px;}"\r\n\t\t+ ".cfg-sub{color:#9ca3af;font-size:0.8rem;margin-bottom:14px;}"\r\n\t\t+ ".cfg-error{color:#f87171;font-size:0.8rem;min-height:1.1em;margin-bottom:8px;}"\r\n\t\t+ ".cfg-field{margin-bottom:12px;}"\r\n\t\t+ ".cfg-field label{display:block;color:#9ca3af;font-size:0.78rem;margin-bottom:5px;}"\r\n\t\t+ ".cfg-field input,.cfg-field select{width:100%;box-sizing:border-box;background:#14171c;color:#f3f4f6;border:1px solid #374151;border-radius:6px;padding:9px 12px;font-size:0.88rem;outline:none;}"\r\n\t\t+ ".cfg-field input:focus,.cfg-field select:focus{border-color:#f59e0b;}"\r\n\t\t+ ".cfg-btn{width:100%;background:#1d4ed8;border:none;border-radius:6px;color:#fff;font-size:0.9rem;font-weight:600;padding:10px;cursor:pointer;margin-top:4px;}"\r\n\t\t+ ".cfg-btn:hover{background:#2563eb;}"\r\n\t\t+ ".cfg-btn.alt{background:#374151;font-weight:400;}"\r\n\t\t+ ".cfg-btn.alt:hover{background:#4b5563;}"\r\n\t\t+ ".cfg-group{border-top:1px solid #2e3440;padding:12px 0;}"\r\n\t\t+ ".cfg-group-title{font-weight:700;margin-bottom:4px;}"\r\n\t\t+ ".cfg-note{color:#9ca3af;font-size:0.75rem;margin-top:4px;}"\r\n\t\t+ ".cfg-list{margin:8px 0 0 18px;color:#d1d5db;font-size:0.8rem;}"\r\n\t\t+ ".cfg-status{margin-top:10px;padding:10px;border:1px solid #2e3440;border-radius:8px;background:#14171c;font-size:0.85rem;word-break:break-word;}"+ ".cfg-check{display:flex;align-items:center;gap:8px;color:#9ca3af;font-size:0.78rem;margin:6px 0 10px;cursor:pointer;}"\r\n\t\t+ ".cfg-user-row{cursor:pointer;padding:3px 0;}"\r\n\t\t\r\n\t\t+ ".cfg-table{width:100%;border-collapse:collapse;margin-top:6px;font-size:0.72rem;}"\r\n\t\t+ ".cfg-table th,.cfg-table td{padding:5px 6px;border-top:1px solid #2e3440;text-align:left;white-space:nowrap;}"\r\n\t\t+ ".cfg-table th{color:#9ca3af;font-weight:600;}"\r\n\t\t+ ".cfg-table-wrap{max-height:210px;overflow:auto;margin-top:6px;}"\r\n\t\t+ ".cfg-row-btn{width:auto;padding:2px 8px;margin-top:0;font-size:0.7rem;background:#374151;}"\r\n\t\t+ ".cfg-row-btn:hover{background:#4b5563;}"\r\n\t\t+ "body.cfg-worker-mode .audio-panel,body.cfg-worker-mode .controls,body.cfg-worker-mode #action-bar,body.cfg-worker-mode #video-accordions,body.cfg-worker-mode #gallery,body.cfg-worker-mode #status-text,body.cfg-worker-mode #progress-container,body.cfg-worker-mode h1,body.cfg-worker-mode h2{display:none !important;}";\r\n\tdocument.head.appendChild(style);\r\n\tfunction el(tag, cls, text) {\r\n\t\tvar node = document.createElement(tag);\r\n\t\tif (cls) node.className = cls;\r\n\t\tif (text !== undefined) node.textContent = text;\r\n\t\treturn node;\r\n\t}\r\n\tvar gate = el("div", "cfg-overlay");\r\n\tvar gateBox = el("div", "cfg-box");\r\n\tgateBox.appendChild(el("div", "cfg-title", "\u2699\ufe0f Studio Settings"));\r\n\tgateBox.appendChild(el("div", "cfg-sub", "This page controls background render workers. Enter the settings password to continue."));\r\n\tvar gateError = el("div", "cfg-error");\r\n\tgateBox.appendChild(gateError);\r\n\tvar gateField = el("div", "cfg-field");\r\n\tgateField.appendChild(el("label", null, "Password"));\r\n\tvar gateInput = el("input");\r\n\tgateInput.type = "password";\r\n\tgateInput.autocomplete = "off";\r\n\tgateField.appendChild(gateInput);\r\n\tgateBox.appendChild(gateField);\r\n\tvar gateBtn = el("button", "cfg-btn", "Unlock");\r\n\tgateBtn.type = "button";\r\n\tgateBox.appendChild(gateBtn);\r\n\tgate.appendChild(gateBox);\r\n\tdocument.body.appendChild(gate);\r\n\tvar modal = el("div", "cfg-overlay");\r\n\tmodal.style.display = "none";\r\n\tvar modalBox = el("div", "cfg-box");\r\n\tmodalBox.appendChild(el("div", "cfg-title", "\u2699\ufe0f Studio Settings"));\r\n\tmodalBox.appendChild(el("div", "cfg-sub", "Choose how this instance runs."));\r\n\tvar modeField = el("div", "cfg-field");\r\n\tmodeField.appendChild(el("label", null, "Instance mode"));\r\n\tvar modeSelect = el("select");\r\n\tvar optApp = el("option", null, "Web app");\r\n\toptApp.value = "app";\r\n\tvar optWorker = el("option", null, "Background worker");\r\n\toptWorker.value = "worker";\r\n\tmodeSelect.appendChild(optApp);\r\n\tmodeSelect.appendChild(optWorker);\r\n\tmodeField.appendChild(modeSelect);\r\n\tmodalBox.appendChild(modeField);\r\n\tvar appGroup = el("div", "cfg-group");\r\n\tappGroup.appendChild(el("div", "cfg-group-title", "Background workers"));\r\n\tappGroup.appendChild(el("div", "cfg-note", "Optional \u2014 URLs of extra worker instances (max 3). Each one is this same day-prefixed settings page opened in worker mode."));\r\n\tvar workerInputs = [];\r\n\tfor (var i = 1; i <= 3; i++) {\r\n\t\tvar f = el("div", "cfg-field");\r\n\t\tf.appendChild(el("label", null, "Worker " + i + " URL (optional)"));\r\n\t\tvar inp = el("input");\r\n\t\tinp.type = "text";\r\n\t\tinp.id = "cfg-worker-url-" + i;\r\n\t\tinp.placeholder = "https://your-worker.workers.dev";\r\n\t\tf.appendChild(inp);\r\n\t\tappGroup.appendChild(f);\r\n\t\tworkerInputs.push(inp);\r\n\t}\r\n\tvar savedList = el("div", "cfg-list");\r\n\tappGroup.appendChild(savedList);\r\n\tvar saveBtn = el("button", "cfg-btn", "Save workers");\r\n\tsaveBtn.type = "button";\r\n\tappGroup.appendChild(saveBtn);\r\n\tvar themeGroup = el("div", "cfg-group");\r\n\tthemeGroup.appendChild(el("div", "cfg-group-title", "Appearance"));\r\n\tthemeGroup.appendChild(el("div", "cfg-note", "Theme for the studio page \\u2014 every visitor sees it. Aerial and Stellar follow the HTML5UP designs of the same name; Night Lab, Warm Paper, Swiss and Neo Brutalist are the studio\\u2019s own skins."));\r\n\tvar themeWrap = el("div", "cfg-themes");\r\n\tvar themeOptions = [\r\n\t\t{ value: "default", name: "Studio", sub: "Built-in dark studio (default)", preview: "cfg-preview-default" },\r\n\t\t{ value: "strata", name: "Aerial", sub: "Blue sky, mountains, white accents", preview: "cfg-preview-strata" },\r\n\t\t{ value: "stellar", name: "Stellar", sub: "Violet gradient, frosted panels", preview: "cfg-preview-stellar" },\r\n\t\t{ value: "nightlab", name: "Night Lab", sub: "Charcoal lab, lime accent", preview: "cfg-preview-nightlab" },\r\n\t\t{ value: "paper", name: "Warm Paper", sub: "Warm light paper, coral accent", preview: "cfg-preview-paper" },\r\n\t\t{ value: "swiss", name: "Swiss", sub: "Clean white, electric blue", preview: "cfg-preview-swiss" },\r\n\t\t{ value: "neo", name: "Neo Brutalist", sub: "Cream, hard black lines, lime", preview: "cfg-preview-neo" }\r\n\t];\r\n\tfunction themeLabel(theme) {\r\n\t\tfor (var q = 0; q < themeOptions.length; q++) {\r\n\t\t\tif (themeOptions[q].value === theme) return themeOptions[q].name;\r\n\t\t}\r\n\t\treturn theme.charAt(0).toUpperCase() + theme.slice(1);\r\n\t}\r\n\tvar themeRadios = [];\r\n\tfor (var t = 0; t < themeOptions.length; t++) {\r\n\t\tvar option = themeOptions[t];\r\n\t\tvar card = el("label", "cfg-theme");\r\n\t\tvar radio = el("input");\r\n\t\tradio.type = "radio";\r\n\t\tradio.name = "cfg-theme";\r\n\t\tradio.value = option.value;\r\n\t\tcard.appendChild(radio);\r\n\t\tcard.appendChild(el("span", "cfg-theme-preview " + option.preview));\r\n\t\tcard.appendChild(el("span", "cfg-theme-name", option.name));\r\n\t\tcard.appendChild(el("span", "cfg-theme-sub", option.sub));\r\n\t\tthemeWrap.appendChild(card);\r\n\t\tthemeRadios.push(radio);\r\n\t}\r\n\tthemeGroup.appendChild(themeWrap);\r\n\tvar themeSave = el("button", "cfg-btn", "Save theme");\r\n\tthemeSave.type = "button";\r\n\tthemeGroup.appendChild(themeSave);\r\n\tvar themeStatus = el("div", "cfg-note", "Loading current theme\u2026");\r\n\tthemeGroup.appendChild(themeStatus);\r\n\tmodalBox.appendChild(themeGroup);\r\n\tfunction paintTheme(theme) {\r\n\t\tfor (var k = 0; k < themeRadios.length; k++) {\r\n\t\t\tvar checked = themeRadios[k].value === theme;\r\n\t\t\tthemeRadios[k].checked = checked;\r\n\t\t\tvar box = themeRadios[k].parentNode;\r\n\t\t\tif (box) {\r\n\t\t\t\tif (checked) box.classList.add("active");\r\n\t\t\t\telse box.classList.remove("active");\r\n\t\t\t}\r\n\t\t}\r\n\t\tif (theme && theme !== "default") document.documentElement.setAttribute("data-theme", theme);\r\n\t\telse document.documentElement.removeAttribute("data-theme");\r\n\t}\r\n\tfunction currentTheme() {\r\n\t\tfor (var k = 0; k < themeRadios.length; k++) {\r\n\t\t\tif (themeRadios[k].checked) return themeRadios[k].value;\r\n\t\t}\r\n\t\treturn "default";\r\n\t}\r\n\tfunction loadTheme() {\r\n\t\tfetch("/api/config/theme", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar theme = (d && d.theme) || "default";\r\n\t\t\t\tpaintTheme(theme);\r\n\t\t\t\tthemeStatus.textContent = "Current theme: " + themeLabel(theme) + (theme === "default" ? " (default)." : ".");\r\n\t\t\t})\r\n\t\t\t.catch(function () { themeStatus.textContent = "Could not read the current theme."; });\r\n\t}\r\n\tfor (var r = 0; r < themeRadios.length; r++) {\r\n\t\tthemeRadios[r].addEventListener("change", function () {\r\n\t\t\tpaintTheme(this.value);\r\n\t\t\tthemeStatus.textContent = "Preview only \u2014 press Save theme to apply it for everyone.";\r\n\t\t});\r\n\t}\r\n\tthemeSave.addEventListener("click", function () {\r\n\t\tvar theme = currentTheme();\r\n\t\tfetch("/api/config/theme", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, theme: theme }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) {\r\n\t\t\t\t\tpaintTheme(d.theme || theme);\r\n\t\t\t\t\tthemeStatus.textContent = "Saved \u2014 reload the studio page to see the new theme.";\r\n\t\t\t\t} else {\r\n\t\t\t\t\tthemeStatus.textContent = "Save failed: " + ((d && d.error) || "unknown error") + ".";\r\n\t\t\t\t}\r\n\t\t\t})\r\n\t\t\t.catch(function () { themeStatus.textContent = "Save failed: network error."; });\r\n\t});\r\n\tloadTheme();\r\n\tvar creditsGroup = el(\"div\", \"cfg-group\");\r\n\t\tcreditsGroup.appendChild(el(\"div\", \"cfg-group-title\", \"Plans & credits\"));\r\n\t\tcreditsGroup.appendChild(el(\"div\", \"cfg-note\", \"Free: 50 AI images per day. Paid (paid_user): 1,200 AI images per day. Videos, AI scripts and voiceovers are unlimited on both plans. Counters renew every day at midnight (UTC+8).\"));\r\n\t\tvar creditUserField = el(\"div\", \"cfg-field\");\r\n\t\tcreditUserField.appendChild(el(\"label\", null, \"Username\"));\r\n\t\tvar creditUserInput = el(\"input\");\r\n\t\tcreditUserInput.type = \"text\";\r\n\t\tcreditUserInput.placeholder = \"username\";\r\n\t\tcreditUserField.appendChild(creditUserInput);\r\n\t\tcreditsGroup.appendChild(creditUserField);\r\n\t\tvar creditPlanField = el(\"div\", \"cfg-field\");\r\n\t\tcreditPlanField.appendChild(el(\"label\", null, \"Plan\"));\r\n\t\tvar creditPlanSelect = el(\"select\");\r\n\t\tvar creditPlanFree = el(\"option\", null, \"Free - 50 AI images / day\");\r\n\t\tcreditPlanFree.value = \"free\";\r\n\t\tvar creditPlanPaid = el(\"option\", null, \"Paid (paid_user) - 1,200 AI images / day\");\r\n\t\tcreditPlanPaid.value = \"paid_user\";\r\n\t\tcreditPlanSelect.appendChild(creditPlanFree);\r\n\t\tcreditPlanSelect.appendChild(creditPlanPaid);\r\n\t\tcreditPlanField.appendChild(creditPlanSelect);\r\n\t\tcreditsGroup.appendChild(creditPlanField);\r\n\t\tvar creditResetLabel = el(\"label\", \"cfg-check\");\r\n\t\tvar creditResetInput = el(\"input\");\r\n\t\tcreditResetInput.type = \"checkbox\";\r\n\t\tcreditResetLabel.appendChild(creditResetInput);\r\n\t\tcreditResetLabel.appendChild(document.createTextNode(\" Reset today counters\"));\r\n\t\tcreditsGroup.appendChild(creditResetLabel);\r\n\t\tvar creditSaveBtn = el(\"button\", \"cfg-btn\", \"Save plan\");\r\n\t\tcreditSaveBtn.type = \"button\";\r\n\t\tcreditsGroup.appendChild(creditSaveBtn);\r\n\t\tvar creditStatus = el(\"div\", \"cfg-note\", \"\");\r\n\t\tcreditsGroup.appendChild(creditStatus);\r\n\t\tvar creditList = el(\"div\", \"cfg-list\");\r\n\t\tcreditsGroup.appendChild(creditList);\r\n\t\tfunction renderCreditUsers(users) {\r\n\t\t	creditList.innerHTML = \"\";\r\n\t\t	creditList.appendChild(el(\"span\", null, users.length ? \"Accounts (click to edit):\" : \"No accounts yet.\"));\r\n\t\t	for (var c = 0; c < users.length; c++) {\r\n\t\t		var u = users[c];\r\n\t\t		var summaryText = u.plan.limits.images === null ? \"unlimited images\" : (u.remaining.images + \"/\" + u.plan.limits.images + \" images left today\");\r\n\t\t		var li = el(\"li\", \"cfg-user-row\", u.username + \" - \" + u.plan.label + \" - \" + summaryText);\r\n\t\t		(function (user) {\r\n\t\t			li.addEventListener(\"click\", function () {\r\n\t\t				creditUserInput.value = user.username;\r\n\t\t				for (var q = 0; q < creditPlanSelect.options.length; q++) { creditPlanSelect.options[q].selected = creditPlanSelect.options[q].value === (user.usertype || "free"); }\r\n\t\t				creditStatus.textContent = \"Editing \" + user.username + \" - press Save plan to apply.\";\r\n\t\t			});\r\n\t\t		})(u);\r\n\t\t		creditList.appendChild(li);\r\n\t\t	}\r\n\t\t}\r\n\t\tfunction loadCreditUsers(statusText) {\r\n\t\t	fetch(\"/api/config/users?pw=\" + encodeURIComponent(CONFIG_PASSWORD), { credentials: \"same-origin\" })\r\n\t\t		.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t		.then(function (d) {\r\n\t\t			if (!d || !d.success) { creditStatus.textContent = (d && d.error) || \"Could not load users.\"; return; }\r\n\t\t			renderCreditUsers(d.users || []);\r\n\t\t			creditStatus.textContent = statusText || \"Counters renew every day at midnight (UTC+8).\";\r\n\t\t		})\r\n\t\t		.catch(function () { creditStatus.textContent = \"Could not load users.\"; });\r\n\t\t}\r\n\t\tcreditSaveBtn.addEventListener(\"click\", function () {\r\n\t\t	var username = creditUserInput.value.trim();\r\n\t\t	if (!username) { creditStatus.textContent = \"Enter a username.\"; return; }\r\n\t\t	fetch(\"/api/config/users\", {\r\n\t\t		method: \"POST\",\r\n\t\t		headers: { \"Content-Type\": \"application/json\" },\r\n\t\t		body: JSON.stringify({ pw: CONFIG_PASSWORD, username: username, usertype: (creditPlanSelect.value || "free"), resetCredits: !!creditResetInput.checked }),\r\n\t\t		credentials: \"same-origin\"\r\n\t\t	})\r\n\t\t		.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t		.then(function (d) {\r\n\t\t			if (d && d.success) {\r\n\t\t				creditStatus.textContent = \"Saved: \" + d.username + \" is now on the \" + d.plan.label + \" plan.\";\r\n\t\t				creditResetInput.checked = false;\r\n\t\t				loadCreditUsers(\"Saved: \" + d.username + \" is now on the \" + d.plan.label + \" plan.\");\r\n\t\t			} else {\r\n\t\t				creditStatus.textContent = \"Save failed: \" + ((d && d.error) || \"unknown error\") + \".\";\r\n\t\t			}\r\n\t\t		})\r\n\t\t		.catch(function () { creditStatus.textContent = \"Save failed: network error.\"; });\r\n\t\t});\r\n\t\tloadCreditUsers();\r\n\t\tvar guestGroup = el("div", "cfg-group");\r\n\t\tguestGroup.appendChild(el("div", "cfg-group-title", "Guest credits by IP"));\r\n\t\tguestGroup.appendChild(el("div", "cfg-note", "Visitors who never sign in (GET /free) get 10 AI images per day. Counters are keyed by a hash of the IP address, and only the masked address is stored. Scripts, voiceovers and videos stay unlimited. Reset deletes a row, so the next request starts from zero."));\r\n\t\tvar guestStatus = el("div", "cfg-note", "Loading guest rows...");\r\n\t\tguestGroup.appendChild(guestStatus);\r\n\t\tvar guestTableWrap = el("div", "cfg-table-wrap");\r\n\t\tguestGroup.appendChild(guestTableWrap);\r\n\t\tmodalBox.appendChild(guestGroup);\r\n\t\tvar guestImageLimit = 10;\r\n\t\tfunction renderGuestRows(rows) {\r\n\t\t\tguestTableWrap.innerHTML = "";\r\n\t\t\tif (!rows.length) {\r\n\t\t\t\tguestStatus.textContent = "No guest activity yet today.";\r\n\t\t\t\treturn;\r\n\t\t\t}\r\n\t\t\tvar table = el("table", "cfg-table");\r\n\t\t\tvar head = el("tr");\r\n\t\t\tvar headers = ["IP (masked)", "Images", "Scripts", "Voiceovers", "Left today", "Last seen", ""];\r\n\t\t\tfor (var h = 0; h < headers.length; h++) head.appendChild(el("th", null, headers[h]));\r\n\t\t\ttable.appendChild(head);\r\n\t\t\tfor (var g = 0; g < rows.length; g++) {\r\n\t\t\t\tvar row = rows[g];\r\n\t\t\t\tvar tr = el("tr");\r\n\t\t\t\ttr.appendChild(el("td", null, row.ip));\r\n\t\t\t\ttr.appendChild(el("td", null, String(row.used.images)));\r\n\t\t\t\ttr.appendChild(el("td", null, String(row.used.scripts)));\r\n\t\t\t\ttr.appendChild(el("td", null, String(row.used.voiceovers)));\r\n\t\t\t\ttr.appendChild(el("td", null, row.remaining.images === null ? "unlimited" : (row.remaining.images + "/" + guestImageLimit)));\r\n\t\t\t\ttr.appendChild(el("td", null, row.updatedAt ? row.updatedAt.substring(11, 19) + " UTC" : "-"));\r\n\t\t\t\tvar actionCell = el("td");\r\n\t\t\t\tvar resetBtn = el("button", "cfg-btn cfg-row-btn", "Reset");\r\n\t\t\t\tresetBtn.type = "button";\r\n\t\t\t\t(function (key) {\r\n\t\t\t\t\tresetBtn.addEventListener("click", function () {\r\n\t\t\t\t\t\tfetch("/api/config/ipcredits", {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, key: key }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t})\r\n\t\t\t\t\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t\t\t\t\t.then(function (d) {\r\n\t\t\t\t\t\t\t\tif (d && d.success) loadGuestRows();\r\n\t\t\t\t\t\t\t\telse guestStatus.textContent = "Reset failed: " + ((d && d.error) || "unknown error") + ".";\r\n\t\t\t\t\t\t\t})\r\n\t\t\t\t\t\t\t.catch(function () { guestStatus.textContent = "Reset failed: network error."; });\r\n\t\t\t\t\t});\r\n\t\t\t\t})(row.key);\r\n\t\t\t\tactionCell.appendChild(resetBtn);\r\n\t\t\t\ttr.appendChild(actionCell);\r\n\t\t\t\ttable.appendChild(tr);\r\n\t\t\t}\r\n\t\t\tguestTableWrap.appendChild(table);\r\n\t\t\tguestStatus.textContent = rows.length + " guest IP row(s) today. Counters renew at midnight (UTC+8).";\r\n\t\t}\r\n\t\tfunction loadGuestRows() {\r\n\t\t\tfetch("/api/config/ipcredits?pw=" + encodeURIComponent(CONFIG_PASSWORD), { credentials: "same-origin" })\r\n\t\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t\t.then(function (d) {\r\n\t\t\t\t\tif (!d || !d.success) { guestStatus.textContent = (d && d.error) || "Could not load guest rows."; return; }\r\n\t\t\t\t\tif (d.plan && d.plan.limits && d.plan.limits.images !== null) guestImageLimit = d.plan.limits.images;\r\n\t\t\t\t\trenderGuestRows(d.rows || []);\r\n\t\t\t\t})\r\n\t\t\t\t.catch(function () { guestStatus.textContent = "Could not load guest rows."; });\r\n\t\t}\r\n\t\tloadGuestRows();\r\n\r\n\t\tvar workerGroup = el("div", "cfg-group");\r\n\tworkerGroup.style.display = "none";\r\n\tworkerGroup.appendChild(el("div", "cfg-group-title", "Background worker"));\r\n\tworkerGroup.appendChild(el("div", "cfg-note", "This browser waits for render jobs (POST /api/render) and produces the videos in the background. Keep this tab open."));\r\n\tvar workerStatus = el("div", "cfg-status", "Stopped.");\r\n\tworkerGroup.appendChild(workerStatus);\r\n\tvar startBtn = el("button", "cfg-btn", "\u25b6 Start worker");\r\n\tstartBtn.type = "button";\r\n\tworkerGroup.appendChild(startBtn);\r\n\tvar stopBtn = el("button", "cfg-btn alt", "\u25a0 Stop worker");\r\n\tstopBtn.type = "button";\r\n\tworkerGroup.appendChild(stopBtn);\r\n\tmodalBox.appendChild(appGroup);\r\n\tmodalBox.appendChild(creditsGroup);\r\n\tmodalBox.appendChild(workerGroup);\r\n\tmodal.appendChild(modalBox);\r\n\tdocument.body.appendChild(modal);\r\n\tvar studioHidden = false;\r\n\tvar studioEls = [];\r\n\tfunction hideStudio() {\r\n\t\tif (studioHidden) return;\r\n\t\tstudioEls = Array.prototype.slice.call(document.querySelectorAll("h1, h2, .audio-panel, .controls, #action-bar, #video-accordions, #gallery, #status-text, #progress-container"));\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "none";\r\n\t\tstudioHidden = true;\r\n\t}\r\n\tfunction showStudio() {\r\n\t\tif (!studioHidden) return;\r\n\t\tfor (var k = 0; k < studioEls.length; k++) studioEls[k].style.display = "";\r\n\t\tstudioHidden = false;\r\n\t}\r\n\tfunction showWorkerMode(on) {\r\n\t\tappGroup.style.display = on ? "none" : "block";\r\n\t\tthemeGroup.style.display = on ? "none" : "block";\r\n\t\tcreditsGroup.style.display = on ? "none" : "block";\r\n\t\tguestGroup.style.display = on ? "none" : "block";\r\n\t\tworkerGroup.style.display = on ? "block" : "none";\r\n\t\tif (on) {\r\n\t\t\tdocument.body.classList.add("cfg-worker-mode");\r\n\t\t\thideStudio();\r\n\t\t} else {\r\n\t\t\tdocument.body.classList.remove("cfg-worker-mode");\r\n\t\t\tshowStudio();\r\n\t\t}\r\n\t}\r\n\tfunction renderList(urls) {\r\n\t\tsavedList.innerHTML = "";\r\n\t\tsavedList.appendChild(el("span", null, urls.length ? "Registered:" : "None registered."));\r\n\t\tfor (var k = 0; k < urls.length; k++) {\r\n\t\t\tsavedList.appendChild(el("li", null, urls[k]));\r\n\t\t}\r\n\t}\r\n\tfunction loadWorkers() {\r\n\t\tfetch("/api/config/workers", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar urls = (d && d.urls) || [];\r\n\t\t\t\tfor (var k = 0; k < 3; k++) workerInputs[k].value = urls[k] || "";\r\n\t\t\t\trenderList(urls);\r\n\t\t\t})\r\n\t\t\t.catch(function () {});\r\n\t}\r\n\tloadWorkers();\r\n\tsaveBtn.addEventListener("click", function () {\r\n\t\tvar urls = [];\r\n\t\tfor (var k = 0; k < workerInputs.length; k++) {\r\n\t\t\tvar v = workerInputs[k].value.trim();\r\n\t\t\tif (v) urls.push(v);\r\n\t\t}\r\n\t\tfetch("/api/config/workers", {\r\n\t\t\tmethod: "POST",\r\n\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\tbody: JSON.stringify({ pw: CONFIG_PASSWORD, urls: urls }),\r\n\t\t\tcredentials: "same-origin"\r\n\t\t})\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tif (d && d.success) renderList(d.urls || []);\r\n\t\t\t\telse alert("Save failed: " + ((d && d.error) || "unknown error"));\r\n\t\t\t})\r\n\t\t\t.catch(function () { alert("Save failed: network error"); });\r\n\t});\r\n\tmodeSelect.addEventListener("change", function () {\r\n\t\tshowWorkerMode(modeSelect.value === "worker");\r\n\t});\r\n\tvar polling = false;\r\n\tvar pollTimer = null;\r\n\tfunction setStatus(text) { workerStatus.textContent = text; }\r\n\tfunction stopWorker() {\r\n\t\tpolling = false;\r\n\t\tif (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }\r\n\t\tstartBtn.textContent = "\u25b6 Start worker";\r\n\t\tstartBtn.disabled = false;\r\n\t\tstopBtn.disabled = true;\r\n\t}\r\n\tfunction runJob(job) {\r\n\t\treturn Promise.resolve().then(function () { return window.workerRunJob(job); });\r\n\t}\r\n\tfunction pollOnce() {\r\n\t\tif (!polling) return;\r\n\t\tfetch("/api/worker/poll", { credentials: "same-origin" })\r\n\t\t\t.then(function (r) { return r.json().catch(function () { return {}; }); })\r\n\t\t\t.then(function (d) {\r\n\t\t\t\tvar job = d && d.job;\r\n\t\t\t\tif (job) {\r\n\t\t\t\t\tsetStatus("\u23f3 Rendering \\"" + (job.name || "job") + "\\" ...");\r\n\t\t\t\t\trunJob(job).then(function () {\r\n\t\t\t\t\t\tsetStatus("\u2705 Delivered \\"" + (job.name || "job") + "\\" \u2014 waiting for jobs...");\r\n\t\t\t\t\t}).catch(function (err) {\r\n\t\t\t\t\t\tvar msg = (err && err.message) || String(err);\r\n\t\t\t\t\t\tfetch("/api/worker/failed?job=" + job.id, {\r\n\t\t\t\t\t\t\tmethod: "POST",\r\n\t\t\t\t\t\t\theaders: { "Content-Type": "application/json" },\r\n\t\t\t\t\t\t\tbody: JSON.stringify({ error: msg }),\r\n\t\t\t\t\t\t\tcredentials: "same-origin"\r\n\t\t\t\t\t\t}).catch(function () {});\r\n\t\t\t\t\t\tsetStatus("\u274c Job failed: " + msg + " \u2014 waiting for jobs...");\r\n\t\t\t\t\t});\r\n\t\t\t\t}\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 3000);\r\n\t\t\t})\r\n\t\t\t.catch(function () {\r\n\t\t\t\tif (polling) pollTimer = setTimeout(pollOnce, 5000);\r\n\t\t\t});\r\n\t}\r\n\tstartBtn.addEventListener("click", function () {\r\n\t\tif (polling) return;\r\n\t\tpolling = true;\r\n\t\tstartBtn.textContent = "Worker running\u2026";\r\n\t\tstartBtn.disabled = true;\r\n\t\tstopBtn.disabled = false;\r\n\t\tsetStatus("\u23f3 Waiting for jobs...");\r\n\t\tpollOnce();\r\n\t});\r\n\tstopBtn.addEventListener("click", function () {\r\n\t\tstopWorker();\r\n\t\tsetStatus("Stopped.");\r\n\t});\r\n\tfunction tryUnlock() {\r\n\t\tif (gateInput.value === CONFIG_PASSWORD) {\r\n\t\t\tgate.style.display = "none";\r\n\t\t\tmodal.style.display = "flex";\r\n\t\t} else {\r\n\t\t\tgateError.textContent = "Wrong password.";\r\n\t\t}\r\n\t}\r\n\tgateBtn.addEventListener("click", tryUnlock);\r\n\tgateInput.addEventListener("keydown", function (e) {\r\n\t\tif (e.key === "Enter") tryUnlock();\r\n\t});\r\n\tgateInput.focus();\r\n})();\r\n</script>\r\n';
+export const CONFIG_PAGE_SCRIPT = `
+<style id="cfg-page-styles">
+	body.cfg-real-page {
+		margin: 0 !important;
+		padding: 0 !important;
+		overflow-x: hidden !important;
+		overflow-y: auto !important;
+		height: auto !important;
+		min-height: 100vh !important;
+		background: #0b0e14 !important;
+		color: #e5e7eb !important;
+		font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+	}
+
+	/* Hide landing/studio visual chrome while keeping #video-canvas alive in DOM for Worker Mode */
+	body.cfg-real-page #landing-page,
+	body.cfg-real-page #auth-footer,
+	body.cfg-real-page #auth-modal {
+		display: none !important;
+	}
+
+	body.cfg-real-page #studio-app {
+		position: absolute !important;
+		left: -99999px !important;
+		top: 0 !important;
+		width: 1px !important;
+		height: 1px !important;
+		overflow: hidden !important;
+		opacity: 0 !important;
+		pointer-events: none !important;
+	}
+
+	.cfg-page {
+		min-height: 100vh;
+		display: flex;
+		flex-direction: column;
+		background: #0b0e14;
+		color: #e5e7eb;
+	}
+
+	.cfg-topbar {
+		border-bottom: 1px solid #1f2633;
+		background: #11151f;
+		padding: 16px 28px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		flex-wrap: wrap;
+	}
+
+	.cfg-brand {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+	}
+
+	.cfg-brand-badge {
+		background: #f59e0b;
+		color: #111827;
+		font-weight: 800;
+		font-size: 0.76rem;
+		padding: 4px 9px;
+		border-radius: 6px;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+
+	.cfg-brand h1 {
+		margin: 0;
+		font-size: 1.2rem;
+		color: #ffffff;
+	}
+
+	.cfg-brand-path {
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.8rem;
+		color: #9ca3af;
+	}
+
+	.cfg-toplinks {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+
+	.cfg-toplinks a {
+		color: #cbd5e1;
+		text-decoration: none;
+		font-size: 0.86rem;
+		font-weight: 600;
+		padding: 7px 12px;
+		border-radius: 8px;
+		border: 1px solid #262f40;
+		background: #171c28;
+	}
+
+	.cfg-toplinks a:hover {
+		border-color: #f59e0b;
+		color: #ffffff;
+	}
+
+	.cfg-container {
+		width: 100%;
+		max-width: 1280px;
+		margin: 0 auto;
+		padding: 28px 24px 64px;
+		box-sizing: border-box;
+		flex: 1;
+	}
+
+	.cfg-unlock-card {
+		max-width: 480px;
+		margin: 48px auto;
+		background: #141923;
+		border: 1px solid #262f40;
+		border-radius: 14px;
+		padding: 28px;
+		box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+	}
+
+	.cfg-unlock-card h2 {
+		margin: 0 0 8px;
+		font-size: 1.35rem;
+		color: #ffffff;
+	}
+
+	.cfg-sub {
+		margin: 0 0 18px;
+		font-size: 0.9rem;
+		color: #9ca3af;
+		line-height: 1.55;
+	}
+
+	.cfg-tabs {
+		display: flex;
+		gap: 10px;
+		flex-wrap: wrap;
+		margin-bottom: 24px;
+		padding-bottom: 14px;
+		border-bottom: 1px solid #1f2633;
+	}
+
+	.cfg-tab-btn {
+		padding: 10px 18px;
+		border-radius: 9px;
+		border: 1px solid #283244;
+		background: #151a25;
+		color: #cbd5e1;
+		font-size: 0.9rem;
+		font-weight: 700;
+		cursor: pointer;
+		transition: all 0.15s ease;
+	}
+
+	.cfg-tab-btn:hover {
+		border-color: #475569;
+		color: #ffffff;
+	}
+
+	.cfg-tab-btn.active {
+		background: #f59e0b;
+		border-color: #f59e0b;
+		color: #111827;
+	}
+
+	.cfg-panel {
+		display: none;
+	}
+
+	.cfg-panel.active {
+		display: block;
+	}
+
+	.cfg-card {
+		background: #141923;
+		border: 1px solid #252e3f;
+		border-radius: 14px;
+		padding: 24px;
+		margin-bottom: 22px;
+	}
+
+	.cfg-card h2 {
+		margin: 0 0 6px;
+		font-size: 1.2rem;
+		color: #ffffff;
+	}
+
+	.cfg-card h3 {
+		margin: 0 0 8px;
+		font-size: 1.02rem;
+		color: #f3f4f6;
+	}
+
+	.cfg-input,
+	.cfg-select,
+	.cfg-textarea {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 10px 13px;
+		border-radius: 9px;
+		border: 1px solid #2e3a4f;
+		background: #0d1118;
+		color: #f9fafb;
+		font-size: 0.93rem;
+		font-family: inherit;
+	}
+
+	.cfg-input:focus,
+	.cfg-select:focus,
+	.cfg-textarea:focus {
+		outline: none;
+		border-color: #f59e0b;
+	}
+
+	.cfg-label {
+		display: block;
+		font-size: 0.84rem;
+		font-weight: 700;
+		color: #cbd5e1;
+		margin-bottom: 6px;
+	}
+
+	.cfg-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		padding: 10px 18px;
+		border-radius: 9px;
+		border: 1px solid #334155;
+		background: #1e2636;
+		color: #f8fafc;
+		font-weight: 700;
+		font-size: 0.88rem;
+		cursor: pointer;
+		transition: opacity 0.15s ease, border-color 0.15s ease;
+	}
+
+	.cfg-btn:hover {
+		border-color: #64748b;
+	}
+
+	.cfg-btn-primary {
+		background: #f59e0b;
+		border-color: #f59e0b;
+		color: #111827;
+	}
+
+	.cfg-btn-success {
+		background: #10b981;
+		border-color: #10b981;
+		color: #052e16;
+	}
+
+	.cfg-btn-danger {
+		background: rgba(239, 68, 68, 0.15);
+		border-color: rgba(239, 68, 68, 0.45);
+		color: #fca5a5;
+	}
+
+	.cfg-btn:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+
+	.cfg-err {
+		color: #f87171;
+		font-size: 0.85rem;
+		min-height: 1.2em;
+		margin-top: 8px;
+	}
+
+	.cfg-msg {
+		font-size: 0.86rem;
+		margin-top: 10px;
+		min-height: 1.25em;
+	}
+
+	.cfg-msg.ok { color: #34d399; }
+	.cfg-msg.err { color: #f87171; }
+
+	/* Theme Cards */
+	.cfg-themes {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+		gap: 12px;
+		margin: 14px 0 18px;
+	}
+
+	.cfg-theme {
+		border: 2px solid #263042;
+		border-radius: 11px;
+		padding: 13px;
+		cursor: pointer;
+		background: #0f141d;
+		transition: border-color 0.15s, background 0.15s;
+	}
+
+	.cfg-theme:hover { border-color: #475569; }
+	.cfg-theme.selected { border-color: #f59e0b; background: #1a1f2c; }
+	.cfg-theme-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+	.cfg-theme-name { font-weight: 700; font-size: 0.94rem; color: #ffffff; }
+	.cfg-swatches { display: flex; gap: 4px; }
+	.cfg-swatches span { width: 15px; height: 15px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); }
+	.cfg-theme-desc { font-size: 0.78rem; color: #9ca3af; line-height: 1.4; }
+
+	/* Workers & Credits */
+	.cfg-two-col {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+		gap: 20px;
+	}
+
+	.cfg-worker-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 11px;
+		border: 1px solid #252f42;
+		border-radius: 8px;
+		background: #0d1118;
+		margin-bottom: 6px;
+		font-size: 0.82rem;
+	}
+
+	.cfg-worker-row code {
+		flex: 1;
+		color: #e5e7eb;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.cfg-worker-status {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 11px 13px;
+		border-radius: 9px;
+		background: #0d1118;
+		border: 1px solid #252f42;
+		margin: 10px 0;
+		font-size: 0.84rem;
+	}
+
+	.cfg-dot { width: 10px; height: 10px; border-radius: 50%; background: #6b7280; flex-shrink: 0; }
+	.cfg-dot.idle { background: #10b981; box-shadow: 0 0 8px #10b981; }
+	.cfg-dot.busy { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; }
+
+	.cfg-log {
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.76rem;
+		background: #090c11;
+		border: 1px solid #1e2636;
+		border-radius: 8px;
+		padding: 9px 11px;
+		max-height: 130px;
+		overflow-y: auto;
+		color: #9ca3af;
+		line-height: 1.5;
+	}
+
+	/* Uploaded Payment Transactions Tab */
+	.cfg-pay-toolbar {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 12px;
+		flex-wrap: wrap;
+		margin-bottom: 18px;
+	}
+
+	.cfg-pay-list {
+		display: grid;
+		gap: 16px;
+	}
+
+	.cfg-pay-item {
+		display: grid;
+		grid-template-columns: 260px 1fr;
+		gap: 20px;
+		padding: 18px;
+		border-radius: 12px;
+		border: 1px solid #283244;
+		background: #0f131c;
+		align-items: start;
+	}
+
+	.cfg-pay-thumb-wrap {
+		position: relative;
+		border-radius: 10px;
+		overflow: hidden;
+		border: 1px solid #2e3a4f;
+		background: #090c11;
+	}
+
+	.cfg-pay-img {
+		width: 100%;
+		height: 190px;
+		object-fit: cover;
+		display: block;
+		cursor: zoom-in;
+	}
+
+	.cfg-pay-fs-btn {
+		width: 100%;
+		border: 0;
+		border-top: 1px solid #283244;
+		background: #171d29;
+		color: #e5e7eb;
+		padding: 8px 10px;
+		font-size: 0.8rem;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.cfg-pay-fs-btn:hover {
+		background: #222b3d;
+		color: #ffffff;
+	}
+
+	.cfg-badge {
+		display: inline-flex;
+		align-items: center;
+		padding: 4px 10px;
+		border-radius: 999px;
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.cfg-badge.pending {
+		background: rgba(245, 158, 11, 0.16);
+		color: #fbbf24;
+		border: 1px solid rgba(245, 158, 11, 0.45);
+	}
+
+	.cfg-badge.approved {
+		background: rgba(16, 185, 129, 0.16);
+		color: #34d399;
+		border: 1px solid rgba(16, 185, 129, 0.45);
+	}
+
+	.cfg-pagination {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		margin-top: 20px;
+		padding-top: 16px;
+		border-top: 1px solid #232c3d;
+		flex-wrap: wrap;
+	}
+
+	/* CMS Split Layout (Left Editor + Right Live Preview) */
+	.cms-saved-bar {
+		display: flex;
+		gap: 10px;
+		flex-wrap: wrap;
+		margin: 14px 0 20px;
+	}
+
+	.cms-saved-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 12px;
+		border-radius: 10px;
+		border: 1px solid #2b364a;
+		background: #0f131c;
+		font-size: 0.84rem;
+	}
+
+	.cms-saved-pill.editing {
+		border-color: #f59e0b;
+		background: #1b202e;
+	}
+
+	.cms-split {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		gap: 24px;
+		align-items: start;
+	}
+
+	.cms-blocks-list {
+		display: grid;
+		gap: 14px;
+		margin: 14px 0;
+	}
+
+	.cms-block-editor {
+		border: 1px solid #2b364a;
+		border-radius: 10px;
+		padding: 14px;
+		background: #0d1118;
+	}
+
+	.cms-block-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 8px;
+		margin-bottom: 10px;
+		font-size: 0.82rem;
+		font-weight: 700;
+		color: #cbd5e1;
+	}
+
+	/* Explicit requirement: Add Paragraph button shows a textbox with min-height: 200px */
+	.cms-paragraph-textbox {
+		min-height: 200px !important;
+		resize: vertical;
+		line-height: 1.65;
+	}
+
+	.cms-preview-pane {
+		position: sticky;
+		top: 20px;
+		border: 1px solid #2b364a;
+		border-radius: 14px;
+		background: #0f131c;
+		padding: 22px;
+		min-height: 420px;
+	}
+
+	.cms-preview-meta {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+		padding-bottom: 12px;
+		margin-bottom: 16px;
+		border-bottom: 1px solid #232c3d;
+		font-size: 0.8rem;
+		color: #9ca3af;
+	}
+
+	.cms-preview-title {
+		font-size: 1.6rem;
+		font-weight: 800;
+		color: #ffffff;
+		margin: 0 0 16px;
+	}
+
+	.cms-preview-p {
+		font-size: 0.98rem;
+		line-height: 1.75;
+		color: #e2e8f0;
+		margin: 0 0 16px;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	/* Strictly max 2 images per line */
+	.cms-preview-img-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 12px;
+		margin: 16px 0;
+	}
+
+	.cms-preview-img-card {
+		border: 1px solid #2b364a;
+		border-radius: 10px;
+		overflow: hidden;
+		background: #090c11;
+		aspect-ratio: 16 / 10;
+		position: relative;
+	}
+
+	.cms-preview-img-card img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+		cursor: zoom-in;
+	}
+
+	/* Fullscreen Image Lightbox (for payment receipts & CMS images) */
+	.cfg-fs-viewer {
+		position: fixed;
+		inset: 0;
+		z-index: 99999;
+		background: rgba(5, 7, 11, 0.94);
+		display: none;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding: 24px;
+	}
+
+	.cfg-fs-viewer.open {
+		display: flex;
+	}
+
+	.cfg-fs-viewer img {
+		max-width: 95vw;
+		max-height: 85vh;
+		object-fit: contain;
+		border-radius: 8px;
+		box-shadow: 0 24px 64px rgba(0, 0, 0, 0.75);
+	}
+
+	.cfg-fs-close {
+		position: fixed;
+		top: 18px;
+		right: 22px;
+		background: rgba(255, 255, 255, 0.14);
+		color: #ffffff;
+		border: 1px solid rgba(255, 255, 255, 0.3);
+		border-radius: 999px;
+		padding: 8px 16px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	@media (max-width: 960px) {
+		.cms-split {
+			grid-template-columns: 1fr;
+		}
+		.cms-preview-pane {
+			position: static;
+		}
+		.cfg-pay-item {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>
+<main id="cfg-page" class="cfg-page"></main>
+<script>
+(function() {
+	"use strict";
+
+	var THEMES = [
+		{ id: "default", name: "Classic Dark", desc: "Obsidian studio with amber accents — the original look.", swatches: ["#0e0f12", "#16181d", "#f59e0b", "#e5e7eb"] },
+		{ id: "strata", name: "Strata Editorial", desc: "Warm espresso & terracotta layers with refined serif display.", swatches: ["#171412", "#221d1a", "#e07a5f", "#f2eae1"] },
+		{ id: "stellar", name: "Stellar Signal", desc: "Midnight navy with electric cyan & violet — crisp tech workspace.", swatches: ["#090d16", "#111827", "#38bdf8", "#a78bfa"] },
+		{ id: "nightlab", name: "Night Lab", desc: "True-black OLED canvas with neon matrix green & monospace accents.", swatches: ["#050505", "#0d0f0e", "#22c55e", "#ecfdf5"] },
+		{ id: "paper", name: "Editorial Paper", desc: "Warm ivory daylight theme with ink typography and vermilion highlights.", swatches: ["#f6f3ec", "#ffffff", "#c2410c", "#1c1917"] },
+		{ id: "swiss", name: "Swiss Grid", desc: "Crisp white modernist grid with international orange and hairline rules.", swatches: ["#fafafa", "#ffffff", "#ff3b00", "#111111"] },
+		{ id: "neo", name: "Neo Brutalist", desc: "Warm cream, bold 2px ink borders, hard offset shadows and punchy violet.", swatches: ["#fef9ef", "#ffffff", "#7c3aed", "#0f0f0f"] }
+	];
+
+	function esc(s) {
+		return String(s == null ? "" : s)
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;")
+			.replace(/"/g, "&quot;");
+	}
+
+	function applyThemeClientSide(id) {
+		if (!id || id === "default") {
+			document.documentElement.removeAttribute("data-theme");
+		} else {
+			document.documentElement.setAttribute("data-theme", id);
+		}
+		var meta = document.querySelector('meta[name="theme-color"]');
+		if (meta) {
+			var light = id === "paper" || id === "swiss" || id === "neo";
+			meta.setAttribute("content", light ? "#f6f3ec" : "#0e0f12");
+		}
+	}
+
+	// Switch document into Real Full Page mode (never a modal)
+	document.body.classList.add("cfg-real-page");
+
+	var pageRoot = document.getElementById("cfg-page");
+	if (!pageRoot) {
+		pageRoot = document.createElement("main");
+		pageRoot.id = "cfg-page";
+		pageRoot.className = "cfg-page";
+		document.body.appendChild(pageRoot);
+	}
+	pageRoot.innerHTML =
+		'<header class="cfg-topbar">' +
+			'<div class="cfg-brand">' +
+				'<span class="cfg-brand-badge">Site Admin</span>' +
+				'<div>' +
+					'<h1>Dynamic Site Configuration</h1>' +
+					'<div class="cfg-brand-path">' + esc(window.location.pathname) + '</div>' +
+				'</div>' +
+			'</div>' +
+			'<nav class="cfg-toplinks" aria-label="Quick navigation">' +
+				'<a href="/">Landing Page</a>' +
+				'<a href="/free">Free Studio</a>' +
+				'<a href="/paid">Paid Studio</a>' +
+				'<a href="/account">Account</a>' +
+				'<a href="/upgrade">Upgrade Page</a>' +
+			'</nav>' +
+		'</header>' +
+		'<div class="cfg-container">' +
+			'<section id="cfg-pw-view" class="cfg-unlock-card">' +
+				'<h2>Unlock Site Configuration</h2>' +
+				'<p class="cfg-sub">This dynamic configuration page rotates daily at midnight (Asia/Taipei). Enter the administrator password to manage themes, workers, payment gateway details, payment approvals, and CMS pages.</p>' +
+				'<form id="cfg-pw-form" autocomplete="off">' +
+					'<label class="cfg-label" for="cfg-pw-input">Administrator Password</label>' +
+					'<input id="cfg-pw-input" class="cfg-input" type="password" placeholder="Enter config password" autofocus />' +
+					'<div class="cfg-err" id="cfg-pw-err"></div>' +
+					'<div style="margin-top:14px;">' +
+						'<button type="submit" class="cfg-btn cfg-btn-primary" style="width:100%;">Unlock Configuration Page</button>' +
+					'</div>' +
+				'</form>' +
+			'</section>' +
+
+			'<div id="cfg-unlocked-view" style="display:none;">' +
+				'<nav class="cfg-tabs" role="tablist" aria-label="Configuration sections">' +
+					'<button type="button" class="cfg-tab-btn active" data-cfg-tab="general">1. General &amp; Themes</button>' +
+					'<button type="button" class="cfg-tab-btn" data-cfg-tab="payment-gateway">2. Local Payment Gateway</button>' +
+					'<button type="button" class="cfg-tab-btn" data-cfg-tab="payments">3. Payment Transactions</button>' +
+					'<button type="button" class="cfg-tab-btn" data-cfg-tab="cms">4. CMS Pages (Max 8)</button>' +
+				'</nav>' +
+
+				/* TAB 1: GENERAL & THEMES */
+				'<section class="cfg-panel active" id="cfg-panel-general">' +
+					'<div class="cfg-card">' +
+						'<h2>Appearance Theme</h2>' +
+						'<p class="cfg-sub">Choose a visual skin applied globally across the landing page, studio, account, upgrade, and CMS pages.</p>' +
+						'<div class="cfg-themes" id="cfg-themes"></div>' +
+						'<button type="button" class="cfg-btn cfg-btn-primary" id="cfg-save">Save Theme</button>' +
+						'<div class="cfg-msg" id="cfg-status"></div>' +
+					'</div>' +
+
+					'<div class="cfg-two-col">' +
+						'<div class="cfg-card">' +
+							'<h2>Registered Background Workers</h2>' +
+							'<p class="cfg-sub">Optional URLs of extra worker instances (up to 3).</p>' +
+							'<div style="display:grid;gap:8px;">' +
+								'<input id="cfg-worker-url-1" class="cfg-input" type="url" placeholder="Worker 1 URL (https://your-worker.workers.dev)" />' +
+								'<input id="cfg-worker-url-2" class="cfg-input" type="url" placeholder="Worker 2 URL (optional)" />' +
+								'<input id="cfg-worker-url-3" class="cfg-input" type="url" placeholder="Worker 3 URL (optional)" />' +
+							'</div>' +
+							'<div id="cfg-workers-list" style="margin-top:10px;"></div>' +
+							'<div style="margin-top:12px;">' +
+								'<button type="button" class="cfg-btn cfg-btn-primary" id="cfg-worker-save">Save Workers</button>' +
+							'</div>' +
+							'<div class="cfg-msg" id="cfg-worker-msg"></div>' +
+						'</div>' +
+
+						'<div class="cfg-card">' +
+							'<h2>Background Worker Mode</h2>' +
+							'<p class="cfg-sub">Keep this page open to render queued video jobs in the background via WebCodecs.</p>' +
+							'<div class="cfg-worker-status">' +
+								'<span class="cfg-dot" id="cfg-worker-dot"></span>' +
+								'<span id="cfg-worker-state" style="flex:1;">Stopped</span>' +
+								'<button type="button" class="cfg-btn cfg-btn-primary" id="cfg-worker-toggle">Start Worker</button>' +
+							'</div>' +
+							'<div class="cfg-log" id="cfg-worker-log">Worker idle. Click "Start Worker" to begin polling /api/worker/poll.</div>' +
+						'</div>' +
+					'</div>' +
+
+					'<div class="cfg-two-col">' +
+						'<div class="cfg-card">' +
+							'<h2>Plans &amp; Account Credits</h2>' +
+							'<p class="cfg-sub">Free: 50 AI images/day · Paid (<code>paid_user</code>): 1,200 AI images/day. Click any account row to edit its plan.</p>' +
+							'<div style="display:grid;gap:10px;">' +
+								'<div>' +
+									'<label class="cfg-label" for="cfg-credit-user">Username</label>' +
+									'<input id="cfg-credit-user" class="cfg-input" type="text" placeholder="username" />' +
+								'</div>' +
+								'<div>' +
+									'<label class="cfg-label" for="cfg-credit-plan">Plan</label>' +
+									'<select id="cfg-credit-plan" class="cfg-select">' +
+										'<option value="free">Free — 50 AI images / day</option>' +
+										'<option value="paid_user">Paid (paid_user) — 1,200 AI images / day</option>' +
+									'</select>' +
+								'</div>' +
+								'<label style="display:flex;align-items:center;gap:8px;font-size:0.84rem;color:#cbd5e1;cursor:pointer;">' +
+									'<input id="cfg-credit-reset" type="checkbox" /> Reset today counters' +
+								'</label>' +
+								'<div>' +
+									'<button type="button" class="cfg-btn cfg-btn-primary" id="cfg-plan-save">Save Plan</button>' +
+								'</div>' +
+							'</div>' +
+							'<div class="cfg-msg" id="cfg-plan-msg"></div>' +
+							'<div id="cfg-users-list" style="margin-top:12px;max-height:200px;overflow-y:auto;"></div>' +
+						'</div>' +
+
+						'<div class="cfg-card">' +
+							'<h2>Guest Credits by IP (Today UTC+8)</h2>' +
+							'<p class="cfg-sub">Visitors on GET /free receive 10 AI images/day per masked IP. Reset clears today’s counter.</p>' +
+							'<button type="button" class="cfg-btn" id="cfg-guests-refresh">Refresh Guest IPs</button>' +
+							'<div id="cfg-guests-list" style="margin-top:12px;max-height:220px;overflow-y:auto;"></div>' +
+							'<div class="cfg-msg" id="cfg-guests-msg"></div>' +
+						'</div>' +
+					'</div>' +
+				'</section>' +
+
+				/* TAB 2: LOCAL PAYMENT GATEWAY */
+				'<section class="cfg-panel" id="cfg-panel-payment-gateway">' +
+					'<div class="cfg-card">' +
+						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+							'<div>' +
+								'<h2>Local Payment Gateway Details</h2>' +
+								'<p class="cfg-sub">Write the payment gateway details and screenshot upload instructions shown to users on <a href="/upgrade" target="_blank" style="color:#f59e0b;">/upgrade</a>.</p>' +
+							'</div>' +
+							'<a href="/upgrade" target="_blank" class="cfg-btn">Preview /upgrade ↗</a>' +
+						'</div>' +
+						'<div style="display:grid;gap:16px;margin-top:10px;">' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-gw-name">Payment Gateway Title</label>' +
+								'<input id="cfg-gw-name" class="cfg-input" type="text" maxlength="120" placeholder="e.g. GCash / Maya / Local Bank Transfer" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-gw-details">Local Payment Gateway Details (Account Name, Number, Price, QR / Bank Info)</label>' +
+								'<textarea id="cfg-gw-details" class="cfg-textarea" rows="7" placeholder="Enter bank/e-wallet name, account holder, account number, and plan price..."></textarea>' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-gw-instructions">User Screenshot Upload Instructions</label>' +
+								'<textarea id="cfg-gw-instructions" class="cfg-textarea" rows="5" placeholder="Instructions telling the user how to upload their payment transaction screenshot..."></textarea>' +
+							'</div>' +
+							'<div>' +
+								'<button type="button" class="cfg-btn cfg-btn-primary" id="cfg-gw-save">Save Payment Gateway Details</button>' +
+								'<div class="cfg-msg" id="cfg-gw-msg"></div>' +
+							'</div>' +
+						'</div>' +
+					'</div>' +
+				'</section>' +
+
+				/* TAB 3: UPLOADED PAYMENT TRANSACTIONS */
+				'<section class="cfg-panel" id="cfg-panel-payments">' +
+					'<div class="cfg-card">' +
+						'<div class="cfg-pay-toolbar">' +
+							'<div>' +
+								'<h2>Uploaded Payment Transaction Screenshots</h2>' +
+								'<p class="cfg-sub" style="margin-bottom:0;">Click any screenshot to inspect it fullscreen, verify the transaction number, and approve to upgrade the user account to <code>paid_user</code>.</p>' +
+							'</div>' +
+							'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
+								'<select id="cfg-pay-filter" class="cfg-select" style="width:auto;">' +
+									'<option value="all">All Submissions</option>' +
+									'<option value="pending">Pending Only</option>' +
+									'<option value="approved">Approved Only</option>' +
+								'</select>' +
+								'<button type="button" class="cfg-btn" id="cfg-pay-refresh">Refresh</button>' +
+							'</div>' +
+						'</div>' +
+						'<div class="cfg-msg" id="cfg-pay-msg"></div>' +
+						'<div class="cfg-pay-list" id="cfg-pay-list"></div>' +
+						'<div class="cfg-pagination" id="cfg-pay-pagination">' +
+							'<button type="button" class="cfg-btn" id="cfg-pay-prev" disabled>← Previous Page</button>' +
+							'<span id="cfg-pay-page-info" style="font-size:0.88rem;color:#9ca3af;">Page 1 of 1</span>' +
+							'<button type="button" class="cfg-btn" id="cfg-pay-next" disabled>Next Page →</button>' +
+						'</div>' +
+					'</div>' +
+				'</section>' +
+
+				/* TAB 4: BASIC CMS (MAX 8 PAGES) */
+				'<section class="cfg-panel" id="cfg-panel-cms">' +
+					'<div class="cfg-card">' +
+						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+							'<div>' +
+								'<h2>Basic CMS — Static &amp; Marketing Pages (<span id="cms-count-label">0 / 8</span>)</h2>' +
+								'<p class="cfg-sub" style="margin-bottom:0;">Create up to 8 flat pages (no nested URLs). Links appear automatically in the Top Menu or Footer.</p>' +
+							'</div>' +
+							'<button type="button" class="cfg-btn cfg-btn-primary" id="cms-new-page-btn">+ New Page</button>' +
+						'</div>' +
+
+						'<div class="cms-saved-bar" id="cms-saved-bar"></div>' +
+
+						'<div class="cms-split">' +
+							/* Left column: Editor */
+							'<form id="cms-editor-form" autocomplete="off">' +
+								'<input type="hidden" id="cms-edit-id" value="" />' +
+								'<div style="display:grid;gap:14px;">' +
+									'<div>' +
+										'<label class="cfg-label" for="cms-page-url">Page URL <span style="color:#f59e0b;">*</span> (Required — single-level, e.g. /about)</label>' +
+										'<input id="cms-page-url" class="cfg-input" type="text" required placeholder="/about" />' +
+									'</div>' +
+									'<div>' +
+										'<label class="cfg-label" for="cms-page-title">Page Title / Menu Link Text</label>' +
+										'<input id="cms-page-title" class="cfg-input" type="text" maxlength="120" placeholder="About Us" />' +
+									'</div>' +
+									'<div>' +
+										'<label class="cfg-label" for="cms-page-link">Page Link</label>' +
+										'<select id="cms-page-link" class="cfg-select">' +
+											'<option value="Link Placed On Top Menu">Link Placed On Top Menu</option>' +
+											'<option value="Link Placed On Footer">Link Placed On Footer</option>' +
+										'</select>' +
+									'</div>' +
+								'</div>' +
+
+								'<div style="margin-top:18px;">' +
+									'<div class="cfg-label">Page Content Blocks (URL-only images, max 2 images per line)</div>' +
+									'<div class="cms-blocks-list" id="cms-blocks-list"></div>' +
+									'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">' +
+										'<button type="button" class="cfg-btn" id="cms-add-paragraph-btn">+ Add Paragraph</button>' +
+										'<button type="button" class="cfg-btn" id="cms-add-image-btn">+ Add Image (URL)</button>' +
+										'<button type="button" class="cfg-btn" id="cms-add-image-pair-btn">+ Add 2-Image Row (URLs)</button>' +
+									'</div>' +
+								'</div>' +
+
+								'<div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
+									'<button type="submit" class="cfg-btn cfg-btn-primary" id="cms-save-btn">Save CMS Page</button>' +
+									'<button type="button" class="cfg-btn" id="cms-reset-btn">Clear Form</button>' +
+								'</div>' +
+								'<div class="cfg-msg" id="cms-msg"></div>' +
+							'</form>' +
+
+							/* Right column: Live Preview */
+							'<aside class="cms-preview-pane" aria-label="CMS Live Preview">' +
+								'<div class="cms-preview-meta">' +
+									'<strong>Live Preview</strong>' +
+									'<span id="cms-preview-placement">Link Placed On Top Menu</span>' +
+									'<code id="cms-preview-url">/your-page</code>' +
+								'</div>' +
+								'<div id="cms-live-preview"></div>' +
+							'</aside>' +
+						'</div>' +
+					'</div>' +
+				'</section>' +
+			'</div>' +
+		'</div>' +
+
+		/* Fullscreen Lightbox */
+		'<div class="cfg-fs-viewer" id="cfg-fs-viewer" role="dialog" aria-modal="true" aria-label="Fullscreen image viewer">' +
+			'<button type="button" class="cfg-fs-close" id="cfg-fs-close">✕ Close Fullscreen (Esc)</button>' +
+			'<img id="cfg-fs-img" src="" alt="Fullscreen preview" />' +
+			'<div id="cfg-fs-caption" style="margin-top:12px;color:#cbd5e1;font-size:0.9rem;"></div>' +
+		'</div>';
+
+	// Fullscreen image viewer helpers
+	var fsViewer = document.getElementById("cfg-fs-viewer");
+	var fsImg = document.getElementById("cfg-fs-img");
+	var fsCaption = document.getElementById("cfg-fs-caption");
+	var fsClose = document.getElementById("cfg-fs-close");
+
+	function openFs(src, caption) {
+		if (!src || !fsViewer || !fsImg) return;
+		fsImg.src = src;
+		if (fsCaption) fsCaption.textContent = caption || "";
+		fsViewer.classList.add("open");
+	}
+
+	function closeFs() {
+		if (!fsViewer || !fsImg) return;
+		fsViewer.classList.remove("open");
+		fsImg.src = "";
+	}
+
+	if (fsClose) fsClose.addEventListener("click", closeFs);
+	if (fsViewer) {
+		fsViewer.addEventListener("click", function(e) {
+			if (e.target === fsViewer) closeFs();
+		});
+	}
+	document.addEventListener("keydown", function(e) {
+		if (e.key === "Escape" && fsViewer && fsViewer.classList.contains("open")) {
+			closeFs();
+		}
+	});
+	document.addEventListener("click", function(e) {
+		var trigger = e.target && e.target.closest ? e.target.closest("[data-cfg-fs-src]") : null;
+		if (trigger) {
+			e.preventDefault();
+			openFs(trigger.getAttribute("data-cfg-fs-src"), trigger.getAttribute("data-cfg-fs-caption") || "");
+		}
+	});
+
+	var unlockedPw = "";
+	var selectedTheme = document.documentElement.getAttribute("data-theme") || "default";
+
+	// Tab switching on the same dynamic URL
+	var tabBtns = pageRoot.querySelectorAll("[data-cfg-tab]");
+	function activateTab(tabName) {
+		tabBtns.forEach(function(btn) {
+			var match = btn.getAttribute("data-cfg-tab") === tabName;
+			btn.classList.toggle("active", match);
+		});
+		["general", "payment-gateway", "payments", "cms"].forEach(function(id) {
+			var panel = document.getElementById("cfg-panel-" + id);
+			if (panel) panel.classList.toggle("active", id === tabName);
+		});
+		if (unlockedPw) {
+			if (tabName === "payments") loadPaymentsPage(currentPayPage);
+			if (tabName === "payment-gateway") loadGatewayConfig();
+			if (tabName === "cms") loadCmsPages();
+		}
+	}
+
+	tabBtns.forEach(function(btn) {
+		btn.addEventListener("click", function() {
+			var tabName = btn.getAttribute("data-cfg-tab");
+			activateTab(tabName);
+		});
+	});
+
+	// --- TAB 1: Themes, Workers, Plans, Guest IPs ---
+	function renderThemeGrid() {
+		var wrap = document.getElementById("cfg-themes");
+		if (!wrap) return;
+		wrap.innerHTML = "";
+		THEMES.forEach(function(t) {
+			var card = document.createElement("div");
+			card.className = "cfg-theme" + (t.id === selectedTheme ? " selected" : "");
+			var sw = t.swatches.map(function(c) { return '<span style="background:' + c + '"></span>'; }).join("");
+			card.innerHTML =
+				'<div class="cfg-theme-head">' +
+					'<span class="cfg-theme-name">' + esc(t.name) + '</span>' +
+					'<span class="cfg-swatches">' + sw + '</span>' +
+				'</div>' +
+				'<div class="cfg-theme-desc">' + esc(t.desc) + '</div>';
+			card.addEventListener("click", function() {
+				selectedTheme = t.id;
+				applyThemeClientSide(t.id);
+				renderThemeGrid();
+				var st = document.getElementById("cfg-status");
+				if (st) { st.className = "cfg-msg"; st.textContent = "Previewing " + t.name + " — click Save Theme to persist."; }
+			});
+			wrap.appendChild(card);
+		});
+	}
+
+	document.getElementById("cfg-save").addEventListener("click", function() {
+		var btn = document.getElementById("cfg-save");
+		var st = document.getElementById("cfg-status");
+		btn.disabled = true;
+		st.className = "cfg-msg";
+		st.textContent = "Saving theme...";
+		fetch("/api/config/theme", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pw: unlockedPw, theme: selectedTheme })
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				btn.disabled = false;
+				if (res.ok && res.body && res.body.success) {
+					st.className = "cfg-msg ok";
+					st.textContent = "Saved! All visitors now see this theme.";
+				} else {
+					st.className = "cfg-msg err";
+					st.textContent = (res.body && res.body.error) || "Failed to save theme.";
+				}
+			})
+			.catch(function() {
+				btn.disabled = false;
+				st.className = "cfg-msg err";
+				st.textContent = "Network error.";
+			});
+	});
+
+	function renderWorkersList(urls) {
+		var box = document.getElementById("cfg-workers-list");
+		if (!box) return;
+		for (var idx = 0; idx < 3; idx++) {
+			var inp = document.getElementById("cfg-worker-url-" + (idx + 1));
+			if (inp) inp.value = (urls && urls[idx]) || "";
+		}
+		box.innerHTML = "";
+		if (!urls || !urls.length) {
+			box.innerHTML = '<div style="font-size:0.82rem;color:#6b7280;padding:4px 0;">No extra workers registered.</div>';
+			return;
+		}
+		urls.forEach(function(u) {
+			var row = document.createElement("div");
+			row.className = "cfg-worker-row";
+			row.innerHTML = '<code>' + esc(u) + '</code>';
+			box.appendChild(row);
+		});
+	}
+
+	function loadWorkersList() {
+		fetch("/api/config/workers", { credentials: "same-origin" })
+			.then(function(r) { return r.ok ? r.json() : null; })
+			.then(function(d) { if (d && Array.isArray(d.urls)) renderWorkersList(d.urls); })
+			.catch(function() {});
+	}
+
+	document.getElementById("cfg-worker-save").addEventListener("click", function() {
+		var msg = document.getElementById("cfg-worker-msg");
+		var urls = [];
+		for (var idx = 1; idx <= 3; idx++) {
+			var val = document.getElementById("cfg-worker-url-" + idx).value.trim();
+			if (val) urls.push(val);
+		}
+		msg.className = "cfg-msg";
+		msg.textContent = "Saving workers...";
+		fetch("/api/config/workers", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pw: unlockedPw, urls: urls })
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				if (res.ok && res.body && res.body.success) {
+					renderWorkersList(res.body.urls || []);
+					msg.className = "cfg-msg ok";
+					msg.textContent = "Saved background worker URLs.";
+				} else {
+					msg.className = "cfg-msg err";
+					msg.textContent = (res.body && res.body.error) || "Failed to save workers.";
+				}
+			})
+			.catch(function() {
+				msg.className = "cfg-msg err";
+				msg.textContent = "Network error.";
+			});
+	});
+
+	// Background Worker polling loop (/api/worker/poll + window.workerRunJob + /api/worker/failed)
+	var workerActive = false;
+	var workerBusy = false;
+	var workerTimer = null;
+
+	function wlog(line) {
+		var el = document.getElementById("cfg-worker-log");
+		if (!el) return;
+		var ts = new Date().toTimeString().slice(0, 8);
+		el.textContent = "[" + ts + "] " + line + "\\n" + el.textContent.slice(0, 4000);
+	}
+
+	function setWorkerDot(state, label) {
+		var dot = document.getElementById("cfg-worker-dot");
+		var st = document.getElementById("cfg-worker-state");
+		if (dot) dot.className = "cfg-dot" + (state ? " " + state : "");
+		if (st) st.textContent = label;
+	}
+
+	async function pollOnce() {
+		if (!workerActive || workerBusy) return;
+		try {
+			var res = await fetch("/api/worker/poll", { credentials: "same-origin" });
+			if (!res.ok) {
+				wlog("Poll HTTP " + res.status);
+			} else {
+				var data = await res.json();
+				if (data && data.job) {
+					workerBusy = true;
+					setWorkerDot("busy", "Rendering " + (data.job.name || data.job.id) + "...");
+					wlog("Claimed job " + data.job.id);
+					try {
+						if (typeof window.workerRunJob !== "function") {
+							throw new Error("Studio renderer not ready yet");
+						}
+						await window.workerRunJob(data.job);
+						wlog("Delivered job " + data.job.id);
+					} catch (jobErr) {
+						var emsg = (jobErr && jobErr.message) ? jobErr.message : String(jobErr);
+						wlog("Job failed: " + emsg);
+						try {
+							await fetch("/api/worker/failed?job=" + encodeURIComponent(data.job.id), {
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({ error: emsg }),
+								credentials: "same-origin"
+							});
+						} catch (_) {}
+					}
+					workerBusy = false;
+					if (workerActive) setWorkerDot("idle", "Listening for jobs...");
+				}
+			}
+		} catch (e) {
+			wlog("Poll error: " + ((e && e.message) || e));
+		}
+		if (workerActive) {
+			workerTimer = setTimeout(pollOnce, 3000);
+		}
+	}
+
+	function setWorkerActive(on) {
+		workerActive = on;
+		clearTimeout(workerTimer);
+		var btn = document.getElementById("cfg-worker-toggle");
+		if (on) {
+			btn.textContent = "Stop Worker";
+			setWorkerDot("idle", "Listening for jobs...");
+			wlog("Worker started.");
+			pollOnce();
+		} else {
+			btn.textContent = "Start Worker";
+			setWorkerDot("", "Stopped");
+			wlog("Worker stopped.");
+		}
+	}
+
+	document.getElementById("cfg-worker-toggle").addEventListener("click", function() {
+		setWorkerActive(!workerActive);
+	});
+
+	function loadCreditUsers() {
+		var box = document.getElementById("cfg-users-list");
+		fetch("/api/config/users?pw=" + encodeURIComponent(unlockedPw), { credentials: "same-origin" })
+			.then(function(r) { return r.json().catch(function() { return {}; }); })
+			.then(function(d) {
+				if (!box) return;
+				box.innerHTML = "";
+				if (!d || !d.success) {
+					box.innerHTML = '<div style="font-size:0.82rem;color:#6b7280;">' + esc((d && d.error) || "Could not load accounts.") + '</div>';
+					return;
+				}
+				var users = d.users || [];
+				if (!users.length) {
+					box.innerHTML = '<div style="font-size:0.82rem;color:#6b7280;">No accounts created yet.</div>';
+					return;
+				}
+				users.forEach(function(u) {
+					var row = document.createElement("div");
+					row.className = "cfg-worker-row";
+					row.style.cursor = "pointer";
+					var lim = u.plan && u.plan.limits && u.plan.limits.images !== null
+						? (u.remaining.images + "/" + u.plan.limits.images + " images left")
+						: "unlimited";
+					row.innerHTML =
+						'<code>' + esc(u.username) + '</code>' +
+						'<span style="font-size:0.78rem;color:#9ca3af;">' + esc(u.usertype || "free") + ' · ' + esc(lim) + '</span>';
+					row.addEventListener("click", function() {
+						document.getElementById("cfg-credit-user").value = u.username;
+						document.getElementById("cfg-credit-plan").value = u.usertype === "paid_user" ? "paid_user" : "free";
+					});
+					box.appendChild(row);
+				});
+			})
+			.catch(function() {});
+	}
+
+	document.getElementById("cfg-plan-save").addEventListener("click", function() {
+		var msg = document.getElementById("cfg-plan-msg");
+		var username = document.getElementById("cfg-credit-user").value.trim();
+		var usertype = document.getElementById("cfg-credit-plan").value || "free";
+		var resetCredits = !!document.getElementById("cfg-credit-reset").checked;
+		if (!username) {
+			msg.className = "cfg-msg err";
+			msg.textContent = "Enter a username.";
+			return;
+		}
+		msg.className = "cfg-msg";
+		msg.textContent = "Saving account plan...";
+		fetch("/api/config/users", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pw: unlockedPw, username: username, usertype: usertype, resetCredits: resetCredits }),
+			credentials: "same-origin"
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				if (res.ok && res.body && res.body.success) {
+					msg.className = "cfg-msg ok";
+					msg.textContent = "Saved: " + res.body.username + " is now on " + res.body.usertype + ".";
+					document.getElementById("cfg-credit-reset").checked = false;
+					loadCreditUsers();
+				} else {
+					msg.className = "cfg-msg err";
+					msg.textContent = (res.body && res.body.error) || "Failed.";
+				}
+			})
+			.catch(function() {
+				msg.className = "cfg-msg err";
+				msg.textContent = "Network error.";
+			});
+	});
+
+	function renderGuestsList(data) {
+		var box = document.getElementById("cfg-guests-list");
+		if (!box) return;
+		box.innerHTML = "";
+		var list = (data && data.rows) || [];
+		var limit = (data && data.plan && data.plan.limits && data.plan.limits.images) || 10;
+		if (!list.length) {
+			box.innerHTML = '<div style="font-size:0.82rem;color:#6b7280;padding:6px 0;">No guest IP activity yet today.</div>';
+			return;
+		}
+		list.forEach(function(g) {
+			var row = document.createElement("div");
+			row.className = "cfg-worker-row";
+			var left = g.remaining && g.remaining.images !== null ? (g.remaining.images + "/" + limit) : "unlimited";
+			row.innerHTML =
+				'<code>' + esc(g.ip) + '</code>' +
+				'<span style="color:#9ca3af;font-size:0.78rem;">img ' + esc(g.used && g.used.images) + ' · left <strong>' + esc(left) + '</strong></span>' +
+				'<button type="button" class="cfg-btn" style="padding:4px 8px;font-size:0.74rem;">Reset</button>';
+			row.querySelector("button").addEventListener("click", function() { resetGuestRow(g.key); });
+			box.appendChild(row);
+		});
+	}
+
+	function loadGuests() {
+		var msg = document.getElementById("cfg-guests-msg");
+		msg.className = "cfg-msg";
+		msg.textContent = "Loading...";
+		fetch("/api/config/ipcredits?pw=" + encodeURIComponent(unlockedPw), { credentials: "same-origin" })
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				if (res.ok && res.body && res.body.success) {
+					renderGuestsList(res.body);
+					msg.textContent = "";
+				} else {
+					msg.className = "cfg-msg err";
+					msg.textContent = (res.body && res.body.error) || "Could not load guest rows.";
+				}
+			})
+			.catch(function() {
+				msg.className = "cfg-msg err";
+				msg.textContent = "Network error.";
+			});
+	}
+
+	function resetGuestRow(key) {
+		var msg = document.getElementById("cfg-guests-msg");
+		fetch("/api/config/ipcredits", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pw: unlockedPw, key: key }),
+			credentials: "same-origin"
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				if (res.ok && res.body && res.body.success) {
+					msg.className = "cfg-msg ok";
+					msg.textContent = "Reset guest row.";
+					loadGuests();
+				} else {
+					msg.className = "cfg-msg err";
+					msg.textContent = (res.body && res.body.error) || "Reset failed.";
+				}
+			})
+			.catch(function() {
+				msg.className = "cfg-msg err";
+				msg.textContent = "Network error.";
+			});
+	}
+
+	document.getElementById("cfg-guests-refresh").addEventListener("click", loadGuests);
+
+	// --- TAB 2: Local Payment Gateway Config ---
+	function loadGatewayConfig() {
+		fetch("/api/config/payment-gateway")
+			.then(function(r) { return r.ok ? r.json() : null; })
+			.then(function(d) {
+				if (!d || !d.gateway) return;
+				document.getElementById("cfg-gw-name").value = d.gateway.gatewayName || "";
+				document.getElementById("cfg-gw-details").value = d.gateway.gatewayDetails || "";
+				document.getElementById("cfg-gw-instructions").value = d.gateway.uploadInstructions || "";
+			})
+			.catch(function() {});
+	}
+
+	document.getElementById("cfg-gw-save").addEventListener("click", function() {
+		var btn = document.getElementById("cfg-gw-save");
+		var msg = document.getElementById("cfg-gw-msg");
+		btn.disabled = true;
+		msg.className = "cfg-msg";
+		msg.textContent = "Saving payment gateway details...";
+		fetch("/api/config/payment-gateway", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				pw: unlockedPw,
+				gatewayName: document.getElementById("cfg-gw-name").value.trim(),
+				gatewayDetails: document.getElementById("cfg-gw-details").value.trim(),
+				uploadInstructions: document.getElementById("cfg-gw-instructions").value.trim()
+			})
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				btn.disabled = false;
+				if (res.ok && res.body && res.body.success) {
+					msg.className = "cfg-msg ok";
+					msg.textContent = "Saved! Your local payment gateway details are now live on /upgrade.";
+				} else {
+					msg.className = "cfg-msg err";
+					msg.textContent = (res.body && res.body.error) || "Failed to save payment gateway details.";
+				}
+			})
+			.catch(function() {
+				btn.disabled = false;
+				msg.className = "cfg-msg err";
+				msg.textContent = "Network error.";
+			});
+	});
+
+	// --- TAB 3: Uploaded Payment Transactions (Paginated + Fullscreen + Verify/Approve) ---
+	var currentPayPage = 1;
+	var PAY_PAGE_LIMIT = 5;
+
+	function loadPaymentsPage(pageNum) {
+		currentPayPage = Math.max(1, pageNum || 1);
+		var statusFilter = document.getElementById("cfg-pay-filter").value || "all";
+		var listBox = document.getElementById("cfg-pay-list");
+		var msg = document.getElementById("cfg-pay-msg");
+		var pageInfo = document.getElementById("cfg-pay-page-info");
+		var prevBtn = document.getElementById("cfg-pay-prev");
+		var nextBtn = document.getElementById("cfg-pay-next");
+
+		msg.className = "cfg-msg";
+		msg.textContent = "Loading payment transactions...";
+
+		fetch(
+			"/api/config/payments?pw=" + encodeURIComponent(unlockedPw) +
+			"&page=" + currentPayPage +
+			"&limit=" + PAY_PAGE_LIMIT +
+			"&status=" + encodeURIComponent(statusFilter)
+		)
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				listBox.innerHTML = "";
+				if (!res.ok || !res.body || !res.body.success) {
+					msg.className = "cfg-msg err";
+					msg.textContent = (res.body && res.body.error) || "Could not load payment transactions.";
+					return;
+				}
+				msg.textContent = "";
+				var items = res.body.items || [];
+				var pg = res.body.pagination || { page: 1, totalPages: 1, total: 0, hasPrev: false, hasNext: false };
+				currentPayPage = pg.page;
+
+				pageInfo.textContent = "Page " + pg.page + " of " + pg.totalPages + " (" + pg.total + " total submissions)";
+				prevBtn.disabled = !pg.hasPrev;
+				nextBtn.disabled = !pg.hasNext;
+
+				if (!items.length) {
+					listBox.innerHTML = '<div style="padding:24px;text-align:center;color:#9ca3af;border:1px dashed #283244;border-radius:10px;">No payment transaction screenshots found for this filter.</div>';
+					return;
+				}
+
+				items.forEach(function(item) {
+					var row = document.createElement("div");
+					row.className = "cfg-pay-item";
+					var isApproved = item.status === "approved";
+					var caption = "User: " + item.username + " · File: " + (item.fileName || item.id);
+					row.innerHTML =
+						'<div class="cfg-pay-thumb-wrap">' +
+							'<img class="cfg-pay-img" src="' + esc(item.imageUrl) + '" data-cfg-fs-src="' + esc(item.imageUrl) + '" data-cfg-fs-caption="' + esc(caption) + '" alt="Payment screenshot from ' + esc(item.username) + '" />' +
+							'<button type="button" class="cfg-pay-fs-btn" data-cfg-fs-src="' + esc(item.imageUrl) + '" data-cfg-fs-caption="' + esc(caption) + '">⛶ Fullscreen Screenshot</button>' +
+						'</div>' +
+						'<div>' +
+							'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">' +
+								'<div>' +
+									'<strong style="font-size:1.05rem;color:#ffffff;">' + esc(item.username) + '</strong> ' +
+									'<span style="color:#9ca3af;font-size:0.86rem;">(' + esc(item.email || "no email") + ')</span>' +
+								'</div>' +
+								'<span class="cfg-badge ' + (isApproved ? "approved" : "pending") + '" data-role="badge">' +
+									(isApproved ? "✓ Approved · paid_user" : "⏳ Pending Verification") +
+								'</span>' +
+							'</div>' +
+							'<div style="font-size:0.84rem;color:#9ca3af;display:grid;gap:4px;margin-bottom:12px;">' +
+								'<div><strong>Submitted:</strong> ' + esc((item.createdAt || "").replace("T", " ").slice(0, 19)) + ' UTC</div>' +
+								'<div><strong>Account DB Usertype:</strong> <code data-role="usertype">' + esc(item.accountUsertype || "free") + '</code></div>' +
+								(item.userNote ? '<div><strong>User Note:</strong> ' + esc(item.userNote) + '</div>' : '') +
+							'</div>' +
+							'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
+								'<input type="text" class="cfg-input cfg-pay-txn-input" style="max-width:280px;" placeholder="Enter verified transaction #" value="' + esc(item.transactionNumber || "") + '" />' +
+								'<button type="button" class="cfg-btn cfg-btn-success cfg-pay-approve-btn">' +
+									(isApproved ? "Update Verified Txn #" : "✓ Verify & Approve (Set paid_user)") +
+								'</button>' +
+							'</div>' +
+							'<div class="cfg-msg" data-role="row-msg"></div>' +
+						'</div>';
+
+					var txnInput = row.querySelector(".cfg-pay-txn-input");
+					var approveBtn = row.querySelector(".cfg-pay-approve-btn");
+					var rowMsg = row.querySelector('[data-role="row-msg"]');
+					var badgeEl = row.querySelector('[data-role="badge"]');
+					var utEl = row.querySelector('[data-role="usertype"]');
+
+					approveBtn.addEventListener("click", function() {
+						var txn = txnInput.value.trim();
+						if (!txn) {
+							rowMsg.className = "cfg-msg err";
+							rowMsg.textContent = "Enter the transaction number shown on the payment screenshot first.";
+							txnInput.focus();
+							return;
+						}
+						approveBtn.disabled = true;
+						rowMsg.className = "cfg-msg";
+						rowMsg.textContent = "Verifying & updating user account to paid_user...";
+						fetch("/api/config/payments/approve", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								pw: unlockedPw,
+								id: item.id,
+								transactionNumber: txn
+							})
+						})
+							.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+							.then(function(ans) {
+								approveBtn.disabled = false;
+								if (ans.ok && ans.body && ans.body.success) {
+									badgeEl.className = "cfg-badge approved";
+									badgeEl.textContent = "✓ Approved · paid_user";
+									utEl.textContent = "paid_user";
+									approveBtn.textContent = "Update Verified Txn #";
+									rowMsg.className = "cfg-msg ok";
+									rowMsg.textContent = 'Approved! User "' + item.username + '" is now paid_user in the database.';
+									loadCreditUsers();
+								} else {
+									rowMsg.className = "cfg-msg err";
+									rowMsg.textContent = (ans.body && ans.body.error) || "Approval failed.";
+								}
+							})
+							.catch(function() {
+								approveBtn.disabled = false;
+								rowMsg.className = "cfg-msg err";
+								rowMsg.textContent = "Network error.";
+							});
+					});
+
+					listBox.appendChild(row);
+				});
+			})
+			.catch(function() {
+				msg.className = "cfg-msg err";
+				msg.textContent = "Network error loading payments.";
+			});
+	}
+
+	document.getElementById("cfg-pay-prev").addEventListener("click", function() {
+		if (currentPayPage > 1) loadPaymentsPage(currentPayPage - 1);
+	});
+	document.getElementById("cfg-pay-next").addEventListener("click", function() {
+		loadPaymentsPage(currentPayPage + 1);
+	});
+	document.getElementById("cfg-pay-refresh").addEventListener("click", function() {
+		loadPaymentsPage(currentPayPage);
+	});
+	document.getElementById("cfg-pay-filter").addEventListener("change", function() {
+		loadPaymentsPage(1);
+	});
+
+	// --- TAB 4: Basic CMS (Max 8 Pages, Live Preview, 200px Paragraph Textbox, 2-per-line URL Images) ---
+	var cmsSavedPages = [];
+	var cmsDraftBlocks = [];
+
+	function slugTitleFallback(rawUrl) {
+		var clean = String(rawUrl || "").trim().replace(/^\\/+/, "");
+		if (!clean) return "Untitled Page";
+		return clean
+			.split(/[-_]+/)
+			.filter(Boolean)
+			.map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1); })
+			.join(" ");
+	}
+
+	function renderCmsLivePreview() {
+		var rawUrl = document.getElementById("cms-page-url").value.trim();
+		var rawTitle = document.getElementById("cms-page-title").value.trim();
+		var placement = document.getElementById("cms-page-link").value;
+		var title = rawTitle || slugTitleFallback(rawUrl);
+		var displayUrl = rawUrl ? (rawUrl.charAt(0) === "/" ? rawUrl : "/" + rawUrl) : "/your-page";
+
+		document.getElementById("cms-preview-placement").textContent = placement;
+		document.getElementById("cms-preview-url").textContent = displayUrl;
+
+		var previewBox = document.getElementById("cms-live-preview");
+		var htmlParts = ['<h3 class="cms-preview-title">' + esc(title) + '</h3>'];
+
+		var pendingImgs = [];
+		function flushImgs() {
+			if (!pendingImgs.length) return;
+			var cards = pendingImgs.map(function(u, idx) {
+				return (
+					'<div class="cms-preview-img-card">' +
+						'<img src="' + esc(u) + '" data-cfg-fs-src="' + esc(u) + '" data-cfg-fs-caption="' + esc(title + " — Image " + (idx + 1)) + '" alt="CMS preview image" />' +
+					'</div>'
+				);
+			}).join("");
+			htmlParts.push('<div class="cms-preview-img-grid">' + cards + '</div>');
+			pendingImgs = [];
+		}
+
+		cmsDraftBlocks.forEach(function(b) {
+			if (b.type === "image") {
+				var u = (b.url || "").trim();
+				if (u) pendingImgs.push(u);
+			} else if (b.type === "paragraph") {
+				flushImgs();
+				if ((b.text || "").trim()) {
+					htmlParts.push('<p class="cms-preview-p">' + esc(b.text) + '</p>');
+				}
+			}
+		});
+		flushImgs();
+
+		if (htmlParts.length === 1) {
+			htmlParts.push('<p style="color:#6b7280;font-size:0.9rem;">Click "+ Add Paragraph" or "+ Add Image (URL)" to build your page and preview it live here.</p>');
+		}
+
+		previewBox.innerHTML = htmlParts.join("");
+	}
+
+	function renderCmsBlockEditors() {
+		var listEl = document.getElementById("cms-blocks-list");
+		listEl.innerHTML = "";
+
+		cmsDraftBlocks.forEach(function(block, index) {
+			var wrap = document.createElement("div");
+			wrap.className = "cms-block-editor";
+
+			var labelTxt = block.type === "paragraph"
+				? "Paragraph Block #" + (index + 1)
+				: "Image URL Block #" + (index + 1) + " (Max 2 images per line)";
+
+			wrap.innerHTML =
+				'<div class="cms-block-head">' +
+					'<span>' + esc(labelTxt) + '</span>' +
+					'<div style="display:flex;gap:6px;">' +
+						'<button type="button" class="cfg-btn" data-act="up" style="padding:3px 8px;font-size:0.75rem;">↑</button>' +
+						'<button type="button" class="cfg-btn" data-act="down" style="padding:3px 8px;font-size:0.75rem;">↓</button>' +
+						'<button type="button" class="cfg-btn cfg-btn-danger" data-act="del" style="padding:3px 8px;font-size:0.75rem;">Remove</button>' +
+					'</div>' +
+				'</div>';
+
+			if (block.type === "paragraph") {
+				var ta = document.createElement("textarea");
+				ta.className = "cfg-textarea cms-paragraph-textbox";
+				ta.style.minHeight = "200px";
+				ta.placeholder = "Write paragraph text here...";
+				ta.value = block.text || "";
+				ta.addEventListener("input", function() {
+					block.text = ta.value;
+					renderCmsLivePreview();
+				});
+				wrap.appendChild(ta);
+			} else {
+				var inp = document.createElement("input");
+				inp.type = "url";
+				inp.className = "cfg-input cms-image-url-input";
+				inp.placeholder = "https://example.com/image.jpg (URL only — no file upload)";
+				inp.value = block.url || "";
+				inp.addEventListener("input", function() {
+					block.url = inp.value;
+					renderCmsLivePreview();
+				});
+				wrap.appendChild(inp);
+			}
+
+			wrap.querySelector('[data-act="up"]').addEventListener("click", function() {
+				if (index === 0) return;
+				var tmp = cmsDraftBlocks[index - 1];
+				cmsDraftBlocks[index - 1] = cmsDraftBlocks[index];
+				cmsDraftBlocks[index] = tmp;
+				renderCmsBlockEditors();
+				renderCmsLivePreview();
+			});
+			wrap.querySelector('[data-act="down"]').addEventListener("click", function() {
+				if (index >= cmsDraftBlocks.length - 1) return;
+				var tmp = cmsDraftBlocks[index + 1];
+				cmsDraftBlocks[index + 1] = cmsDraftBlocks[index];
+				cmsDraftBlocks[index] = tmp;
+				renderCmsBlockEditors();
+				renderCmsLivePreview();
+			});
+			wrap.querySelector('[data-act="del"]').addEventListener("click", function() {
+				cmsDraftBlocks.splice(index, 1);
+				renderCmsBlockEditors();
+				renderCmsLivePreview();
+			});
+
+			listEl.appendChild(wrap);
+		});
+	}
+
+	function resetCmsEditor() {
+		document.getElementById("cms-edit-id").value = "";
+		document.getElementById("cms-page-url").value = "";
+		document.getElementById("cms-page-title").value = "";
+		document.getElementById("cms-page-link").value = "Link Placed On Top Menu";
+		cmsDraftBlocks = [];
+		renderCmsBlockEditors();
+		renderCmsLivePreview();
+		renderCmsSavedBar();
+	}
+
+	function editCmsPage(page) {
+		document.getElementById("cms-edit-id").value = page.id;
+		document.getElementById("cms-page-url").value = page.url;
+		document.getElementById("cms-page-title").value = page.title;
+		document.getElementById("cms-page-link").value = page.pageLink;
+		cmsDraftBlocks = (page.blocks || []).map(function(b) {
+			return b.type === "image"
+				? { type: "image", url: b.url || "" }
+				: { type: "paragraph", text: b.text || "" };
+		});
+		renderCmsBlockEditors();
+		renderCmsLivePreview();
+		renderCmsSavedBar();
+	}
+
+	function renderCmsSavedBar() {
+		var bar = document.getElementById("cms-saved-bar");
+		var countLabel = document.getElementById("cms-count-label");
+		var activeId = document.getElementById("cms-edit-id").value;
+		countLabel.textContent = cmsSavedPages.length + " / 8";
+		bar.innerHTML = "";
+
+		if (!cmsSavedPages.length) {
+			bar.innerHTML = '<div style="font-size:0.84rem;color:#6b7280;">No CMS pages created yet. Fill out the form below to publish your first page.</div>';
+			return;
+		}
+
+		cmsSavedPages.forEach(function(p) {
+			var pill = document.createElement("div");
+			pill.className = "cms-saved-pill" + (p.id === activeId ? " editing" : "");
+			pill.innerHTML =
+				'<strong>' + esc(p.title) + '</strong>' +
+				'<code style="color:#f59e0b;">' + esc(p.url) + '</code>' +
+				'<span style="font-size:0.75rem;color:#9ca3af;">(' + esc(p.pageLink === "Link Placed On Footer" ? "Footer" : "Top Menu") + ')</span>' +
+				'<button type="button" class="cfg-btn" data-act="edit" style="padding:4px 9px;font-size:0.75rem;">Edit</button>' +
+				'<a href="' + esc(p.url) + '" target="_blank" class="cfg-btn" style="padding:4px 9px;font-size:0.75rem;text-decoration:none;">Open ↗</a>' +
+				'<button type="button" class="cfg-btn cfg-btn-danger" data-act="del" style="padding:4px 9px;font-size:0.75rem;">Delete</button>';
+
+			pill.querySelector('[data-act="edit"]').addEventListener("click", function() {
+				editCmsPage(p);
+			});
+			pill.querySelector('[data-act="del"]').addEventListener("click", function() {
+				var msg = document.getElementById("cms-msg");
+				fetch("/api/config/cms/delete", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ pw: unlockedPw, id: p.id })
+				})
+					.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+					.then(function(res) {
+						if (res.ok && res.body && res.body.success) {
+							cmsSavedPages = res.body.pages || [];
+							if (document.getElementById("cms-edit-id").value === p.id) {
+								resetCmsEditor();
+							} else {
+								renderCmsSavedBar();
+							}
+							msg.className = "cfg-msg ok";
+							msg.textContent = "Deleted " + p.url + ".";
+						} else {
+							msg.className = "cfg-msg err";
+							msg.textContent = (res.body && res.body.error) || "Delete failed.";
+						}
+					});
+			});
+			bar.appendChild(pill);
+		});
+	}
+
+	function loadCmsPages() {
+		fetch("/api/config/cms?pw=" + encodeURIComponent(unlockedPw))
+			.then(function(r) { return r.ok ? r.json() : null; })
+			.then(function(d) {
+				if (!d || !Array.isArray(d.pages)) return;
+				cmsSavedPages = d.pages;
+				renderCmsSavedBar();
+			})
+			.catch(function() {});
+	}
+
+	document.getElementById("cms-page-url").addEventListener("input", renderCmsLivePreview);
+	document.getElementById("cms-page-title").addEventListener("input", renderCmsLivePreview);
+	document.getElementById("cms-page-link").addEventListener("change", renderCmsLivePreview);
+
+	document.getElementById("cms-add-paragraph-btn").addEventListener("click", function() {
+		cmsDraftBlocks.push({ type: "paragraph", text: "" });
+		renderCmsBlockEditors();
+		renderCmsLivePreview();
+		var textareas = document.querySelectorAll("#cms-blocks-list .cms-paragraph-textbox");
+		if (textareas.length) textareas[textareas.length - 1].focus();
+	});
+
+	document.getElementById("cms-add-image-btn").addEventListener("click", function() {
+		cmsDraftBlocks.push({ type: "image", url: "" });
+		renderCmsBlockEditors();
+		renderCmsLivePreview();
+	});
+
+	document.getElementById("cms-add-image-pair-btn").addEventListener("click", function() {
+		cmsDraftBlocks.push({ type: "image", url: "" });
+		cmsDraftBlocks.push({ type: "image", url: "" });
+		renderCmsBlockEditors();
+		renderCmsLivePreview();
+	});
+
+	document.getElementById("cms-new-page-btn").addEventListener("click", function() {
+		resetCmsEditor();
+		document.getElementById("cms-msg").textContent = "";
+	});
+
+	document.getElementById("cms-reset-btn").addEventListener("click", function() {
+		resetCmsEditor();
+		document.getElementById("cms-msg").textContent = "";
+	});
+
+	document.getElementById("cms-editor-form").addEventListener("submit", function(e) {
+		e.preventDefault();
+		var msg = document.getElementById("cms-msg");
+		var editId = document.getElementById("cms-edit-id").value.trim();
+		var pageUrl = document.getElementById("cms-page-url").value.trim();
+		var pageTitle = document.getElementById("cms-page-title").value.trim();
+		var pageLink = document.getElementById("cms-page-link").value;
+
+		if (!pageUrl) {
+			msg.className = "cfg-msg err";
+			msg.textContent = "Page URL is required.";
+			document.getElementById("cms-page-url").focus();
+			return;
+		}
+
+		if (!editId && cmsSavedPages.length >= 8) {
+			msg.className = "cfg-msg err";
+			msg.textContent = "Maximum of 8 CMS pages reached. Edit or delete an existing page first.";
+			return;
+		}
+
+		var saveBtn = document.getElementById("cms-save-btn");
+		saveBtn.disabled = true;
+		msg.className = "cfg-msg";
+		msg.textContent = "Saving CMS page...";
+
+		fetch("/api/config/cms", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				pw: unlockedPw,
+				id: editId || undefined,
+				url: pageUrl,
+				title: pageTitle,
+				pageLink: pageLink,
+				blocks: cmsDraftBlocks
+			})
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				saveBtn.disabled = false;
+				if (res.ok && res.body && res.body.success) {
+					cmsSavedPages = res.body.pages || [];
+					if (res.body.page) {
+						editCmsPage(res.body.page);
+					} else {
+						renderCmsSavedBar();
+					}
+					msg.className = "cfg-msg ok";
+					msg.textContent = "Saved! Page is now live at " + res.body.page.url + " (" + res.body.page.pageLink + ").";
+				} else {
+					msg.className = "cfg-msg err";
+					msg.textContent = (res.body && res.body.error) || "Failed to save CMS page.";
+				}
+			})
+			.catch(function() {
+				saveBtn.disabled = false;
+				msg.className = "cfg-msg err";
+				msg.textContent = "Network error.";
+			});
+	});
+
+	renderCmsLivePreview();
+
+	// --- Password Unlock Flow ---
+	document.getElementById("cfg-pw-form").addEventListener("submit", function(e) {
+		e.preventDefault();
+		var pw = document.getElementById("cfg-pw-input").value;
+		var err = document.getElementById("cfg-pw-err");
+		err.textContent = "Checking password...";
+		fetch("/api/config/verify", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pw: pw })
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				if (res.ok && res.body && res.body.valid) {
+					unlockedPw = pw;
+					if (res.body.theme) {
+						selectedTheme = res.body.theme;
+						applyThemeClientSide(selectedTheme);
+					}
+					document.getElementById("cfg-pw-view").style.display = "none";
+					document.getElementById("cfg-unlocked-view").style.display = "block";
+					renderThemeGrid();
+					loadWorkersList();
+					loadCreditUsers();
+					loadGuests();
+					loadGatewayConfig();
+					loadPaymentsPage(1);
+					loadCmsPages();
+				} else {
+					err.textContent = (res.body && res.body.error) || "Incorrect password.";
+				}
+			})
+			.catch(function() {
+				err.textContent = "Could not verify password — try again.";
+			});
+	});
+})();
+</script>
+`;

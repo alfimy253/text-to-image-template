@@ -8077,4 +8077,45 @@ export const APP_CSS = `
 			}
 		}
 
+		/* Modular CMS Top Menu & Footer Links inside Studio */
+		.app-top-cms-links {
+			display: flex;
+			align-items: center;
+			gap: 14px;
+			flex-wrap: wrap;
+			padding: 8px 24px;
+			border-bottom: 1px solid var(--t-line, rgba(255, 255, 255, 0.09));
+			background: var(--t-panel, rgba(20, 22, 28, 0.85));
+			font-size: 0.82rem;
+		}
+
+		.app-top-cms-links a,
+		.studio-cms-footer-links a {
+			color: var(--t-muted, #9ca3af);
+			text-decoration: none;
+			font-weight: 600;
+			transition: color 0.15s ease;
+		}
+
+		.app-top-cms-links a:hover,
+		.studio-cms-footer-links a:hover {
+			color: var(--t-text, #f59e0b);
+		}
+
+		.studio-cms-footer {
+			margin-top: 28px;
+			padding: 16px 24px;
+			border-top: 1px solid var(--t-line, rgba(255, 255, 255, 0.09));
+			display: flex;
+			justify-content: center;
+		}
+
+		.studio-cms-footer-links {
+			display: flex;
+			align-items: center;
+			gap: 18px;
+			flex-wrap: wrap;
+			font-size: 0.85rem;
+		}
+
 `;
