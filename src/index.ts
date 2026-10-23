@@ -630,11 +630,15 @@ export default {
 		// GET  /api/worker/poll       worker claims a job
 		// POST /api/worker/deliver    worker uploads the MP4
 		// POST /api/worker/failed     worker reports failure
-		// POST /api/script            SEO script (SRT) via an
-		//                             INSTRUCT model: 2 long-tail
-		//                             keywords (1-3 short each) are
-		//                             planned first, then the
-		//                             script must use them
+		// POST /api/script            SEO EXPLAINER script (SRT)
+		//                             via an INSTRUCT model:
+		//                             1 long-tail keyword (said
+		//                             exactly 2x), exactly 4 short
+		//                             keywords (each said exactly
+		//                             2x), a title (<=70 chars) and
+		//                             >=1 heading are planned first,
+		//                             then the script must use them
+		//                             (2026-10-23 rule set)
 		// POST /api/voiceover         MeloTTS voice -> MP3
 		// GET/POST /api/config/workers  up to 3 worker URLs
 		// GET/POST /api/config/theme  studio theme (default /
@@ -943,26 +947,37 @@ export default {
 		}
 
 		/*
-			* SEO script (SRT) generation.
-			* INSTRUCT model on Workers
-			* AI, in two stages.
+			* SEO EXPLAINER script (SRT)
+			* generation. INSTRUCT model on
+			* Workers AI, in two stages
+			* (2026-10-23 rule set - every
+			* earlier script rule was
+			* removed).
 			*
-			*  1. Keywords: 2 long-tail
-			*     keywords, each with 1-3
-			*     short keywords, 2-5 short
-			*     keywords in total (its own
-			*     3 attempts).
-			*  2. Script: SRT built around
-			*     that set. The output is
-			*     VALIDATED server-side -
-			*     clean SRT under the
-			*     selected minutes AND every
-			*     short keyword spoken 2-5
-			*     times, every long-tail
-			*     keyword at least once
-			*     (invalid output is retried
-			*     up to 3 times with the
-			*     problem spelled out).
+			*  1. Keywords: exactly 1
+			*     long-tail keyword (<=6
+			*     words), exactly 4 short
+			*     keywords (<=3 words each),
+			*     a title (<=70 chars) that
+			*     includes one short keyword
+			*     and >=1 heading (<=12 words
+			*     each) of which one includes
+			*     a short keyword (its own 3
+			*     attempts).
+			*  2. Script: EXPLAINER SRT built
+			*     around that plan. The rules
+			*     are REDUNDANT: stated in the
+			*     prompt AND re-checked here.
+			*     The output is VALIDATED
+			*     server-side - clean SRT under
+			*     the selected minutes AND the
+			*     long-tail keyword spoken
+			*     EXACTLY 2 times AND every one
+			*     of the 4 short keywords
+			*     spoken EXACTLY 2 times
+			*     (invalid output is retried up
+			*     to 3 times with the problem
+			*     spelled out).
 		*/
 		if (
 			request.method === "POST" &&
@@ -1510,58 +1525,61 @@ export default {
 			}
 
 			/*
-			 * SEO layer. The script is written around a
-			 * keyword set that is planned first and
+			 * SEO layer (2026-10-23 revision - every rule
+			 * documented before this date was removed). The
+			 * default script is an EXPLAINER video written
+			 * around a keyword set that is planned first and
 			 * verified afterwards:
 			 *
-			 *   - SEO_LONG_TAIL long-tail keywords,
-			 *     each with 1..SEO_SHORT_PER_LONG_MAX
-			 *     short keywords;
-			 *   - SEO_SHORT_TOTAL_MIN..
-			 *     SEO_SHORT_TOTAL_MAX short keywords in
-			 *     total;
-			 *   - every short keyword must be spoken
-			 *     SEO_SHORT_FREQ_MIN..
-			 *     SEO_SHORT_FREQ_MAX times;
-			 *   - every long-tail keyword must be
-			 *     spoken at least
-			 *     SEO_LONG_FREQ_MIN time.
+			 *   - exactly SEO_LONG_TAIL long-tail keyword,
+			 *     spoken EXACTLY SEO_LONG_FREQ_MIN times
+			 *     (min = max = 2);
+			 *   - exactly SEO_SHORT_TOTAL unique short-tail
+			 *     keywords (min = max = 4), each spoken
+			 *     EXACTLY SEO_SHORT_FREQ_MIN times
+			 *     (min = max = 2);
+			 *   - the planned video TITLE must include at
+			 *     least one of the short-tail keywords;
+			 *   - at least SEO_HEADINGS_MIN heading (an
+			 *     explainer always has one) and at least one
+			 *     heading must include a short-tail keyword -
+			 *     the same one as the title's is allowed.
 			 *
-			 * The model is only asked for the script; the
-			 * frequency rules are counted here and a
-			 * violation is sent back to the model as the
-			 * retry reason (same 3-attempt loop as the
-			 * SRT validation).
+			 * The rules are REDUNDANT on purpose: the model
+			 * system instruction states them AND this layer
+			 * re-enforces them - frequencies are counted on
+			 * the spoken words and a violation is sent back
+			 * to the model as the retry reason (same
+			 * 3-attempt loop as the SRT validation).
+			 *
+			 * Future: scripts without SEO and non-explainer
+			 * scripts will bypass this layer; the enforcement
+			 * is isolated in parseKeywordSet(), the SEO brief
+			 * and keywordUsageError() so a plain-script mode
+			 * can skip all three.
 			 */
 			const SEO_LONG_TAIL =
-				2;
-
-			const SEO_SHORT_TOTAL_MIN =
-				2;
-
-			const SEO_SHORT_TOTAL_MAX =
-				5;
-
-			const SEO_SHORT_PER_LONG_MIN =
 				1;
-
-			const SEO_SHORT_PER_LONG_MAX =
-				3;
-
+			const SEO_SHORT_TOTAL =
+				4;
 			const SEO_SHORT_WORDS_MAX =
 				3;
-
 			const SEO_LONG_WORDS_MAX =
 				6;
-
+			const SEO_LONG_FREQ_MIN =
+				2;
+			const SEO_LONG_FREQ_MAX =
+				2;
 			const SEO_SHORT_FREQ_MIN =
 				2;
-
 			const SEO_SHORT_FREQ_MAX =
-				5;
-
-			const SEO_LONG_FREQ_MIN =
+				2;
+			const SEO_HEADINGS_MIN =
 				1;
+			const SEO_HEADING_WORDS_MAX =
+				12;
+			const SEO_TITLE_MAX =
+				70;
 
 			/*
 			 * Reads the text out of whichever shape the
@@ -1702,7 +1720,6 @@ export default {
 			 * lower-cased and whitespace-collapsed.
 			 */
 			function parseKeywordSet(text: string) {
-
 				let raw =
 					String(text || "")
 						.replace(
@@ -1710,25 +1727,18 @@ export default {
 							""
 						)
 						.trim();
-
 				if (
 					raw.indexOf("```") !== -1
 				) {
-
 					const parts =
 						raw.split("```");
-
 					raw =
 						(parts[1] || raw).trim();
-
 				}
-
 				const start =
 					raw.indexOf("{");
-
 				const end =
 					raw.lastIndexOf("}");
-
 				if (
 					start === -1 ||
 					end <= start
@@ -1739,12 +1749,9 @@ export default {
 							"no JSON object in the keyword output"
 					};
 				}
-
-				let data =
+				let data: any =
 					null;
-
 				try {
-
 					data =
 						JSON.parse(
 							raw.slice(
@@ -1752,247 +1759,303 @@ export default {
 								end + 1
 							)
 						);
-
 				}
 				catch (jsonError) {
-
 					return {
 						ok: false,
 						error:
 							"the keyword reply was not valid JSON"
 					};
-
 				}
-
-				const longTail =
-					data &&
-					Array.isArray(
-						data.longTail
-					)
-						? data.longTail
-						: null;
-
-				if (!longTail) {
-
-					return {
-						ok: false,
-						error:
-							'the JSON needs a "longTail" array'
-					};
-
-				}
-
+				/*
+				 * Exactly ONE long-tail keyword. Lenient
+				 * shapes: a bare string, ["one entry"] or
+				 * {keyword:"..."} all read as the keyword,
+				 * so a model that answers in the old array
+				 * shape is not punished with a retry.
+				 */
+				let longRaw: any =
+					data ? data.longTail : null;
 				if (
-					longTail.length !==
-					SEO_LONG_TAIL
+					Array.isArray(longRaw)
 				) {
-
+					longRaw =
+						longRaw[0] &&
+						typeof longRaw[0] ===
+							"object"
+							? longRaw[0].keyword
+							: longRaw[0];
+				}
+				if (
+					longRaw &&
+					typeof longRaw === "object"
+				) {
+					longRaw =
+						longRaw.keyword;
+				}
+				const longTail =
+					String(longRaw || "")
+						.trim()
+						.toLowerCase()
+						.replace(
+							/\s+/g,
+							" "
+						);
+				if (!longTail) {
 					return {
 						ok: false,
 						error:
-							"there must be exactly " +
-							SEO_LONG_TAIL +
-							" long-tail keywords, not " +
-							longTail.length
+							'the JSON needs a "longTail" keyword'
 					};
-
 				}
-
-				const shortKeywords =
-					[];
-
-				const clean =
-					[];
-
-				for (
-					const entry of longTail
+				if (
+					longTail.split(" ")
+						.length >
+						SEO_LONG_WORDS_MAX
 				) {
-
-					const keyword =
-						String(
-							(entry && entry.keyword) ||
-								""
-						)
+					return {
+						ok: false,
+						error:
+							'the long-tail keyword "' +
+							longTail +
+							'" is longer than ' +
+							SEO_LONG_WORDS_MAX +
+							" words"
+					};
+				}
+				/*
+				 * Exactly SEO_SHORT_TOTAL unique short-tail
+				 * keywords. Duplicates collapse first, so a
+				 * repeated short fails the total.
+				 */
+				const shortList =
+					data &&
+					Array.isArray(data.short)
+						? data.short
+						: null;
+				if (!shortList) {
+					return {
+						ok: false,
+						error:
+							'the JSON needs a "short" array'
+					};
+				}
+				const shorts =
+					[];
+				for (
+					const shortEntry of shortList
+				) {
+					const shortKeyword =
+						String(shortEntry || "")
 							.trim()
 							.toLowerCase()
 							.replace(
 								/\s+/g,
 								" "
 							);
-
-					if (!keyword) {
-
+					if (!shortKeyword) {
 						return {
 							ok: false,
 							error:
-								"a long-tail entry has no keyword"
+								"a short keyword is empty"
 						};
-
 					}
-
 					if (
-						keyword.split(" ")
+						shortKeyword.split(" ")
 							.length >
-						SEO_LONG_WORDS_MAX
+							SEO_SHORT_WORDS_MAX
 					) {
-
 						return {
 							ok: false,
 							error:
-								'the long-tail keyword "' +
-								keyword +
+								'the short keyword "' +
+								shortKeyword +
 								'" is longer than ' +
-								SEO_LONG_WORDS_MAX +
+								SEO_SHORT_WORDS_MAX +
 								" words"
 						};
-
 					}
-
-					const shortList =
-						Array.isArray(
-							entry.short
-						)
-							? entry.short
-							: [];
-
 					if (
-						shortList.length <
-							SEO_SHORT_PER_LONG_MIN ||
-						shortList.length >
-							SEO_SHORT_PER_LONG_MAX
+						shorts.indexOf(
+							shortKeyword
+						) === -1
 					) {
-
+						shorts.push(
+							shortKeyword
+						);
+					}
+				}
+				if (
+					shorts.length !==
+						SEO_SHORT_TOTAL
+				) {
+					return {
+						ok: false,
+						error:
+							"there must be exactly " +
+							SEO_SHORT_TOTAL +
+							" short keywords, not " +
+							shorts.length
+					};
+				}
+				/*
+				 * The explainer TITLE: at least one of the
+				 * short-tail keywords must appear in it
+				 * (word-boundary match, case-insensitive).
+				 */
+				const title =
+					String(
+						(data && data.title) ||
+							""
+					).trim();
+				if (!title) {
+					return {
+						ok: false,
+						error:
+							'the JSON needs a "title" string'
+					};
+				}
+				if (
+					title.length >
+						SEO_TITLE_MAX
+				) {
+					return {
+						ok: false,
+						error:
+							"the title is longer than " +
+							SEO_TITLE_MAX +
+							" characters"
+					};
+				}
+				let titleHasShort =
+					false;
+				for (const kw of shorts) {
+					if (
+						keywordCount(
+							title,
+							kw
+						) > 0
+					) {
+						titleHasShort =
+							true;
+						break;
+					}
+				}
+				if (!titleHasShort) {
+					return {
+						ok: false,
+						error:
+							"the title must include at least one of the short keywords"
+					};
+				}
+				/*
+				 * HEADINGS: every default script is an
+				 * explainer, so at least SEO_HEADINGS_MIN
+				 * heading is required and one heading (the
+				 * same short keyword as the title's is
+				 * allowed) must include a short keyword.
+				 */
+				const headingList =
+					data &&
+					Array.isArray(
+						data.headings
+					)
+						? data.headings
+						: null;
+				if (
+					!headingList ||
+					headingList.length <
+						SEO_HEADINGS_MIN
+				) {
+					return {
+						ok: false,
+						error:
+							'the JSON needs a "headings" array with at least ' +
+							SEO_HEADINGS_MIN +
+							" heading"
+					};
+				}
+				const headings =
+					[];
+				for (
+					const headingEntry of headingList
+				) {
+					const heading =
+						String(
+							headingEntry ||
+								""
+						)
+							.trim()
+							.replace(
+								/\s+/g,
+								" "
+							);
+					if (!heading) {
 						return {
 							ok: false,
 							error:
-								'"' +
-								keyword +
-								'" needs ' +
-								SEO_SHORT_PER_LONG_MIN +
-								"-" +
-								SEO_SHORT_PER_LONG_MAX +
-								" short keywords, not " +
-								shortList.length
+								"a heading is empty"
 						};
-
 					}
-
-					const scrubbed =
-						[];
-
-					for (
-						const shortEntry of shortList
+					if (
+						heading.split(" ")
+							.length >
+							SEO_HEADING_WORDS_MAX
 					) {
-
-						const shortKeyword =
-							String(shortEntry || "")
-								.trim()
-								.toLowerCase()
-								.replace(
-									/\s+/g,
-									" "
-								);
-
-						if (!shortKeyword) {
-
-							return {
-								ok: false,
-								error:
-									'a short keyword under "' +
-									keyword +
-									'" is empty'
-							};
-
-						}
-
-						if (
-							shortKeyword.split(" ")
-								.length >
-							SEO_SHORT_WORDS_MAX
-						) {
-
-							return {
-								ok: false,
-								error:
-									'the short keyword "' +
-									shortKeyword +
-									'" is longer than ' +
-									SEO_SHORT_WORDS_MAX +
-									" words"
-							};
-
-						}
-
-						scrubbed.push(
-							shortKeyword
-						);
-
-						if (
-							shortKeywords.indexOf(
-								shortKeyword
-							) === -1
-						) {
-							shortKeywords.push(
-								shortKeyword
-							);
-						}
-
+						return {
+							ok: false,
+							error:
+								'the heading "' +
+								heading +
+								'" is longer than ' +
+								SEO_HEADING_WORDS_MAX +
+								" words"
+						};
 					}
-
-					clean.push({
-						keyword:
-							keyword,
-						short:
-							scrubbed
-					});
-
+					headings.push(
+						heading
+					);
 				}
-
-				if (
-					clean[0].keyword ===
-					clean[1].keyword
-				) {
-
+				let headingHasShort =
+					false;
+				for (const heading of headings) {
+					for (const kw of shorts) {
+						if (
+							keywordCount(
+								heading,
+								kw
+							) > 0
+						) {
+							headingHasShort =
+								true;
+							break;
+						}
+					}
+					if (headingHasShort) {
+						break;
+					}
+				}
+				if (!headingHasShort) {
 					return {
 						ok: false,
 						error:
-							"the two long-tail keywords must be different"
+							"at least one heading must include a short keyword"
 					};
-
 				}
-
-				if (
-					shortKeywords.length <
-						SEO_SHORT_TOTAL_MIN ||
-					shortKeywords.length >
-						SEO_SHORT_TOTAL_MAX
-				) {
-
-					return {
-						ok: false,
-						error:
-							"there must be " +
-							SEO_SHORT_TOTAL_MIN +
-							"-" +
-							SEO_SHORT_TOTAL_MAX +
-							" short keywords in total, not " +
-							shortKeywords.length
-					};
-
-				}
-
 				return {
 					ok: true,
 					data: {
+						title:
+							title,
+						headings:
+							headings,
 						longTail:
-							clean,
+							longTail,
 						shorts:
-							shortKeywords
+							shorts
 					}
 				};
-
 			}
-
 			/*
 			 * Returns "" when the spoken script honours the
 			 * keyword rules, otherwise the exact problem (used
@@ -2002,88 +2065,81 @@ export default {
 				spokenText: string,
 				keywordSet: any
 			) {
-
-				for (
-					const long of keywordSet.longTail
-				) {
-
-					const count =
-						keywordCount(
-							spokenText,
-							long.keyword
-						);
-
-					if (
-						count <
+				const longCount =
+					keywordCount(
+						spokenText,
+						keywordSet.longTail
+					);
+				if (
+					longCount <
 						SEO_LONG_FREQ_MIN
-					) {
-
-						return (
-							'the long-tail keyword "' +
-							long.keyword +
-							'" never appears; say it at least ' +
-							SEO_LONG_FREQ_MIN +
-							" time"
-						);
-
-					}
-
+				) {
+					return (
+						'the long-tail keyword "' +
+						keywordSet.longTail +
+						'" appears ' +
+						longCount +
+						" time(s); it must appear exactly " +
+						SEO_LONG_FREQ_MIN +
+						" times"
+					);
 				}
-
+				if (
+					longCount >
+						SEO_LONG_FREQ_MAX
+				) {
+					return (
+						'the long-tail keyword "' +
+						keywordSet.longTail +
+						'" appears ' +
+						longCount +
+						" times; it must appear exactly " +
+						SEO_LONG_FREQ_MAX +
+						" times"
+					);
+				}
 				for (
 					const shortKeyword of keywordSet.shorts
 				) {
-
 					const count =
 						keywordCount(
 							spokenText,
 							shortKeyword
 						);
-
 					if (
 						count <
-						SEO_SHORT_FREQ_MIN
+							SEO_SHORT_FREQ_MIN
 					) {
-
 						return (
 							'the short keyword "' +
 							shortKeyword +
 							'" appears ' +
 							count +
-							" time(s); it must appear " +
+							" time(s); it must appear exactly " +
 							SEO_SHORT_FREQ_MIN +
-							"-" +
-							SEO_SHORT_FREQ_MAX +
 							" times"
 						);
-
 					}
-
 					if (
 						count >
-						SEO_SHORT_FREQ_MAX
+							SEO_SHORT_FREQ_MAX
 					) {
-
 						return (
 							'the short keyword "' +
 							shortKeyword +
 							'" appears ' +
 							count +
-							" times; use it at most " +
+							" times; it must appear exactly " +
 							SEO_SHORT_FREQ_MAX +
 							" times"
 						);
-
 					}
-
 				}
-
 				return "";
-
 			}
 
 			const basePrompt =
-				"You are a professional video script writer. Answer with ONLY valid SRT subtitle text, nothing else. " +
+				"You are a professional video script writer for EXPLAINER videos - every default script explains its topic section by section, in natural spoken English. Answer with ONLY valid SRT subtitle text, nothing else. " +
 				"Write a YouTube narration script as SRT subtitles about: " +
 					topic +
 					". The video is " +
@@ -2113,25 +2169,28 @@ export default {
 				 * invalid set never reaches the writer.
 				 */
 				const keywordPrompt =
-					"You are an SEO strategist for YouTube. Answer with ONLY one JSON object, no prose and no code fences. " +
+					"You are an SEO strategist for YouTube explainer videos. Answer with ONLY one JSON object, no prose and no code fences. " +
 					"The video topic is: " +
 					topic +
-					". Give exactly " +
+					". Plan exactly " +
 					SEO_LONG_TAIL +
-					" long-tail keywords (2-" +
+					" long-tail keyword (2-" +
 					SEO_LONG_WORDS_MAX +
-					" words each, a specific search phrase that expands the topic) and under each one " +
-					SEO_SHORT_PER_LONG_MIN +
-					"-" +
-					SEO_SHORT_PER_LONG_MAX +
-					" short SEO keywords (1-" +
+					" words, lower case, a specific search phrase that expands the topic) and exactly " +
+					SEO_SHORT_TOTAL +
+					" unique short-tail keywords (1-" +
 					SEO_SHORT_WORDS_MAX +
-					" words each) that it covers; the short keywords together must be " +
-					SEO_SHORT_TOTAL_MIN +
-					"-" +
-					SEO_SHORT_TOTAL_MAX +
-					" in total and every keyword must be lower case, unique and closely related to the topic. " +
-					'Reply with exactly this JSON shape: {"longTail":[{"keyword":"first long tail","short":["short one","short two"]},{"keyword":"second long tail","short":["short three"]}]}';
+					" words each, lower case, closely related to the topic). " +
+					"Also plan the video TITLE (at most " +
+					SEO_TITLE_MAX +
+					" characters): it MUST include at least one of the " +
+					SEO_SHORT_TOTAL +
+					" short-tail keywords. And plan at least " +
+					SEO_HEADINGS_MIN +
+					" section HEADING(S) (at most " +
+					SEO_HEADING_WORDS_MAX +
+					" words each) because the script is an explainer video; at least one heading MUST include one of the short-tail keywords - the same one the title uses is allowed. " +
+					'Reply with exactly this JSON shape: {"title":"the video title","headings":["first section heading","second section heading"],"longTail":"the one long tail keyword","short":["short one","short two","short three","short four"]}';
 
 				let keywordSet =
 					null;
@@ -2224,10 +2283,12 @@ export default {
 				console.log(
 					"[script] keywords ok",
 					{
+						title:
+							keywordSet.title,
+						headings:
+							keywordSet.headings,
 						longTail:
-							keywordSet.longTail.map(
-								(l) => l.keyword
-							),
+							keywordSet.longTail,
 						shorts:
 							keywordSet.shorts
 					}
@@ -2242,19 +2303,27 @@ export default {
 				 */
 				const userPrompt =
 					basePrompt +
-					"SEO keyword requirements, all mandatory: the narration must say each of these long-tail keywords at least once: " +
-					keywordSet.longTail
-						.map((l) => l.keyword)
-						.join("; ") +
-					". It must also say each of these short keywords between " +
+					"SEO rules - mandatory and REDUNDANTLY re-checked by the server after you answer, so a violation is rejected: " +
+					"the narration must say the long-tail keyword \"" +
+					keywordSet.longTail +
+					"\" EXACTLY " +
+					SEO_LONG_FREQ_MIN +
+					" times - not " +
+					(SEO_LONG_FREQ_MIN - 1) +
+					" times and not " +
+					(SEO_LONG_FREQ_MAX + 1) +
+					" times. It must also say each of these " +
+					SEO_SHORT_TOTAL +
+					" short-tail keywords EXACTLY " +
 					SEO_SHORT_FREQ_MIN +
-					" and " +
-					SEO_SHORT_FREQ_MAX +
-					" times: " +
+					" times each: " +
 					keywordSet.shorts.join("; ") +
-					". Work every keyword into natural spoken sentences - never read them out as a list - and never use a short keyword more than " +
-					SEO_SHORT_FREQ_MAX +
-					" times. ";
+					". Work every keyword into natural spoken sentences - never read them out as a list. " +
+					"This is an explainer video. Its title is \"" +
+					keywordSet.title +
+					"\" and its section headings are: " +
+					keywordSet.headings.join("; ") +
+					" - take the narration through those sections in order. The title includes a short-tail keyword and at least one heading includes one; both are already fixed, never alter or spell them out. ";
 
 				let lastError =
 					"";
@@ -2343,20 +2412,19 @@ export default {
 						 * written.
 						 */
 						const keywords = {
-							longTail:
-								keywordSet.longTail.map(
-									(l) => ({
-										keyword:
-											l.keyword,
-										count:
-											keywordCount(
-												spokenText,
-												l.keyword
-											),
-										short:
-											l.short
-									})
-								),
+							longTail: {
+								keyword:
+									keywordSet.longTail,
+								count:
+									keywordCount(
+										spokenText,
+										keywordSet.longTail
+									),
+								min:
+									SEO_LONG_FREQ_MIN,
+								max:
+									SEO_LONG_FREQ_MAX
+							},
 							short:
 								keywordSet.shorts.map(
 									(kw) => ({
@@ -2400,6 +2468,10 @@ export default {
 								srt:
 									check
 										.srt,
+								title:
+									keywordSet.title,
+								headings:
+									keywordSet.headings,
 								keywords:
 									keywords,
 								model:

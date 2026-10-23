@@ -6332,6 +6332,10 @@ export const APP_JS = `
 			n
 		);
 
+		syncVoiceoverButton(
+			n
+		);
+
 	}
 
 	function toggleVideoAccordion(
@@ -6354,7 +6358,7 @@ export const APP_JS = `
 
 		body.style.display =
 			body.style.display === "none"
-			? "block"
+			? ""
 			: "none";
 
 		if (arrow) {
@@ -6437,20 +6441,20 @@ export const APP_JS = `
 			'<div class="va-left">' +
 				'<div class="va-section">' +
 				'<div class="va-section-title">Generate SEO Script With AI</div>' +
-				'<span class="va-note">SEO rule: 2 long-tail keywords \u00b7 2\u20135 short keywords \u00b7 every short keyword is said 2\u20135 times</span>' +
+				'<span class="va-note">SEO rule (explainer): 1 long-tail keyword said exactly 2\u00d7 \u00b7 exactly 4 short keywords said exactly 2\u00d7 each \u00b7 one short keyword is in the title \u00b7 one is in a heading</span>' +
 				'<input type="text" id="va-script-topic-' + n + '" maxlength="120" placeholder="Topic (uses the video title if empty)">' +
 				'<div class="va-row">' +
 				'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
 				'<label class="quality-select">Speech <select id="va-script-speed-' + n + '"><option value="super fast">Super fast</option><option value="fast">Fast</option><option value="medium" selected>Medium</option><option value="slow">Slow</option></select></label>' +
 				'</div>' +
-				'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px" title="AI plans 2 long-tail keywords and 2-5 short keywords (each short said 2-5 times) and writes the SRT script around them">\u2728 Generate SEO Script</button>' +
+				'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px" title="AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them">\u2728 Generate SEO Script</button>' +
 				'<span class="va-note" id="va-script-status-' + n + '"></span>' +
 				'<div class="va-seo-keywords" id="va-script-keywords-' + n + '" style="display:none"></div>' +
 				'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">\u25bc Script (SRT)</button>' +
 				'<div class="va-script-box" id="va-script-box-' + n + '" style="display:none"></div>' +
 				'<div class="va-row va-script-actions">' +
 				'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">\u2b07 Download .srt</button>' +
-				'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled title="Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles">\ud83c\udf99 Generate Voiceover</button>' +
+				'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled style="display:none" title="Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles">\ud83c\udf99 Generate Voiceover</button>' +
 				'</div>' +
 				'</div>' +
 				'<div class="va-section">' +
@@ -6460,6 +6464,13 @@ export const APP_JS = `
 				'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
 				'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
+				'</div>' +
+				'<div class="va-section">' +
+				'<div class="va-section-title">AI Images \u2014 Cloudflare</div>' +
+				'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
+				'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">\u2728 Generate 2 Images</button>' +
+				'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit \u00b7 480px landscape</span>' +
+				'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
 				'</div>' +
 				'<div class="va-section">' +
 				'<div class="va-section-title">Audio \u2014 one MP3 (the video is as long as the MP3)</div>' +
@@ -6487,15 +6498,6 @@ export const APP_JS = `
 				'<div class="va-section-title">Quality</div>' +
 				'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
 				'</div>' +
-			'</div>' +
-		'<div class="va-right">' +
-			'<div class="va-section">' +
-			'<div class="va-section-title">AI Images \u2014 Cloudflare</div>' +
-			'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
-			'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">\u2728 Generate 2 Images</button>' +
-			'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit \u00b7 480px landscape</span>' +
-			'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
-			'</div>' +
 			'</div>' +
 			'</div>' +
 			'<input type="file" id="va-file-' + n + '" multiple accept="image/*,image/gif,.gif,video/mp4,.mp4" style="display:none">' +
@@ -7019,7 +7021,7 @@ export const APP_JS = `
 		if (body) {
 
 			body.style.display =
-				"block";
+				"";
 
 		}
 
@@ -12651,6 +12653,39 @@ export const APP_JS = `
 
 	}
 
+	/*
+	 * The voiceover speaks the generated
+	 * script (SRT), so its button stays
+	 * HIDDEN while the video has no script
+	 * and is revealed + enabled as soon as
+	 * one has been generated.
+	 */
+
+	function syncVoiceoverButton(n) {
+
+		const project =
+			videoProjects[n - 1];
+
+		const btn =
+			document.getElementById(
+				"va-voice-btn-" + n
+			);
+
+		if (!btn) {
+			return;
+		}
+
+		const hasScript =
+			!!(project && project.srt);
+
+		btn.style.display =
+			hasScript ? "" : "none";
+
+		btn.disabled =
+			!hasScript;
+
+	}
+
 	function toggleGalleryScroll(n) {
 
 		const gallery =
@@ -12682,17 +12717,25 @@ export const APP_JS = `
 	}
 
 	/*
-	 * Shows the two long-tail keywords plus the
-	 * short keywords (with how often each one
-	 * actually appears in the spoken script).
-	 * The counts come from the worker, which
-	 * counts them after stripping cue numbers
-	 * and timestamps.
+	 * Shows the full SEO plan the worker
+	 * verified for this explainer script:
+	 * the AI title (it carries at least
+	 * one short keyword), the section
+	 * headings (at least one carries a
+	 * short keyword), the single long-tail
+	 * keyword and the exactly 4 short
+	 * keywords - each with how often it
+	 * actually appears in the spoken
+	 * script. The explainer rule pins
+	 * every keyword to exactly 2x.
+	 * The counts come from the worker,
+	 * which counts them after stripping
+	 * cue numbers and timestamps.
 	 */
 
 	function renderSeoKeywords(
 		n,
-		keywords
+		data
 	) {
 
 		const box =
@@ -12704,19 +12747,35 @@ export const APP_JS = `
 			return;
 		}
 
+		const keywords =
+			(data && data.keywords) || {};
+
+		/* one long-tail object (not an array) */
 		const longs =
-			keywords &&
-			Array.isArray(keywords.longTail)
-				? keywords.longTail
+			keywords.longTail &&
+			keywords.longTail.keyword
+				? [keywords.longTail]
 				: [];
 
 		const shorts =
-			keywords &&
 			Array.isArray(keywords.short)
 				? keywords.short
 				: [];
 
-		if (!longs.length && !shorts.length) {
+		const title =
+			(data && data.title) || "";
+
+		const headings =
+			data && Array.isArray(data.headings)
+				? data.headings
+				: [];
+
+		if (
+			!title &&
+			!headings.length &&
+			!longs.length &&
+			!shorts.length
+		) {
 
 			box.style.display = "none";
 
@@ -12727,7 +12786,40 @@ export const APP_JS = `
 		}
 
 		let html =
-			'<div class="va-seo-heading">SEO keywords \u2014 counted in the script</div>';
+			'<div class="va-seo-heading">SEO plan \u2014 counted in the script</div>';
+
+		if (title) {
+
+			html +=
+				'<div class="va-seo-row">' +
+				'<span class="va-seo-label">Title</span>' +
+				'<span class="va-seo-chip" title="Explainer title \u2014 includes at least one short keyword">' +
+				escapeHTML(title) +
+				"</span></div>";
+
+		}
+
+		if (headings.length) {
+
+			html +=
+				'<div class="va-seo-row">' +
+				'<span class="va-seo-label">Headings</span>';
+
+			headings.forEach(
+				(item) => {
+
+					html +=
+						'<span class="va-seo-chip" title="Section heading \u2014 at least one heading includes a short keyword">' +
+						escapeHTML(item) +
+						"</span>";
+
+				}
+			);
+
+			html +=
+				"</div>";
+
+		}
 
 		html +=
 			'<div class="va-seo-row">' +
@@ -12737,7 +12829,9 @@ export const APP_JS = `
 			(item) => {
 
 				html +=
-					'<span class="va-seo-chip long" title="Long-tail keyword \u2014 must be said at least 1\u00d7">' +
+					'<span class="va-seo-chip long" title="Long-tail keyword \u2014 must be said exactly ' +
+					item.min +
+					'\u00d7">' +
 					escapeHTML(item.keyword) +
 					" <b>" +
 					item.count +
@@ -12754,7 +12848,9 @@ export const APP_JS = `
 			(item) => {
 
 				html +=
-					'<span class="va-seo-chip short" title="Short keyword \u2014 must be said 2\u20135\u00d7">' +
+					'<span class="va-seo-chip short" title="Short keyword \u2014 must be said exactly ' +
+					item.min +
+					'\u00d7; one short keyword is in the title and one in a heading">' +
 					escapeHTML(item.keyword) +
 					" <b>" +
 					item.count +
@@ -12886,9 +12982,37 @@ export const APP_JS = `
 
 			project.srt = data.srt;
 
+			/*
+			 * Keep the verified SEO plan on
+			 * the project, and offer the AI
+			 * title when the video title
+			 * input is still empty - the
+			 * title is <=70 chars (the
+			 * input maxlength) and carries
+			 * one of the short keywords.
+			 */
+			project.seoTitle =
+				(data && data.title) || "";
+
+			project.seoHeadings =
+				data && Array.isArray(data.headings)
+					? data.headings
+					: [];
+
+			if (
+				titleEl &&
+				!titleEl.value.trim() &&
+				project.seoTitle
+			) {
+
+				titleEl.value =
+					project.seoTitle.slice(0, 70);
+
+			}
+
 			renderSeoKeywords(
 				n,
-				data.keywords
+				data
 			);
 
 			const box =
@@ -12898,14 +13022,13 @@ export const APP_JS = `
 
 			box.textContent = data.srt;
 
-			const voiceBtn =
-				document.getElementById(
-					"va-voice-btn-" + n
-				);
-
-			if (voiceBtn) {
-				voiceBtn.disabled = false;
-			}
+			/*
+			 * The script now exists:
+			 * reveal + enable the
+			 * voiceover button (hidden
+			 * until an SRT exists).
+			 */
+			syncVoiceoverButton(n);
 
 			showScriptBox(n);
 
@@ -12918,16 +13041,24 @@ export const APP_JS = `
 					)
 					.length;
 
-			const longCount =
-				data.keywords &&
-				data.keywords.longTail
-					? data.keywords.longTail.length
-					: 0;
-
+			/*
+			 * The SEO counts are pinned by
+			 * the explainer rule (1 long-tail
+			 * said exactly 2x, exactly 4
+			 * short keywords said exactly
+			 * 2x each) - show what the
+			 * worker verified, plus the
+			 * title/headings the AI planned.
+			 */
 			const shortCount =
 				data.keywords &&
-				data.keywords.short
+				Array.isArray(data.keywords.short)
 					? data.keywords.short.length
+					: 0;
+
+			const headingCount =
+				Array.isArray(data.headings)
+					? data.headings.length
 					: 0;
 
 			statusEl.textContent =
@@ -12937,11 +13068,12 @@ export const APP_JS = `
 				speed +
 				" speech, " +
 				minutes +
-				" min) \u00b7 SEO: " +
-				longCount +
-				" long-tail + " +
+				" min) \u00b7 SEO: 1 long-tail (2\u00d7) + " +
 				shortCount +
-				" short keywords";
+				" short keywords (2\u00d7 each) \u00b7 title + " +
+				headingCount +
+				" heading" +
+				(headingCount === 1 ? "" : "s");
 
 		}
 		catch (err) {

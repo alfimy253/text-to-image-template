@@ -1649,41 +1649,41 @@ export const APP_CSS = `
 		}
 
 
+		/*
+		 * ONE COLUMN ONLY: every section
+		 * inside a video accordion stacks
+		 * full width (the AI images panel
+		 * now sits under the gallery).
+		 */
+
 		.va-body {
 
 			display:
 				flex;
 
+			flex-direction:
+				column;
+
 			gap:
-				16px;
+				0;
 
 			padding:
 				4px 16px 14px 16px;
 
 			align-items:
-				flex-start;
+				stretch;
 		}
 
 
 		/*
-		 * Left = 60% of the accordion,
-		 * right = 40% (AI panel).
+		 * Single column: the left wrapper
+		 * is the accordion's only column.
 		 */
 
 		.va-left {
 
 			width:
-				60%;
-
-			min-width:
-				0;
-		}
-
-
-		.va-right {
-
-			width:
-				40%;
+				100%;
 
 			min-width:
 				0;
@@ -1691,7 +1691,8 @@ export const APP_CSS = `
 
 
 		/*
-		 * AI image panel (right 40%)
+		 * AI image panel (under the
+		 * Images / MP4s gallery)
 		 */
 
 		.va-ai-prompt {
@@ -1728,13 +1729,23 @@ export const APP_CSS = `
 		}
 
 
+		/*
+		 * The AI panel is full width now:
+		 * lay its result cards out like the
+		 * gallery thumbs instead of one huge
+		 * full-width stack.
+		 */
+
 		.va-ai-results {
 
 			display:
-				flex;
+				grid;
 
-			flex-direction:
-				column;
+			grid-template-columns:
+				repeat(
+					auto-fill,
+						minmax(160px, 1fr)
+				);
 
 			gap:
 				10px;
@@ -2018,6 +2029,14 @@ export const APP_CSS = `
 
 			padding:
 				10px 0;
+
+			/*
+			 * 3px of breathing room after
+			 * every accordion section.
+			 */
+
+			margin-bottom:
+				3px;
 		}
 
 
@@ -7779,7 +7798,11 @@ export const APP_CSS = `
 
 		#studio-app .studio {
 			display: grid;
-			grid-template-columns: minmax(320px, 2fr) minmax(0, 3fr);
+			/* Every theme shares this one grid: the
+			   preview monitor takes 35% of the row
+			   and Build-your-video takes the wider
+			   remaining 65%. */
+			grid-template-columns: minmax(320px, 65fr) minmax(0, 35fr);
 			gap: 14px;
 			align-items: start;
 			max-width: none;
@@ -7985,7 +8008,7 @@ export const APP_CSS = `
 
 		@media (max-width: 1100px) {
 			#studio-app .studio {
-				grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
+				grid-template-columns: minmax(280px, 65fr) minmax(0, 35fr);
 			}
 		}
 

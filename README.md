@@ -19,10 +19,11 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 - **Rendering is local and free.** WebCodecs `VideoEncoder` (H.264) + `AudioEncoder` (AAC) +
   `mp4-muxer` — no FFmpeg, no server rendering. Chrome/Edge stream the file straight to disk via
   the File System Access API; other browsers build it in memory.
-- **AI on demand.** Stable Diffusion XL images per video panel (`/image/gen`), an **SEO script**
-  (`/api/script`: the AI first plans 2 long-tail keywords plus 2-5 short ones, then writes an SRT
-  script that *says* those keywords the required number of times — every rule enforced
-  server-side), and a MeloTTS voiceover (`/api/voiceover`) with a free fallback TTS engine.
+- **AI on demand.** Stable Diffusion XL images per video panel (`/image/gen`), an **SEO explainer
+  script** (`/api/script`: the AI first plans 1 long-tail keyword, exactly 4 short keywords, a
+  title carrying one short keyword and at least one heading carrying one, then writes an SRT
+  script that *says* every keyword exactly 2× — every rule enforced server-side), and a MeloTTS
+  voiceover (`/api/voiceover`) with a free fallback TTS engine.
 - **Optional server-side rendering.** **☁️ API** uploads a video's whole payload to KV and a
   background worker tab (the same app opened at its current-day settings URL, e.g.
   `/16/config/uvxyz` on 2026-10-16 in Asia/Taipei) claims the job, renders it in *its* browser
@@ -59,7 +60,8 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   See `THIRD_PARTY_NOTICES.md` for the Aerial background attribution.
 - **Two views, one state.** A sticky top bar switches between the **Bulk grid** — a read-only
   index of every video in the project (title, prompt, scene counts, MP3 length, state, **Open ↗**)
-  — and the **Editor**, a *Build your video* accordion card beside a sticky preview monitor.
+  — and the **Editor**, a *Build your video* accordion card (65% of the row, single-column
+  sections inside) beside a sticky preview monitor that takes 35% — the same split in every theme.
   The grid reads the same project array the engine renders; it has no bulk operations, and the
   view choice is memory-only. There is deliberately **no timeline**.
 - **Template composer.** The "Add video from template" link opens a modal with a **4-column
@@ -82,7 +84,7 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 | Slide timing | 9 s per image/GIF; MP4 clips play in full; the list repeats to cover the MP3 |
 | Captions | 10 rows, 40 characters each; last caption capped at 10 s on screen |
 | Script | 1-6 minutes, `super fast` / `fast` / `medium` / `slow`, valid SRT required |
-| SEO keywords | exactly 2 long-tail (≥1× in the script) + 2-5 short keywords (each said 2-5×); 1-3 shorts under each long tail |
+| SEO keywords | exactly 1 long-tail (said exactly 2×) + exactly 4 short keywords (each said exactly 2×); one short keyword in the AI title (≤70 chars), one in at least 1 heading |
 | Voiceover | 8,000 characters max, chunked at 500; English in the UI |
 | Render API | 10 in-flight jobs, 60 MB payload, outputs kept 2 h (job records 1 h) |
 | Theme | one setting for the whole deployment: `default` · `strata` · `stellar` |
@@ -102,9 +104,9 @@ the strings that carry the rules (the full inventory, with the constant each one
 
 | Where | Hint |
 | --- | --- |
-| Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule: 2 long-tail keywords · 2–5 short keywords · every short keyword is said 2–5 times` |
-| ✨ **Generate SEO Script** button | tooltip: *AI plans 2 long-tail keywords and 2-5 short keywords (each short said 2-5 times) and writes the SRT script around them* |
-| Keyword chips (after a successful run) | `long-tail keyword — must be said at least 1×` · `short keyword — must be said 2–5×`, each chip showing the measured count, e.g. `coffee brewing 4×` |
+| Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading` |
+| ✨ **Generate SEO Script** button | tooltip: *AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them* |
+| SEO plan chips (after a successful run) | Title row · Headings row · `long-tail keyword — must be said exactly 2×` · `short keyword — must be said exactly 2×; one short keyword is in the title and one in a heading`, each keyword chip showing the measured count, e.g. `coffee brewing 2×` |
 | Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the template modal's tip line says each template is a looping motion design and the clip is silent |
 | Video accordion, **AI Images** | `2 images per submit · 480px landscape` (also the status line for failures) |
 | 🎙 **Generate Voiceover** | tooltip: *Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
@@ -117,7 +119,7 @@ the strings that carry the rules (the full inventory, with the constant each one
 
 Status lines (`#va-status-N`, `#va-script-status-N`, `#va-ai-status-N`) are the normal progress
 channel; the script line ends with `Script ready — N lines (<speed> speech, <minutes> min) · SEO:
-2 long-tail + N short keywords`.
+1 long-tail (2×) + 4 short keywords (2× each) · title + N heading(s)`.
 
 
 ## Setup
@@ -163,7 +165,7 @@ whole site.
 | `GET /{current-day}/config/uvxyz` | Settings / background-worker page; current Asia/Taipei day only (e.g. `/16/config/uvxyz` on 2026-10-16) |
 | `GET /image/:i` | Workers AI demo image (unmetered, index into `prompts[]`) |
 | `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` for a cold anonymous request when KV is bound, `429` at the limit, `X-Credit-*` headers on success |
-| `POST /api/script` | SEO keyword plan + AI script → validated SRT (with keyword counts) |
+| `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated SRT (with keyword counts) |
 | `POST /api/voiceover` · `GET /tts` | MeloTTS voiceover / fallback TTS proxy |
 | `GET /api/session` · `POST /api/signup` · `POST /api/login` · `POST /api/logout` | Accounts (session/signup/login include `usertype`, `plan` and `credits`) |
 | `GET /api/credits` | Today's plan, used counters, remaining allowances and `resetsAt` — for the signed-in user, or the IP-keyed guest plan after `/free` |
