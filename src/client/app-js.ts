@@ -6673,7 +6673,482 @@ export const APP_JS = `
 		refreshVaTips(
 			n
 		);
+
+		renderBatchTable();
 	}
+
+	// =========================================================
+	// MODULE 1b: studio shell (Bug Fix Session #240)
+	//
+	// Two views over the same state:
+	//   Bulk grid  read-only index of the videos in this
+	//              project (no bulk operations)
+	//   Editor     the Video N accordions + preview canvas
+	//
+	// The choice lives in memory only: RULE 15 forbids client
+	// storage, so a reload always starts in the Editor.
+	// =========================================================
+
+	let studioLayout =
+		"editor";
+
+	function setStudioLayout(name) {
+
+		studioLayout =
+			name === "table"
+				? "table"
+				: "editor";
+
+		const tableView =
+			document.getElementById(
+				"view-table"
+			);
+
+		const editorView =
+			document.getElementById(
+				"view-editor"
+			);
+
+		if (tableView) {
+
+			tableView.classList.toggle(
+				"active",
+				studioLayout === "table"
+			);
+
+		}
+
+		if (editorView) {
+
+			editorView.classList.toggle(
+				"active",
+				studioLayout === "editor"
+			);
+
+		}
+
+		const buttons =
+			document.querySelectorAll(
+				"[data-layout]"
+			);
+
+		for (const button of buttons) {
+
+			const on =
+				button.getAttribute(
+					"data-layout"
+				) ===
+				studioLayout;
+
+			button.classList.toggle(
+				"active",
+				on
+			);
+
+			button.setAttribute(
+				"aria-selected",
+				on
+					? "true"
+					: "false"
+			);
+
+		}
+
+		if (studioLayout === "table") {
+
+			renderBatchTable();
+
+		}
+
+	}
+
+	function batchScenes(project) {
+
+		const counts =
+			videoCounts(
+				project
+			);
+
+		const parts =
+			[];
+
+		if (counts.stills > 0) {
+
+			parts.push(
+				counts.stills +
+					" img"
+			);
+
+		}
+
+		if (counts.gifs > 0) {
+
+			parts.push(
+				counts.gifs +
+					" GIF"
+			);
+
+		}
+
+		if (counts.clips > 0) {
+
+			parts.push(
+				counts.clips +
+					" MP4"
+			);
+
+		}
+
+		return parts.length
+			? parts.join(
+					" \u00b7 "
+			  )
+			: "\u2014";
+
+	}
+
+	function batchPrompt(n) {
+
+		const box =
+			document.getElementById(
+				"va-ai-prompt-" + n
+			);
+
+		const typed =
+			box && box.value
+				? box.value.trim().replace(/\\s+/g, " ")
+				: "";
+
+		if (!typed) {
+
+			return "No prompt yet";
+
+		}
+
+		return typed.length > 64
+			? typed.slice(0, 64) + "\u2026"
+			: typed;
+
+	}
+
+	function batchTitle(n, project) {
+
+		const input =
+			document.getElementById(
+				"va-title-" + n
+			);
+
+		const typed =
+			input && input.value
+				? input.value.trim()
+				: "";
+
+		return typed || project.name;
+
+	}
+
+	function renderBatchTable() {
+
+		const body =
+			document.getElementById(
+				"batch-rows"
+			);
+
+		if (!body) {
+
+			return;
+
+		}
+
+		const empty =
+			document.getElementById(
+				"batch-empty"
+			);
+
+		const note =
+			document.getElementById(
+				"batch-note"
+			);
+
+		const conceptCount =
+			document.getElementById(
+				"concept-count"
+			);
+
+		const total =
+			videoProjects.length;
+
+		if (empty) {
+
+			empty.hidden =
+				total > 0;
+
+		}
+
+		if (note) {
+
+			note.textContent =
+				total
+					? total +
+						" video" +
+						(total === 1
+							? ""
+							: "s") +
+						" \u00b7 read-only index"
+					: "Every video in this project";
+
+		}
+
+		if (conceptCount) {
+
+			conceptCount.textContent =
+				total +
+				" of " +
+				VIDEO_MAX_VIDEOS +
+				" videos";
+
+		}
+
+		const previewState =
+			document.getElementById(
+				"preview-state"
+			);
+
+		if (previewState) {
+
+			previewState.textContent =
+				total
+					? total +
+						" in queue"
+					: "idle";
+
+		}
+
+		const rows =
+			[];
+
+		videoProjects.forEach(
+			(project, index) => {
+
+				const n =
+					index + 1;
+
+				const audio =
+					project.audioFile
+						? "MP3" +
+							(project.audio
+								? " " +
+									formatSeconds(
+										project.audio.duration
+									)
+								: "")
+						: "\u2014";
+
+				rows.push(
+					'<tr data-video="' + n + '">' +
+						'<td class="batch-index">' +
+							String(n).padStart(2, "0") +
+						"</td>" +
+						"<td>" +
+							'<div class="batch-title">' +
+								escapeHTML(
+									batchTitle(n, project)
+								) +
+							"</div>" +
+							'<div class="batch-sub">' +
+								escapeHTML(
+									batchPrompt(n)
+								) +
+							"</div>" +
+						"</td>" +
+						"<td>" +
+							batchScenes(project) +
+						"</td>" +
+						"<td>" +
+							audio +
+						"</td>" +
+						"<td>" +
+							'<span class="batch-badge" data-state="' +
+								escapeHTML(
+									project.status
+								) +
+								'">' +
+								escapeHTML(
+									project.status
+								) +
+							"</span>" +
+						"</td>" +
+						"<td>" +
+							'<button type="button" class="batch-open" data-open="' +
+								n +
+								'">Open \u2197</button>' +
+						"</td>" +
+					"</tr>"
+				);
+
+			}
+		);
+
+		body.innerHTML =
+			rows.join("");
+
+	}
+
+	function focusVideoInEditor(n) {
+
+		const accordion =
+			document.getElementById(
+				"video-" + n
+			);
+
+		if (!accordion) {
+
+			return;
+
+		}
+
+		setStudioLayout(
+			"editor"
+		);
+
+		const body =
+			document.getElementById(
+				"va-body-" + n
+			);
+
+		if (body) {
+
+			body.style.display =
+				"block";
+
+		}
+
+		const arrow =
+			document.getElementById(
+				"va-arrow-" + n
+			);
+
+		if (arrow) {
+
+			arrow.textContent =
+				"\u25bc";
+
+		}
+
+		if (
+			accordion.scrollIntoView
+		) {
+
+			accordion.scrollIntoView({
+				behavior:
+					"smooth",
+				block:
+					"start",
+			});
+
+		}
+
+	}
+
+	function bindStudioShell() {
+
+		const buttons =
+			document.querySelectorAll(
+				"[data-layout]"
+			);
+
+		for (const button of buttons) {
+
+			button.addEventListener(
+				"click",
+				() =>
+					setStudioLayout(
+						button.getAttribute(
+							"data-layout"
+						)
+					)
+			);
+
+		}
+
+		const rows =
+			document.getElementById(
+				"batch-rows"
+			);
+
+		if (rows) {
+
+			rows.addEventListener(
+				"click",
+				(event) => {
+
+					const target =
+						event.target.closest(
+							"[data-open]"
+						);
+
+					if (!target) {
+
+						return;
+
+					}
+
+					focusVideoInEditor(
+						Number(
+							target.getAttribute(
+								"data-open"
+							)
+						)
+					);
+
+				}
+			);
+
+		}
+
+		/*
+		 * A title typed in the Editor updates the grid row.
+		 * Delegated, so accordions created later are covered.
+		 */
+
+		const stack =
+			document.getElementById(
+				"video-accordions"
+			);
+
+		if (stack) {
+
+			stack.addEventListener(
+				"input",
+				(event) => {
+
+					const target =
+						event.target;
+
+					if (
+						target &&
+						target.id &&
+						(target.id.indexOf(
+							"va-title-"
+						) === 0 ||
+							target.id.indexOf(
+								"va-ai-prompt-"
+							) === 0)
+					) {
+
+						renderBatchTable();
+
+					}
+
+				}
+			);
+
+		}
+
+		renderBatchTable();
+
+	}
+
 
 	// =========================================================
 	// MODULE 2: video-gallery
@@ -13116,6 +13591,7 @@ export const APP_JS = `
 	}
 
 	initVideoStudio();
+	bindStudioShell();
 	bindLandingActions();
 	initAuth();
 

@@ -16,8 +16,9 @@ export const PAGE_MARKUP = `
 
 <html lang="en">
 
-<!-- index.ts writes data-theme="strata" / "stellar" into the
-     html element above when the settings page has picked a theme. -->
+<!-- index.ts writes data-theme="strata" / "stellar" / "nightlab" /
+     "paper" / "swiss" / "neo" into the html element above when the
+     settings page has picked a theme (Bug Fix Session #240). -->
 
 <head>
 
@@ -246,25 +247,88 @@ export const PAGE_MARKUP = `
 
 	<div id="studio-app" class="studio-app" hidden>
 
-	<div class="header">
+	<!-- ======================================================
+	     TOP BAR (BUG FIX SESSION #240)
+	     Sticky chrome: brand, the Bulk grid / Editor switch
+	     and the generate action. The reference mockup's theme
+	     picker is a settings-page control here, so it is not
+	     duplicated in the bar.
+	     ====================================================== -->
 
-				<button
+	<header class="app-top">
+
+		<div class="app-brand">
+			<span class="app-mark" aria-hidden="true">V</span>
+			<span class="app-name">VIBE <b>STUDIO</b></span>
+		</div>
+
+		<div class="grow"></div>
+
+		<div
+			class="view-switch"
+			id="view-switch"
+			role="tablist"
+			aria-label="Studio layout"
+		>
+			<button
+				type="button"
+				class="view-switch-btn"
+				id="layout-table"
+				data-layout="table"
+				role="tab"
+				aria-selected="false"
+			>\u25a6 Bulk grid</button>
+			<button
+				type="button"
+				class="view-switch-btn active"
+				id="layout-editor"
+				data-layout="editor"
+				role="tab"
+				aria-selected="true"
+			>\u25eb Editor</button>
+		</div>
+
+		<button
+			type="button"
+			class="app-generate"
+			id="top-generate"
+			onclick="onGenerateClick()"
+			title="Render and download the MP4"
+		>\u2726 Generate</button>
+
+	</header>
+
+
+	<main class="app-main">
+
+	<div class="header heading">
+
+		<div class="heading-copy">
+
+			<div class="kicker">VIDEO WORKSPACE</div>
+
+			<h1>
+				\ud83c\udfac YouTube Vibe Studio
+			</h1>
+
+			<p>
+				Generates AI scenes, adds your MP3
+				soundtrack, and exports a cinematic MP4.
+			</p>
+
+		</div>
+
+		<div class="heading-actions">
+
+			<button
 			type="button"
 			id="bulk-toggle"
 			class="bulk-toggle"
 			onclick="addVideoAccordion()"
-			title="Add a video (up to 10)">+ Add Video
-		</button>
+			title="Add a video (up to 10)">\uff0b Add Video
+			</button>
 
-
-		<h1>
-			\ud83c\udfac YouTube Vibe Studio
-		</h1>
-
-		<p>
-			Generates AI scenes, adds your MP3
-			soundtrack, and exports a cinematic MP4.
-		</p>
+		</div>
 
 	</div>
 
@@ -282,10 +346,78 @@ export const PAGE_MARKUP = `
 
 
 	<!-- ======================================================
-	     VIDEO STUDIO
+	     BULK GRID (view 1)
+	     A read-only index of the videos in this project.
+	     No bulk operations \u2014 the accordions stay the editor.
 	     ====================================================== -->
 
+	<section id="view-table" class="view">
+
+		<div class="studio-card table-card">
+
+			<div class="card-head">
+				<strong>Batch canvas</strong>
+				<span class="card-note" id="batch-note">Every video in this project</span>
+			</div>
+
+			<div class="table-scroll">
+
+				<table class="batch-table">
+
+					<thead>
+						<tr>
+							<th>\u2116</th>
+							<th>Video</th>
+							<th>Scenes</th>
+							<th>Audio</th>
+							<th>State</th>
+							<th></th>
+						</tr>
+					</thead>
+
+					<tbody id="batch-rows"></tbody>
+
+				</table>
+
+			</div>
+
+			<div class="table-empty" id="batch-empty">
+				No videos yet \u2014 press \uff0b Add Video to start,
+				then open it here or in the Editor.
+			</div>
+
+		</div>
+
+	</section>
+
+
+	<!-- ======================================================
+	     VIDEO STUDIO (view 2) \u2014 the editor
+	     ====================================================== -->
+
+	<section id="view-editor" class="view active">
+
 	<div class="studio">
+
+		<div class="studio-card editor-build">
+
+			<div class="card-head">
+				<strong>Build your video</strong>
+				<span class="card-note" id="concept-count">0 videos</span>
+			</div>
+
+			<div id="video-accordions"></div>
+
+		</div>
+
+
+		<div class="studio-card preview-card">
+
+			<div class="card-head">
+				<i class="preview-dot" aria-hidden="true"></i>
+				<strong>Preview monitor</strong>
+				<span class="card-note" id="preview-state">idle</span>
+			</div>
 
 		<div class="canvas-container">
 
@@ -306,6 +438,47 @@ export const PAGE_MARKUP = `
 
 		</div>
 
+
+		<div
+			class="progress-bar-container"
+			id="progress-container"
+		>
+
+			<div
+				class="progress-bar"
+				id="progress-bar"
+			></div>
+
+		</div>
+
+
+		<div
+			class="status-text"
+			id="status-text"
+		>
+			Compiling video...
+		</div>
+
+
+		<div
+			class="action-bar"
+			id="action-bar"
+		>
+			<span
+				class="action-hint"
+				id="action-hint"
+			>
+				Click \uff0b Add Video above, then
+				press Generate.
+			</span>
+		</div>
+
+
+
+		</div><!-- .preview-card -->
+
+
+		<div class="engine-panels">
 
 		<!-- ======================================================
 		     AUDIO TRACK (MP3)
@@ -619,45 +792,6 @@ export const PAGE_MARKUP = `
 
 		</div>
 
-		<div
-			class="progress-bar-container"
-			id="progress-container"
-		>
-
-			<div
-				class="progress-bar"
-				id="progress-bar"
-			></div>
-
-		</div>
-
-
-		<div
-			class="status-text"
-			id="status-text"
-		>
-			Compiling video...
-		</div>
-
-
-		<div
-			class="action-bar"
-			id="action-bar"
-		>
-			<span
-				class="action-hint"
-				id="action-hint"
-			>
-				Click the round Add Video button (top
-				left), then press Generate.
-			</span>
-		</div>
-
-		<div
-			id="video-accordions"
-		>
-		</div>
-
 
 		<div class="controls">
 
@@ -712,8 +846,13 @@ export const PAGE_MARKUP = `
 
 		</div>
 
-	</div>
+		</div><!-- .engine-panels -->
 
+	</div><!-- .studio -->
+
+	</section>
+
+	</main>
 
 
 	<div

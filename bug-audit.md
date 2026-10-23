@@ -26,6 +26,16 @@ found two runtime defects, both fixed in `src/index.ts` and recorded in
 when the Worker ran without a KV binding. The other 20 register findings were prose drift and are
 listed in that register's resolution table.
 
+**2026-10-23 — Bug Fix Session #240.** A feature session, not an audit: the studio adopted the
+chrome and the four extra skins of an uploaded `video_bulk_production` reference. No new runtime
+finding in the list below was touched. It did add one *structural* fact worth recording for the
+next audit: `#video-accordions` used to exist **twice** in the served markup (one empty host in
+each editor column); the pre-#240 `initVideoStudio()` wrote into the first match, so the second was
+dead markup. The rebuild leaves exactly one host, inside `.editor-build`, and the legacy
+audio/title/caption/controls panels now live in a `display:none` `.engine-panels` block instead of
+being hidden at boot by script. Record: `bug-fix-session-240.md`; new rule: `system-rules.md`
+RULE 22.
+
 | # | Severity | Finding | Status |
 | --- | --- | --- | --- |
 | 1 | S1 | Most data routes are anonymous (render, worker, `/api/script`, `/api/voiceover`, config GETs). **`/image/gen` is metered per account (RULE 20) or per IP for `/free` guests (RULE 21)** | partially fixed |

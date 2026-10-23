@@ -4061,6 +4061,216 @@ export const APP_CSS = `
 		}
 
 
+		/* -----------------------------------------------------
+		 * Bulk-video reference skins (Bug Fix Session #240).
+		 * Token blocks only: the shared
+		 * html[data-theme] block below re-skins every
+		 * component from --t-*, so a new skin needs no
+		 * component rules of its own.
+		 *
+		 * Palette + type are taken from the four themes in
+		 * the uploaded "video_bulk_production" reference
+		 * (Night Lab, Warm Paper, Swiss, Neo Brutalist).
+		 * ----------------------------------------------------- */
+
+		html[data-theme="nightlab"] {
+			--bg: #0b0d12;
+			--card: #141923;
+			--accent: #baff61;
+			--text: #f5f6fa;
+
+			--t-backdrop: #0b0d12;
+			--t-panel: #141923;
+			--t-panel-2: #1b2130;
+			--t-panel-3: #0e1219;
+			--t-line: #2c3444;
+			--t-line-2: #3a4457;
+			--t-ink: #f5f6fa;
+			--t-ink-out: #f5f6fa;
+			--t-heading: #f5f6fa;
+			--t-heading-out: #f5f6fa;
+			--t-muted: #929bad;
+			--t-muted-out: #929bad;
+			--t-accent-ink: #baff61;
+			--t-input: #0c1017;
+			--t-btn-bg: #baff61;
+			--t-btn-ink: #10140d;
+			--t-btn-line: #baff61;
+			--t-btn-bg-hover: #ccff8d;
+			--t-btn-ink-hover: #10140d;
+			--t-btn2-bg: #1b2130;
+			--t-btn2-ink: #f5f6fa;
+			--t-btn2-line: #2c3444;
+			--t-btn2-bg-hover: #262f40;
+			--t-on-accent: #10140d;
+			--t-shadow: 0 12px 30px #0002;
+			--t-radius: 15px;
+			--t-radius-sm: 10px;
+			--t-ok: #baff61;
+			--t-track: #0e1219;
+		}
+
+		html[data-theme="paper"] {
+			--bg: #f0ece3;
+			--card: #fffdf7;
+			--accent: #e85f42;
+			--text: #272720;
+
+			--t-backdrop: #f0ece3;
+			--t-panel: #fffdf7;
+			--t-panel-2: #f5f0e7;
+			--t-panel-3: #faf5ed;
+			--t-line: #ded8cc;
+			--t-line-2: #cfc7b7;
+			--t-ink: #272720;
+			--t-ink-out: #272720;
+			--t-heading: #272720;
+			--t-heading-out: #272720;
+			--t-muted: #777367;
+			--t-muted-out: #777367;
+			--t-accent-ink: #c8472c;
+			--t-input: #fffdf7;
+			--t-btn-bg: #fffdf7;
+			--t-btn-ink: #272720;
+			--t-btn-line: #ded8cc;
+			--t-btn-bg-hover: #f5f0e7;
+			--t-btn-ink-hover: #111111;
+			--t-btn2-bg: #f5f0e7;
+			--t-btn2-ink: #272720;
+			--t-btn2-line: #ded8cc;
+			--t-btn2-bg-hover: #ebe4d7;
+			--t-on-accent: #10140d;
+			--t-shadow: 0 12px 30px #0001;
+			--t-radius: 15px;
+			--t-radius-sm: 10px;
+			--t-ok: #2f7d4f;
+			--t-track: #f5f0e7;
+		}
+
+		html[data-theme="swiss"] {
+			--bg: #f4f5f7;
+			--card: #ffffff;
+			--accent: #2364f5;
+			--text: #15171b;
+
+			--t-backdrop: #f4f5f7;
+			--t-panel: #ffffff;
+			--t-panel-2: #f8f9fb;
+			--t-panel-3: #f8f9fb;
+			--t-line: #dfe3e8;
+			--t-line-2: #c9d0d9;
+			--t-ink: #15171b;
+			--t-ink-out: #15171b;
+			--t-heading: #15171b;
+			--t-heading-out: #15171b;
+			--t-muted: #6d737d;
+			--t-muted-out: #6d737d;
+			--t-accent-ink: #1b4fd0;
+			--t-input: #f8f9fb;
+			--t-btn-bg: #ffffff;
+			--t-btn-ink: #15171b;
+			--t-btn-line: #dfe3e8;
+			--t-btn-bg-hover: #f8f9fb;
+			--t-btn-ink-hover: #15171b;
+			--t-btn2-bg: #f8f9fb;
+			--t-btn2-ink: #15171b;
+			--t-btn2-line: #dfe3e8;
+			--t-btn2-bg-hover: #eef1f5;
+			--t-on-accent: #ffffff;
+			--t-shadow: 0 8px 28px rgba(22, 29, 45, 0.07);
+			--t-radius: 14px;
+			--t-radius-sm: 9px;
+			--t-ok: #1b7f4b;
+			--t-track: #f8f9fb;
+		}
+
+		html[data-theme="neo"] {
+			--bg: #f6f3e9;
+			--card: #fffdf5;
+			--accent: #d8ff00;
+			--text: #111111;
+
+			--t-backdrop: #f6f3e9;
+			--t-panel: #fffdf5;
+			--t-panel-2: #f0ecdf;
+			--t-panel-3: #f0ecdf;
+			--t-line: #111111;
+			--t-line-2: #111111;
+			--t-ink: #111111;
+			--t-ink-out: #111111;
+			--t-heading: #111111;
+			--t-heading-out: #111111;
+			--t-muted: #555348;
+			--t-muted-out: #555348;
+			--t-accent-ink: #111111;
+			--t-input: #fffdf5;
+			--t-btn-bg: #fffdf5;
+			--t-btn-ink: #111111;
+			--t-btn-line: #111111;
+			--t-btn-bg-hover: #d8ff00;
+			--t-btn-ink-hover: #111111;
+			--t-btn2-bg: #f0ecdf;
+			--t-btn2-ink: #111111;
+			--t-btn2-line: #111111;
+			--t-btn2-bg-hover: #e4dfcf;
+			--t-on-accent: #111111;
+			--t-shadow: 4px 4px 0 #111111;
+			--t-radius: 3px;
+			--t-radius-sm: 2px;
+			--t-ok: #166534;
+			--t-track: #f0ecdf;
+		}
+
+		/* Flat, border-forward skins: the upload's per-theme
+		 * rules reduced to the app's surface vocabulary. */
+
+		html[data-theme="neo"] body,
+		html[data-theme="paper"] body,
+		html[data-theme="swiss"] body {
+			background-image: none;
+		}
+
+		html[data-theme="neo"] .studio-card,
+		html[data-theme="neo"] .video-accordion,
+		html[data-theme="neo"] .modal-box,
+		html[data-theme="neo"] .auth-box,
+		html[data-theme="neo"] .cfg-box {
+			border-width: 2px;
+			border-color: var(--t-line);
+			box-shadow: var(--t-shadow);
+		}
+
+		html[data-theme="neo"] .upload-btn,
+		html[data-theme="neo"] #render-btn,
+		html[data-theme="neo"] .app-generate,
+		html[data-theme="neo"] .bulk-toggle,
+		html[data-theme="neo"] .view-switch,
+		html[data-theme="neo"] .view-switch-btn.active {
+			border-width: 2px;
+			border-color: #111111;
+			border-radius: 2px;
+			text-transform: uppercase;
+			letter-spacing: 0.02em;
+			transform: none;
+		}
+
+		html[data-theme="neo"] .upload-btn:active,
+		html[data-theme="neo"] #render-btn:active,
+		html[data-theme="neo"] .app-generate:active {
+			box-shadow: 1px 1px 0 #111111;
+			transform: translate(2px, 2px);
+		}
+
+		html[data-theme="neo"] .app-top {
+			border-bottom-width: 3px;
+			border-bottom-color: #111111;
+		}
+
+		html[data-theme="paper"] .studio-card,
+		html[data-theme="swiss"] .studio-card {
+			box-shadow: var(--t-shadow);
+		}
+
 		.aerial-credit { display: none; }
 		html[data-theme="strata"] .aerial-credit { display: block; text-align: center; font-size: 11px; margin: -10px 0 20px; color: rgba(255,255,255,.8); }
 		html[data-theme="strata"] .aerial-credit a { color: inherit; }
@@ -4671,6 +4881,8 @@ export const APP_CSS = `
 		.cfg-themes {
 			display:
 				flex;
+			flex-wrap:
+				wrap;
 			gap:
 				8px;
 			margin:
@@ -4679,7 +4891,7 @@ export const APP_CSS = `
 
 		.cfg-theme {
 			flex:
-				1 1 0;
+				1 1 150px;
 			display:
 				flex;
 			flex-direction:
@@ -4766,6 +4978,56 @@ export const APP_CSS = `
 					135deg,
 					#e37682 0%,
 					#5f4d93 100%
+				);
+		}
+
+		/* Bug Fix Session #240 skins: four colour chips. */
+
+		.cfg-preview-nightlab {
+			background:
+				linear-gradient(
+					135deg,
+					#0b0d12 0%,
+					#1b2130 55%,
+					#baff61 55%,
+					#baff61 70%,
+					#1b2130 70%
+				);
+		}
+
+		.cfg-preview-paper {
+			background:
+				linear-gradient(
+					135deg,
+					#f0ece3 0%,
+					#fffdf7 55%,
+					#e85f42 55%,
+					#e85f42 70%,
+					#f5f0e7 70%
+				);
+		}
+
+		.cfg-preview-swiss {
+			background:
+				linear-gradient(
+					135deg,
+					#f4f5f7 0%,
+					#ffffff 55%,
+					#2364f5 55%,
+					#2364f5 70%,
+					#f8f9fb 70%
+				);
+		}
+
+		.cfg-preview-neo {
+			background:
+				linear-gradient(
+					135deg,
+					#f6f3e9 0%,
+					#fffdf5 55%,
+					#d8ff00 55%,
+					#d8ff00 70%,
+					#111111 70%
 				);
 		}
 
@@ -7144,6 +7406,634 @@ export const APP_CSS = `
 
 		html[data-theme] #auth-account-credits {
 			color: var(--t-ink);
+		}
+
+		/* =====================================================
+		 * STUDIO SHELL (Bug Fix Session #240)
+		 *
+		 * Layout adopted from the uploaded "video_bulk_production"
+		 * reference: a sticky top bar, a page heading, and two
+		 * views — a Bulk grid table and an Editor split into
+		 * "Build your video" (the existing accordions) and a
+		 * Preview monitor (the existing canvas).
+		 *
+		 * Tokens fall back to the built-in palette, so the
+		 * default skin needs no data-theme attribute and the six
+		 * themed skins inherit through --t-*.
+		 *
+		 * The reference's timeline, rail, metrics and preview
+		 * widgets have no function in this app: no markup is
+		 * emitted for them (see the guard at the end of this
+		 * block for stray fragments).
+		 * ===================================================== */
+
+		#studio-app {
+			min-height: 100vh;
+			color: var(--t-ink, var(--text));
+		}
+
+		#studio-app[hidden] {
+			display: none !important;
+		}
+
+		#studio-app .app-top {
+			position: sticky;
+			top: 0;
+			z-index: 60;
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			padding: 10px 18px;
+			background: var(--t-panel, var(--card));
+			border-bottom: 1px solid var(--t-line, #2e3440);
+			-webkit-backdrop-filter: blur(16px);
+			backdrop-filter: blur(16px);
+		}
+
+		#studio-app .app-brand {
+			display: flex;
+			align-items: center;
+			gap: 9px;
+			font-weight: 800;
+			letter-spacing: -0.02em;
+		}
+
+		#studio-app .app-mark {
+			display: grid;
+			place-items: center;
+			width: 31px;
+			height: 31px;
+			border-radius: 10px;
+			background: var(--accent);
+			color: var(--t-on-accent, #10140d);
+			font-family: 'Oswald', sans-serif;
+			font-size: 1rem;
+		}
+
+		#studio-app .app-name {
+			font-size: 0.95rem;
+			text-transform: uppercase;
+			letter-spacing: 0.02em;
+		}
+
+		#studio-app .app-name b {
+			color: var(--accent);
+		}
+
+		#studio-app .grow {
+			flex: 1;
+		}
+
+		#studio-app .view-switch {
+			display: flex;
+			gap: 3px;
+			padding: 4px;
+			background: var(--t-panel-2, #1b2130);
+			border: 1px solid var(--t-line, #2e3440);
+			border-radius: 11px;
+		}
+
+		#studio-app .view-switch-btn {
+			border: 0;
+			background: transparent;
+			color: var(--t-muted, #9ca3af);
+			padding: 8px 11px;
+			border-radius: 7px;
+			font-size: 0.72rem;
+			font-weight: 800;
+			cursor: pointer;
+		}
+
+		#studio-app .view-switch-btn:hover,
+		#studio-app .app-generate:hover,
+		#studio-app .batch-open:hover {
+			transform: none;
+		}
+
+		#studio-app .view-switch-btn:hover {
+			color: var(--t-ink, var(--text));
+		}
+
+		#studio-app .view-switch-btn.active {
+			background: var(--accent);
+			color: var(--t-on-accent, #10140d);
+		}
+
+		#studio-app .app-generate {
+			border: 1px solid var(--accent);
+			background: var(--accent);
+			color: var(--t-on-accent, #10140d);
+			padding: 10px 13px;
+			border-radius: 10px;
+			font-weight: 800;
+			font-size: 0.8rem;
+			cursor: pointer;
+		}
+
+		#studio-app .app-generate:hover {
+			filter: brightness(1.06);
+		}
+
+		#studio-app .app-main {
+			display: flex;
+			flex-direction: column;
+			gap: 16px;
+			max-width: 1180px;
+			margin: 0 auto;
+			padding: 22px 18px 40px;
+		}
+
+		/* ---- heading ---------------------------------------- */
+
+		#studio-app .heading {
+			display: flex;
+			align-items: flex-end;
+			gap: 15px;
+			flex-wrap: wrap;
+			text-align: left;
+			margin: 0;
+			padding: 0;
+		}
+
+		#studio-app .heading::after {
+			display: none;
+			content: none;
+		}
+
+		#studio-app .kicker {
+			color: var(--accent);
+			font-size: 0.62rem;
+			font-weight: 900;
+			letter-spacing: 0.16em;
+			text-transform: uppercase;
+			margin-bottom: 8px;
+		}
+
+		#studio-app .heading h1 {
+			margin: 0;
+			font-family: 'Oswald', sans-serif;
+			font-size: clamp(1.6rem, 2.6vw, 2.2rem);
+			line-height: 1.05;
+			letter-spacing: -0.02em;
+			color: var(--t-heading-out, var(--accent));
+			border: 0;
+			padding: 0;
+			text-shadow: none;
+		}
+
+		#studio-app .heading p {
+			margin: 8px 0 0;
+			color: var(--t-muted-out, #9ca3af);
+			font-size: 0.9rem;
+			letter-spacing: 0;
+			text-transform: none;
+			line-height: 1.5;
+		}
+
+		#studio-app .heading-actions {
+			margin-left: auto;
+			display: flex;
+			gap: 8px;
+			flex-wrap: wrap;
+		}
+
+		#studio-app .heading-actions .bulk-toggle {
+			position: static;
+			width: auto;
+			height: auto;
+			border-radius: 10px;
+			padding: 10px 14px;
+			font-size: 0.82rem;
+			font-weight: 800;
+			background: transparent;
+			color: var(--t-ink, var(--text));
+			border: 1px solid var(--t-line, #2e3440);
+		}
+
+		#studio-app .heading-actions .bulk-toggle:hover {
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+
+		/* ---- views + cards ---------------------------------- */
+
+		#studio-app .view {
+			display: none;
+		}
+
+		#studio-app .view.active {
+			display: block;
+		}
+
+		#studio-app .studio-card {
+			background: var(--t-panel, var(--card));
+			border: 1px solid var(--t-line, #2e3440);
+			border-radius: var(--t-radius, 12px);
+			box-shadow: var(--t-shadow, none);
+			overflow: hidden;
+			color: var(--t-ink, var(--text));
+		}
+
+		#studio-app .card-head {
+			display: flex;
+			align-items: center;
+			gap: 9px;
+			padding: 13px 16px;
+			border-bottom: 1px solid var(--t-line, #2e3440);
+		}
+
+		#studio-app .card-head strong {
+			font-size: 0.8rem;
+			letter-spacing: 0.02em;
+		}
+
+		#studio-app .card-note {
+			margin-left: auto;
+			color: var(--t-muted, #9ca3af);
+			font-size: 0.7rem;
+		}
+
+		#studio-app .preview-dot {
+			width: 7px;
+			height: 7px;
+			border-radius: 50%;
+			background: var(--accent);
+			box-shadow: 0 0 10px var(--accent);
+			flex: 0 0 auto;
+		}
+
+		/* ---- bulk grid -------------------------------------- */
+
+		#studio-app .table-scroll {
+			overflow: auto;
+		}
+
+		#studio-app .batch-table {
+			width: 100%;
+			border-collapse: collapse;
+			white-space: nowrap;
+		}
+
+		#studio-app .batch-table th {
+			text-align: left;
+			padding: 10px 12px;
+			background: var(--t-panel-2, #14161a);
+			color: var(--t-muted, #9ca3af);
+			font-size: 0.62rem;
+			font-weight: 800;
+			letter-spacing: 0.12em;
+			text-transform: uppercase;
+			border-bottom: 1px solid var(--t-line, #2e3440);
+		}
+
+		#studio-app .batch-table td {
+			padding: 10px 12px;
+			border-bottom: 1px solid var(--t-line, #2e3440);
+			color: var(--t-ink, var(--text));
+			font-size: 0.82rem;
+			vertical-align: middle;
+		}
+
+		#studio-app .batch-table tbody tr:last-child td {
+			border-bottom: 0;
+		}
+
+		#studio-app .batch-table tbody tr:hover {
+			background: var(--t-panel-3, rgba(255, 255, 255, 0.03));
+		}
+
+		#studio-app .batch-index {
+			color: var(--t-muted, #9ca3af);
+			font-variant-numeric: tabular-nums;
+		}
+
+		#studio-app .batch-title {
+			font-weight: 700;
+		}
+
+		#studio-app .batch-sub {
+			color: var(--t-muted, #9ca3af);
+			font-size: 0.7rem;
+			margin-top: 3px;
+		}
+
+		#studio-app .batch-badge {
+			display: inline-block;
+			padding: 4px 9px;
+			border-radius: 999px;
+			border: 1px solid var(--t-line, #2e3440);
+			background: var(--t-panel-2, #1b2130);
+			font-size: 0.68rem;
+			font-weight: 800;
+			text-transform: lowercase;
+		}
+
+		#studio-app .batch-badge[data-state="rendering"],
+		#studio-app .batch-badge[data-state="queued"] {
+			border-color: #b45309;
+			color: #b45309;
+			background: rgba(180, 83, 9, 0.1);
+		}
+
+		#studio-app .batch-badge[data-state="done"] {
+			border-color: #15803d;
+			color: #15803d;
+			background: rgba(21, 128, 61, 0.1);
+		}
+
+		#studio-app .batch-badge[data-state="error"],
+		#studio-app .batch-badge[data-state="skipped"] {
+			border-color: #b91c1c;
+			color: #b91c1c;
+			background: rgba(185, 28, 28, 0.1);
+		}
+
+		#studio-app .batch-open {
+			border: 1px solid var(--t-line, #2e3440);
+			background: transparent;
+			color: var(--t-ink, var(--text));
+			border-radius: 8px;
+			padding: 6px 10px;
+			font-size: 0.72rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+
+		#studio-app .batch-open:hover {
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+
+		#studio-app .table-empty {
+			padding: 22px 16px;
+			color: var(--t-muted, #9ca3af);
+			font-size: 0.82rem;
+			text-align: center;
+		}
+
+		#studio-app .table-empty[hidden] {
+			display: none;
+		}
+
+		/* ---- editor ----------------------------------------- */
+
+		#studio-app .studio {
+			display: grid;
+			grid-template-columns: minmax(320px, 2fr) minmax(0, 3fr);
+			gap: 14px;
+			align-items: start;
+			max-width: none;
+			margin: 0;
+			background: transparent;
+			border: 0;
+			border-radius: 0;
+			padding: 0;
+			-webkit-backdrop-filter: none;
+			backdrop-filter: none;
+			box-shadow: none;
+		}
+
+		#studio-app .engine-panels {
+			display: none;
+		}
+
+		#studio-app #video-accordions {
+			max-width: none;
+			margin: 0;
+		}
+
+		#studio-app .editor-build .video-accordion {
+			background: transparent;
+			border: 0;
+			border-bottom: 1px solid var(--t-line, #2e3440);
+			border-radius: 0;
+			box-shadow: none;
+			margin: 0;
+			-webkit-backdrop-filter: none;
+			backdrop-filter: none;
+		}
+
+		#studio-app .editor-build .video-accordion:last-child {
+			border-bottom: 0;
+		}
+
+		#studio-app .editor-build .va-header {
+			background: transparent;
+			padding: 14px 15px;
+		}
+
+		#studio-app .editor-build .video-accordion:hover > .va-header {
+			background: var(--t-panel-3, rgba(255, 255, 255, 0.03));
+		}
+
+		#studio-app .editor-build .va-body {
+			padding: 0 15px 15px;
+		}
+
+		#studio-app .preview-card {
+			position: sticky;
+			top: 84px;
+			display: flex;
+			flex-direction: column;
+		}
+
+		#studio-app .preview-card .canvas-container {
+			margin: 14px 14px 0;
+			width: auto;
+		}
+
+		#studio-app .preview-card .progress-bar-container {
+			margin: 12px 14px 0;
+		}
+
+		#studio-app .preview-card .status-text {
+			margin: 10px 14px 0;
+			font-size: 0.78rem;
+			text-align: center;
+		}
+
+		#studio-app .preview-card .action-bar {
+			margin: 12px 14px 14px;
+			max-width: none;
+			flex-wrap: wrap;
+		}
+
+		#studio-app #render-btn {
+			background: var(--accent);
+			color: var(--t-on-accent, #000000);
+			border: 1px solid var(--accent);
+			font-weight: 800;
+			padding: 11px 16px;
+			border-radius: 10px;
+		}
+
+		#studio-app #render-btn:hover {
+			opacity: 0.92;
+			transform: none;
+		}
+
+		#studio-app .preview-card .action-hint {
+			font-size: 0.78rem;
+		}
+
+		/* ---- timeline guard --------------------------------- */
+
+		/*
+		 * The reference mockup ships a timeline dock. This app
+		 * has no timeline engine, so no timeline markup is
+		 * emitted; this guard keeps any future stray fragment
+		 * from rendering a dead UI.
+		 */
+
+		#studio-app .timeline,
+		#studio-app .timehead,
+		#studio-app .timebody,
+		#studio-app .cliprow,
+		#studio-app .playhead,
+		#studio-app .wave {
+			display: none !important;
+		}
+
+		/* ---- themed chrome ---------------------------------- */
+
+		html[data-theme] #studio-app .app-top {
+			background: var(--t-panel);
+			border-bottom-color: var(--t-line);
+			color: var(--t-ink);
+		}
+
+		html[data-theme] #studio-app .heading h1 {
+			color: var(--t-heading-out);
+			font-weight: 700;
+		}
+
+		html[data-theme] #studio-app .heading p {
+			color: var(--t-muted-out);
+		}
+
+		html[data-theme] #studio-app .studio-card {
+			background: var(--t-panel);
+			border-color: var(--t-line);
+			box-shadow: var(--t-shadow);
+			border-radius: var(--t-radius);
+		}
+
+		html[data-theme] #studio-app .card-head {
+			border-bottom-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .batch-table th {
+			background: var(--t-panel-2);
+			color: var(--t-muted);
+			border-bottom-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .batch-table td {
+			border-bottom-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .batch-badge {
+			background: var(--t-panel-2);
+			border-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .view-switch {
+			background: var(--t-panel-2);
+			border-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .view-switch-btn {
+			color: var(--t-muted);
+		}
+
+		html[data-theme] #studio-app .view-switch-btn.active {
+			background: var(--accent);
+			color: var(--t-on-accent);
+		}
+
+		html[data-theme] #studio-app .editor-build .video-accordion,
+		html[data-theme] #studio-app .editor-build .va-header {
+			background: transparent;
+		}
+
+		html[data-theme] #studio-app .heading-actions .bulk-toggle {
+			border-color: var(--t-line);
+			background: var(--t-btn2-bg);
+			color: var(--t-btn2-ink);
+		}
+
+		html[data-theme] #studio-app .heading-actions .bulk-toggle:hover {
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+
+		html[data-theme] #studio-app .app-generate {
+			border-color: var(--accent);
+			background: var(--accent);
+			color: var(--t-on-accent);
+		}
+
+		/*
+		 * The credit pill is fixed. While the studio is on
+		 * screen, park it under the sticky top bar; on the
+		 * landing page it keeps its own corner.
+		 */
+
+		#studio-app:not([hidden]) ~ .credit-pill {
+			top: 78px;
+		}
+
+		@media (max-width: 1100px) {
+			#studio-app .studio {
+				grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
+			}
+		}
+
+		@media (max-width: 860px) {
+			#studio-app .studio {
+				grid-template-columns: 1fr;
+			}
+
+			#studio-app .preview-card {
+				position: static;
+			}
+
+			#studio-app .app-top {
+				flex-wrap: wrap;
+			}
+		}
+
+		@media (max-width: 560px) {
+			#studio-app .app-main {
+				padding: 14px 10px 30px;
+			}
+
+			#studio-app .heading-actions {
+				margin-left: 0;
+				width: 100%;
+			}
+
+			#studio-app .heading-actions .bulk-toggle {
+				flex: 1;
+			}
+
+			#studio-app .app-top {
+				padding: 8px 10px;
+				gap: 8px;
+			}
+
+			#studio-app .app-name {
+				display: none;
+			}
+
+			#studio-app .app-generate {
+				padding: 9px 11px;
+				font-size: 0.74rem;
+			}
+
+			#studio-app:not([hidden]) ~ .credit-pill {
+				top: 66px;
+			}
 		}
 
 		@media (max-width: 560px) {

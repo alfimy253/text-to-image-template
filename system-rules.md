@@ -166,9 +166,10 @@
     compare against `CONFIG_PASSWORD` (`403` otherwise).
   - Restriction: rotating the password therefore requires editing both files and redeploying.
 - Appearance group (added with the theme feature, RULE 19):
-  - three radio cards (Studio / Aerial / Stellar) with CSS-only preview swatches, a status
-    line and a **Save theme** button; the group is hidden while the mode select is on
-    "Background worker".
+  - **seven** radio cards (Studio / Aerial / Stellar / Night Lab / Warm Paper / Swiss /
+    Neo Brutalist) with CSS-only preview swatches, a status line and a **Save theme** button;
+    the group is hidden while the mode select is on "Background worker". The cards wrap
+    (`flex: 1 1 150px`) so seven fit in rows rather than being squeezed into one.
   - Restriction: the preview is client-side only — picking a card restyles the page
     immediately but stores nothing, so an unsaved pick is lost on reload.
   - Restriction: the theme is a **global** setting (one page serves every visitor), not a
@@ -699,13 +700,17 @@
   `class="…note…"` / `class="…hint…"` / `class="…tip…"` in the three template literals that become
   the page — `src/client/app-js.ts` (`APP_JS`), `src/client/markup.ts` (`PAGE_MARKUP`) and
   `src/client/template-composer-js.ts` (`TEMPLATE_COMPOSER_JS`).
-- Counts, re-measured on the two served pages on 2026-10-23: **21 tooltips · 7 placeholders ·
-  35 `alert()` call sites** (33 in the studio script: 27 `app-js.ts` + 6 `template-composer-js.ts`;
-  2 in the settings script) **· 17 note/hint/tip class usages** in the page markup (13 of them
-  predate Bug Fix Session #206) plus **7 notes/status elements** built by the settings script —
-  ≈ 87 user-visible hint strings.
+- Counts, re-measured on the two served pages on 2026-10-23 (after Bug Fix Session #240):
+  **22 tooltips · 7 placeholders · 35 `alert()` call sites** (33 in the studio script: 27
+  `app-js.ts` + 6 `template-composer-js.ts`; 2 in the settings script) **· 17 note/hint/tip class
+  usages** in the page markup (13 of them predate Bug Fix Session #206) plus **7 notes/status
+  elements** built by the settings script — ≈ 88 user-visible hint strings.
   - Per source file: `app-js.ts` 27/13/5 (alerts/tooltips/placeholders), `template-composer-js.ts`
-    6/7/1, `markup.ts` 0/1/1, `config-page-js.ts` 2/0/0.
+    6/7/1, `markup.ts` 0/2/1, `config-page-js.ts` 2/0/0.
+  - Bug Fix Session #240 moved the Add Video button into the page heading and added the top bar,
+    the two views and four status lines — one extra tooltip (**Generate** in the top bar) and
+    four extra status elements (`#batch-note`, `#concept-count`, `#preview-state`,
+    `#batch-empty`), all listed below. No new `alert()` and no new placeholder.
   - Bug Fix Session #206 added the credits/guest strings listed below (auth overlay notes, the
     credits popover, the `401`/`429` bodies, the settings guest table) **and one alert** — the
     pre-submit quota box in `submitAiImages()` — which is why the alert count moved from 34 to 35.
@@ -734,9 +739,9 @@
 | `Send all of this video's elements to the render API` | **☁️ API** tooltip | the `/api/render` payload (RULE 4) |
 | `Compose a portrait or landscape MP4 (max 25 seconds) from a design template …` | `Add video from template` tooltip | the composer caps 1-25 s (RULE 13) |
 | `Tip: each template is a looping motion design … The clip is silent …` | composer panel (`.tpl-tips`) | composer motion controls + the silent-clip rule (RULE 13) |
-| `Theme for the studio page — every visitor sees it. Aerial and Stellar follow the HTML5UP designs of the same name.` | settings page, Appearance group (`.cfg-note`) | RULE 19 (three skins, global setting) |
-| `Built-in dark studio (default)` · `Blue sky, mountains, white accents` · `Violet gradient, frosted panels` | theme cards (`.cfg-theme-sub`) | what each skin in `CONFIG_THEMES` looks like |
-| `Current theme: Studio (default).` / `Current theme: Aerial.` | Appearance status line | the value stored under `config:theme` |
+| `Theme for the studio page — every visitor sees it. Aerial and Stellar follow the HTML5UP designs of the same name; Night Lab, Warm Paper, Swiss and Neo Brutalist are the studio's own skins.` | settings page, Appearance group (`.cfg-note`) | RULE 19 (seven skins, global setting) |
+| `Built-in dark studio (default)` · `Blue sky, mountains, white accents` · `Violet gradient, frosted panels` · `Charcoal lab, lime accent` · `Warm light paper, coral accent` · `Clean white, electric blue` · `Cream, hard black lines, lime` | theme cards (`.cfg-theme-sub`) | what each skin in `CONFIG_THEMES` looks like |
+| `Current theme: Studio (default).` / `Current theme: Night Lab.` / `Current theme: Neo Brutalist.` | Appearance status line (`themeLabel()`) | the value stored under `config:theme` |
 | `Preview only — press Save theme to apply it for everyone.` | Appearance status line after picking | the preview is client-side only (RULE 19) |
 | `Saved — reload the studio page to see the new theme.` | Appearance status line after saving | server-side injection on the next page render |
 | `Free plan: 50 AI images every day · unlimited videos, AI scripts and voiceovers.` / `Paid plan (paid_user): 1,200 AI images every day.` | auth overlay (`.auth-plan-note`) | `CREDIT_PLANS.free/paid_user.limits` (RULE 20) |
@@ -784,9 +789,15 @@
 
 ### Onboarding and empty-state hints
 
-- `Click the round Add Video button (top left), then press Generate.` (`.action-hint` in the
-  main panel; it said "red" until the theme work — the button is amber in the default skin
-  but teal or white in the other two).
+- `Click ＋ Add Video above, then press Generate.` (`.action-hint` in the preview card; the
+  button it names is the **＋ Add Video** control in the page heading, and **Generate** exists
+  twice by design — `#render-btn` in the action bar and `#top-generate` in the top bar).
+- `Every video in this project` → `N videos · read-only index` (`#batch-note`),
+  `N of 10 videos` (`#concept-count`), `idle` → `N in queue` (`#preview-state`) and
+  `No videos yet — press ＋ Add Video to start, then open it here or in the Editor.`
+  (`#batch-empty`, Bug Fix Session #240). The first three are written by `renderBatchTable()`,
+  so they always agree with `videoProjects`; the `10` in the count is a hand-copied duplicate of
+  `VIDEO_MAX_VIDEOS`, the same drift risk as the rest of this table.
 - `Pick a template — each preview is the real animation` (composer status),
   `Preview:` (main panel caption preview).
 - Placeholders: `Enter your video title...` (main panel + accordion), `Topic (uses the video title
@@ -802,9 +813,9 @@
 
 ---
 
-## RULE 19 — The studio ships three skins, chosen globally on the settings page
+## RULE 19 — The studio ships seven skins, chosen globally on the settings page
 
-- Three looks, selected by the `data-theme` attribute on `<html>`; **absence of the attribute is
+- Seven looks, selected by the `data-theme` attribute on `<html>`; **absence of the attribute is
   the default** (the amber-on-charcoal studio look that shipped first).
   - `strata` — legacy API/storage value for **Aerial**: blue sky and a bundled mountain
     backdrop, diagonal overlays, white type and translucent blue panels, adapted from
@@ -812,25 +823,42 @@
     choices get the new look without a KV migration. Motion respects reduced-motion settings.
   - `stellar` — pink-to-violet 45° gradient backdrop with a fixed dot overlay and frosted
     translucent panels (same provenance: HTML5UP "Stellar").
+  - `nightlab` — charcoal lab (#0b0d12 backdrop, #141923 panels) with a lime `#baff61` accent
+    and 15px corners. The first of the four skins ported from the uploaded
+    `video_bulk_production` reference (Bug Fix Session #240).
+  - `paper` — warm paper (#f0ece3 / #fffdf7) with a coral `#e85f42` accent, dark ink and soft
+    corners; the light skin with the most surface texture.
+  - `swiss` — white (#f4f5f7 / #ffffff) with electric blue `#2364f5`, tight corners and no
+    shadow; the neutral light skin.
+  - `neo` — cream (#f6f3e9 / #fffdf5) with lime `#d8ff00`, 2px `#111` borders, a hard
+    `4px 4px 0 #111` shadow and uppercase labels; the brutalist skin.
+  - Restriction: the four new skins changed **colour tokens only**. The layout they sit in is the
+    same for every skin (RULE 22) — exactly like the uploaded reference, where one markup serves
+    all four of its skins.
   - Restriction: the CSS is **additive**. Every rule is scoped `html[data-theme=…]` (or
     `html[data-theme]`), so without the attribute not a single declaration applies and the default
     look is byte-identical to before the feature.
 - Storage and API:
-  - one KV key, `config:theme`, value `default | strata | stellar`, no `expirationTtl`.
-  - `GET /api/config/theme` → `{success, theme, themes:[default,strata,stellar]}`; open (no
-    password).
+  - one KV key, `config:theme`, value
+    `default | strata | stellar | nightlab | paper | swiss | neo`, no `expirationTtl`. The three
+    pre-#240 values keep working unchanged; no KV migration was needed to add four skins.
+  - `GET /api/config/theme` → `{success, theme, themes:[default,strata,stellar,nightlab,paper,
+    swiss,neo]}`; open (no password). The `themes` array is what the picker renders, so the
+    settings page and the whitelist cannot drift apart by omission.
     - Restriction: it is the only config GET besides `/api/config/workers` that answers
       anonymously; it leaks nothing but the skin name, and the page itself already carries it.
   - `POST /api/config/theme` `{pw, theme}` → `403` wrong password, `400 Unknown theme` (anything
     outside the whitelist, including lowercase misses and attribute-injection attempts),
     `503 Theme storage unavailable` if the KV write throws.
-  - Restriction: only the three whitelisted strings can ever be written or injected — the value
+  - Restriction: only the seven whitelisted strings can ever be written or injected — the value
     is lower-cased and checked against `CONFIG_THEMES` **before** the key is touched, and
-    `applyTheme()` only ever builds `data-theme="<name>"` from that whitelist.
+    `applyTheme()` only ever builds `data-theme="<name>"` from that whitelist. `NEO` is accepted
+    as `neo`; `bogus` is a `400`.
 - Injection is server-side, so there is no flash of the wrong theme:
   - `applyTheme(html, theme)` rewrites a **copy** of the cached page at the literal
-    `<html lang="en">` → `<html lang="en" data-theme="strata|stellar">`; `default` returns the
-    cached string untouched (1 `String.replace` for a themed page, 0 for the default).
+    `<html lang="en">` → `<html lang="en" data-theme="<name>">` for any of the six non-default
+    names; `default` returns the cached string untouched (1 `String.replace` for a themed page,
+    0 for the default).
   - Every HTML route does it: `GET /`, `/free`, `/studio`, `/paid` (the three plan routes
     through `appPageResponse()`) and `GET /{current-day}/config/uvxyz`.
   - Restriction: it costs **one extra KV read per page render** (see `kv-scale-test.md` §5) and
@@ -840,10 +868,12 @@
     above.
 - The picker lives in the settings page's **Appearance** group (RULE 3) and previews instantly by
   setting/removing `data-theme` on `document.documentElement`.
-  - Restriction: the theme names exist in **three** places that must be kept in step — the worker
-    whitelist (`CONFIG_THEMES`), the CSS token blocks (`html[data-theme="…"]`) and the picker's
-    `themeOptions` array. A fourth theme needs all three (plus a preview class), and the worker's
-    `400` is the only guard against a half-added theme.
+  - Restriction: the theme names exist in **four** places that must be kept in step — the worker
+    whitelist (`CONFIG_THEMES`, `src/index.ts`), the CSS token block (`html[data-theme="…"]`
+    in `src/client/styles.ts`), the picker's `themeOptions` array
+    (`src/client/config-page-js.ts`) and the card's swatch class
+    (`.cfg-preview-<name>`). A new theme needs all four; the worker's `400` is the only guard
+    against a half-added theme, and a missing swatch only degrades to an empty chip.
   - Restriction: `applyTheme()` matches the literal `<html lang="en">`; changing that tag (for
     example adding a second attribute in `markup.ts`) silently disables theming everywhere.
   - Unrelated to the theme: the studio's *rendered* output (fonts, colours, sticker, captions) is
@@ -999,6 +1029,49 @@ addresses and gives visitors without an account a small, IP-metered allowance.
     the freemium studio.
 - **Documentation.** The complete session record (matrix, payloads, privacy notes, test
   evidence) is `bug-fix-session-206.md`.
+
+
+---
+
+## RULE 22 — The studio shell is one state behind two views
+
+- The studio page is a **shell** (top bar, page heading) around two sibling views inside
+  `main.app-main`; exactly one carries `.active` and the layout block does the rest
+  (`#studio-app .view { display: none }` / `.view.active { display: block }`):
+  - `#view-table` — the **Bulk grid**: a read-only index of `videoProjects`, one row per video
+    (number, title, prompt excerpt, scene counts, MP3 length, state, **Open ↗**).
+  - `#view-editor` — the **Editor**: `.studio-card.editor-build` (`#video-accordions`) beside
+    `.studio-card.preview-card` (canvas, progress, status, action bar). It is the boot view.
+- The switch is `#view-switch` → `[data-layout="table"|"editor"]`, handled by
+  `setStudioLayout()`. The choice is a **module variable**; RULE 15 forbids client storage, so a
+  reload always starts in the Editor.
+- The grid is a **view, not a controller** (Bug Fix Session #240):
+  - `renderBatchTable()` rebuilds `#batch-rows` from the same `videoProjects` array the engine
+    uses; it never creates, copies, deletes or persists a project.
+  - **Open ↗** calls `focusVideoInEditor(n)`, which switches the view, expands `#va-body-N` /
+    `#va-arrow-N` with the same inline-`display` mechanism as `toggleVideoAccordion()` and scrolls
+    the accordion into view.
+  - A delegated `input` listener on `#video-accordions` re-renders the grid when `#va-title-N` or
+    `#va-ai-prompt-N` changes, and `updateVideoStatus(n)` re-renders it after a status change, so
+    the two views cannot show different states.
+  - Restriction: there are **no bulk operations** — no checkbox column, duplicate, delete, export,
+    search or queue badge. The uploaded reference had them; this app does not, and the grid
+    deliberately does not pretend to.
+- Only **re-parenting** was allowed: `initVideoStudio()` hides `.audio-panel`, `.controls` and
+  `#gallery`, moves `#render-btn` into `#action-bar`, and every handler looks nodes up by `id` or
+  class — never by parent. The legacy panels live on in `.engine-panels`
+  (`display: none` in CSS, so nothing flashes before the script runs) and their ids
+  (`#file-upload`, `#upload`, `#quality-select`, …) are still in the DOM.
+- **No timeline.** The reference's `.timeline` dock (`.timehead`, `.timebody`, `.cliprow`,
+  `.playhead`, `.wave`) has no engine in this app, so no markup or JS is emitted; a
+  `display: none !important` guard keeps a stray fragment from ever rendering.
+- The shell is **global**, not per-skin (RULE 19): the seven skins recolour it through `--t-*`.
+  Omitted because they had no function: the reference's left rail, metric strip, in-bar theme
+  picker, preview hero / scene strip / detail grid / play button.
+- The fixed credits pill is parked under the sticky bar with
+  `#studio-app:not([hidden]) ~ .credit-pill { top: 78px }` (66px under 560px); on the landing page
+  it keeps its own corner.
+- Record: `bug-fix-session-240.md`.
 
 ---
 
@@ -1308,3 +1381,18 @@ cites `kv-scale-test.md` §8, the last section of that document.
 > Method note for the next audit: the fastest reliable cross-check is the pair of harnesses in
 > `bug-fix-session-206.md` §9 (77 checks) plus `grep -c 'alert('`, `wc -l` and a `createHTML()`
 > byte count. Do not trust a line number written before the last feature branch.
+
+### Register addendum — Bug Fix Session #240 (2026-10-23)
+
+> The feature session that adopted the `video_bulk_production` chrome and four extra skins changed
+> the page structure, the skin count and a handful of UI strings. Everything it invalidated is
+> listed here, and every entry was fixed in the same commit.
+
+| # | Drift | Resolution |
+| --- | --- | --- |
+| 7.1 | RULE 19 said **three** skins and named the theme names in three places. | Rule retitled **seven skins**; four token blocks, four picker cards and four swatches added; the "three places" restriction is now **four** (whitelist, token block, `themeOptions`, `.cfg-preview-*`). |
+| 7.2 | RULE 3 described three Appearance cards. | Now seven, wrapping at `flex: 1 1 150px`. |
+| 7.3 | RULE 18 quoted `Click the round Add Video button (top left), then press Generate.` and the three-card theme notes. | Rewritten for the heading button, plus the four new status lines (`#batch-note`, `#concept-count`, `#preview-state`, `#batch-empty`), the seven-card theme note and the `themeLabel()` status line. Tooltip count 21 → **22**; alerts and placeholders unchanged. |
+| 7.4 | **No rule described the page structure.** §3 of every earlier document described `.header` + `.studio` + hidden panels. | New **RULE 22** documents the shell (`app-top`, `main.app-main`, two views, `.engine-panels`), the read-only grid, the memory-only view choice and the absence of the timeline. |
+| 7.5 | `README.md` and `userflow.md` claimed three themes and a single-canvas studio. | Feature bullet, limits, `userflow.md` §11 and the header counts updated. |
+| 7.6 | No document said what the studio deliberately *lacks*. | RULE 22 and `bug-fix-session-240.md` §6 name the dropped reference widgets (timeline, rail, metrics, in-bar picker, preview fake widgets, bulk operations). |

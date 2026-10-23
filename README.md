@@ -49,12 +49,19 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 - **Plan-based URLs.** `/free` (everyone), `/studio` (`free_user` / `paid_user`) and `/paid`
   (`paid_user` only) serve the same shell in a different plan mode; guests are redirected to
   `/free`, free accounts to `/studio` (RULE 21).
-- **Three UI themes.** The current-day settings page → **Appearance** switches the whole studio
-  between the built-in dark look, **Aerial** (blue sky, mountain backdrop, white accents), and
-  **Stellar** (violet gradient, frosted panels) — HTML5UP-inspired skins, applied server-side so
-  there is no flash.
+- **Seven UI themes.** The current-day settings page → **Appearance** switches the whole studio
+  between the built-in dark look, **Aerial** (blue sky, mountain backdrop, white accents),
+  **Stellar** (violet gradient, frosted panels), **Night Lab** (charcoal + lime), **Warm Paper**
+  (paper + coral), **Swiss** (white + electric blue) and **Neo Brutalist** (cream, 2px black
+  borders, lime). Aerial and Stellar are HTML5UP-inspired; the last four are the studio's own
+  skins. All of them are applied server-side so there is no flash.
   Aerial retains the legacy `strata` API/storage value, so saved selections still work.
   See `THIRD_PARTY_NOTICES.md` for the Aerial background attribution.
+- **Two views, one state.** A sticky top bar switches between the **Bulk grid** — a read-only
+  index of every video in the project (title, prompt, scene counts, MP3 length, state, **Open ↗**)
+  — and the **Editor**, a *Build your video* accordion card beside a sticky preview monitor.
+  The grid reads the same project array the engine renders; it has no bulk operations, and the
+  view choice is memory-only. There is deliberately **no timeline**.
 - **Template composer.** The "Add video from template" link opens a modal with a **4-column
   gallery of live animated previews** of 8 motion-typography templates (Halo Warp, Terminal
   Fracture, Ribbon Editorial, Portal Type, Comic Burst, Dream Echo, Perspective Fold, Liquid
@@ -103,8 +110,9 @@ the strings that carry the rules (the full inventory, with the constant each one
 | 🎙 **Generate Voiceover** | tooltip: *Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
 | ☁️ **API** button | tooltip: *Send all of this video's elements to the render API* |
 | Main panel notes | slideshow repeats to cover the track · captions sit 4/7 up from the bottom, 17px Bookman, last one capped at 10 s · sticker is a 435 × 150 white rectangle hanging 40 px past the right edge |
-| Onboarding | `Click the round Add Video button (top left), then press Generate.` |
-| Settings page, Appearance | `Current theme: Aerial.` · `Preview only — press Save theme to apply it for everyone.` · `Saved — reload the studio page to see the new theme.` |
+| Onboarding | `Click ＋ Add Video above, then press Generate.` |
+| Bulk grid / editor heads | `N videos · read-only index` · `N of 10 videos` · `N in queue` (or `idle`) · empty state `No videos yet — press ＋ Add Video to start…` |
+| Settings page, Appearance | `Current theme: Night Lab.` · `Preview only — press Save theme to apply it for everyone.` · `Saved — reload the studio page to see the new theme.` |
 | Blocking alerts | only for hard failures and cap breaches (e.g. `You can add at most 25 images (jpg, png, jpeg).`); the AI script instead reports `Script failed: <error>` in its status line so a retry can start immediately |
 
 Status lines (`#va-status-N`, `#va-script-status-N`, `#va-ai-status-N`) are the normal progress
@@ -136,7 +144,8 @@ The settings page is password-gated and uses **`/{current-day}/config/uvxyz`**, 
 `{current-day}` is the unpadded day of month (1–31) in **Asia/Taipei**. For example, on
 2026-10-16 the URL is **`/16/config/uvxyz`**; it changes at midnight Asia/Taipei. The old bare
 `/config/uvxyz` path and any stale day-prefixed path return `404`. The page picks the **theme**
-for every visitor (Appearance → *Studio / Aerial / Stellar* → **Save theme**), manages **plans
+for every visitor (Appearance → *Studio / Aerial / Stellar / Night Lab / Warm Paper / Swiss /
+Neo Brutalist* → **Save theme**), manages **plans
 & credits** (set an account to `free` or `paid_user`, optionally reset today's counters), reviews
 **guest credits by IP** (masked address, today's usage, remaining images, reset), registers
 background worker URLs, and can switch a tab into "Background worker" mode to consume the render
@@ -161,7 +170,7 @@ whole site.
 | `POST /api/render` · `GET /api/render/:jobId` | Submit a render job / poll and download |
 | `GET /api/worker/poll` · `POST /api/worker/deliver` · `POST /api/worker/failed` | Background worker queue |
 | `GET`/`POST /api/config/workers` | Registered worker URLs (max 3, `POST` needs the settings password) |
-| `GET`/`POST /api/config/theme` | Current UI theme / set it (`default`, `strata`, `stellar`; `POST` needs the settings password) |
+| `GET`/`POST /api/config/theme` | Current UI theme / set it (`default`, `strata`, `stellar`, `nightlab`, `paper`, `swiss`, `neo`); the GET is open, the POST needs the settings password |
 | `GET`/`POST /api/config/users` | Accounts with plan + today's usage / set `usertype` (`free`, `paid_user`) and reset counters — both need the settings password |
 | `GET`/`POST /api/config/ipcredits` | Guest credits table (masked IP, usage, remaining) / delete one IP row (reset) — both need the settings password |
 
@@ -172,7 +181,7 @@ whole site.
 - **`system-rules.md`** — the high-level system rules with the nested technical detail,
   invariants and restrictions behind each of them (RULE 7 = the SEO script, RULE 18 = the
   inventory of every user-visible hint: tooltips, notes, placeholders and alerts, RULE 19 =
-  the three themes and where the choice is stored).
+  the seven themes and where the choice is stored, RULE 22 = the studio shell and its two views).
 - **`kv-scale-test.md`** — measured KV behaviour (operations per request, list-page caps,
   free-tier allowance maths) with the reproduction commands.
 - **`bug-audit.md`** — the current bug and inconsistency audit, with severity and fixes.
@@ -182,6 +191,10 @@ whole site.
   2026-10-22 register — a guest refund erasing the IP row's identity, and
   `GET /api/config/workers` throwing without a KV binding — with the before/after code and the
   77-check verification.
+- **`bug-fix-session-240.md`** — Bug Fix Session #240: the studio shell (top bar, two views,
+  read-only bulk grid, hidden legacy panels, no timeline) and the four extra skins ported from
+  the uploaded `video_bulk_production` reference, with the 44-check DOM harness and the 36-check
+  route harness.
 
 ## Notes for contributors
 

@@ -22,9 +22,12 @@ import { CONFIG_PAGE_SCRIPT } from "./client/config-page-js";
  * =============================================================
  * THEME HELPERS
  * -------------------------------------------------------------
- * The studio ships three skins: the built-in look (no
- * attribute) plus "strata" and "stellar". The settings page
- * stores the choice in KV; the two HTML routes read it and
+ * The studio ships seven skins: the built-in look (no
+ * attribute) plus "strata" / "stellar" (the HTML5UP pair) and
+ * "nightlab" / "paper" / "swiss" / "neo" (the four skins of
+ * the uploaded bulk-video reference, Bug Fix Session #240).
+ * The settings
+ * page stores the choice in KV; the HTML routes read it and
  * write data-theme onto the <html> tag, so the skin is applied
  * during parse and no default-themed frame is ever painted.
  * =============================================================
@@ -50,14 +53,22 @@ function getCurrentConfigPath() {
 
 /*
  * The whitelist. "default" is the built-in studio look; the
- * other two names are the CSS themes in client/styles.ts and
+ * other six names are the CSS themes in client/styles.ts and
  * are the ONLY values that ever reach the markup.
+ *
+ *   strata   Aerial (HTML5UP)          stellar  Stellar (HTML5UP)
+ *   nightlab Night Lab                 paper    Warm Paper
+ *   swiss    Swiss                     neo      Neo Brutalist
  */
 
 const CONFIG_THEMES = [
 	"default",
 	"strata",
-	"stellar"
+	"stellar",
+	"nightlab",
+	"paper",
+	"swiss",
+	"neo"
 ];
 
 function normalizeTheme(value: any) {

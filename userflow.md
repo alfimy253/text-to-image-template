@@ -1,14 +1,15 @@
 # YouTube Vibe Studio — User Flow Documentation
 
-> Reconstructed from a full code read of the working tree on **2026-10-16**.
+> Reconstructed from a full code read of the working tree on **2026-10-16**; §11 and the theme
+> sections were revised on **2026-10-23** for Bug Fix Session #240.
 >
-> Evidence base: `src/index.ts` (≈7,200 lines, all routes/APIs/KV logic), `src/page.ts`,
-> `src/prompts.ts`, `src/client/markup.ts`, `src/client/styles.ts`,
-> `src/client/app-js.ts` (14,832 lines, the whole studio UI + render engine),
+> Evidence base: `src/index.ts` (7,215 lines, all routes/APIs/KV logic), `src/page.ts`,
+> `src/prompts.ts`, `src/client/markup.ts` (897 lines), `src/client/styles.ts` (8,057 lines),
+> `src/client/app-js.ts` (15,308 lines, the whole studio UI + render engine),
 > `src/client/template-composer-js.ts` (2,312 lines), `src/client/config-page-js.ts`,
 > `wrangler.json`, `package.json`, `e2e/index.ts`. The SEO script has two AI stages (see §4.2
 > and `system-rules.md` RULE 7 / RULE 18). This revision documents the day-rotating settings
-> route and its Asia/Taipei date boundary.
+> route, its Asia/Taipei date boundary, the two studio views (§11) and the seven skins.
 >
 > Companion document: **`system-rules.md`** — the high-level system rules with the
 > indented technical detail, invariants and restrictions behind every flow below.
@@ -89,7 +90,9 @@ User opens /
    │    3. wire the legacy panels: MP3 upload, title, sticker, captions, quality, gallery upload
    │    4. initVideoStudio() → hides every .audio-panel, .controls and #gallery
    │                          moves #render-btn into #action-bar as "🎬 Generate Videos"
-   │    5. initAuth() → GET /api/session
+   │    5. bindStudioShell() → paints the Bulk grid, wires #view-switch and [data-open]
+   │                          (the Editor is the boot view; the choice is memory-only)
+   │    6. bindLandingActions(); initAuth() → GET /api/session
    │
    └─ Branch on /api/session
         ├─ 200 OK ....... signed in → hide landing, show studio + footer badge "👤 name" + Account / Contact / Logout
@@ -105,8 +108,9 @@ Landing actions:
    bottom "Log in" menu → auth overlay in sign-in mode
    primary "Start creating" action → signup overlay when authentication is required,
                                      otherwise show the studio
-   (the landing surface uses the active theme's tokens, so the Aerial/Stellar skin
-    chosen on the settings page covers the landing and the studio alike)
+   (the landing surface uses the active theme's tokens, so the skin chosen on the
+    settings page — default, Aerial, Stellar, Night Lab, Warm Paper, Swiss or Neo
+    Brutalist — covers the landing and the studio alike)
 ```
 
 **Sign in / sign up (overlay, Module 6)**
@@ -528,9 +532,11 @@ GET /{current-day}/config/uvxyz
 password overlay ("⚙️ Studio Settings — Enter the settings password")
   wrong  → "Wrong password."
   right  → settings modal
-     ├─ Appearance (app mode only)     → Studio / Aerial / Stellar radio cards
-     │    GET /api/config/theme preloads the current skin; picking a card previews it
-     │    instantly (client-side only, "Preview only — press Save theme …")
+     ├─ Appearance (app mode only)     → seven radio cards, wrapping over several rows:
+     │    Studio · Aerial · Stellar · Night Lab · Warm Paper · Swiss · Neo Brutalist
+     │    GET /api/config/theme preloads the current skin ("Current theme: Night Lab.");
+     │    picking a card previews it instantly (client-side only,
+     │    "Preview only — press Save theme …")
      │    [Save theme] → POST /api/config/theme {pw, theme}
      │        server: pw must match, theme must be in the whitelist → stored as config:theme
      │        → "Saved — reload the studio page to see the new theme."
@@ -601,6 +607,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Page assembly / caching | `src/page.ts`, `src/client/markup.ts`, `src/client/styles.ts` |
 | Routes, KV, jobs, auth | `src/index.ts` (ordered route handler; `getCurrentConfigPath()` builds the current-day settings URL, which is matched only by the settings-page GET route; unmatched paths return `404`) |
 | Accordions, gallery, queue | `src/client/app-js.ts` MODULE 1-4 (`initVideoStudio()`, `addVideoAccordion()`, `videoAccordionHTML()`, `onVideoFiles()`, `runGenerationQueue()`) |
+| Shell / two views | MODULE 1b (`setStudioLayout()`, `renderBatchTable()`, `batchTitle()`, `batchPrompt()`, `batchScenes()`, `focusVideoInEditor()`, `bindStudioShell()`) — reads `videoProjects`, never mutates it |
 | AI images panel | MODULE 5 (`submitAiImages()`, `addAiResultCard()`, `addAiToVideo()`) |
 | Auth UI | MODULE 6 (`buildAuthOverlay()`, `submitAuth()`, `initAuth()`) |
 | Render API + worker | MODULE 7 (`collectVideoPayload()`, `apiRenderVideo()`, `renderVideoLocally()`, `workerRunJob()`) |
@@ -625,6 +632,66 @@ the status pill turns green *done* and the summary reads "Bulk complete: 1 saved
 Or, for server-mediated rendering: press **☁️ API** on that video, leave the tab polling, and let a
 current-day settings-route worker tab (Flow 3) pick the job up, render it in *its* browser and deliver the MP4
 back — the original tab downloads `API_Video1.mp4`.
+
+## 11. Flow 5 — The two studio views (Bug Fix Session #240)
+
+The studio page is one state behind two views. Nothing is duplicated: both read the same
+`videoProjects` array and the same accordions.
+
+```
+#studio-app
+  header.app-top   VIBE STUDIO · [#view-switch: ▦ Bulk grid | ▯ Editor] · [✦ Generate]
+  main.app-main
+    .heading       VIDEO WORKSPACE · "🎬 YouTube Vibe Studio" · [＋ Add Video]
+    .aerial-credit (Aerial skin only) · #bulk-banner (bulk warning, when running)
+    section#view-table.view    Batch canvas: table#batch-rows  (read-only)
+    section#view-editor.view.active
+      .studio
+        .studio-card.editor-build  "Build your video"  N of 10 videos · #video-accordions
+        .studio-card.preview-card  "Preview monitor"   canvas · progress · #status-text · action bar
+        .engine-panels             the legacy 4 × .audio-panel + .controls stack (display:none)
+  #gallery · #required-modal       (siblings of <main>, exactly as before)
+```
+
+**Switching**
+
+```
+[▦ Bulk grid] → setStudioLayout("table")  → #view-table.active, #view-editor hidden
+                                          → renderBatchTable() redraws every row
+[▯ Editor]    → setStudioLayout("editor") → #view-editor.active (the boot view)
+```
+
+- The choice lives in a module variable. Reload always starts in the **Editor** (RULE 15: no
+  client storage).
+- Both buttons carry `aria-selected`; the active one has `.active`.
+
+**The Bulk grid**
+
+- One row per `videoProjects[i]`: `01` · title (+ the first 64 characters of that video's AI
+  image prompt, or “No prompt yet”) · scene counts (`3 img · 1 GIF · 2 MP4`, or `—`) · audio
+  (`MP3 1:42`, or `—`) · state badge · **Open ↗**.
+- Title = the live `#va-title-N` field, falling back to `Video N`; prompt = `#va-ai-prompt-N`.
+- The card head shows `N videos · read-only index`; the editor card head shows `N of 10 videos`;
+  the preview card head shows `N in queue` (or `idle`).
+- **No bulk operations.** No checkboxes, no duplicate/delete/export/search — the reference's
+  toolbar is not ported.
+- **Open ↗** → `focusVideoInEditor(n)`: switch to the Editor, expand `#va-body-N`, set
+  `#va-arrow-N` to ▼ and scroll that accordion into view.
+- Empty state: `No videos yet — press ＋ Add Video to start, then open it here or in the Editor.`
+
+**Keeping the two views in sync**
+
+- A delegated `input` listener on `#video-accordions` re-renders the grid when a
+  `#va-title-N` or `#va-ai-prompt-N` changes.
+- `updateVideoStatus(n)` re-renders it after every status change, so a render started in the
+  Editor is visible in the grid.
+- Uploads, AI images, scripts and voiceovers are unchanged — they all still happen in the
+  accordion (Flow 1), and the grid simply reflects their results.
+
+**What was deliberately not ported** from the uploaded reference: the timeline dock, the left
+rail, the metric strip, the in-bar theme picker, and the preview monitor's hero image, scene
+strip, details grid and play button. None of them have an engine here. See
+`bug-fix-session-240.md` §6.
 
 ## UI update — Aerial / Stellar / template modal (2026-10-15)
 
