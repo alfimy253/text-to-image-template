@@ -161,33 +161,32 @@
     with `Intl.DateTimeFormat`; for example, the route is `/16/config/uvxyz` on 2026-10-16.
     It changes at midnight Asia/Taipei. The old bare `/config/uvxyz` path and a stale day path
     fall through to the normal plain-text `404`.
-  - Restriction: the rotating path is not an authorization boundary. The page still relies on
-    the client-side password gate described below.
-- The settings password is the literal `"#123admin%"`, duplicated in two places:
-  - the Worker constant `CONFIG_PASSWORD` (`src/index.ts`), and
-  - the client script `CONFIG_PASSWORD` (`src/client/config-page-js.ts`).
-  - Restriction: the gate is a client-side `===` comparison, so it is cosmetic — the value is
-    readable in the served HTML/JS. Its server-side uses are the six operator endpoints:
-    `POST /api/config/theme`, `POST /api/config/workers`, `GET|POST /api/config/users` and
-    `GET|POST /api/config/ipcredits` — the GETs take `?pw=`, the POSTs `body.pw`, and all six
-    compare against `CONFIG_PASSWORD` (`403` otherwise).
-  - Restriction: rotating the password therefore requires editing both files and redeploying.
-- Appearance group (added with the theme feature, RULE 19):
+  - Restriction: the rotating path is not an authorization boundary. The full-page inline
+    unlock card posts the entered password to `POST /api/config/verify`; valid/invalid responses
+    come from the Worker, not a client-side comparison.
+- The settings password is the literal `"#123admin%"` in the active Worker constant
+  `CONFIG_PASSWORD` (`src/index.ts`). The current config client contains no copy: it stores only
+  the operator-entered value in memory as `unlockedPw` and sends it to password-gated APIs.
+  `src/index.ts.original` is a stale, unimported snapshot with an older duplicated client gate.
+  - Server-side checks cover config verification, theme/worker writes, account/IP-credit admin,
+    payment-gateway writes, payment review/images/approval and CMS admin APIs. They compare the
+    supplied body/query `pw` against `CONFIG_PASSWORD` and return `403` on mismatch. Public
+    exceptions are intentional (for example theme/worker reads, gateway read and public CMS read).
+  - Restriction: the password is hard-coded in server source and some admin image/list URLs put
+    it in the query string. Rotate by editing the active Worker constant and redeploying; a real
+    deployment should move it to a Worker secret and avoid query-string credentials.
+- **General & Themes** (RULE 19):
   - **seven** radio cards (Studio / Aerial / Stellar / Night Lab / Warm Paper / Swiss /
-    Neo Brutalist) with CSS-only preview swatches, a status line and a **Save theme** button;
-    the group is hidden while the mode select is on "Background worker". The cards wrap
-    (`flex: 1 1 150px`) so seven fit in rows rather than being squeezed into one.
+    Neo Brutalist) with CSS-only preview swatches, a status line and a **Save theme** button.
+    The cards wrap (`flex: 1 1 150px`) so seven fit in rows rather than being squeezed into one.
   - Restriction: the preview is client-side only — picking a card restyles the page
     immediately but stores nothing, so an unsaved pick is lost on reload.
   - Restriction: the theme is a **global** setting (one page serves every visitor), not a
     per-user preference.
-- Worker-mode UI switching:
-  - Mode select "Web app" / "Background worker" toggles the modal groups and adds
-    `body.cfg-worker-mode`, which hides `h1, h2, .audio-panel, .controls, #action-bar,
-    #video-accordions, #gallery, #status-text, #progress-container` (both via injected CSS and
-    via `hideStudio()` inline styles).
-  - Restriction: only the *chrome* is hidden; the studio JS (and its render engine) is still
-    fully loaded and is what performs the work.
+- **Full-page/worker mode:** the config script builds `#cfg-page` on `body.cfg-real-page` with
+  four tabs, not the retired modal/mode-select UI. The General tab's **Background Worker Mode**
+  card has Start/Stop and a polling log. `#studio-app` is moved off-screen and visually hidden,
+  but its canvas, JS and render engine remain alive to perform claimed jobs.
 - Registered worker URLs:
   - `POST /api/config/workers` trims the array, drops empties, keeps at most **3** URLs, and
     rejects any entry longer than 500 chars or not matching `^https?://` → `400`.
@@ -605,46 +604,60 @@
 
 ---
 
-## RULE 13 — The template composer is a self-contained module with its own caps
+## RULE 13 — The template composer exposes two canvas-rendered galleries
 
-- Composer code executes in an IIFE so helpers cannot collide with the studio's globals; only
-  `window.openTemplateModal` and `window.closeTemplateModal` are exported. Motion-template code
-  lives in `src/client/template-composer-js.ts`; interactive scene logic is injected from
-  `src/client/template-scene-editor.ts`, with its optimized backdrops in
-  `src/client/reel-scene-assets.ts`.
+- Composer code executes in an IIFE so helpers cannot collide with studio globals; only
+  `window.openTemplateModal` and `window.closeTemplateModal` are exported. The shared composer is
+  `src/client/template-composer-js.ts`; Interactive scenes come from
+  `src/client/template-scene-editor.ts`, the ring from `src/client/template-ring-carousel.ts`,
+  bundled Reel backdrops from `src/client/reel-scene-assets.ts`, and Shape objects from
+  `src/client/template-shape-animations.ts`.
 - The modal has a **gallery** and an **editor**:
-  - **Gallery** — two tabs, each with a 4-column grid of live animated previews:
-    - **8 motion-typography templates** (19 Halo Warp, 20 Terminal Fracture, 21 Ribbon
-      Editorial, 22 Portal Type, 23 Comic Burst, 24 Dream Echo, 25 Perspective Fold,
-      26 Liquid Bloom — ported from the uploaded Typography Motion Studio III HTML).
-    - **14 interactive Reel scenes** (Kinetic Typography, Duotone, Neon, Glitch Art and
-      Vox Magazine — adapted from the user-supplied Reel Editor v4 HTML).
-    - Both galleries render with the same `drawScene()` engine used by MP4 export.
-  - **Editor** — a live canvas preview plus mode-specific controls:
-    - **Motion templates** retain the dynamic text-layers accordion (text ≤12 chars,
-      30-colour palette, 9 positions, 9 text animations, size slider 3–18 with a % readout),
-      the `+`/× layer controls, photo entry/motion, up to 2 photos and animated backgrounds.
-    - **Reel scenes** use click-to-select controls for Background, Eyebrow, Headline, Sub
-      text, Graphic and any added text layers. Clicking the canvas or an object chip swaps
-      the inspector to the matching fields; text, font, colour, size, animation, transition,
-      speed, alignment and X/Y position are editable. Graphic controls include visibility,
-      sticker shape, colour, size, animation and position; background controls include mood
-      or uploaded photo, scene style, animated effect, speed and transition. Elements can
-      be dragged; text can be added, and deleted elements can be restored.
-    - **Photos** in the motion editor remain limited to **2 images** (`files.slice(0,2)`,
-      extras silently ignored); Reel scenes may use those uploads as their background.
-    - Format stays portrait 9:16 (1080 × 1920) or landscape 16:9 (1920 × 1080); length is
-      **1–25 s** (`TPL_MAX_DURATION = 25`, default 6, clamped).
-- Export renders the SAME canvas engine as the preview — WebCodecs `VideoEncoder`
-  `avc1.4d002a`, `TPL_FPS = 30`, `TPL_VIDEO_BITRATE = 6 000 000`, muxed with `mp4-muxer`,
-  no FFmpeg and **no screen capture**. The MP4 downloads to disk automatically (plus a
-  `Download MP4` link for a re-download).
-  - Missing `VideoEncoder` or missing `Mp4Muxer` (CDN failed) → `alert` + abort.
-- The exported MP4 can be appended to the target accordion's gallery as a normal MP4 asset, so it
-  plays inside the final render like an uploaded clip and obeys the 5-clip cap.
-- The modal is built once and reused: closing hides it, so photos/last export survive; the
-  accordion link retargets the same modal at another Video N. Per-template and per-scene editing
-  state is remembered for the life of the tab.
+  - **Gallery — exactly two tabs**, with **Interactive scenes selected every time the modal opens**:
+    - **Interactive scenes · 15**: the 14 Reel Editor designs (Kinetic Typography, Duotone,
+      Neon, Glitch Art and Vox Magazine) plus scene 15, **3D Ring Carousel**.
+    - **Shape animations · 13**: original MotionGenie objects 47–54 and 56–60. Object 55,
+      Confetti Burst Canvas, and every particle effect are deliberately excluded.
+    - The Motion tab and its cards are removed from the DOM when the Interactive module builds;
+      the detached preview list is cleared. Legacy drawing helpers in the composer are not a
+      user-facing template gallery.
+    - Both galleries preview through the same `drawScene()` path used by MP4 export.
+  - **Reel scene editor** — element tags are in the left preview column immediately below the
+    canvas. Clicking a tag or canvas object selects Background, Eyebrow, Headline, Sub text,
+    Graphic or an added element and swaps the inspector to its controls. Text, font, colour,
+    size, animation, transition, speed, alignment and X/Y position are editable; selected objects
+    can be dragged and deleted elements can be restored. **＋ Text** becomes **＋ Graphic** for a
+    selected graphic and clones its visual settings into a new tagged element. Compact colour
+    boxes contain 12 solid swatches, a custom colour and one row of four gradients (Sunset,
+    Ocean, Lime, Violet); gradient tokens become real canvas gradients in preview and export.
+  - **3D Ring Carousel editor** — one carousel tag, visibility, rotation speed (0–3×), radius
+    (55–145%), card size (50–150%), 3D tilt (-30°–30°), X/Y and reset. The ring has eight cards,
+    a default 380-unit radius, 240×344 base cards, 1200-unit perspective and -6° tilt; rotation
+    is time-based (21°/second at 1×) and cards are depth-sorted before drawing.
+    - Only the ring from the uploaded `editorial_magazine_experience.html` is ported. Its 3D
+      flip book, Web Audio, ambient particles, sound controls, external UI libraries/fonts and
+      magazine page chrome are outside this scene.
+    - The eight editorial URLs load with `crossOrigin="anonymous"`; loading settles on load,
+      error or an 8-second fallback timeout. Failed/unloaded images use deterministic illustrated
+      fallbacks, so a remote failure never rejects or indefinitely stalls export. CORS-enabled
+      images keep the export canvas origin-clean.
+  - **Shape animation editor** — object, main/accent/background colour, size (12–70% of the
+    shorter canvas side), speed (0.25–2.5×), X/Y and reset. Every object is deterministic canvas
+    geometry, not a DOM/CSS-only animation or particle system.
+  - Format stays portrait 9:16 (1080×1920) or landscape 16:9 (1920×1080); length is **1–25 s**
+    (`TPL_MAX_DURATION = 25`, default 6, clamped).
+- Both footer actions render the SAME canvas engine as the preview — WebCodecs `VideoEncoder`
+  `avc1.4d002a`, `TPL_FPS = 30`, `TPL_VIDEO_BITRATE = 6 000 000`, muxed with `mp4-muxer`, no
+  FFmpeg and **no screen capture**. **Download MP4** is the only download action; there is no
+  persistent re-download link. Missing `VideoEncoder` or `Mp4Muxer` alerts and aborts.
+- **Add to Video N** calls the same renderer with `{download:false}`, skips the anchor click,
+  probes and appends the new MP4 directly to the target accordion as a normal asset. It needs no
+  earlier manual export, never downloads and obeys the 5-clip cap.
+- The modal is built once and reused: closing hides it, so per-scene/per-object state survives;
+  the accordion link retargets it at another Video N. The clip is silent; add audio in the
+  accordion's normal audio control.
+
+---
 
 ---
 
@@ -734,16 +747,15 @@
 - **Non-atomic uniqueness:** the duplicate-username/email checks are read-then-write, so two
   simultaneous signups can both succeed with the same username or email (see RULE 2). The old
   7-user cap that this entry used to describe no longer exists.
-- **Client-only gates:** both the account overlay and the settings password are cosmetic from a
-  security standpoint; apart from `/image/gen` (metered) and the password-gated
-  `/api/config/users` + `/api/config/ipcredits`, no data route checks a credential (see RULE 2,
-  RULE 3).
+- **Entry UI is not the security boundary:** the account overlay and settings unlock are client
+  UI, but their APIs enforce sessions, credits and the settings password server-side. The current
+  settings unlock calls `/api/config/verify`; it is not the removed client-only `===` gate.
 - **Duplicated SEO copy:** the client's SEO hint text and chip tooltips (RULE 18) are hand-copied
   from the Worker's `SEO_*` constants (RULE 7): changing a constant without changing the copy
   leaves the UI stating the old rule, and nothing fails loudly.
-- **Duplicated source of truth:** the settings password and the model ids
-  (`MODEL`, `SCRIPT_MODEL`, `VOICEOVER_MODEL`) are hard-coded; the password exists in both the
-  Worker and the client script.
+- **Hard-coded operator configuration:** the settings password and model ids
+  (`MODEL`, `SCRIPT_MODEL`, `VOICEOVER_MODEL`) live in Worker source. The password has one active
+  constant; the older client-side duplicate exists only in the unimported `.original` snapshot.
 - **Unbounded-job detail:** a `busy` response is treated as success-with-fallback rather than an
   error by design — do not "fix" it to `429`, the client depends on `200 + status:"busy"`.
 
@@ -956,6 +968,18 @@
 - Editor values have labels beneath them. Blur/opacity sliders show live numeric values.
   The sticky Add/Close footer centers its buttons on both axes.
 
+### UI refinements (2026-10-23)
+
+- Every `button` inside `#video-accordions .video-accordion` now has a **48px minimum width and
+  height**, **12px 24px padding**, **1rem** type and **1.25** line-height in all seven themes.
+  This matches the Upload Image button's proportions and supersedes the older compact-control
+  rules; wide disclosure buttons remain full width.
+- `html[data-theme="neo"] #video-accordions .video-accordion button` sets `border-radius: 0`,
+  including API, disclosure, card-remove and caption-remove controls. Other themes keep their
+  existing radius tokens.
+- The composer gains the 13-object, non-particle Shape animations gallery described in RULE 13;
+  it adds no new export path, server route, persisted state or particle engine.
+
 ---
 
 ## RULE 20 — Daily credits are per-account, plan-based and reset in Asia/Taipei
@@ -997,11 +1021,12 @@
     `user:<name>.usertype` and optionally deletes `credits:<name>`.
   - Both are password-gated (`403`) and KV-gated (`503`); the plan change applies on the account's
     next request because every credit read re-reads the user record.
-  - Restriction: there is no payment provider here — "paid" means an operator set
-    `usertype: "paid_user"`.
-  - Restriction: the settings password is a shared constant bundled with the settings page script,
-    so a public deployment cannot treat this route as a secure billing console. It is an operator
-    tool for a trusted instance; real billing needs per-user roles and a payment provider.
+  - There is no automated payment provider. "Paid" means an operator either set
+    `usertype: "paid_user"` directly or approved an uploaded receipt with a verified transaction
+    number (RULE 23). Both paths reread the same user record on the next request.
+  - Restriction: the settings password is one shared constant hard-coded in Worker source, not a
+    per-admin credential. A public deployment should move it to a secret and add per-user roles;
+    real billing still needs a payment provider.
   - Restriction: KV is eventually consistent, so concurrent generations can overshoot by the
     in-flight count; the overshoot is bounded and self-corrects at the next daily reset.
 - Client:
@@ -1139,6 +1164,78 @@ addresses and gives visitors without an account a small, IP-metered allowance.
   `#studio-app:not([hidden]) ~ .credit-pill { top: 78px }` (66px under 560px); on the landing page
   it keeps its own corner.
 - Record: `bug-fix-session-240.md`.
+
+---
+
+## RULE 23 — CMS, manual payments and the account dashboard share the shell but not the auth boundary
+
+- **Modules.** `src/modules/cms.ts` owns CMS validation/KV/public rendering;
+  `src/modules/payments.ts` owns gateway/receipt/approval routes; `src/modules/user-pages.ts`
+  owns `/account` and `/upgrade`; `src/client/config-page-js.ts` owns their settings editors;
+  `src/client/payment-upload-js.ts` owns the signed-in uploader. `src/modules/theme-shell.ts`
+  supplies shared navigation and fullscreen image behavior.
+- **Account dashboard (`GET /account`).**
+  - Signed out → inline Sign In / Create Account; successful authentication reloads the page.
+  - Signed in → escaped username/email, account type, live `GET /api/credits`, plan pill and up to
+    six recent receipts. Free users get **Open Video Studio → `/studio`** and **Upgrade →
+    `/upgrade`**; paid users get **Open Video Studio → `/paid`** and **View Upgrade & Payment
+    Details → `/upgrade`**. The free `/studio` destination is intentional: `/free` is the guest
+    entry, not the signed-in free-account dashboard destination.
+  - `creditSessionUser()` rereads `user:<name>`; an approval or direct operator plan change thus
+    affects the next credits/paid-route request without replacing the session cookie.
+- **CMS pages.**
+  - KV key `config:cms_pages` holds one JSON array, maximum **8** records. `GET /api/cms/pages`
+    and `GET /<slug>` are public reads: every saved page is published; there is no draft state.
+    List/create/update/delete under `/api/config/cms*` require the settings password and KV.
+  - A slug is flat and lowercase-normalized: `^[a-z0-9][a-z0-9-_]{0,63}$`. Root, nested paths,
+    query/fragment/space/backslash forms and reserved app/API slugs are rejected. A duplicate
+    slug returns `409`. A new ninth page returns `400`; updating an existing id at the cap works.
+  - A page has title (≤120 chars, slug-derived fallback), `pageLink` (top menu or footer),
+    `createdAt`/`updatedAt`, and ≤100 blocks. Paragraphs are ≤20,000 chars; empty blocks drop.
+    Images are HTTP(S) URLs ≤1,000 chars only—no file upload, data URI or `javascript:` URL.
+    Public text/title/navigation values are HTML-escaped; consecutive images render two per row.
+  - The settings Add Page editor supports paragraph, single-image and two-image-row buttons,
+    reorder/remove, reset/new, saved-page edit/delete pills and an escaped live preview. Create
+    and update share `POST /api/config/cms`; optional `id` selects update. Delete by id or slug
+    releases a slot; if both are supplied, id takes precedence and only one record is removed. Public `/<slug>` matching occurs after built-in routes, otherwise `404`.
+  - Top/footer placement injects links into the shared shell/studio navigation. Without KV the
+    public list is empty/public pages are `404`; password-gated CMS routes return `503`.
+- **Manual local payments.**
+  - There is **no automated charge, provider session or webhook**. `GET
+    /api/config/payment-gateway` is public; its password-gated `POST` edits the gateway name,
+    details and upload instructions stored at `config:payment_gateway`. `/upgrade` always shows
+    those instructions, but mounts the uploader only for a session.
+  - `POST /api/payments/upload` requires session + KV and accepts multipart or JSON/data-URL.
+    PNG/JPEG/WEBP/GIF are detected from actual bytes, not only the filename/MIME declaration;
+    maximum **5 MiB**. The client also validates type/size and posts an optional ≤240-char note.
+    Success stores base64 bytes at `payment_img:<id>` and pending metadata at `payment:<id>`.
+  - `GET /api/payments/my` returns only the session user's records. `GET
+    /api/payments/image/:id` requires the owner; anonymous → `401`, another owner → `403`.
+    Admin list/image routes use the settings password; admin image URLs carry it as a query
+    parameter, so deployments must treat those URLs/logs as sensitive.
+  - Admin review is paginated (default 5, maximum 24/page) with `all`/`pending`/`approved`
+    filters. The implementation lists up to 500 metadata keys; status-filtered reads load that
+    bounded set before paginating. User history scans a bounded recent set rather than providing
+    a complete export. These are deliberate scale restrictions, not unlimited payment ledgers.
+  - `POST /api/config/payments/approve` requires a nonempty transaction number (≤120 chars).
+    `payment_txn:<lowercase-number-without-whitespace>` prevents the same number approving a
+    different receipt (`409`). Success marks the receipt approved, writes that index and sets
+    `user:<name>.usertype="paid_user"`; the next request receives 1,200 images/day and `/paid`.
+  - Restrictions: there is no rejection/refund workflow, KV updates are not transactional, and
+    concurrent approvals/generation remain subject to KV eventual consistency. The settings
+    password is the same shared operator constant documented in RULE 20, not per-admin auth.
+
+### Verification (2026-10-24)
+
+- Local KV-backed route audit: **47 checks** for CMS create/edit/delete/public navigation,
+  receipt ownership/upload/approval, immediate paid credits and free/paid dashboard actions;
+  **17 more checks** for the CMS page/block caps and grouped-image/mixed-delete regressions.
+- Real client markup/script harnesses: **22 CMS editor checks** and **21 payment uploader checks**.
+  The template harness passed **133 checks / 31,106 canvas operations**, including ring fallback,
+  controls and both MP4 destinations for ring and Shape scenes.
+- Generated HTML/inline JS and CSS parsed; `/`, `/free`, `/account`, `/upgrade`, `/api/cms/pages`
+  and the current-day settings route returned `200`; Wrangler deploy dry-run passed. TypeScript
+  still has only the 36 pre-existing `src/index.ts` diagnostics, none in the changed modules.
 
 ---
 

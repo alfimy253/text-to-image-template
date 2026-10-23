@@ -75,13 +75,25 @@ export const REEL_SCENE_EDITOR_JS = `
 			["Heart", "heart", "♥"], ["Arrow", "arrow", "➜"],
 			["Gear", "gear", "⚙"], ["Synth grid", "synth", "▤"], ["Letters", "letters", "ABC"]
 		];
+		const REEL_COLOR_SWATCHES = [
+			["White", "#ffffff"], ["Ink", "#111111"], ["Cream", "#f6f0df"],
+			["Red", "#ff3b30"], ["Orange", "#ff7a00"], ["Yellow", "#ffe600"],
+			["Lime", "#c8ff00"], ["Green", "#22c55e"], ["Cyan", "#00e5ff"],
+			["Blue", "#2563eb"], ["Violet", "#7c3aed"], ["Pink", "#ff4fa3"]
+		];
+		const REEL_COLOR_GRADIENTS = [
+			{ name: "Sunset", value: "gradient:sunset", colors: ["#ff6b35", "#ec4899"] },
+			{ name: "Ocean", value: "gradient:ocean", colors: ["#22d3ee", "#2563eb"] },
+			{ name: "Lime", value: "gradient:lime", colors: ["#d8ff00", "#00a86b"] },
+			{ name: "Violet", value: "gradient:violet", colors: ["#818cf8", "#a855f7"] }
+		];
 		const REEL_STYLE_OPTIONS = [
 			["Kinetic typography", "kinetic"], ["Duotone", "duotone"],
 			["Neon", "neon"], ["Glitch art", "glitch"], ["Vox magazine", "vox"]
 		];
 
 		let reelSceneMode = false;
-		let reelGalleryCategory = "motion";
+		let reelGalleryCategory = "scenes";
 		let reelSceneIndex = 0;
 		let reelSelectedElement = "headline";
 		let reelPreviousOrientation = null;
@@ -366,6 +378,34 @@ export const REEL_SCENE_EDITOR_JS = `
 			context.fillText(text, x, y, maxWidth);
 		}
 
+		function reelGradientDefinition(value) {
+			return REEL_COLOR_GRADIENTS.find(function (gradient) {
+				return gradient.value === value;
+			}) || null;
+		}
+
+		function reelSolidColor(value, fallback) {
+			const gradient = reelGradientDefinition(value);
+			return gradient ? gradient.colors[0] : (value || fallback);
+		}
+
+		function reelColorCss(value) {
+			const gradient = reelGradientDefinition(value);
+			return gradient ? "linear-gradient(135deg," + gradient.colors.join(",") + ")" : value;
+		}
+
+		function reelPaint(context, value, width, height, fallback) {
+			const definition = reelGradientDefinition(value);
+			if (!definition) return value || fallback;
+			const halfWidth = Math.max(1, Number(width) || 1) / 2;
+			const halfHeight = Math.max(1, Number(height) || 1) / 2;
+			const gradient = context.createLinearGradient(-halfWidth, -halfHeight, halfWidth, halfHeight);
+			definition.colors.forEach(function (color, index) {
+				gradient.addColorStop(index / Math.max(1, definition.colors.length - 1), color);
+			});
+			return gradient;
+		}
+
 		function reelDrawText(context, width, height, scale, time, state, key, element, hitAreas) {
 			if (!element.visible || element.deleted) return;
 			const fontSize = Math.max(10, Number(element.size) || 24) * scale;
@@ -405,7 +445,9 @@ export const REEL_SCENE_EDITOR_JS = `
 			if (element.anim === "neon") {
 				const phase = (motionTime % 2.5) / 2.5;
 				if ((phase > 0.18 && phase < 0.22) || (phase > 0.53 && phase < 0.57)) alpha *= 0.48;
-				context.shadowColor = "#ff2d95";
+				context.shadowColor = reelGradientDefinition(element.color)
+					? reelSolidColor(element.color, "#ff2d95")
+					: "#ff2d95";
 				context.shadowBlur = 24 * scale;
 			}
 			context.translate(x + transition.dx, y + transition.dy);
@@ -413,7 +455,7 @@ export const REEL_SCENE_EDITOR_JS = `
 			context.scale(sx, sy);
 			context.globalAlpha *= alpha;
 			context.textBaseline = "middle";
-			context.fillStyle = element.color || "#ffffff";
+			context.fillStyle = reelPaint(context, element.color, maxLine, lineHeight, "#ffffff");
 			if (element.anim === "duotone") {
 				const shift = (motionTime % 3) / 3;
 				const gradient = context.createLinearGradient(-maxLine / 2 - shift * width * 0.25, 0, maxLine / 2 + width * 0.25, 0);
@@ -504,22 +546,23 @@ export const REEL_SCENE_EDITOR_JS = `
 			context.rotate(rotation);
 			context.scale(sx, sy);
 			context.globalAlpha *= transition.alpha;
-			context.fillStyle = element.color || "#7aac2b";
-			context.strokeStyle = element.color || "#7aac2b";
+			const graphicPaint = reelPaint(context, element.color, size, size, "#7aac2b");
+			context.fillStyle = graphicPaint;
+			context.strokeStyle = graphicPaint;
 			context.lineWidth = Math.max(2, size * 0.08);
 			if (element.anim === "glow" || state.style === "neon") {
-				context.shadowColor = element.color || "#ff2d95";
+				context.shadowColor = reelSolidColor(element.color, "#ff2d95");
 				context.shadowBlur = (12 + (Math.sin(motionTime * 4) + 1) * 8) * scale;
 			}
 			if (element.kind === "letters") {
 				context.font = "900 " + Math.round(size * 0.58) + "px Arial, sans-serif";
 				context.textAlign = "center";
 				context.textBaseline = "middle";
-				context.fillStyle = element.color || "#7aac2b";
+				context.fillStyle = graphicPaint;
 				context.fillText("A B C", 0, 0, size * 2.4);
 			}
 			else if (element.kind === "synth") {
-				context.strokeStyle = element.color || "#ff7a5c";
+				context.strokeStyle = graphicPaint;
 				context.lineWidth = Math.max(1, 1.5 * scale);
 				for (let i = 0; i < 6; i++) {
 					const yy = size * (0.15 + i * 0.15);
@@ -652,21 +695,14 @@ export const REEL_SCENE_EDITOR_JS = `
 			}
 		};
 
-		function reelSetGalleryCategory(category) {
-			reelGalleryCategory = category === "scenes" ? "scenes" : "motion";
-			const motionGrid = document.getElementById("tm-grid");
+		function reelSetGalleryCategory() {
+			reelGalleryCategory = "scenes";
 			const sceneGrid = document.getElementById("tm-scene-grid");
-			if (motionGrid) motionGrid.style.display = reelGalleryCategory === "motion" ? "" : "none";
-			if (sceneGrid) sceneGrid.style.display = reelGalleryCategory === "scenes" ? "" : "none";
-			const motionTab = document.getElementById("tm-tab-motion");
+			if (sceneGrid) sceneGrid.style.display = "";
 			const sceneTab = document.getElementById("tm-tab-scenes");
-			if (motionTab) {
-				motionTab.classList.toggle("active", reelGalleryCategory === "motion");
-				motionTab.setAttribute("aria-pressed", reelGalleryCategory === "motion" ? "true" : "false");
-			}
 			if (sceneTab) {
-				sceneTab.classList.toggle("active", reelGalleryCategory === "scenes");
-				sceneTab.setAttribute("aria-pressed", reelGalleryCategory === "scenes" ? "true" : "false");
+				sceneTab.classList.add("active");
+				sceneTab.setAttribute("aria-pressed", "true");
 			}
 		}
 
@@ -745,6 +781,106 @@ export const REEL_SCENE_EDITOR_JS = `
 			input.value = /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#ffffff";
 			input.addEventListener("input", function () { onChange(input.value); });
 			field.appendChild(input);
+		}
+
+		function reelAddSceneColor(parent, label, value, onChange) {
+			const field = document.createElement("div");
+			field.className = "tm-scene-field tm-scene-color-field";
+			const caption = document.createElement("span");
+			caption.className = "tm-scene-field-label";
+			caption.textContent = label;
+			field.appendChild(caption);
+			parent.appendChild(field);
+			const current = reelButton("", "tm-scene-color-current", function () {});
+			current.style.background = reelColorCss(value);
+			current.setAttribute("aria-label", "Choose " + label.toLowerCase());
+			current.setAttribute("aria-expanded", "false");
+			current.title = "Choose " + label.toLowerCase();
+			const picker = document.createElement("span");
+			picker.className = "tm-scene-color-popover";
+			picker.style.display = "none";
+			picker.setAttribute("role", "group");
+			picker.setAttribute("aria-label", label + " palette");
+
+			const closePicker = function () {
+				picker.style.display = "none";
+				current.setAttribute("aria-expanded", "false");
+			};
+			const choose = function (nextValue) {
+				current.style.background = reelColorCss(nextValue);
+				onChange(nextValue);
+				closePicker();
+			};
+			current.addEventListener("click", function (event) {
+				event.preventDefault();
+				event.stopPropagation();
+				const opening = picker.style.display === "none";
+				document.querySelectorAll("#tpl-modal .tm-scene-color-popover").forEach(function (other) {
+					other.style.display = "none";
+				});
+				document.querySelectorAll("#tpl-modal .tm-scene-color-current").forEach(function (other) {
+					other.setAttribute("aria-expanded", "false");
+				});
+				if (opening) {
+					picker.style.display = "block";
+					current.setAttribute("aria-expanded", "true");
+				}
+			});
+
+			const solidTitle = document.createElement("span");
+			solidTitle.className = "tm-scene-color-title";
+			solidTitle.textContent = "Colours";
+			picker.appendChild(solidTitle);
+			const solids = document.createElement("span");
+			solids.className = "tm-scene-color-swatches";
+			REEL_COLOR_SWATCHES.forEach(function (swatch) {
+				const button = reelButton("", "tm-scene-color-swatch", function (event) {
+					event.preventDefault();
+					event.stopPropagation();
+					choose(swatch[1]);
+				});
+				button.style.background = swatch[1];
+				button.title = swatch[0];
+				button.setAttribute("aria-label", swatch[0]);
+				solids.appendChild(button);
+			});
+			const custom = document.createElement("input");
+			custom.type = "color";
+			custom.className = "tm-scene-color-custom";
+			const solidValue = reelSolidColor(value, "#ffffff");
+			custom.value = /^#[0-9a-f]{6}$/i.test(solidValue || "") ? solidValue : "#ffffff";
+			custom.title = "Custom colour";
+			custom.setAttribute("aria-label", "Custom colour");
+			custom.addEventListener("input", function () {
+				current.style.background = custom.value;
+				onChange(custom.value);
+			});
+			custom.addEventListener("change", closePicker);
+			custom.addEventListener("click", function (event) { event.stopPropagation(); });
+			solids.appendChild(custom);
+			picker.appendChild(solids);
+
+			const gradientTitle = document.createElement("span");
+			gradientTitle.className = "tm-scene-color-title";
+			gradientTitle.textContent = "Gradients";
+			picker.appendChild(gradientTitle);
+			const gradients = document.createElement("span");
+			gradients.className = "tm-scene-gradient-row";
+			REEL_COLOR_GRADIENTS.forEach(function (gradient) {
+				const button = reelButton("", "tm-scene-gradient-swatch", function (event) {
+					event.preventDefault();
+					event.stopPropagation();
+					choose(gradient.value);
+				});
+				button.style.background = reelColorCss(gradient.value);
+				button.title = gradient.name + " gradient";
+				button.setAttribute("aria-label", gradient.name + " gradient");
+				gradients.appendChild(button);
+			});
+			picker.appendChild(gradients);
+			field.appendChild(current);
+			field.appendChild(picker);
+			return field;
 		}
 
 		function reelAddSelect(parent, label, options, value, onChange) {
@@ -828,6 +964,14 @@ export const REEL_SCENE_EDITOR_JS = `
 			const inspector = document.getElementById("tm-scene-inspector");
 			const badge = document.getElementById("tm-scene-selection-badge");
 			if (!objectsHost || !inspector) return;
+			const addButton = document.getElementById("tm-scene-add-text");
+			const selectedForAdd = state.elements[reelSelectedElement];
+			const graphicSelected = !!(selectedForAdd && selectedForAdd.type === "graphic");
+			if (addButton) {
+				addButton.textContent = graphicSelected ? "＋ Graphic" : "＋ Text";
+				addButton.title = graphicSelected ? "Add a graphic element" : "Add a text element";
+				addButton.setAttribute("aria-label", graphicSelected ? "Add a graphic element" : "Add a text element");
+			}
 			objectsHost.innerHTML = "";
 			const bgButton = reelButton("Background", "tm-scene-object", function () { reelSelectSceneElement("bg"); });
 			bgButton.classList.toggle("selected", reelSelectedElement === "bg");
@@ -928,7 +1072,7 @@ export const REEL_SCENE_EDITOR_JS = `
 				});
 				inspector.appendChild(stickers);
 				reelAddRange(inspector, "Size", element.size, 20, 160, 1, function (value) { element.size = value; reelRedrawScene(); }, " px");
-				reelAddColor(inspector, "Color", element.color, function (value) { element.color = value; reelRedrawScene(); });
+				reelAddSceneColor(inspector, "Color", element.color, function (value) { element.color = value; reelRedrawScene(); });
 				reelAddSelect(inspector, "Animation", REEL_SHAPE_ANIMS, element.anim, function (value) { element.anim = value; reelRedrawScene(); });
 			}
 			else {
@@ -939,7 +1083,7 @@ export const REEL_SCENE_EDITOR_JS = `
 					reelRedrawScene();
 				});
 				reelAddRange(inspector, "Font size", element.size, 10, 110, 1, function (value) { element.size = value; reelRedrawScene(); }, " px");
-				reelAddColor(inspector, "Color", element.color, function (value) { element.color = value; reelRedrawScene(); });
+				reelAddSceneColor(inspector, "Color", element.color, function (value) { element.color = value; reelRedrawScene(); });
 				reelAddSelect(inspector, "Font", [["Archivo / sans", "sans"], ["Georgia / serif", "serif"], ["JetBrains Mono", "mono"]], element.font, function (value) { element.font = value; reelRedrawScene(); });
 				reelAddSelect(inspector, "Text align", [["Left", "left"], ["Center", "center"], ["Right", "right"]], element.align, function (value) { element.align = value; reelRedrawScene(); });
 				reelAddSelect(inspector, "Animation", REEL_TEXT_ANIMS, element.anim, function (value) { element.anim = value; reelRedrawScene(); });
@@ -1007,6 +1151,35 @@ export const REEL_SCENE_EDITOR_JS = `
 			reelSelectSceneElement(key);
 		}
 
+		function reelAddGraphicElement() {
+			const state = reelSelectedState();
+			let count = 2;
+			while (state.elements["graphic" + count]) count++;
+			const key = "graphic" + count;
+			const selected = state.elements[reelSelectedElement];
+			const source = selected && selected.type === "graphic" ? selected : state.elements.graphic;
+			state.elements[key] = {
+				type: "graphic", label: "Graphic " + count,
+				kind: source ? source.kind : "circle",
+				x: reelClamp((source ? Number(source.x) : 50) + 8, 5, 95),
+				y: reelClamp((source ? Number(source.y) : 50) + 8, 5, 95),
+				size: source ? Number(source.size) : 64,
+				color: source ? source.color : "#7aac2b",
+				anim: source ? source.anim : "float",
+				transition: source ? source.transition : "zoom",
+				transitionSpeed: source ? Number(source.transitionSpeed) : 1,
+				speed: source ? Number(source.speed) : 1,
+				visible: true, deleted: false
+			};
+			reelSelectSceneElement(key);
+		}
+
+		function reelAddSceneElement() {
+			const selected = reelSelectedState().elements[reelSelectedElement];
+			if (selected && selected.type === "graphic") reelAddGraphicElement();
+			else reelAddTextElement();
+		}
+
 		function reelBuildSceneList() {
 			const host = document.getElementById("tm-scene-list");
 			if (!host) return;
@@ -1023,10 +1196,12 @@ export const REEL_SCENE_EDITOR_JS = `
 		function reelSetEditorControls(sceneMode) {
 			const motion = document.getElementById("tm-motion-controls");
 			const scene = document.getElementById("tm-scene-controls");
+			const objects = document.getElementById("tm-scene-objects");
 			const badge = document.getElementById("tm-scene-selection-badge");
 			const stage = document.getElementById("tm-stage");
 			if (motion) motion.style.display = sceneMode ? "none" : "";
 			if (scene) scene.style.display = sceneMode ? "" : "none";
+			if (objects) objects.style.display = sceneMode ? "flex" : "none";
 			if (badge) badge.style.display = sceneMode ? "" : "none";
 			if (stage) stage.classList.toggle("tm-reel-stage", !!sceneMode);
 			const description = document.getElementById("tpl-sub");
@@ -1177,14 +1352,15 @@ export const REEL_SCENE_EDITOR_JS = `
 
 			const tabs = document.createElement("div");
 			tabs.className = "tm-gallery-tabs";
-			tabs.innerHTML = '<button type="button" id="tm-tab-motion" class="tm-gallery-tab active" aria-pressed="true">Motion templates</button><button type="button" id="tm-tab-scenes" class="tm-gallery-tab" aria-pressed="false">Interactive scenes · 14</button>';
+			tabs.innerHTML = '<button type="button" id="tm-tab-scenes" class="tm-gallery-tab active" aria-pressed="true">Interactive scenes · ' + REEL_SCENES.length + '</button>';
 			gallery.insertBefore(tabs, motionGrid);
+			motionGrid.remove();
+			galleryCanvases = [];
 			const sceneGrid = document.createElement("div");
 			sceneGrid.id = "tm-scene-grid";
 			sceneGrid.className = "tm-gallery-grid tm-scene-gallery-grid";
 			sceneGrid.style.display = "none";
 			gallery.appendChild(sceneGrid);
-			document.getElementById("tm-tab-motion").addEventListener("click", function () { reelSetGalleryCategory("motion"); });
 			document.getElementById("tm-tab-scenes").addEventListener("click", function () { reelSetGalleryCategory("scenes"); });
 
 			const motionControls = document.createElement("div");
@@ -1197,9 +1373,16 @@ export const REEL_SCENE_EDITOR_JS = `
 			sceneControls.id = "tm-scene-controls";
 			sceneControls.className = "tm-scene-controls";
 			sceneControls.style.display = "none";
-			sceneControls.innerHTML = '<div class="tm-scene-panel"><div class="tm-scene-panel-head"><div><div class="tm-scene-kicker">REEL EDITOR</div><div class="tm-sec-title">Scene elements</div></div><button type="button" id="tm-scene-add-text" class="tm-scene-add">＋ Text</button></div><p class="tm-scene-hint">Click an object in the preview to load its controls. Drag to move it.</p><div id="tm-scene-objects" class="tm-scene-objects"></div><div id="tm-scene-inspector" class="tm-scene-inspector"></div></div><details class="tm-scene-switcher"><summary>Scenes · 14 editable designs</summary><div id="tm-scene-list" class="tm-scene-list"></div></details>';
+			sceneControls.innerHTML = '<div class="tm-scene-panel"><div class="tm-scene-panel-head"><div><div class="tm-scene-kicker">REEL EDITOR</div><div class="tm-sec-title">Scene elements</div></div><button type="button" id="tm-scene-add-text" class="tm-scene-add">＋ Text</button></div><p class="tm-scene-hint">Click an object in the preview to load its controls. Drag to move it.</p><div id="tm-scene-inspector" class="tm-scene-inspector"></div></div><details class="tm-scene-switcher"><summary>Scenes · ' + REEL_SCENES.length + ' editable designs</summary><div id="tm-scene-list" class="tm-scene-list"></div></details>';
 			side.appendChild(sceneControls);
-			document.getElementById("tm-scene-add-text").addEventListener("click", reelAddTextElement);
+			document.getElementById("tm-scene-add-text").addEventListener("click", reelAddSceneElement);
+
+			const objects = document.createElement("div");
+			objects.id = "tm-scene-objects";
+			objects.className = "tm-scene-objects";
+			objects.style.display = "none";
+			objects.setAttribute("aria-label", "Scene elements");
+			if (stage.parentNode) stage.parentNode.insertBefore(objects, stage.nextSibling);
 
 			const badge = document.createElement("div");
 			badge.id = "tm-scene-selection-badge";
@@ -1213,18 +1396,18 @@ export const REEL_SCENE_EDITOR_JS = `
 		};
 
 		const reelBaseExportMP4 = exportMP4;
-		exportMP4 = async function () {
+		exportMP4 = async function (options) {
 			if (reelSceneMode) {
 				await REEL_SCENE_IMAGES_READY;
 				if (document.fonts && document.fonts.ready) await document.fonts.ready;
 			}
-			return reelBaseExportMP4();
+			return reelBaseExportMP4(options);
 		};
 
 		const reelBaseOpenTemplateModal = window.openTemplateModal;
 		window.openTemplateModal = function (videoNumber) {
 			reelExitSceneMode();
-			reelGalleryCategory = "motion";
+			reelGalleryCategory = "scenes";
 			const result = reelBaseOpenTemplateModal(videoNumber);
 			reelSetGalleryCategory(reelGalleryCategory);
 			return result;

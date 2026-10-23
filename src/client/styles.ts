@@ -3052,19 +3052,19 @@ export const APP_CSS = `
 
 		/* =====================================================
 		 * BUTTON STANDARDIZATION (accordion)
-		 * All buttons inside a Video accordion share the
-		 * same SMALL size as the Fullscreen button
-		 * (.upload-btn.small: 6px 10px / 0.75rem).
+		 * Upload-style buttons share the larger Upload Image
+		 * proportions (12px 24px / 1rem). The final accordion
+		 * rule below extends the same tap target to every button.
 		 * ===================================================== */
 
 		.va-body .upload-btn,
 		.va-body .upload-btn.small {
 
 			padding:
-				6px 10px;
+				12px 24px;
 
 			font-size:
-				0.75rem;
+				1rem;
 
 			font-weight:
 				bold;
@@ -3205,9 +3205,9 @@ export const APP_CSS = `
 		}
 
 		/*
-		 * Caption row x button:
-		 * same small look as the
-		 * other buttons.
+		 * Caption row x button: the final accordion rule
+		 * below gives it the same large tap target as
+		 * the other buttons.
 		 */
 		.va-body .caption-remove {
 
@@ -6552,13 +6552,11 @@ export const APP_CSS = `
 
 
 		/* =====================================================
-		 * TEMPLATE COMPOSER — motion template gallery + editor
-		 * (tm-* classes). 4-column live preview gallery of the
-		 * 8 motion-typography templates, then an editor with
-		 * dynamic text layers, motion / transition controls,
-		 * photos and animated backgrounds. Matches the
-		 * #tpl-modal look and inherits the three studio themes
-		 * through the --t-* tokens below.
+		 * TEMPLATE COMPOSER — Interactive + Shape galleries/editor
+		 * (tm-* classes). Two live canvas-preview galleries feed
+		 * mode-specific inspectors for Reel scenes, the 3D Ring
+		 * Carousel and non-particle Shape objects. #tpl-modal
+		 * inherits the active studio theme through --t-* tokens.
 		 * ===================================================== */
 
 		#tpl-modal .tm-view {
@@ -8332,6 +8330,100 @@ export const APP_CSS = `
 			cursor: pointer;
 		}
 
+		#tpl-modal .tm-scene-color-field {
+			position: relative;
+		}
+
+		#tpl-modal .tm-scene-color-current {
+			width: 32px;
+			height: 32px;
+			min-width: 32px;
+			padding: 0;
+			border: 1px solid rgba(255,255,255,.28);
+			border-radius: 6px;
+			box-shadow: inset 0 0 0 2px rgba(0,0,0,.16);
+			cursor: pointer;
+		}
+
+		#tpl-modal .tm-scene-color-current:hover,
+		#tpl-modal .tm-scene-color-current[aria-expanded="true"] {
+			border-color: #c8f36f;
+			outline: 2px solid rgba(200,243,111,.18);
+			outline-offset: 2px;
+		}
+
+		#tpl-modal .tm-scene-color-popover {
+			position: absolute;
+			z-index: 40;
+			top: calc(100% + 7px);
+			left: 0;
+			width: 218px;
+			padding: 10px;
+			border: 1px solid rgba(255,255,255,.16);
+			border-radius: 9px;
+			background: #111117;
+			box-shadow: 0 16px 40px rgba(0,0,0,.48);
+			letter-spacing: normal;
+			text-transform: none;
+		}
+
+		#tpl-modal .tm-scene-color-title {
+			display: block;
+			margin: 0 0 7px;
+			color: #a8a8b3;
+			font: 700 9px 'JetBrains Mono', monospace;
+			letter-spacing: .09em;
+			text-transform: uppercase;
+		}
+
+		#tpl-modal .tm-scene-color-swatches {
+			display: grid;
+			grid-template-columns: repeat(7, 22px);
+			gap: 6px;
+			margin-bottom: 11px;
+		}
+
+		#tpl-modal .tm-scene-color-swatch,
+		#tpl-modal .tm-scene-field input[type="color"].tm-scene-color-custom {
+			width: 22px;
+			height: 22px;
+			min-width: 22px;
+			padding: 0;
+			border: 1px solid rgba(255,255,255,.22);
+			border-radius: 4px;
+			background-clip: padding-box;
+			cursor: pointer;
+		}
+
+		#tpl-modal .tm-scene-color-swatch:hover,
+		#tpl-modal .tm-scene-color-swatch:focus-visible,
+		#tpl-modal .tm-scene-gradient-swatch:hover,
+		#tpl-modal .tm-scene-gradient-swatch:focus-visible {
+			border-color: #c8f36f;
+			outline: 2px solid rgba(200,243,111,.28);
+			outline-offset: 1px;
+		}
+
+		#tpl-modal .tm-scene-gradient-row {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 6px;
+			width: 100%;
+		}
+
+		#tpl-modal .tm-scene-gradient-swatch {
+			width: 100%;
+			height: 24px;
+			padding: 0;
+			border: 1px solid rgba(255,255,255,.24);
+			border-radius: 4px;
+			cursor: pointer;
+		}
+
+		#tpl-modal .tm-previewcol > .tm-scene-objects {
+			margin: 12px 0 10px;
+		}
+
 		#tpl-modal .tm-scene-range-row {
 			display: flex;
 			align-items: center;
@@ -8503,6 +8595,51 @@ export const APP_CSS = `
 			#tpl-modal .tm-scene-inspector { grid-template-columns: 1fr 1fr; }
 			#tpl-modal .tm-scene-panel { padding: 10px; }
 			#tpl-modal .tm-scene-list { grid-template-columns: 1fr; }
+		}
+
+		/* Shape animations use the same live canvas gallery and inspector. */
+		#tpl-modal .tm-shape-stage {
+			position: relative;
+			border: 1px solid rgba(99,102,241,.6);
+		}
+
+		#tpl-modal .tm-shape-inspector .tm-scene-secondary {
+			align-self: end;
+			min-height: 36px;
+		}
+
+		/* =====================================================
+		 * VIDEO ACCORDION BUTTONS — every theme
+		 * Match the Upload Image button's larger proportions:
+		 * 12px 24px padding, 1rem type and a 48px tap target.
+		 * The ID scope intentionally wins over older small-button
+		 * rules and each theme's compact control overrides.
+		 * ===================================================== */
+		#video-accordions .video-accordion button {
+			box-sizing: border-box;
+			min-width: 48px;
+			min-height: 48px;
+			padding: 12px 24px;
+			font-size: 1rem;
+			line-height: 1.25;
+			font-weight: 700;
+			align-items: center;
+			justify-content: center;
+		}
+
+		/* Neo Brutalist uses truly square corners on every accordion
+		 * button, including icon, remove, API and disclosure buttons. */
+		html[data-theme="neo"] #video-accordions .video-accordion button {
+			border-radius: 0;
+		}
+
+		@media (max-width: 560px) {
+			#tpl-modal .tm-gallery-tabs {
+				flex-wrap: wrap;
+			}
+			#tpl-modal .tm-gallery-tab {
+				flex: 1 1 30%;
+			}
 		}
 
 `;

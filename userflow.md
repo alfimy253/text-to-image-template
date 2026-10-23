@@ -1,13 +1,16 @@
 # YouTube Vibe Studio — User Flow Documentation
 
 > Reconstructed from a full code read of the working tree on **2026-10-16**; §11 and the theme
-> sections were revised on **2026-10-23** for Bug Fix Session #240.
+> sections were revised on **2026-10-23** for Bug Fix Session #240. CMS, payments, the account
+> dashboard and the two-gallery/3D-ring composer were verified and revised on **2026-10-24**.
 >
 > Evidence base: `src/index.ts` (7,215 lines, all routes/APIs/KV logic), `src/page.ts`,
 > `src/prompts.ts`, `src/client/markup.ts` (897 lines), `src/client/styles.ts` (8,057 lines),
 > `src/client/app-js.ts` (15,308 lines, the whole studio UI + render engine),
-> `src/client/template-composer-js.ts` (2,312 lines), `src/client/config-page-js.ts`,
-> `wrangler.json`, `package.json`, `e2e/index.ts`. The SEO script has two AI stages and follows the
+> `src/client/template-composer-js.ts`, `src/client/template-scene-editor.ts`,
+> `src/client/template-ring-carousel.ts`, `src/client/template-shape-animations.ts`,
+> `src/client/config-page-js.ts`, `src/client/payment-upload-js.ts`,
+> `src/modules/{cms,payments,user-pages}.ts`, `wrangler.json`, `package.json`, `e2e/index.ts`. The SEO script has two AI stages and follows the
 > **2026-10-23 explainer SEO rule set** (see §4.2 and `system-rules.md` RULE 7 / RULE 18) —
 > every documentation of the AI script written before 2026-10-23 was deleted and replaced.
 > This revision documents the day-rotating settings
@@ -30,6 +33,8 @@ A single-page **browser-side video studio** served by one Cloudflare Worker.
 | AI script (SRT) | Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8`, **two stages** | `/api/script` — stage 1 plans the SEO keywords plus the explainer title and headings, stage 2 writes the SRT around them |
 | Voiceover | Workers AI `@cf/myshell-ai/melotts` + free fallback TTS | `/api/voiceover`, proxied `/tts` |
 | Accounts | KV namespace `KV_BINDING` | `/api/session`, `/api/login`, `/api/signup`, `/api/logout` (unlimited accounts, `email:<address>` uniqueness index) |
+| CMS pages | KV `config:cms_pages` + shared theme shell | Up to 8 public flat pages; settings-only writes, public reads and top/footer links |
+| Payments | KV receipt bytes/metadata/transaction index | Manual local-gateway instructions, signed-in uploads, admin approval → `paid_user`; no automated charge |
 | Render jobs | KV (queued job records + chunked blobs) | `/api/render`, `/api/worker/*` — rendered by **other browser tabs** |
 
 There is no server-side video encoder and no FFmpeg anywhere in the codebase.
@@ -40,6 +45,7 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | --- | --- | --- |
 | **Studio user** | `GET /` | Sees the public landing page; signs in to enter the studio (or, if KV is unbound, enters through the primary CTA). Builds up to 10 videos, uploads media, generates images/scripts/voiceovers, renders MP4s locally, can push a video to the render API |
 | **Background worker operator** | `GET /{current-day}/config/uvxyz` | Password-gated settings page; the current day-of-month in Asia/Taipei must match; runs an extra browser tab that polls `/api/worker/poll` and renders other users' queued jobs |
+| **Settings administrator** | Same current-day settings URL | Edits gateway instructions, reviews/approves receipts, manages plans and creates/edits/deletes public CMS pages |
 | **Anonymous caller** | Any route | `/api/script`, `/api/voiceover`, `/api/render`, `/tts`, `/image/:i` and `GET /api/config/workers` are unauthenticated. `/image/gen` is the exception: it needs a session or the `/free` guest cookie, and `/studio` + `/paid` need a session (RULE 21) |
 
 ---
@@ -52,7 +58,10 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | `/free` | GET | none — **freemium entry**; sets `yvs_free=1` (1 day) | Studio HTML + `window.__PLAN_MODE="freemium"`; 10 AI images/day per IP, everything else unlimited |
 | `/studio` | GET | session (`free_user` / `paid_user`) | Studio HTML + `window.__PLAN_MODE="studio"`; anonymous → `302 /free` |
 | `/paid` | GET | session, `usertype: paid_user` | Studio HTML + `window.__PLAN_MODE="paid"`; anonymous → `302 /free`, free → `302 /studio` |
-| `/{current-day}/config/uvxyz` | GET | client-side password overlay; day must match Asia/Taipei today | Studio HTML + `window.__CONFIG_PAGE=true` + injected settings script; stale-day and bare legacy paths are `404` |
+| `/account` | GET | none for page; session for dashboard data | Signed-out inline auth; signed-in profile, live credits, plan, six recent receipts and plan-aware studio/payment actions |
+| `/upgrade` | GET | none for instructions; session for uploader | Public local-gateway details; signed-out inline auth or signed-in screenshot uploader/history |
+| `/{current-day}/config/uvxyz` | GET | full-page inline unlock + server `/api/config/verify`; day must match Asia/Taipei today | Studio HTML + `window.__CONFIG_PAGE=true` + injected settings script; stale-day and bare legacy paths are `404` |
+| `/{slug}` | GET | none; matched only after built-in routes | Saved public CMS page with top/footer navigation; unknown/nested/reserved slug → `404` |
 | `/image/:index` | GET | none | PNG (`X-Image-Index`); `400` if index outside `prompts[]`; `500` on AI error. **Unmetered demo sample** |
 | `/image/gen?prompt=&variant=` | GET | session **or** `yvs_free` guest cookie when KV is bound; **1 image credit** | PNG (`X-Image-Variant`, `X-Credit-*`, `X-Credit-Scope: account\|ip`); `400` if prompt empty; `401` only when both a session and the cookie are absent (message points at `/free`); `429 {error,credits}` daily limit spent; `500` on AI error (credit refunded) |
 | `/api/session` | GET | none | `200 {authenticated:true,user,plan,credits}` / `401` / `503` if KV unbound |
@@ -60,6 +69,17 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | `/api/signup` | POST | none | `200` + `Set-Cookie: yvs_session` + `user{...,usertype:"free"}`, `plan`, `credits` / `400` / `409` (duplicate) / `503` (KV unbound); no account cap |
 | `/api/login` | POST | none | `200` + cookie + `plan` + `credits` / `401` |
 | `/api/logout` | POST | none | `200`, cookie cleared (`Max-Age=0`) |
+| `/api/payments/upload` | POST | session + KV | Multipart/JSON image ≤5 MiB; verifies PNG/JPEG/WEBP/GIF bytes → `pending` receipt / `400` / `401` / `413` / `503` |
+| `/api/payments/my` | GET | session | Own receipt history / `401`; empty list without KV |
+| `/api/payments/image/:id` | GET | session, receipt owner | Private receipt bytes / `401` / `403` / `404` / `503` |
+| `/api/config/verify` | POST | `pw` body | `{success:true,valid:true,theme}` / `403 {valid:false,error:"Wrong password"}` |
+| `/api/config/payment-gateway` | GET / POST | GET public · POST `pw` | Read or update local-gateway name/details/instructions |
+| `/api/config/payments` | GET | `pw` query + KV | Paginated review, default 5/max 24 per page, `all`/`pending`/`approved` filters |
+| `/api/config/payments/image/:id` | GET | `pw` query | Admin receipt bytes |
+| `/api/config/payments/approve` | POST | `pw` body + KV | Requires verified transaction number; unique transaction → receipt approved + user `paid_user` / `400` / `404` / `409` |
+| `/api/cms/pages` | GET | none | Public saved pages and `maxPages:8`; empty without KV |
+| `/api/config/cms` | GET / POST / DELETE | `pw` + KV | List / create or update (optional `id`) / delete; max 8, duplicate slug `409` |
+| `/api/config/cms/delete` | POST | `pw` body + KV | Delete by page `id` or `slug`; releases a page slot |
 | `/api/script` | POST | none | `{success:true,srt}` / `400` / `500` / `503` |
 | `/api/voiceover` | POST | none | audio bytes (`attachment`, `audio/mpeg` or `audio/wav`) / `400` / `500` / `503` |
 | `/tts?text=&lang=` | GET | none | Proxied audio (`audio/mpeg`), max 2 000 chars |
@@ -219,6 +239,87 @@ anonymous                     free_user                    paid_user
 
 ---
 
+## 3d. Flow 0.6 — Account dashboard and manual payment upgrade
+
+```
+GET /account
+   ├─ no session → inline Sign In / Create Account card (not the studio overlay)
+   │                successful auth reloads /account
+   └─ session    → profile + live GET /api/credits + plan + recent payment receipts
+                    free: Open Video Studio → /studio; Upgrade → /upgrade
+                    paid: Open Video Studio → /paid; View Upgrade & Payment Details → /upgrade
+                    up to 6 recent receipts appear with pending/approved status
+
+GET /upgrade
+   ├─ everyone can read the configured local-gateway + upload instructions
+   ├─ no session → inline authentication; there is no anonymous upload
+   └─ session    → PaymentScreenshotUploader mounts with history
+
+Choose/drop a receipt
+   client checks PNG/JPG/WEBP/GIF type and ≤5 MiB, shows an object-URL preview
+   optional note (≤240 chars) → Upload Payment Screenshot
+   POST multipart /api/payments/upload (JSON data URL is also accepted by the API)
+   Worker re-checks authentication, size and actual image magic bytes
+   KV puts payment_img:<id> (base64 bytes) + payment:<id> (pending metadata)
+   history refreshes through GET /api/payments/my
+   GET /api/payments/image/:id serves bytes only to the owner
+
+Administrator → current-day settings → Payment Transactions
+   GET /api/config/payments?pw=…&status=pending&page=1&limit=5
+   inspect the private admin image, then enter the verified transaction/reference number
+   POST /api/config/payments/approve {pw,id,transactionNumber}
+     ├─ missing number / bad id → 400
+     ├─ transaction already used by another payment → 409
+     ├─ receipt or account missing → 404
+     └─ success → payment.status="approved", payment_txn:<normalized-number> index,
+                  user:<name>.usertype="paid_user"
+The next /api/credits or /paid request rereads the user record: 1,200 images/day and Paid Studio
+access apply without issuing a new session cookie.
+```
+
+This is a **manual local-payment workflow**. No card is charged and no payment-provider webhook
+exists. A settings administrator can also change a plan directly under Plans & credits. There is
+no receipt rejection/refund workflow. Without KV, uploads/approvals return `503`; wrong settings
+passwords return `403`.
+
+## 3e. Flow 0.7 — CMS Add Page, edit, publish and delete
+
+```
+Administrator → current-day settings → CMS Pages
+   GET /api/config/cms?pw=… → saved pills + N / 8 counter
+   + New Page / Reset clears the draft
+
+Build the draft
+   + Add Paragraph         → 200px-minimum textarea
+   + Add Image (URL)       → one HTTP(S)-URL input
+   + Add 2-Image Row       → two URL inputs
+   ↑ / ↓ reorders blocks; Remove deletes one; every edit rerenders the escaped Live Preview
+   Page URL is required; Title is optional (slug-derived fallback); Page Link chooses
+   "Link Placed On Top Menu" or "Link Placed On Footer"
+
+Save CMS Page → POST /api/config/cms {pw,id?,url,title,pageLink,blocks}
+   client blocks a new page when N=8; the server independently enforces every rule:
+     flat /^[a-z0-9][a-z0-9-_]{0,63}$/ slug; no root/nested/reserved route
+     ≤8 pages · ≤100 blocks · title ≤120 chars · paragraph ≤20,000 chars
+     images are http:// or https:// URLs only (≤1,000 chars); empty blocks are omitted
+     duplicate slug → 409; invalid payload → 400; wrong pw → 403; no KV → 503
+   existing id preserves id/createdAt and updates content/updatedAt; otherwise creates an id
+   KV put config:cms_pages → response {page,pages,maxPages} → saved pill + live URL message
+
+Publish/read
+   GET /<slug> is tried after all built-in routes → public themed page or 404
+   paragraph/title text is HTML-escaped; consecutive images render two per row and can open
+   fullscreen; placement injects the link into the shared top menu or footer
+   GET /api/cms/pages is public because every saved page is published (there is no draft state)
+
+Edit / Delete
+   Edit restores id, fields and blocks; saving at the 8-page cap is allowed for an existing id
+   Delete posts /api/config/cms/delete {pw,id} → removes the record and releases one slot
+   (API also accepts slug; if both id and slug are present, id wins and only one page is removed)
+```
+
+---
+
 ## 4. Flow 1 — Create and fill a video ("Video N" accordion)
 
 ```
@@ -251,6 +352,11 @@ accordion = header + body
             ├ Sticker (bottom right) — 7 presets
             └ Quality — 480p Light / 720p Balanced / 720p High
 ```
+
+Across all seven themes, every button in the accordion (including its header API/disclosure
+controls and card/caption remove buttons) has a minimum 48 × 48 px target, 12px 24px padding and
+1rem type, matching the Upload Image button's proportions. Under **Neo Brutalist**, all of these
+buttons have `border-radius: 0`; other themes retain their own corner tokens.
 
 ### 4.1 Media intake — three independent entry points
 
@@ -285,43 +391,53 @@ type prompt → [✨ Generate 2 Images]
 **C. Template composer (`Add video from template` link → #tpl-modal)**
 
 ```
-GALLERY view — two tabs, each with a 4-column live animated preview grid:
-  Motion templates (adapted from the uploaded Typography Motion Studio III HTML):
-    19 Halo Warp · 20 Terminal Fracture · 21 Ribbon Editorial · 22 Portal Type ·
-    23 Comic Burst · 24 Dream Echo · 25 Perspective Fold · 26 Liquid Bloom
-  Interactive scenes (adapted from the uploaded Reel Editor v4 HTML; 14 designs):
-    Kinetic Typography · Duotone · Neon · Glitch Art · Vox Magazine
-click a card → EDITOR view for that template/scene
+GALLERY view — two tabs with live animated preview grids; Interactive is the default:
+  Interactive scenes (15):
+    14 Reel Editor designs — Kinetic Typography · Duotone · Neon · Glitch Art · Vox Magazine
+    15 3D Ring Carousel — only the eight-card ring from the uploaded editorial demo
+  Shape animations (adapted from the uploaded MotionGenie HTML; 13 objects):
+    47 Morphing SVG Blob · 48 Rotating 3D Box · 49 Pulsing Ripple Ring ·
+    50 Floating Glass Card · 51 Orbiting Satellite · 52 DNA Helix Pulse ·
+    53 Infinite Tunnel Zoom · 54 Kaleidoscope Spinner · 56 Elastic Bounce Ball ·
+    57 Audio Equalizer Bars · 58 Diamond Crystal Spin · 59 Neon Laser Beam ·
+    60 Shimmer Spinner Ring
+    (55 Confetti Burst Canvas and all particle effects are deliberately excluded)
+  Motion templates have no tab or cards.
+click a card → EDITOR view for that scene/object
 EDITOR view
-  toolbar: [← Templates] · template name · Format (Portrait 9:16 1080×1920 |
+  toolbar: [← Templates] · scene/object name · Format (Portrait 9:16 1080×1920 |
            Landscape 16:9 1920×1080) · Length (1–25 s, default 6, clamped) ·
            [⏸ Pause]/[▶ Play] · [↺ Restart]
   left    : live canvas preview (the SAME drawScene() that renders the export)
-            + timeline loop bar
-  right   : Photos (optional, max 2 — extras silently ignored, slice(0,2))
-            Motion & transitions: photo entry (9 transitions), entry speed,
-              photo motion (10 looping motions), background (Template default |
-              blurred photo | 10 colours | 3 neo-brutalist | 3 swiss grids |
-              4 animated CSS patterns), animation speed (0.5×–2×, scales every
-              text/photo/background animation)
-            Text layers accordion — dynamic: [+] adds a layer (up to any number,
-              each with its own text ≤12 chars, 30-colour palette, 9 positions,
-              9 text animations, size slider 3–18 vw with % readout); every layer
-              collapses; × removes (disabled at 1 layer)
+            + Interactive-scene element tags below the preview + timeline loop bar
   Reel scene editor: click Background, Eyebrow, Headline, Sub text or Graphic in the
-            canvas (or use the object chips); the inspector changes to matching controls.
-            Text: content, font, colour, size, animation, enter transition/speed, alignment,
-              X/Y position and delete/restore. Graphic: sticker shape, colour, size,
-              animation and position. Background: bundled or uploaded image, scene style,
-              animated effect, speed and transition. Drag selected canvas objects or add text.
+            canvas (or use the element tags below the preview); the inspector changes to
+            matching controls. Text: content, font, colour, size, animation, enter
+              transition/speed, alignment, X/Y position and delete/restore. Graphic: sticker
+              shape, colour, size, animation and position. Background: bundled or uploaded
+              image, scene style, animated effect, speed and transition. Drag selected canvas
+              objects. [＋ Text] adds text; with a graphic selected it becomes [＋ Graphic]
+              and creates a new tagged graphic. Compact colour boxes open 12 solid swatches,
+              a custom colour and one row of four gradients (Sunset, Ocean, Lime, Violet);
+              gradients are painted by the canvas renderer and included in export.
             Each Reel scene keeps its own editing state while the modal stays open.
-[⬇ Export MP4] → WebCodecs H.264 avc1.4d002a @ 6 Mbps, 30 fps, mp4-muxer in memory
-        → the MP4 downloads to disk automatically (Download MP4 link for re-download)
-[➕ Add to Video N] → adds the exported MP4 to THIS accordion's gallery as a normal
-        MP4 asset (counts against the 5-MP4 cap; ≤25 s so always under the 60 s cap)
-the modal is built once and reused: photos/last export survive closing;
+  3D Ring Carousel editor: one selection tag below the preview; visibility, rotation speed
+            (0–3×), ring radius (55–145%), card size (50–150%), 3D tilt (-30°–30°), X/Y and reset.
+            Eight editorial images are CORS-loaded from the uploaded demo's URLs; failed images
+            (or an 8-second stall) use deterministic illustrated card fallbacks. Perspective/depth sorting and time-based
+            auto-rotation are canvas-rendered, not CSS-only. The flip book, sound, ambient
+            particles and magazine page chrome are not included.
+  Shape animation editor: choose any of the 13 objects again, edit main/accent/background
+            colours, size (12–70%), speed (0.25–2.5×) and X/Y position, or reset the object.
+            Its preview uses the same deterministic canvas renderer as MP4 export; each object
+            keeps its own editing state while the modal stays open.
+[⬇ Download MP4] → WebCodecs H.264 avc1.4d002a @ 6 Mbps, 30 fps, mp4-muxer in memory
+        → renders and downloads the MP4; this footer button is the only download action
+[➕ Add to Video N] → performs the same MP4 render with downloading disabled, then adds
+        the new MP4 directly to THIS accordion's gallery as a normal MP4 asset (counts
+        against the 5-MP4 cap; ≤25 s so always under the 60 s cap)
+the modal is built once and reused: per-scene/per-object editing state survives closing;
 the link can retarget the same modal at another Video N (title + Add button update)
-per-template editing state (layers + controls) is remembered while the tab is open
 ```
 
 ### 4.2 Generate SEO Script With AI
@@ -558,32 +674,32 @@ The route is `/{current-day}/config/uvxyz`, where `{current-day}` is the unpadde
 
 ```
 GET /{current-day}/config/uvxyz
-  ├─ same studio HTML (including the theme chosen under Appearance), with
-  │  <script>window.__CONFIG_PAGE = true;</script> prepended
-  │  and the CONFIG_PAGE_SCRIPT injected before </body>
-  │  (initAuth() returns immediately → no sign-in lock on this page)
-  ▼
-password overlay ("⚙️ Studio Settings — Enter the settings password")
-  wrong  → "Wrong password."
-  right  → settings modal
-     ├─ Appearance (app mode only)     → seven radio cards, wrapping over several rows:
-     │    Studio · Aerial · Stellar · Night Lab · Warm Paper · Swiss · Neo Brutalist
-     │    GET /api/config/theme preloads the current skin ("Current theme: Night Lab.");
-     │    picking a card previews it instantly (client-side only,
-     │    "Preview only — press Save theme …")
-     │    [Save theme] → POST /api/config/theme {pw, theme}
-     │        server: pw must match, theme must be in the whitelist → stored as config:theme
-     │        → "Saved — reload the studio page to see the new theme."
-     │        (every HTML route stamps data-theme on <html> from then on — no flash)
-     ├─ Instance mode: [Web app]        → "Background workers" group
-     │    3 optional URL inputs (placeholder https://your-worker.workers.dev)
-     │    GET /api/config/workers preloads the list → "Registered: …" / "None registered."
-     │    [Save workers] → POST /api/config/workers {pw, urls}
-     │        server: pw must match, ≤3 URLs after trim/filter, each ≤500 chars and ^https?://
-     │        → {success:true,urls} → list re-rendered     |  else alert("Save failed: …")
-     └─ Instance mode: [Background worker] → body.cfg-worker-mode, studio sections hidden
-           [▶ Start worker] → the polling loop of Flow 3 (keeps running until Stop or tab close)
-           status line reflects: waiting / rendering "name" / delivered / failed
+  ├─ same studio HTML (including the active theme), with window.__CONFIG_PAGE=true
+  │  and CONFIG_PAGE_SCRIPT injected before </body>; initAuth() returns immediately
+  └─ the script builds a real full-page #cfg-page on body.cfg-real-page
+     (not the retired fixed overlay/settings modal)
+
+Unlock Site Configuration
+  enter administrator password → POST /api/config/verify {pw}
+     ├─ wrong → 403 {valid:false,error:"Wrong password"} → inline error
+     └─ valid → {valid:true,theme} → hide unlock card, show #cfg-unlocked-view
+                the entered value stays in memory as unlockedPw for subsequent admin APIs;
+                the hard-coded literal is not embedded in this client script
+
+Four full-page tabs
+  1. General & Themes
+     seven theme cards + Save Theme; registered worker URLs; Background Worker Mode;
+     Plans & credits (free/paid_user + optional counter reset); Guest credits by IP
+     background mode polls /api/worker/poll and renders queued jobs until Stop/tab close
+  2. Local Payment Gateway
+     GET /api/config/payment-gateway loads name/details/instructions
+     Save → POST same route {pw,gatewayName,gatewayDetails,uploadInstructions}
+     /upgrade reads the saved public instructions
+  3. Payment Transactions
+     paginated all/pending/approved receipt review → admin image → verified transaction number
+     Approve follows Flow 0.6 and promotes the receipt owner to paid_user
+  4. CMS Pages (Max 8)
+     Add Page / Live Preview / saved-page Edit & Delete follow Flow 0.7
 ```
 
 > The registered worker URLs are **stored only**. Nothing in the codebase ever contacts
@@ -631,6 +747,12 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Email already registered | `/api/signup` | `409 "Email already in use"` (1 keyed read of the `email:` index; accounts predating the index are covered by a bounded scan while the namespace holds <= 200 accounts) |
 | Duplicate username / email | `/api/signup` | `409 "Username already taken"` / `409 "Email already in use"` |
 | Wrong sign-in credentials | `/api/login` | `401 "Invalid username or password"` (never reveals which field) |
+| Anonymous payment upload / another user's receipt | payment routes | Upload `401`; owner image route returns `401` signed out or `403` for a different account |
+| Invalid/oversized receipt | uploader + `/api/payments/upload` | Client explains type/5 MiB rule; server independently returns `400`/`413` after checking actual bytes |
+| Missing/duplicate approval transaction | `/api/config/payments/approve` | Missing number `400`; number already tied to another receipt `409`; missing receipt/account `404` |
+| Invalid CMS URL or duplicate slug | `/api/config/cms` | Nested/reserved/malformed URL `400`; duplicate slug `409`; unknown public slug `404` |
+| Ninth CMS page / too many blocks | editor + `/api/config/cms` | Client explains the cap; server returns `400` (8 pages, 100 blocks); editing an existing id at cap remains valid |
+| Wrong settings password | config CMS/payment APIs | `403 {success:false,error:"Wrong password"}`; no data is written |
 
 ---
 
@@ -647,7 +769,10 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Render API + worker | MODULE 7 (`collectVideoPayload()`, `apiRenderVideo()`, `renderVideoLocally()`, `workerRunJob()`) |
 | Script / subtitles / voiceover | MODULE 8-9 (`renderSeoKeywords()`, `generateScript()`, `openVoiceoverModal()`, `generateVoiceover()`, `toggleSubtitles()`) — the accordion markup puts the SEO section first in `.va-left` (`videoAccordionHTML()`) |
 | Render engine | `generateMP4()`; audio helper `encodeAudioTrack()`; GIF frame decoder `buildGifSlideFrames()` |
-| Template composer | `src/client/template-composer-js.ts` (`drawScene()`, `exportMP4()`, `addTemplateToVideo()`, `openTemplateModal()`), `src/client/template-scene-editor.ts` (interactive Reel scene inspector/renderer), `src/client/reel-scene-assets.ts` (bundled backdrops) |
+| Template composer | `src/client/template-composer-js.ts` (`drawScene()`, `exportMP4()`, `addTemplateToVideo()`, `openTemplateModal()`), `src/client/template-scene-editor.ts` (Interactive gallery/editor), `src/client/template-ring-carousel.ts` (scene 15 renderer, image loading and controls), `src/client/reel-scene-assets.ts` (bundled backdrops), `src/client/template-shape-animations.ts` (13 non-particle shape objects, gallery and inspector) |
+| CMS | `src/modules/cms.ts` (validation, KV record, APIs, public page/navigation injection), CMS section of `src/client/config-page-js.ts` (draft editor/live preview) |
+| Payments | `src/modules/payments.ts` (upload/storage/owner/admin/approval routes), `src/client/payment-upload-js.ts` (signed-in uploader/history), payment sections of `src/client/config-page-js.ts` |
+| Account / upgrade dashboard | `src/modules/user-pages.ts` (session-aware HTML and plan-aware actions), `src/modules/theme-shell.ts` (shared navigation), `src/index.ts` (`/api/credits` and session reread) |
 | Themes | `src/client/styles.ts` (token blocks + shared reskin, appended at the end of `APP_CSS`), `src/index.ts` (`CONFIG_THEMES`, `normalizeTheme`/`readTheme`/`applyTheme` at the top of the module) |
 | Settings page | `src/client/config-page-js.ts` (single escaped string) |
 
@@ -745,5 +870,41 @@ the uploaded Reel Editor v4 HTML. In this editor, clicking a text layer, graphic
 loads that element's controls; canvas elements can also be dragged, text can be added, and stickers,
 position, colour, size, animation and enter transitions can be changed per object. Both editors
 render the same scene canvas used by the H.264 MP4 exporter (WebCodecs + mp4-muxer, no screen
-capture). **⬇ Export MP4** downloads the file; **➕ Add to Video N** inserts it into the accordion
-gallery. Reopening/retargeting and the existing gallery-insertion flow are preserved.
+capture). **⬇ Download MP4** renders and downloads the file; **➕ Add to Video N** renders without
+downloading and inserts the result into the accordion gallery. Reopening/retargeting and the
+existing gallery-insertion flow are preserved.
+
+## UI update — Shape animations + accordion controls (2026-10-23)
+
+The uploaded MotionGenie gallery adds a third **Shape animations** tab to the template modal.
+Its 13 canvas-rendered Shapes & Motion objects retain their original reference numbers (47–54
+and 56–60); Confetti Burst and particle effects are not ported. Each card opens an editable,
+looping object preview with colour, background, size, speed and position controls, and exports
+through the existing WebCodecs MP4 path. The modal still reuses per-object state and the existing
+Add to Video N flow. Video accordion buttons now share the larger Upload Image proportions in
+all themes, while Neo Brutalist makes every accordion button square-cornered.
+
+## UI update — Reel element tags, gradients and direct accordion export (2026-10-24)
+
+Interactive-scene element tags now sit in the left column immediately below the preview. Selecting
+a graphic changes **＋ Text** to **＋ Graphic**; the action clones that graphic's visual settings into
+a new offset element, selects it and adds its tag. Text and graphic colour controls use compact
+boxes with 12 solid swatches, a custom colour and exactly one four-gradient row (Sunset, Ocean,
+Lime, Violet). Gradient fills are real canvas gradients, so preview and MP4 frames match.
+
+The footer now has one **Download MP4** action and no separate re-download link. **Add to Video N**
+runs the same frame-by-frame WebCodecs/muxer render with the download step disabled, probes the
+new file and inserts it directly into the target accordion; it no longer depends on a prior
+manual export.
+
+## UI update — 3D Ring Carousel + Motion gallery removal (2026-10-24)
+
+This supersedes the gallery composition in the earlier UI-update notes. The template modal now
+opens on **Interactive scenes** and has only two tabs: **Interactive scenes · 15** and **Shape
+animations · 13**. The Motion tab and all Motion cards are removed from the DOM.
+
+Scene 15, **3D Ring Carousel**, ports only the uploaded editorial demo's eight-card rotating ring.
+Its canvas renderer uses eight CORS-loaded editorial images with deterministic fallbacks,
+perspective/depth sorting and time-based rotation. Controls cover visibility, speed, radius, card
+size, tilt, X/Y and reset. The demo's flip book, Web Audio, ambient particles, fonts and magazine
+chrome are not ported. Both Download MP4 and direct Add to Video N use the shared exporter.

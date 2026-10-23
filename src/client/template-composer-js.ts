@@ -1,24 +1,23 @@
 /*
  * TEMPLATE_COMPOSER_JS — MODULE 9: the "Add video from
- * template" composer modal (8 motion-typography templates plus
- * 14 click-to-edit Reel Editor scenes, with live preview, dynamic text layers,
- * photo transitions / motion, animated backgrounds, and
+ * template" composer modal (15 click-to-edit Interactive scenes, including the
+ * 3D Ring Carousel, and 13 non-particle shape animations, with live preview,
+ * dynamic text layers, photo transitions / motion, animated backgrounds, and
  * WebCodecs + mp4-muxer MP4 export / download). The exported
  * MP4 can also be dropped into the accordion gallery as a
  * normal clip. Self-contained IIFE appended right after APP_JS
  * inside the same <script> tag.
  *
- * The 8 templates and their controls (text layers accordion,
- * entry transitions, image motion, backgrounds) are adapted
- * from the uploaded "Typography Motion Studio III" HTML
- * (variations 19-26: Halo Warp, Terminal Fracture, Ribbon
- * Editorial, Portal Type, Comic Burst, Dream Echo, Perspective
- * Fold, Liquid Bloom).
+ * Legacy typography drawing routines were adapted from the uploaded
+ * "Typography Motion Studio III" HTML. They remain internal to this
+ * module; the modal exposes no Motion tab or Motion template cards.
  *
  * Escapes inside this string are intentional — do not reformat.
  */
 
 import { REEL_SCENE_EDITOR_JS } from "./template-scene-editor";
+import { TEMPLATE_RING_CAROUSEL_JS } from "./template-ring-carousel";
+import { TEMPLATE_SHAPE_ANIMATIONS_JS } from "./template-shape-animations";
 
 export const TEMPLATE_COMPOSER_JS = `	// =========================================================
 	// MODULE 9: template-composer
@@ -27,8 +26,8 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 	// The "Add video from template" text link inside every
 	// Video N accordion opens a modal with TWO views:
 	//
-	//   1. Gallery — a 4-column grid of live animated
-	//      previews of the 8 motion-typography templates.
+	//   1. Gallery — two grids of live animated previews:
+	//      15 Interactive scenes and 13 Shape animation objects.
 	//   2. Editor  — chosen template controls: dynamic
 	//      text layers (each with its own text, colour,
 	//      position, animation and size), animation
@@ -88,7 +87,6 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		let orientEl = null;
 		let exportBtn = null;
 		let addBtn = null;
-		let downloadHost = null;
 		let galleryView = null;
 		let editorView = null;
 		let layersHost = null;
@@ -242,8 +240,8 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		];
 
 		/*
-		 * The 8 motion-typography templates (variations 19-26
-		 * of the uploaded motion studio).
+		 * Legacy internal motion-typography renderer definitions
+		 * (variations 19-26); these are not gallery templates.
 		 */
 
 		const VARIATIONS = [
@@ -1396,6 +1394,9 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			if (exportBtn) {
 				exportBtn.disabled = true;
 			}
+			if (addBtn) {
+				addBtn.disabled = true;
+			}
 			if (progressEl) {
 				progressEl.style.width = "0%";
 			}
@@ -1414,6 +1415,9 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			editorView.style.display = "";
 			if (exportBtn) {
 				exportBtn.disabled = exporting;
+			}
+			if (addBtn) {
+				addBtn.disabled = exporting;
 			}
 			ensureTicking();
 		}
@@ -1795,10 +1799,12 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		// -------------------------------------------------
 		// Export (SAME engine as the Video N accordions:
 		// WebCodecs VideoEncoder + mp4-muxer, no FFmpeg,
-		// no screen capture). The MP4 downloads to disk.
+		// no screen capture). Download renders and saves to disk;
+		// Add to Video renders the same MP4 without saving to disk.
 		// -------------------------------------------------
 
-		async function exportMP4() {
+		async function exportMP4(options) {
+			const shouldDownload = !options || options.download !== false;
 			if (typeof VideoEncoder === "undefined") {
 				alert(
 					"Your browser does not support WebCodecs. Please use modern Chrome, Edge, or Safari."
@@ -1815,7 +1821,6 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			exporting = true;
 			exportBtn.disabled = true;
 			addBtn.disabled = true;
-			downloadHost.innerHTML = "";
 			if (progressEl) {
 				progressEl.style.width = "0%";
 			}
@@ -1932,8 +1937,12 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 					(tplLandscape ? "landscape" : "portrait") +
 					".mp4";
 				const url = URL.createObjectURL(blob);
-				if (lastVideo && lastVideo.url) {
-					URL.revokeObjectURL(lastVideo.url);
+				const previousUrl = lastVideo && lastVideo.url;
+				if (previousUrl) {
+					const urlInUse = videoProjects.some((project) =>
+						project && project.assets.some((asset) => asset.url === previousUrl)
+					);
+					if (!urlInUse) URL.revokeObjectURL(previousUrl);
 				}
 				lastVideo = {
 					blob: blob,
@@ -1942,22 +1951,24 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 					name: name
 				};
 
-				const a = document.createElement("a");
-				a.className = "tpl-download";
-				a.href = url;
-				a.download = name;
-				a.textContent = "Download MP4";
-				downloadHost.appendChild(a);
-				a.click();
+				if (shouldDownload) {
+					const a = document.createElement("a");
+					a.className = "tpl-download";
+					a.href = url;
+					a.download = name;
+					a.textContent = "Download MP4";
+					a.click();
+				}
 
 				if (progressEl) {
 					progressEl.style.width = "100%";
 				}
-				statusEl.textContent =
-					"MP4 ready \\u2014 downloaded as " + name +
-					" \\u00b7 add it to Video " + modalVideo + " or download again";
+				statusEl.textContent = shouldDownload
+					? "MP4 ready \\u2014 downloaded as " + name
+					: "MP4 ready \\u2014 adding it to Video " + modalVideo;
 				addBtn.disabled = false;
 				addBtn.textContent = "\\u2795 Add to Video " + modalVideo;
+				return lastVideo;
 			}
 			catch (err) {
 				console.error(err);
@@ -1966,6 +1977,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				alert(
 					"Video export failed: " + ((err && err.message) || err)
 				);
+				return null;
 			}
 			finally {
 				if (
@@ -1980,6 +1992,8 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				exporting = false;
 				exportBtn.disabled =
 					!editorView || editorView.style.display === "none";
+				addBtn.disabled =
+					!editorView || editorView.style.display === "none";
 				ensureTicking();
 			}
 		}
@@ -1991,9 +2005,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		// -------------------------------------------------
 
 		async function addTemplateToVideo() {
-			if (!lastVideo) {
-				return;
-			}
+			if (exporting) return;
 			const n = modalVideo;
 			const project = videoProjects[n - 1];
 			if (!project) {
@@ -2010,19 +2022,22 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				return;
 			}
 
+			const renderedVideo = await exportMP4({ download: false });
+			if (!renderedVideo) return;
+
 			addBtn.disabled = true;
 			statusEl.textContent =
 				"Adding the composed MP4 to Video " + n + "\\u2026";
 
 			const file = new File(
-				[lastVideo.blob],
-				lastVideo.name,
+				[renderedVideo.blob],
+				renderedVideo.name,
 				{ type: "video/mp4" }
 			);
 			const probed = document.createElement("video");
 			probed.muted = true;
 			probed.playsInline = true;
-			probed.src = lastVideo.url;
+			probed.src = renderedVideo.url;
 
 			try {
 				await new Promise((resolve, reject) => {
@@ -2064,7 +2079,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				file: file,
 				videoEl: probed,
 				duration: clipDuration,
-				url: lastVideo.url,
+				url: renderedVideo.url,
 				card: null
 			};
 			project.assets.push(asset);
@@ -2107,7 +2122,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				'<div class="modal-title" id="tpl-title">\\ud83c\\udfac Add Video from Template \\u2014 Video ' + n + "</div>" +
 				'<button type="button" class="tpl-x" id="tpl-x" title="Close">\\u2715</button>' +
 				"</div>" +
-				'<p class="tpl-sub" id="tpl-sub">Choose a motion template or one of 14 interactive Reel scenes. Edit text layers, positions, colours, stickers, animations, transitions, photos and backgrounds; Reel scenes have click-to-select controls. Export a portrait 9:16 or landscape 16:9 MP4 (max ' + TPL_MAX_DURATION + ' seconds) straight to disk, or add it to this video&rsquo;s Images / MP4s gallery like any uploaded clip.</p>' +
+				'<p class="tpl-sub" id="tpl-sub">Choose one of 15 Interactive scenes, including the 3D Ring Carousel, or one of 13 non-particle Shape animations. Edit text layers, positions, colours, stickers, animations, transitions, photos, backgrounds, ring controls and animated objects. Download a portrait 9:16 or landscape 16:9 MP4 (max ' + TPL_MAX_DURATION + ' seconds) straight to disk, or render it directly into this video&rsquo;s Images / MP4s gallery like any uploaded clip.</p>' +
 
 				'<div id="tm-gallery" class="tm-view">' +
 				'<div class="tm-gallery-grid" id="tm-grid"></div>' +
@@ -2151,12 +2166,11 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				"</div>" +
 				"</div>" +
 				'<div class="tpl-tips">Tip: each template is a looping motion design \\u2014 text layers animate continuously (speed scales every animation), photos enter with the chosen transition and then loop their motion. The clip is silent \\u2014 upload an MP3 in the accordion to give the final video sound.</div>' +
-				'<div id="tpl-download"></div>' +
 				"</div>" +
 
 				'<div class="tm-statusline"><span id="tpl-status" class="tpl-status">Pick a template \\u2014 each preview is the real animation</span></div>' +
 				'<div class="tpl-actions">' +
-				'<button type="button" id="tpl-export" class="tpl-primary" disabled>\\u2b07 Export MP4</button>' +
+				'<button type="button" id="tpl-export" class="tpl-primary" disabled>\\u2b07 Download MP4</button>' +
 				'<button type="button" id="tpl-add" disabled>\\u2795 Add to Video ' + n + "</button>" +
 				'<button type="button" id="tpl-close">\\u2715 Close</button>' +
 				"</div>" +
@@ -2173,7 +2187,6 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			orientEl = document.getElementById("tpl-orientation");
 			exportBtn = document.getElementById("tpl-export");
 			addBtn = document.getElementById("tpl-add");
-			downloadHost = document.getElementById("tpl-download");
 			galleryView = document.getElementById("tm-gallery");
 			editorView = document.getElementById("tm-editor");
 			layersHost = document.getElementById("tm-layers");
@@ -2283,13 +2296,6 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 					"\\ud83c\\udfac Add Video from Template \\u2014 Video " + n;
 				addBtn.textContent =
 					"\\u2795 Add to Video " + n;
-				/*
-				 * A previously exported MP4 can
-				 * also be added to this video.
-				 */
-				if (lastVideo) {
-					addBtn.disabled = false;
-				}
 			}
 			modal.style.display = "flex";
 			showGallery();
@@ -2311,5 +2317,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		window.closeTemplateModal = closeTemplateModal;
 
 		${REEL_SCENE_EDITOR_JS}
+		${TEMPLATE_RING_CAROUSEL_JS}
+		${TEMPLATE_SHAPE_ANIMATIONS_JS}
 	})();
 `;
