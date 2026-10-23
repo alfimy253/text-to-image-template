@@ -285,11 +285,13 @@ type prompt → [✨ Generate 2 Images]
 **C. Template composer (`Add video from template` link → #tpl-modal)**
 
 ```
-GALLERY view — 4-column grid of live animated previews of the 8 motion-typography
-templates (adapted from the uploaded Typography Motion Studio III HTML):
-  19 Halo Warp · 20 Terminal Fracture · 21 Ribbon Editorial · 22 Portal Type ·
-  23 Comic Burst · 24 Dream Echo · 25 Perspective Fold · 26 Liquid Bloom
-click a card → EDITOR view for that template
+GALLERY view — two tabs, each with a 4-column live animated preview grid:
+  Motion templates (adapted from the uploaded Typography Motion Studio III HTML):
+    19 Halo Warp · 20 Terminal Fracture · 21 Ribbon Editorial · 22 Portal Type ·
+    23 Comic Burst · 24 Dream Echo · 25 Perspective Fold · 26 Liquid Bloom
+  Interactive scenes (adapted from the uploaded Reel Editor v4 HTML; 14 designs):
+    Kinetic Typography · Duotone · Neon · Glitch Art · Vox Magazine
+click a card → EDITOR view for that template/scene
 EDITOR view
   toolbar: [← Templates] · template name · Format (Portrait 9:16 1080×1920 |
            Landscape 16:9 1920×1080) · Length (1–25 s, default 6, clamped) ·
@@ -306,6 +308,13 @@ EDITOR view
               each with its own text ≤12 chars, 30-colour palette, 9 positions,
               9 text animations, size slider 3–18 vw with % readout); every layer
               collapses; × removes (disabled at 1 layer)
+  Reel scene editor: click Background, Eyebrow, Headline, Sub text or Graphic in the
+            canvas (or use the object chips); the inspector changes to matching controls.
+            Text: content, font, colour, size, animation, enter transition/speed, alignment,
+              X/Y position and delete/restore. Graphic: sticker shape, colour, size,
+              animation and position. Background: bundled or uploaded image, scene style,
+              animated effect, speed and transition. Drag selected canvas objects or add text.
+            Each Reel scene keeps its own editing state while the modal stays open.
 [⬇ Export MP4] → WebCodecs H.264 avc1.4d002a @ 6 Mbps, 30 fps, mp4-muxer in memory
         → the MP4 downloads to disk automatically (Download MP4 link for re-download)
 [➕ Add to Video N] → adds the exported MP4 to THIS accordion's gallery as a normal
@@ -638,7 +647,7 @@ password overlay ("⚙️ Studio Settings — Enter the settings password")
 | Render API + worker | MODULE 7 (`collectVideoPayload()`, `apiRenderVideo()`, `renderVideoLocally()`, `workerRunJob()`) |
 | Script / subtitles / voiceover | MODULE 8-9 (`renderSeoKeywords()`, `generateScript()`, `openVoiceoverModal()`, `generateVoiceover()`, `toggleSubtitles()`) — the accordion markup puts the SEO section first in `.va-left` (`videoAccordionHTML()`) |
 | Render engine | `generateMP4()`; audio helper `encodeAudioTrack()`; GIF frame decoder `buildGifSlideFrames()` |
-| Template composer | `src/client/template-composer-js.ts` (`drawScene()`, `exportMP4()`, `addTemplateToVideo()`, `openTemplateModal()`) |
+| Template composer | `src/client/template-composer-js.ts` (`drawScene()`, `exportMP4()`, `addTemplateToVideo()`, `openTemplateModal()`), `src/client/template-scene-editor.ts` (interactive Reel scene inspector/renderer), `src/client/reel-scene-assets.ts` (bundled backdrops) |
 | Themes | `src/client/styles.ts` (token blocks + shared reskin, appended at the end of `APP_CSS`), `src/index.ts` (`CONFIG_THEMES`, `normalizeTheme`/`readTheme`/`applyTheme` at the top of the module) |
 | Settings page | `src/client/config-page-js.ts` (single escaped string) |
 
@@ -727,14 +736,14 @@ overlay and white typography adapt the HTML5 UP Aerial design to the scrolling s
 Stellar's main studio and accordion backgrounds are 10% less opaque relative to their original
 alpha; accordion backdrop blur is 20% stronger.
 
-In **Add video from template**, the modal now has two views (2026-10-18 redesign). First a
-**4-column gallery** of live animated previews of the 8 motion-typography templates (Halo Warp,
-Terminal Fracture, Ribbon Editorial, Portal Type, Comic Burst, Dream Echo, Perspective Fold,
-Liquid Bloom — ported from the uploaded Typography Motion Studio III HTML). Choosing a template
-opens the **editor**: a live canvas preview beside studio-styled controls for dynamic text layers
-(each layer has its own text, colour, position, animation and size, with a + button to add more),
-animation speed, photo entry transitions / motion, up to 2 photos and animated backgrounds.
-**⬇ Export MP4** renders the same canvas engine the preview uses to a real H.264 MP4
-(WebCodecs + mp4-muxer, no screen capture) and downloads it; **➕ Add to Video N** still drops it
-into the accordion gallery. Reopening/retargeting the modal and the export/gallery-insertion flow
-retain the existing behaviour.
+In **Add video from template**, the modal keeps its live-preview gallery and editor, now with two
+selectable gallery tabs. The existing 8 motion-typography templates (Halo Warp, Terminal Fracture,
+Ribbon Editorial, Portal Type, Comic Burst, Dream Echo, Perspective Fold, Liquid Bloom — ported
+from the uploaded Typography Motion Studio III HTML) retain their dynamic text-layer, photo-motion,
+and animated-background controls. The new **Interactive scenes** tab adds 14 designs adapted from
+the uploaded Reel Editor v4 HTML. In this editor, clicking a text layer, graphic or background
+loads that element's controls; canvas elements can also be dragged, text can be added, and stickers,
+position, colour, size, animation and enter transitions can be changed per object. Both editors
+render the same scene canvas used by the H.264 MP4 exporter (WebCodecs + mp4-muxer, no screen
+capture). **⬇ Export MP4** downloads the file; **➕ Add to Video N** inserts it into the accordion
+gallery. Reopening/retargeting and the existing gallery-insertion flow are preserved.
