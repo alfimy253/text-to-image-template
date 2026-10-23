@@ -4061,6 +4061,216 @@ export const APP_CSS = `
 		}
 
 
+		/* -----------------------------------------------------
+		 * Bulk-video reference skins (Bug Fix Session #240).
+		 * Token blocks only: the shared
+		 * html[data-theme] block below re-skins every
+		 * component from --t-*, so a new skin needs no
+		 * component rules of its own.
+		 *
+		 * Palette + type are taken from the four themes in
+		 * the uploaded "video_bulk_production" reference
+		 * (Night Lab, Warm Paper, Swiss, Neo Brutalist).
+		 * ----------------------------------------------------- */
+
+		html[data-theme="nightlab"] {
+			--bg: #0b0d12;
+			--card: #141923;
+			--accent: #baff61;
+			--text: #f5f6fa;
+
+			--t-backdrop: #0b0d12;
+			--t-panel: #141923;
+			--t-panel-2: #1b2130;
+			--t-panel-3: #0e1219;
+			--t-line: #2c3444;
+			--t-line-2: #3a4457;
+			--t-ink: #f5f6fa;
+			--t-ink-out: #f5f6fa;
+			--t-heading: #f5f6fa;
+			--t-heading-out: #f5f6fa;
+			--t-muted: #929bad;
+			--t-muted-out: #929bad;
+			--t-accent-ink: #baff61;
+			--t-input: #0c1017;
+			--t-btn-bg: #baff61;
+			--t-btn-ink: #10140d;
+			--t-btn-line: #baff61;
+			--t-btn-bg-hover: #ccff8d;
+			--t-btn-ink-hover: #10140d;
+			--t-btn2-bg: #1b2130;
+			--t-btn2-ink: #f5f6fa;
+			--t-btn2-line: #2c3444;
+			--t-btn2-bg-hover: #262f40;
+			--t-on-accent: #10140d;
+			--t-shadow: 0 12px 30px #0002;
+			--t-radius: 15px;
+			--t-radius-sm: 10px;
+			--t-ok: #baff61;
+			--t-track: #0e1219;
+		}
+
+		html[data-theme="paper"] {
+			--bg: #f0ece3;
+			--card: #fffdf7;
+			--accent: #e85f42;
+			--text: #272720;
+
+			--t-backdrop: #f0ece3;
+			--t-panel: #fffdf7;
+			--t-panel-2: #f5f0e7;
+			--t-panel-3: #faf5ed;
+			--t-line: #ded8cc;
+			--t-line-2: #cfc7b7;
+			--t-ink: #272720;
+			--t-ink-out: #272720;
+			--t-heading: #272720;
+			--t-heading-out: #272720;
+			--t-muted: #777367;
+			--t-muted-out: #777367;
+			--t-accent-ink: #c8472c;
+			--t-input: #fffdf7;
+			--t-btn-bg: #fffdf7;
+			--t-btn-ink: #272720;
+			--t-btn-line: #ded8cc;
+			--t-btn-bg-hover: #f5f0e7;
+			--t-btn-ink-hover: #111111;
+			--t-btn2-bg: #f5f0e7;
+			--t-btn2-ink: #272720;
+			--t-btn2-line: #ded8cc;
+			--t-btn2-bg-hover: #ebe4d7;
+			--t-on-accent: #10140d;
+			--t-shadow: 0 12px 30px #0001;
+			--t-radius: 15px;
+			--t-radius-sm: 10px;
+			--t-ok: #2f7d4f;
+			--t-track: #f5f0e7;
+		}
+
+		html[data-theme="swiss"] {
+			--bg: #f4f5f7;
+			--card: #ffffff;
+			--accent: #2364f5;
+			--text: #15171b;
+
+			--t-backdrop: #f4f5f7;
+			--t-panel: #ffffff;
+			--t-panel-2: #f8f9fb;
+			--t-panel-3: #f8f9fb;
+			--t-line: #dfe3e8;
+			--t-line-2: #c9d0d9;
+			--t-ink: #15171b;
+			--t-ink-out: #15171b;
+			--t-heading: #15171b;
+			--t-heading-out: #15171b;
+			--t-muted: #6d737d;
+			--t-muted-out: #6d737d;
+			--t-accent-ink: #1b4fd0;
+			--t-input: #f8f9fb;
+			--t-btn-bg: #ffffff;
+			--t-btn-ink: #15171b;
+			--t-btn-line: #dfe3e8;
+			--t-btn-bg-hover: #f8f9fb;
+			--t-btn-ink-hover: #15171b;
+			--t-btn2-bg: #f8f9fb;
+			--t-btn2-ink: #15171b;
+			--t-btn2-line: #dfe3e8;
+			--t-btn2-bg-hover: #eef1f5;
+			--t-on-accent: #ffffff;
+			--t-shadow: 0 8px 28px rgba(22, 29, 45, 0.07);
+			--t-radius: 14px;
+			--t-radius-sm: 9px;
+			--t-ok: #1b7f4b;
+			--t-track: #f8f9fb;
+		}
+
+		html[data-theme="neo"] {
+			--bg: #f6f3e9;
+			--card: #fffdf5;
+			--accent: #d8ff00;
+			--text: #111111;
+
+			--t-backdrop: #f6f3e9;
+			--t-panel: #fffdf5;
+			--t-panel-2: #f0ecdf;
+			--t-panel-3: #f0ecdf;
+			--t-line: #111111;
+			--t-line-2: #111111;
+			--t-ink: #111111;
+			--t-ink-out: #111111;
+			--t-heading: #111111;
+			--t-heading-out: #111111;
+			--t-muted: #555348;
+			--t-muted-out: #555348;
+			--t-accent-ink: #111111;
+			--t-input: #fffdf5;
+			--t-btn-bg: #fffdf5;
+			--t-btn-ink: #111111;
+			--t-btn-line: #111111;
+			--t-btn-bg-hover: #d8ff00;
+			--t-btn-ink-hover: #111111;
+			--t-btn2-bg: #f0ecdf;
+			--t-btn2-ink: #111111;
+			--t-btn2-line: #111111;
+			--t-btn2-bg-hover: #e4dfcf;
+			--t-on-accent: #111111;
+			--t-shadow: 4px 4px 0 #111111;
+			--t-radius: 3px;
+			--t-radius-sm: 2px;
+			--t-ok: #166534;
+			--t-track: #f0ecdf;
+		}
+
+		/* Flat, border-forward skins: the upload's per-theme
+		 * rules reduced to the app's surface vocabulary. */
+
+		html[data-theme="neo"] body,
+		html[data-theme="paper"] body,
+		html[data-theme="swiss"] body {
+			background-image: none;
+		}
+
+		html[data-theme="neo"] .studio-card,
+		html[data-theme="neo"] .video-accordion,
+		html[data-theme="neo"] .modal-box,
+		html[data-theme="neo"] .auth-box,
+		html[data-theme="neo"] .cfg-box {
+			border-width: 2px;
+			border-color: var(--t-line);
+			box-shadow: var(--t-shadow);
+		}
+
+		html[data-theme="neo"] .upload-btn,
+		html[data-theme="neo"] #render-btn,
+		html[data-theme="neo"] .app-generate,
+		html[data-theme="neo"] .bulk-toggle,
+		html[data-theme="neo"] .view-switch,
+		html[data-theme="neo"] .view-switch-btn.active {
+			border-width: 2px;
+			border-color: #111111;
+			border-radius: 2px;
+			text-transform: uppercase;
+			letter-spacing: 0.02em;
+			transform: none;
+		}
+
+		html[data-theme="neo"] .upload-btn:active,
+		html[data-theme="neo"] #render-btn:active,
+		html[data-theme="neo"] .app-generate:active {
+			box-shadow: 1px 1px 0 #111111;
+			transform: translate(2px, 2px);
+		}
+
+		html[data-theme="neo"] .app-top {
+			border-bottom-width: 3px;
+			border-bottom-color: #111111;
+		}
+
+		html[data-theme="paper"] .studio-card,
+		html[data-theme="swiss"] .studio-card {
+			box-shadow: var(--t-shadow);
+		}
+
 		.aerial-credit { display: none; }
 		html[data-theme="strata"] .aerial-credit { display: block; text-align: center; font-size: 11px; margin: -10px 0 20px; color: rgba(255,255,255,.8); }
 		html[data-theme="strata"] .aerial-credit a { color: inherit; }
@@ -4671,6 +4881,8 @@ export const APP_CSS = `
 		.cfg-themes {
 			display:
 				flex;
+			flex-wrap:
+				wrap;
 			gap:
 				8px;
 			margin:
@@ -4679,7 +4891,7 @@ export const APP_CSS = `
 
 		.cfg-theme {
 			flex:
-				1 1 0;
+				1 1 150px;
 			display:
 				flex;
 			flex-direction:
@@ -4769,6 +4981,56 @@ export const APP_CSS = `
 				);
 		}
 
+		/* Bug Fix Session #240 skins: four colour chips. */
+
+		.cfg-preview-nightlab {
+			background:
+				linear-gradient(
+					135deg,
+					#0b0d12 0%,
+					#1b2130 55%,
+					#baff61 55%,
+					#baff61 70%,
+					#1b2130 70%
+				);
+		}
+
+		.cfg-preview-paper {
+			background:
+				linear-gradient(
+					135deg,
+					#f0ece3 0%,
+					#fffdf7 55%,
+					#e85f42 55%,
+					#e85f42 70%,
+					#f5f0e7 70%
+				);
+		}
+
+		.cfg-preview-swiss {
+			background:
+				linear-gradient(
+					135deg,
+					#f4f5f7 0%,
+					#ffffff 55%,
+					#2364f5 55%,
+					#2364f5 70%,
+					#f8f9fb 70%
+				);
+		}
+
+		.cfg-preview-neo {
+			background:
+				linear-gradient(
+					135deg,
+					#f6f3e9 0%,
+					#fffdf5 55%,
+					#d8ff00 55%,
+					#d8ff00 70%,
+					#111111 70%
+				);
+		}
+
 		html[data-theme] .cfg-theme {
 			background:
 				var(--t-panel-2);
@@ -4836,21 +5098,32 @@ export const APP_CSS = `
 		}
 
 		.landing-page {
-			--landing-ink: #f5f4f1;
+			--landing-ink: #f3f4f6;
 			--landing-muted: #a6a7b0;
-			--landing-accent: #f5ad57;
+			--landing-faint: #83848d;
+			/* Same accent as the studio theme (html[data-theme]). */
+			--landing-accent: var(--accent);
+			--landing-accent-rgb: 245, 158, 11;
+			--landing-accent-hover: #fbbf24;
+			--landing-on-accent: #1a1713;
 			--landing-line: rgba(255, 255, 255, 0.11);
+			--landing-line-strong: rgba(255, 255, 255, 0.23);
+			--landing-panel: rgba(255, 255, 255, 0.05);
+			--landing-panel-2: rgba(255, 255, 255, 0.022);
+			--landing-panel-line: rgba(255, 255, 255, 0.095);
+			--landing-nav-bg: rgba(15, 17, 21, 0.62);
+			--landing-footer-bg: rgba(11, 12, 16, 0.42);
 			position: relative;
 			isolation: isolate;
 			width: calc(100% + 40px);
 			min-height: 100vh;
 			margin: -20px -20px 0;
 			overflow: hidden;
-			background-color: #101116;
+			background-color: var(--bg);
 			background-image:
-				radial-gradient(ellipse at 74% 14%, rgba(245, 173, 87, 0.12), transparent 34%),
+				radial-gradient(ellipse at 74% 14%, rgba(var(--landing-accent-rgb), 0.12), transparent 34%),
 				radial-gradient(ellipse at 9% 55%, rgba(80, 81, 118, 0.12), transparent 34%),
-				linear-gradient(180deg, #101116 0%, #111218 58%, #101116 100%);
+				linear-gradient(180deg, #0f1115 0%, #121318 58%, #0f1115 100%);
 			color: var(--landing-ink);
 			font-family: "Source Sans Pro", system-ui, -apple-system, sans-serif;
 		}
@@ -4888,8 +5161,8 @@ export const APP_CSS = `
 			height: 82px;
 			margin: 0 auto;
 			padding: 0 clamp(24px, 7vw, 100px);
-			border-bottom: 1px solid rgba(255, 255, 255, 0.075);
-			background: rgba(16, 17, 22, 0.58);
+			border-bottom: 1px solid var(--landing-line);
+			background: var(--landing-nav-bg);
 			-webkit-backdrop-filter: blur(16px);
 			backdrop-filter: blur(16px);
 		}
@@ -4907,9 +5180,9 @@ export const APP_CSS = `
 			justify-content: center;
 			width: 36px;
 			height: 36px;
-			border: 1px solid rgba(245, 173, 87, 0.48);
+			border: 1px solid rgba(var(--landing-accent-rgb), 0.48);
 			border-radius: 11px;
-			background: linear-gradient(145deg, rgba(245, 173, 87, 0.22), rgba(245, 173, 87, 0.04));
+			background: linear-gradient(145deg, rgba(var(--landing-accent-rgb), 0.22), rgba(var(--landing-accent-rgb), 0.04));
 			color: var(--landing-accent);
 			font-size: 1.05rem;
 			font-weight: 900;
@@ -4932,7 +5205,7 @@ export const APP_CSS = `
 			display: flex;
 			align-items: center;
 			gap: clamp(22px, 3.6vw, 48px);
-			color: #b0b1b9;
+			color: var(--landing-muted);
 			font-size: 0.87rem;
 		}
 
@@ -4953,9 +5226,9 @@ export const APP_CSS = `
 			gap: 14px;
 			min-height: 42px;
 			padding: 0 18px;
-			border: 1px solid rgba(245, 173, 87, 0.5);
+			border: 1px solid rgba(var(--landing-accent-rgb), 0.5);
 			border-radius: 7px;
-			background: rgba(245, 173, 87, 0.08);
+			background: rgba(var(--landing-accent-rgb), 0.08);
 			color: var(--landing-ink) !important;
 			font-size: 0.86rem;
 			font-weight: 600;
@@ -4970,7 +5243,7 @@ export const APP_CSS = `
 		.landing-signup:hover {
 			transform: translateY(-1px);
 			border-color: var(--landing-accent);
-			background: rgba(245, 173, 87, 0.15);
+			background: rgba(var(--landing-accent-rgb), 0.15);
 		}
 
 		.landing-main {
@@ -5010,7 +5283,7 @@ export const APP_CSS = `
 			height: 7px;
 			border-radius: 50%;
 			background: var(--landing-accent);
-			box-shadow: 0 0 16px rgba(245, 173, 87, 0.7);
+			box-shadow: 0 0 16px rgba(var(--landing-accent-rgb), 0.7);
 		}
 
 		.landing-hero h1 {
@@ -5056,18 +5329,18 @@ export const APP_CSS = `
 			border: 1px solid var(--landing-accent);
 			border-radius: 7px;
 			background: var(--landing-accent);
-			color: #1a1713;
+			color: var(--landing-on-accent);
 			font-size: 0.92rem;
 			font-weight: 700;
 			cursor: pointer;
-			box-shadow: 0 8px 28px rgba(245, 173, 87, 0.14);
+			box-shadow: 0 8px 28px rgba(var(--landing-accent-rgb), 0.14);
 			transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
 		}
 
 		.landing-primary:hover {
 			transform: translateY(-2px);
-			background: #ffc273;
-			box-shadow: 0 12px 34px rgba(245, 173, 87, 0.24);
+			background: var(--landing-accent-hover);
+			box-shadow: 0 12px 34px rgba(var(--landing-accent-rgb), 0.24);
 		}
 
 		.landing-primary span {
@@ -5078,7 +5351,7 @@ export const APP_CSS = `
 			display: inline-flex;
 			align-items: center;
 			gap: 10px;
-			color: #d0d0d5 !important;
+			color: var(--landing-ink) !important;
 			font-size: 0.88rem;
 			transition: color 160ms ease;
 		}
@@ -5104,7 +5377,7 @@ export const APP_CSS = `
 			align-items: center;
 			gap: 12px;
 			margin-top: 27px;
-			color: #84858f;
+			color: var(--landing-faint);
 			font-size: 0.76rem;
 		}
 
@@ -5112,7 +5385,7 @@ export const APP_CSS = `
 			width: 3px;
 			height: 3px;
 			border-radius: 50%;
-			background: #6e7079;
+			background: var(--landing-faint);
 		}
 
 		.landing-hero-art {
@@ -5126,7 +5399,7 @@ export const APP_CSS = `
 
 		.landing-orbit {
 			position: absolute;
-			border: 1px solid rgba(245, 173, 87, 0.12);
+			border: 1px solid rgba(var(--landing-accent-rgb), 0.12);
 			border-radius: 50%;
 			pointer-events: none;
 		}
@@ -5150,7 +5423,7 @@ export const APP_CSS = `
 			border: 1px solid rgba(255, 255, 255, 0.15);
 			border-radius: 15px;
 			background: linear-gradient(150deg, rgba(38, 39, 47, 0.96), rgba(19, 20, 26, 0.96));
-			box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5), 0 0 55px rgba(245, 173, 87, 0.055);
+			box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5), 0 0 55px rgba(var(--landing-accent-rgb), 0.055);
 			transform: rotate(1.2deg);
 		}
 
@@ -5362,7 +5635,7 @@ export const APP_CSS = `
 			width: 2px;
 			height: 32%;
 			border-radius: 3px;
-			background: rgba(245, 173, 87, 0.75);
+			background: rgba(var(--landing-accent-rgb), 0.75);
 		}
 
 		.preview-wave i:nth-child(3n) { height: 78%; }
@@ -5421,9 +5694,9 @@ export const APP_CSS = `
 			gap: 8px;
 			height: 17px;
 			padding: 0 7px;
-			border: 1px solid rgba(245, 173, 87, 0.19);
+			border: 1px solid rgba(var(--landing-accent-rgb), 0.19);
 			border-radius: 3px;
-			background: rgba(245, 173, 87, 0.055);
+			background: rgba(var(--landing-accent-rgb), 0.055);
 			color: rgba(245, 190, 126, 0.78);
 			font-size: 0.45rem;
 			letter-spacing: 0.12em;
@@ -5432,7 +5705,7 @@ export const APP_CSS = `
 		.preview-audio-track i {
 			flex: 1;
 			height: 5px;
-			background: repeating-linear-gradient(90deg, rgba(245, 173, 87, 0.55) 0 2px, transparent 2px 5px);
+			background: repeating-linear-gradient(90deg, rgba(var(--landing-accent-rgb), 0.55) 0 2px, transparent 2px 5px);
 			opacity: 0.65;
 		}
 
@@ -5495,9 +5768,9 @@ export const APP_CSS = `
 			flex: 0 0 36px;
 			width: 36px;
 			height: 36px;
-			border: 1px solid rgba(245, 173, 87, 0.25);
+			border: 1px solid rgba(var(--landing-accent-rgb), 0.25);
 			border-radius: 50%;
-			background: rgba(245, 173, 87, 0.07);
+			background: rgba(var(--landing-accent-rgb), 0.07);
 			color: var(--landing-accent);
 			font-size: 0.9rem;
 		}
@@ -5509,13 +5782,13 @@ export const APP_CSS = `
 
 		.landing-proof-item b {
 			margin-bottom: 3px;
-			color: #e8e7e4;
+			color: var(--landing-ink);
 			font-size: 0.84rem;
 			font-weight: 600;
 		}
 
 		.landing-proof-item span:not(.proof-icon) {
-			color: #8b8c95;
+			color: var(--landing-muted);
 			font-size: 0.72rem;
 			line-height: 1.45;
 		}
@@ -5568,7 +5841,7 @@ export const APP_CSS = `
 		.landing-step {
 			min-height: 225px;
 			padding: 18px 14px 12px 0;
-			border-top: 1px solid rgba(255, 255, 255, 0.23);
+			border-top: 1px solid var(--landing-line-strong);
 		}
 
 		.landing-step-top {
@@ -5576,7 +5849,7 @@ export const APP_CSS = `
 			align-items: center;
 			justify-content: space-between;
 			margin-bottom: 36px;
-			color: #83848d;
+			color: var(--landing-faint);
 			font-size: 0.6rem;
 			font-weight: 700;
 			letter-spacing: 0.15em;
@@ -5590,7 +5863,7 @@ export const APP_CSS = `
 		.landing-step h3,
 		.landing-feature-card h3 {
 			margin-bottom: 10px;
-			color: #f0efec;
+			color: var(--landing-ink);
 			font-size: 1.04rem;
 			font-weight: 600;
 			letter-spacing: -0.025em;
@@ -5598,16 +5871,16 @@ export const APP_CSS = `
 
 		.landing-step p,
 		.landing-feature-card p {
-			color: #9697a0;
+			color: var(--landing-muted);
 			font-size: 0.83rem;
 			line-height: 1.68;
 		}
 
 		.landing-feature-band {
 			padding: 78px clamp(24px, 5vw, 64px) 84px;
-			border-top: 1px solid rgba(255, 255, 255, 0.07);
-			border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-			background: rgba(255, 255, 255, 0.022);
+			border-top: 1px solid var(--landing-line);
+			border-bottom: 1px solid var(--landing-line);
+			background: var(--landing-panel-2);
 		}
 
 		.landing-feature-heading,
@@ -5635,15 +5908,15 @@ export const APP_CSS = `
 			position: relative;
 			min-height: 210px;
 			padding: 23px 22px;
-			border: 1px solid rgba(255, 255, 255, 0.095);
+			border: 1px solid var(--landing-panel-line);
 			border-radius: 9px;
-			background: linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+			background: linear-gradient(145deg, var(--landing-panel), var(--landing-panel-2));
 			transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
 		}
 
 		.landing-feature-card:hover {
 			transform: translateY(-3px);
-			border-color: rgba(245, 173, 87, 0.38);
+			border-color: rgba(var(--landing-accent-rgb), 0.38);
 			background: rgba(255, 255, 255, 0.055);
 		}
 
@@ -5665,7 +5938,7 @@ export const APP_CSS = `
 			position: absolute;
 			top: 20px;
 			right: 20px;
-			color: #777983;
+			color: var(--landing-faint);
 			font-size: 1rem;
 		}
 
@@ -5694,8 +5967,8 @@ export const APP_CSS = `
 			max-width: 1440px;
 			margin: 0 auto;
 			padding: 27px clamp(24px, 7vw, 100px) 17px;
-			border-top: 1px solid rgba(255, 255, 255, 0.1);
-			background: rgba(11, 12, 16, 0.42);
+			border-top: 1px solid var(--landing-line);
+			background: var(--landing-footer-bg);
 		}
 
 		.landing-footer-brand {
@@ -5709,14 +5982,14 @@ export const APP_CSS = `
 		}
 
 		.landing-footer-brand b {
-			color: #e8e7e4;
+			color: var(--landing-ink);
 			font-size: 0.69rem;
 			letter-spacing: 0.18em;
 		}
 
 		.landing-footer-brand > div > span {
 			margin-top: 4px;
-			color: #81828b;
+			color: var(--landing-muted);
 			font-size: 0.72rem;
 		}
 
@@ -5726,7 +5999,7 @@ export const APP_CSS = `
 			justify-content: center;
 			gap: 13px;
 			margin: 22px 0 20px;
-			color: #a6a7b0;
+			color: var(--landing-muted);
 			font-size: 0.82rem;
 		}
 
@@ -5745,45 +6018,157 @@ export const APP_CSS = `
 			justify-content: space-between;
 			gap: 16px;
 			padding-top: 14px;
-			border-top: 1px solid rgba(255, 255, 255, 0.07);
-			color: #6f7079;
+			border-top: 1px solid var(--landing-line);
+			color: var(--landing-faint);
 			font-size: 0.68rem;
 		}
 
+		/*
+		 * The landing page follows the SAME skins as the studio
+		 * (client/styles.ts THEMES block). The theme's own body
+		 * backdrop (Aerial sky / Stellar gradient) shows through
+		 * by making the landing surface transparent, and every
+		 * landing token is re-declared from the theme tokens so
+		 * panels, rules, accents and type match the studio
+		 * exactly instead of using a second, hand-mixed palette.
+		 */
+
+		html[data-theme] .landing-page {
+			background-color: transparent;
+			background-image: none;
+			--landing-ink: var(--t-ink);
+			--landing-muted: var(--t-muted);
+			--landing-faint: var(--t-muted-out);
+			--landing-accent: var(--t-heading);
+			--landing-accent-rgb: 255, 255, 255;
+			--landing-accent-hover: var(--t-btn-bg-hover);
+			--landing-on-accent: var(--t-on-accent);
+			--landing-line: var(--t-line);
+			--landing-line-strong: var(--t-line-2);
+			--landing-panel: var(--t-panel);
+			--landing-panel-2: var(--t-panel-2);
+			--landing-panel-line: var(--t-line);
+			--landing-nav-bg: rgba(12, 30, 44, 0.16);
+			--landing-footer-bg: rgba(12, 30, 44, 0.2);
+		}
+
+		/* The backdrop itself is the studio theme's body skin. */
+		html[data-theme] .landing-page::before {
+			display: none;
+		}
+
 		html[data-theme="strata"] .landing-page {
-			--landing-accent: #ffffff;
-			background-color: #173c50;
-			background-image:
-				radial-gradient(ellipse at 74% 12%, rgba(211, 242, 255, 0.18), transparent 34%),
-				linear-gradient(180deg, #173c50 0%, #102d3e 100%);
-		}
-
-		html[data-theme="strata"] .landing-brand-mark {
-			border-color: rgba(255, 255, 255, 0.45);
-			background: rgba(255, 255, 255, 0.1);
-		}
-
-		html[data-theme="strata"] .landing-signup,
-		html[data-theme="strata"] .landing-primary {
-			border-color: rgba(255, 255, 255, 0.75);
-		}
-
-		html[data-theme="strata"] .landing-primary {
-			background: #ffffff;
-			color: #183d51;
+			--landing-nav-bg: rgba(12, 46, 66, 0.32);
+			--landing-footer-bg: rgba(12, 46, 66, 0.4);
 		}
 
 		html[data-theme="stellar"] .landing-page {
-			--landing-accent: #f5c4fa;
-			background-color: #281f42;
-			background-image:
-				radial-gradient(ellipse at 80% 12%, rgba(227, 118, 130, 0.28), transparent 35%),
-				linear-gradient(135deg, #282142 0%, #382858 55%, #211c38 100%);
+			--landing-nav-bg: rgba(40, 28, 66, 0.32);
+			--landing-footer-bg: rgba(40, 28, 66, 0.4);
 		}
 
-		html[data-theme="stellar"] .landing-primary {
-			background: #f5c4fa;
-			color: #302246;
+		html[data-theme] .landing-nav {
+			border-bottom-color: var(--t-line);
+		}
+
+		html[data-theme] .landing-brand-mark {
+			border-color: var(--t-line-2);
+			background: var(--t-btn2-bg);
+			color: var(--landing-accent);
+		}
+
+		html[data-theme] .landing-signup {
+			border-color: var(--t-btn-line);
+			background: var(--t-btn2-bg);
+			color: var(--t-ink) !important;
+		}
+
+		html[data-theme] .landing-signup:hover {
+			border-color: var(--t-btn-bg-hover);
+			background: var(--t-btn2-bg-hover);
+		}
+
+		html[data-theme] .landing-primary {
+			border-color: var(--t-btn-line);
+			background: var(--t-btn-bg);
+			color: var(--t-btn-ink);
+		}
+
+		html[data-theme] .landing-primary:hover {
+			background: var(--t-btn-bg-hover);
+			color: var(--t-btn-ink-hover);
+		}
+
+		html[data-theme] .landing-secondary {
+			color: var(--t-ink-out) !important;
+		}
+
+		html[data-theme] .landing-secondary-play {
+			border-color: var(--t-line-2);
+		}
+
+		/*
+		 * The preview illustration is a dark video-editor mock in
+		 * every skin. On translucent skins it becomes a frosted
+		 * panel so it reads as part of the theme instead of a
+		 * black hole in the middle of the hero.
+		 */
+		html[data-theme] .landing-preview-card {
+			border-color: var(--t-line);
+			background: var(--t-panel);
+			box-shadow: 0 30px 90px rgba(0, 0, 0, 0.25), 0 0 55px rgba(0, 0, 0, 0.08);
+			-webkit-backdrop-filter: blur(8px);
+			backdrop-filter: blur(8px);
+		}
+
+		html[data-theme] .landing-preview-topbar,
+		html[data-theme] .preview-control-row,
+		html[data-theme] .preview-timeline {
+			border-color: var(--t-line);
+		}
+
+		html[data-theme] .preview-project-name,
+		html[data-theme] .preview-ready,
+		html[data-theme] .preview-time,
+		html[data-theme] .preview-timeline-label,
+		html[data-theme] .preview-export,
+		html[data-theme] .preview-wave i {
+			color: var(--t-muted);
+		}
+
+		html[data-theme] .preview-float {
+			border-color: var(--t-line);
+			background: var(--t-panel);
+			color: var(--t-ink);
+			-webkit-backdrop-filter: blur(8px);
+			backdrop-filter: blur(8px);
+		}
+
+		html[data-theme] .preview-timeline-clips span {
+			border-color: var(--t-line);
+		}
+
+		html[data-theme] .landing-feature-card:hover {
+			border-color: var(--t-line-2);
+			background: var(--t-panel-3);
+		}
+
+		html[data-theme] .landing-plan-card {
+			border-color: var(--t-line);
+			background: var(--t-panel);
+			-webkit-backdrop-filter: blur(8px);
+			backdrop-filter: blur(8px);
+		}
+
+		html[data-theme] .landing-plan-card.landing-plan-featured {
+			border-color: var(--t-line-2);
+			background: var(--t-panel-3);
+		}
+
+		html[data-theme] .landing-plan-check {
+			border-color: var(--t-line-2);
+			background: var(--t-btn2-bg);
+			color: var(--t-ink);
 		}
 
 		html[data-theme] .landing-page h2 {
@@ -6070,6 +6455,45 @@ export const APP_CSS = `
 			position: relative;
 			max-height: calc(100vh - 32px);
 			overflow-y: auto;
+		}
+
+		.auth-plan-note {
+			margin: 0 0 14px;
+			padding: 9px 11px;
+			border: 1px solid rgba(245, 158, 11, 0.28);
+			border-radius: 8px;
+			background: rgba(245, 158, 11, 0.07);
+			color: #d1d5db;
+			font-size: 0.72rem;
+			line-height: 1.55;
+		}
+
+		html[data-theme] .auth-plan-note {
+			border-color: var(--t-line);
+			background: var(--t-btn2-bg);
+			color: var(--t-muted);
+		}
+
+		/* "No account? Open the free studio" (freemium entry, /free) */
+		.auth-guest-note {
+			margin: -6px 0 14px;
+			color: #9ca3af;
+			font-size: 0.76rem;
+			line-height: 1.5;
+		}
+
+		.auth-guest-note a {
+			color: #fbbf24;
+			font-weight: 600;
+			text-decoration: underline;
+		}
+
+		html[data-theme] .auth-guest-note {
+			color: var(--t-muted);
+		}
+
+		html[data-theme] .auth-guest-note a {
+			color: var(--t-ink);
 		}
 
 		.auth-close {
@@ -6567,6 +6991,1067 @@ export const APP_CSS = `
 
 		html[data-theme] #tpl-modal .tm-photo {
 			border-color: var(--t-line);
+		}
+
+		/* =====================================================
+		 * LANDING — daily credits / plans
+		 * ===================================================== */
+
+		.landing-plans {
+			padding: 84px clamp(24px, 5vw, 64px) 90px;
+			border-top: 1px solid var(--landing-line);
+		}
+
+		.landing-plans-heading {
+			max-width: 1112px;
+			margin: 0 auto 44px;
+		}
+
+		.landing-plans-heading h2 {
+			max-width: 760px;
+		}
+
+		.landing-plans-heading > p:last-child {
+			max-width: 620px;
+			margin-top: 18px;
+			color: var(--landing-muted);
+			font-size: 0.95rem;
+			line-height: 1.7;
+		}
+
+		.landing-plan-grid {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 16px;
+			max-width: 1112px;
+			margin: 0 auto;
+		}
+
+		.landing-plan-card {
+			position: relative;
+			display: flex;
+			flex-direction: column;
+			gap: 16px;
+			padding: 28px 26px 26px;
+			border: 1px solid var(--landing-panel-line);
+			border-radius: 12px;
+			background: linear-gradient(145deg, var(--landing-panel), var(--landing-panel-2));
+		}
+
+		.landing-plan-card.landing-plan-featured {
+			border-color: rgba(var(--landing-accent-rgb), 0.45);
+			background: linear-gradient(145deg, rgba(var(--landing-accent-rgb), 0.09), var(--landing-panel-2));
+		}
+
+		.landing-plan-top {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 14px;
+		}
+
+		.landing-plan-badge {
+			display: inline-flex;
+			align-items: center;
+			min-height: 26px;
+			padding: 0 10px;
+			border: 1px solid rgba(var(--landing-accent-rgb), 0.4);
+			border-radius: 5px;
+			color: var(--landing-accent);
+			font-size: 0.62rem;
+			font-weight: 700;
+			letter-spacing: 0.16em;
+		}
+
+		.landing-plan-price {
+			color: var(--landing-ink);
+			font-size: 1.35rem;
+			font-weight: 700;
+			letter-spacing: -0.03em;
+		}
+
+		.landing-plan-price span {
+			margin-left: 3px;
+			color: var(--landing-faint);
+			font-size: 0.66rem;
+			font-weight: 400;
+			letter-spacing: 0.02em;
+		}
+
+		.landing-plan-card h3 {
+			color: var(--landing-ink);
+			font-size: 1.3rem;
+			font-weight: 600;
+			letter-spacing: -0.03em;
+		}
+
+		.landing-plan-card > p {
+			color: var(--landing-muted);
+			font-size: 0.85rem;
+			line-height: 1.65;
+		}
+
+		.landing-plan-list {
+			display: grid;
+			gap: 10px;
+			margin: 2px 0 6px;
+			padding: 0;
+			list-style: none;
+		}
+
+		.landing-plan-list li {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			color: var(--landing-muted);
+			font-size: 0.85rem;
+		}
+
+		.landing-plan-list b {
+			color: var(--landing-ink);
+			font-weight: 700;
+		}
+
+		.landing-plan-check {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			flex: 0 0 auto;
+			width: 18px;
+			height: 18px;
+			border: 1px solid rgba(var(--landing-accent-rgb), 0.45);
+			border-radius: 50%;
+			background: rgba(var(--landing-accent-rgb), 0.08);
+			color: var(--landing-accent);
+			font-size: 0.58rem;
+		}
+
+		.landing-plan-card .landing-primary {
+			margin-top: auto;
+			width: 100%;
+		}
+
+		.landing-plan-note {
+			color: var(--landing-faint);
+			font-size: 0.72rem;
+			line-height: 1.55;
+			text-align: center;
+		}
+
+		.landing-plans-reset {
+			max-width: 1112px;
+			margin: 22px auto 0;
+			color: var(--landing-faint);
+			font-size: 0.75rem;
+		}
+
+		/* Freemium entry line under the plans */
+		.landing-plans-guest {
+			max-width: 1112px;
+			margin: 8px auto 0;
+			color: var(--landing-faint);
+			font-size: 0.75rem;
+		}
+
+		.landing-plans-guest a {
+			color: var(--landing-ink);
+			font-weight: 600;
+			text-decoration: underline;
+			text-underline-offset: 3px;
+		}
+
+		.landing-plans-guest a:hover {
+			color: var(--landing-accent);
+		}
+
+		@media (max-width: 780px) {
+			.landing-plan-grid {
+				grid-template-columns: 1fr;
+			}
+		}
+
+		@media (max-width: 560px) {
+			.landing-plans {
+				padding: 68px 22px 74px;
+			}
+		}
+
+		/* =====================================================
+		 * DAILY CREDITS — studio pill + popover
+		 * ===================================================== */
+
+		.credit-pill {
+			position: fixed;
+			top: 16px;
+			right: 16px;
+			z-index: 70;
+			display: flex;
+			flex-direction: column;
+			align-items: flex-end;
+			gap: 8px;
+			font-family: "Source Sans Pro", system-ui, sans-serif;
+		}
+
+		.credit-pill[hidden] {
+			display: none !important;
+		}
+
+		.credit-pill-btn {
+			display: inline-flex;
+			align-items: center;
+			gap: 9px;
+			min-height: 38px;
+			padding: 0 13px;
+			border: 1px solid rgba(245, 158, 11, 0.38);
+			border-radius: 999px;
+			background: rgba(15, 17, 21, 0.82);
+			color: #f3f4f6;
+			font: inherit;
+			font-size: 0.78rem;
+			cursor: pointer;
+			-webkit-backdrop-filter: blur(10px);
+			backdrop-filter: blur(10px);
+			transition: border-color 160ms ease, background 160ms ease;
+		}
+
+		.credit-pill-btn:hover {
+			border-color: var(--accent);
+			background: rgba(24, 27, 32, 0.92);
+		}
+
+		.credit-pill-dot {
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+			background: var(--accent);
+			box-shadow: 0 0 10px rgba(245, 158, 11, 0.65);
+		}
+
+		.credit-pill-plan {
+			color: #fbbf24;
+			font-size: 0.64rem;
+			font-weight: 700;
+			letter-spacing: 0.12em;
+			text-transform: uppercase;
+		}
+
+		.credit-pill-sep {
+			width: 1px;
+			height: 14px;
+			background: rgba(255, 255, 255, 0.18);
+		}
+
+		.credit-pill-images {
+			color: #d1d5db;
+		}
+
+		.credit-pill-caret {
+			color: #9ca3af;
+			font-size: 0.7rem;
+		}
+
+		.credit-popover {
+			width: 268px;
+			padding: 14px;
+			border: 1px solid #2e3440;
+			border-radius: 12px;
+			background: #14161c;
+			box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+			color: #f3f4f6;
+		}
+
+		.credit-popover[hidden] {
+			display: none !important;
+		}
+
+		.credit-popover-head {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			padding-bottom: 10px;
+			border-bottom: 1px solid #2e3440;
+			font-size: 0.82rem;
+			font-weight: 700;
+		}
+
+		.credit-plan-tag {
+			padding: 3px 8px;
+			border: 1px solid rgba(245, 158, 11, 0.45);
+			border-radius: 999px;
+			color: #fbbf24;
+			font-size: 0.6rem;
+			font-weight: 700;
+			letter-spacing: 0.12em;
+			text-transform: uppercase;
+		}
+
+		.credit-row {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			padding: 7px 0;
+			color: #9ca3af;
+			font-size: 0.78rem;
+		}
+
+		.credit-row b {
+			color: #f3f4f6;
+			font-weight: 600;
+			text-align: right;
+		}
+
+		.credit-used,
+		.credit-reset {
+			margin-top: 8px;
+			padding-top: 9px;
+			border-top: 1px solid #262b33;
+			color: #6b7280;
+			font-size: 0.68rem;
+			line-height: 1.5;
+		}
+
+		/* Guest popover CTA: free studio -> free account */
+		.credit-signup {
+			width: 100%;
+			margin-top: 10px;
+			padding: 9px 10px;
+			border: 1px solid rgba(245, 158, 11, 0.45);
+			border-radius: 8px;
+			background: rgba(245, 158, 11, 0.12);
+			color: #fbbf24;
+			font: inherit;
+			font-size: 0.72rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+
+		.credit-signup:hover {
+			background: rgba(245, 158, 11, 0.2);
+		}
+
+		html[data-theme] .credit-signup {
+			border-color: var(--t-line-2);
+			background: var(--t-btn2-bg);
+			color: var(--t-ink);
+		}
+
+		html[data-theme] .credit-signup:hover {
+			background: var(--t-btn2-bg-hover);
+		}
+
+		#auth-account-credits {
+			color: #fbbf24;
+		}
+
+		html[data-theme] .credit-pill-btn {
+			border-color: var(--t-line-2);
+			background: var(--t-panel);
+			color: var(--t-ink);
+		}
+
+		html[data-theme] .credit-pill-btn:hover {
+			border-color: var(--t-btn-line);
+			background: var(--t-panel-3);
+		}
+
+		html[data-theme] .credit-pill-plan {
+			color: var(--t-ink);
+		}
+
+		html[data-theme] .credit-pill-images {
+			color: var(--t-ink-out);
+		}
+
+		html[data-theme] .credit-pill-dot {
+			background: var(--accent);
+			box-shadow: none;
+		}
+
+		html[data-theme] .credit-pill-sep {
+			background: var(--t-line);
+		}
+
+		html[data-theme] .credit-pill-caret {
+			color: var(--t-muted);
+		}
+
+		html[data-theme] .credit-popover {
+			border-color: var(--t-line);
+			background: var(--t-backdrop);
+			color: var(--t-ink);
+			box-shadow: var(--t-shadow);
+		}
+
+		html[data-theme] .credit-popover-head,
+		html[data-theme] .credit-used,
+		html[data-theme] .credit-reset {
+			border-color: var(--t-line);
+			color: var(--t-muted);
+		}
+
+		html[data-theme] .credit-row {
+			color: var(--t-muted);
+		}
+
+		html[data-theme] .credit-row b {
+			color: var(--t-ink);
+		}
+
+		html[data-theme] .credit-plan-tag {
+			border-color: var(--t-line-2);
+			color: var(--t-ink);
+		}
+
+		html[data-theme] #auth-account-credits {
+			color: var(--t-ink);
+		}
+
+		/* =====================================================
+		 * STUDIO SHELL (Bug Fix Session #240)
+		 *
+		 * Layout adopted from the uploaded "video_bulk_production"
+		 * reference: a sticky top bar, a page heading, and two
+		 * views — a Bulk grid table and an Editor split into
+		 * "Build your video" (the existing accordions) and a
+		 * Preview monitor (the existing canvas).
+		 *
+		 * Tokens fall back to the built-in palette, so the
+		 * default skin needs no data-theme attribute and the six
+		 * themed skins inherit through --t-*.
+		 *
+		 * The reference's timeline, rail, metrics and preview
+		 * widgets have no function in this app: no markup is
+		 * emitted for them (see the guard at the end of this
+		 * block for stray fragments).
+		 * ===================================================== */
+
+		#studio-app {
+			min-height: 100vh;
+			color: var(--t-ink, var(--text));
+		}
+
+		#studio-app[hidden] {
+			display: none !important;
+		}
+
+		#studio-app .app-top {
+			position: sticky;
+			top: 0;
+			z-index: 60;
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			padding: 10px 18px;
+			background: var(--t-panel, var(--card));
+			border-bottom: 1px solid var(--t-line, #2e3440);
+			-webkit-backdrop-filter: blur(16px);
+			backdrop-filter: blur(16px);
+		}
+
+		#studio-app .app-brand {
+			display: flex;
+			align-items: center;
+			gap: 9px;
+			font-weight: 800;
+			letter-spacing: -0.02em;
+		}
+
+		#studio-app .app-mark {
+			display: grid;
+			place-items: center;
+			width: 31px;
+			height: 31px;
+			border-radius: 10px;
+			background: var(--accent);
+			color: var(--t-on-accent, #10140d);
+			font-family: 'Oswald', sans-serif;
+			font-size: 1rem;
+		}
+
+		#studio-app .app-name {
+			font-size: 0.95rem;
+			text-transform: uppercase;
+			letter-spacing: 0.02em;
+		}
+
+		#studio-app .app-name b {
+			color: var(--accent);
+		}
+
+		#studio-app .grow {
+			flex: 1;
+		}
+
+		#studio-app .view-switch {
+			display: flex;
+			gap: 3px;
+			padding: 4px;
+			background: var(--t-panel-2, #1b2130);
+			border: 1px solid var(--t-line, #2e3440);
+			border-radius: 11px;
+		}
+
+		#studio-app .view-switch-btn {
+			border: 0;
+			background: transparent;
+			color: var(--t-muted, #9ca3af);
+			padding: 8px 11px;
+			border-radius: 7px;
+			font-size: 0.72rem;
+			font-weight: 800;
+			cursor: pointer;
+		}
+
+		#studio-app .view-switch-btn:hover,
+		#studio-app .app-generate:hover,
+		#studio-app .batch-open:hover {
+			transform: none;
+		}
+
+		#studio-app .view-switch-btn:hover {
+			color: var(--t-ink, var(--text));
+		}
+
+		#studio-app .view-switch-btn.active {
+			background: var(--accent);
+			color: var(--t-on-accent, #10140d);
+		}
+
+		#studio-app .app-generate {
+			border: 1px solid var(--accent);
+			background: var(--accent);
+			color: var(--t-on-accent, #10140d);
+			padding: 10px 13px;
+			border-radius: 10px;
+			font-weight: 800;
+			font-size: 0.8rem;
+			cursor: pointer;
+		}
+
+		#studio-app .app-generate:hover {
+			filter: brightness(1.06);
+		}
+
+		#studio-app .app-main {
+			display: flex;
+			flex-direction: column;
+			gap: 16px;
+			max-width: 1180px;
+			margin: 0 auto;
+			padding: 22px 18px 40px;
+		}
+
+		/* ---- heading ---------------------------------------- */
+
+		#studio-app .heading {
+			display: flex;
+			align-items: flex-end;
+			gap: 15px;
+			flex-wrap: wrap;
+			text-align: left;
+			margin: 0;
+			padding: 0;
+		}
+
+		#studio-app .heading::after {
+			display: none;
+			content: none;
+		}
+
+		#studio-app .kicker {
+			color: var(--accent);
+			font-size: 0.62rem;
+			font-weight: 900;
+			letter-spacing: 0.16em;
+			text-transform: uppercase;
+			margin-bottom: 8px;
+		}
+
+		#studio-app .heading h1 {
+			margin: 0;
+			font-family: 'Oswald', sans-serif;
+			font-size: clamp(1.6rem, 2.6vw, 2.2rem);
+			line-height: 1.05;
+			letter-spacing: -0.02em;
+			color: var(--t-heading-out, var(--accent));
+			border: 0;
+			padding: 0;
+			text-shadow: none;
+		}
+
+		#studio-app .heading p {
+			margin: 8px 0 0;
+			color: var(--t-muted-out, #9ca3af);
+			font-size: 0.9rem;
+			letter-spacing: 0;
+			text-transform: none;
+			line-height: 1.5;
+		}
+
+		#studio-app .heading-actions {
+			margin-left: auto;
+			display: flex;
+			gap: 8px;
+			flex-wrap: wrap;
+		}
+
+		#studio-app .heading-actions .bulk-toggle {
+			position: static;
+			width: auto;
+			height: auto;
+			border-radius: 10px;
+			padding: 10px 14px;
+			font-size: 0.82rem;
+			font-weight: 800;
+			background: transparent;
+			color: var(--t-ink, var(--text));
+			border: 1px solid var(--t-line, #2e3440);
+		}
+
+		#studio-app .heading-actions .bulk-toggle:hover {
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+
+		/* ---- views + cards ---------------------------------- */
+
+		#studio-app .view {
+			display: none;
+		}
+
+		#studio-app .view.active {
+			display: block;
+		}
+
+		#studio-app .studio-card {
+			background: var(--t-panel, var(--card));
+			border: 1px solid var(--t-line, #2e3440);
+			border-radius: var(--t-radius, 12px);
+			box-shadow: var(--t-shadow, none);
+			overflow: hidden;
+			color: var(--t-ink, var(--text));
+		}
+
+		#studio-app .card-head {
+			display: flex;
+			align-items: center;
+			gap: 9px;
+			padding: 13px 16px;
+			border-bottom: 1px solid var(--t-line, #2e3440);
+		}
+
+		#studio-app .card-head strong {
+			font-size: 0.8rem;
+			letter-spacing: 0.02em;
+		}
+
+		#studio-app .card-note {
+			margin-left: auto;
+			color: var(--t-muted, #9ca3af);
+			font-size: 0.7rem;
+		}
+
+		#studio-app .preview-dot {
+			width: 7px;
+			height: 7px;
+			border-radius: 50%;
+			background: var(--accent);
+			box-shadow: 0 0 10px var(--accent);
+			flex: 0 0 auto;
+		}
+
+		/* ---- bulk grid -------------------------------------- */
+
+		#studio-app .table-scroll {
+			overflow: auto;
+		}
+
+		#studio-app .batch-table {
+			width: 100%;
+			border-collapse: collapse;
+			white-space: nowrap;
+		}
+
+		#studio-app .batch-table th {
+			text-align: left;
+			padding: 10px 12px;
+			background: var(--t-panel-2, #14161a);
+			color: var(--t-muted, #9ca3af);
+			font-size: 0.62rem;
+			font-weight: 800;
+			letter-spacing: 0.12em;
+			text-transform: uppercase;
+			border-bottom: 1px solid var(--t-line, #2e3440);
+		}
+
+		#studio-app .batch-table td {
+			padding: 10px 12px;
+			border-bottom: 1px solid var(--t-line, #2e3440);
+			color: var(--t-ink, var(--text));
+			font-size: 0.82rem;
+			vertical-align: middle;
+		}
+
+		#studio-app .batch-table tbody tr:last-child td {
+			border-bottom: 0;
+		}
+
+		#studio-app .batch-table tbody tr:hover {
+			background: var(--t-panel-3, rgba(255, 255, 255, 0.03));
+		}
+
+		#studio-app .batch-index {
+			color: var(--t-muted, #9ca3af);
+			font-variant-numeric: tabular-nums;
+		}
+
+		#studio-app .batch-title {
+			font-weight: 700;
+		}
+
+		#studio-app .batch-sub {
+			color: var(--t-muted, #9ca3af);
+			font-size: 0.7rem;
+			margin-top: 3px;
+		}
+
+		#studio-app .batch-badge {
+			display: inline-block;
+			padding: 4px 9px;
+			border-radius: 999px;
+			border: 1px solid var(--t-line, #2e3440);
+			background: var(--t-panel-2, #1b2130);
+			font-size: 0.68rem;
+			font-weight: 800;
+			text-transform: lowercase;
+		}
+
+		#studio-app .batch-badge[data-state="rendering"],
+		#studio-app .batch-badge[data-state="queued"] {
+			border-color: #b45309;
+			color: #b45309;
+			background: rgba(180, 83, 9, 0.1);
+		}
+
+		#studio-app .batch-badge[data-state="done"] {
+			border-color: #15803d;
+			color: #15803d;
+			background: rgba(21, 128, 61, 0.1);
+		}
+
+		#studio-app .batch-badge[data-state="error"],
+		#studio-app .batch-badge[data-state="skipped"] {
+			border-color: #b91c1c;
+			color: #b91c1c;
+			background: rgba(185, 28, 28, 0.1);
+		}
+
+		#studio-app .batch-open {
+			border: 1px solid var(--t-line, #2e3440);
+			background: transparent;
+			color: var(--t-ink, var(--text));
+			border-radius: 8px;
+			padding: 6px 10px;
+			font-size: 0.72rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+
+		#studio-app .batch-open:hover {
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+
+		#studio-app .table-empty {
+			padding: 22px 16px;
+			color: var(--t-muted, #9ca3af);
+			font-size: 0.82rem;
+			text-align: center;
+		}
+
+		#studio-app .table-empty[hidden] {
+			display: none;
+		}
+
+		/* ---- editor ----------------------------------------- */
+
+		#studio-app .studio {
+			display: grid;
+			grid-template-columns: minmax(320px, 2fr) minmax(0, 3fr);
+			gap: 14px;
+			align-items: start;
+			max-width: none;
+			margin: 0;
+			background: transparent;
+			border: 0;
+			border-radius: 0;
+			padding: 0;
+			-webkit-backdrop-filter: none;
+			backdrop-filter: none;
+			box-shadow: none;
+		}
+
+		#studio-app .engine-panels {
+			display: none;
+		}
+
+		#studio-app #video-accordions {
+			max-width: none;
+			margin: 0;
+		}
+
+		#studio-app .editor-build .video-accordion {
+			background: transparent;
+			border: 0;
+			border-bottom: 1px solid var(--t-line, #2e3440);
+			border-radius: 0;
+			box-shadow: none;
+			margin: 0;
+			-webkit-backdrop-filter: none;
+			backdrop-filter: none;
+		}
+
+		#studio-app .editor-build .video-accordion:last-child {
+			border-bottom: 0;
+		}
+
+		#studio-app .editor-build .va-header {
+			background: transparent;
+			padding: 14px 15px;
+		}
+
+		#studio-app .editor-build .video-accordion:hover > .va-header {
+			background: var(--t-panel-3, rgba(255, 255, 255, 0.03));
+		}
+
+		#studio-app .editor-build .va-body {
+			padding: 0 15px 15px;
+		}
+
+		#studio-app .preview-card {
+			position: sticky;
+			top: 84px;
+			display: flex;
+			flex-direction: column;
+		}
+
+		#studio-app .preview-card .canvas-container {
+			margin: 14px 14px 0;
+			width: auto;
+		}
+
+		#studio-app .preview-card .progress-bar-container {
+			margin: 12px 14px 0;
+		}
+
+		#studio-app .preview-card .status-text {
+			margin: 10px 14px 0;
+			font-size: 0.78rem;
+			text-align: center;
+		}
+
+		#studio-app .preview-card .action-bar {
+			margin: 12px 14px 14px;
+			max-width: none;
+			flex-wrap: wrap;
+		}
+
+		#studio-app #render-btn {
+			background: var(--accent);
+			color: var(--t-on-accent, #000000);
+			border: 1px solid var(--accent);
+			font-weight: 800;
+			padding: 11px 16px;
+			border-radius: 10px;
+		}
+
+		#studio-app #render-btn:hover {
+			opacity: 0.92;
+			transform: none;
+		}
+
+		#studio-app .preview-card .action-hint {
+			font-size: 0.78rem;
+		}
+
+		/* ---- timeline guard --------------------------------- */
+
+		/*
+		 * The reference mockup ships a timeline dock. This app
+		 * has no timeline engine, so no timeline markup is
+		 * emitted; this guard keeps any future stray fragment
+		 * from rendering a dead UI.
+		 */
+
+		#studio-app .timeline,
+		#studio-app .timehead,
+		#studio-app .timebody,
+		#studio-app .cliprow,
+		#studio-app .playhead,
+		#studio-app .wave {
+			display: none !important;
+		}
+
+		/* ---- themed chrome ---------------------------------- */
+
+		html[data-theme] #studio-app .app-top {
+			background: var(--t-panel);
+			border-bottom-color: var(--t-line);
+			color: var(--t-ink);
+		}
+
+		html[data-theme] #studio-app .heading h1 {
+			color: var(--t-heading-out);
+			font-weight: 700;
+		}
+
+		html[data-theme] #studio-app .heading p {
+			color: var(--t-muted-out);
+		}
+
+		html[data-theme] #studio-app .studio-card {
+			background: var(--t-panel);
+			border-color: var(--t-line);
+			box-shadow: var(--t-shadow);
+			border-radius: var(--t-radius);
+		}
+
+		html[data-theme] #studio-app .card-head {
+			border-bottom-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .batch-table th {
+			background: var(--t-panel-2);
+			color: var(--t-muted);
+			border-bottom-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .batch-table td {
+			border-bottom-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .batch-badge {
+			background: var(--t-panel-2);
+			border-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .view-switch {
+			background: var(--t-panel-2);
+			border-color: var(--t-line);
+		}
+
+		html[data-theme] #studio-app .view-switch-btn {
+			color: var(--t-muted);
+		}
+
+		html[data-theme] #studio-app .view-switch-btn.active {
+			background: var(--accent);
+			color: var(--t-on-accent);
+		}
+
+		html[data-theme] #studio-app .editor-build .video-accordion,
+		html[data-theme] #studio-app .editor-build .va-header {
+			background: transparent;
+		}
+
+		html[data-theme] #studio-app .heading-actions .bulk-toggle {
+			border-color: var(--t-line);
+			background: var(--t-btn2-bg);
+			color: var(--t-btn2-ink);
+		}
+
+		html[data-theme] #studio-app .heading-actions .bulk-toggle:hover {
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+
+		html[data-theme] #studio-app .app-generate {
+			border-color: var(--accent);
+			background: var(--accent);
+			color: var(--t-on-accent);
+		}
+
+		/*
+		 * The credit pill is fixed. While the studio is on
+		 * screen, park it under the sticky top bar; on the
+		 * landing page it keeps its own corner.
+		 */
+
+		#studio-app:not([hidden]) ~ .credit-pill {
+			top: 78px;
+		}
+
+		@media (max-width: 1100px) {
+			#studio-app .studio {
+				grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
+			}
+		}
+
+		@media (max-width: 860px) {
+			#studio-app .studio {
+				grid-template-columns: 1fr;
+			}
+
+			#studio-app .preview-card {
+				position: static;
+			}
+
+			#studio-app .app-top {
+				flex-wrap: wrap;
+			}
+		}
+
+		@media (max-width: 560px) {
+			#studio-app .app-main {
+				padding: 14px 10px 30px;
+			}
+
+			#studio-app .heading-actions {
+				margin-left: 0;
+				width: 100%;
+			}
+
+			#studio-app .heading-actions .bulk-toggle {
+				flex: 1;
+			}
+
+			#studio-app .app-top {
+				padding: 8px 10px;
+				gap: 8px;
+			}
+
+			#studio-app .app-name {
+				display: none;
+			}
+
+			#studio-app .app-generate {
+				padding: 9px 11px;
+				font-size: 0.74rem;
+			}
+
+			#studio-app:not([hidden]) ~ .credit-pill {
+				top: 66px;
+			}
+		}
+
+		@media (max-width: 560px) {
+			.credit-pill {
+				top: 8px;
+				right: 8px;
+			}
+
+			.credit-pill-btn {
+				min-height: 34px;
+				padding: 0 10px;
+				gap: 7px;
+				font-size: 0.71rem;
+			}
+
+			.credit-popover {
+				width: 246px;
+			}
 		}
 
 `;

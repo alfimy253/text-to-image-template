@@ -49,7 +49,9 @@ curl "http://127.0.0.1:8788/__wipe"
 
 Real worker, instrumented KV. `session` = `GET /api/session` with a valid cookie,
 `login` = `POST /api/login` with valid credentials, `signup` = `POST /api/signup` with a new
-username/email.
+username/email. **These columns are the pre-fix measurements (2026-10-15)**: the `403` rows show
+the removed 7-user cap, and session/login have cost more since the credits work — see the
+2026-10-22 table in §8 for current counts.
 
 | Users in namespace | session | login | signup |
 | --- | --- | --- | --- |
@@ -93,8 +95,8 @@ Both blockers appear only if the 7-user cap is raised, making the signup path re
 GET /__stats  →  {"firstPageKeys":1000,"list_complete":false,"hasCursor":true}
 ```
 
-measured in the real runtime with 3,000 *and* 10,000 user records. `src/index.ts:4383` calls
-`KV_BINDING.list({ prefix: "user:" })` and never follows `cursor`/`list_complete`, so:
+measured in the real runtime with 3,000 *and* 10,000 user records. The pre-fix signup handler
+called `KV_BINDING.list({ prefix: "user:" })` and never followed `cursor`/`list_complete`, so:
 
 - the 7-user cap check only ever sees `min(real_users, 1000)` — any list-based count in the app
   saturates at 1,000;
@@ -128,7 +130,8 @@ Free-plan KV allowances (Cloudflare docs): **100,000 reads/day · 1,000 writes/d
 fail with an error until 00:00 UTC. API routes on this worker also do up to 1,000 external
 operations per invocation.
 
-Measured cost per action:
+Measured cost per action (2026-10-15, **before** the accounts-cap fix and the credits work; the
+current numbers are in §8):
 
 | Action | reads | writes | lists | deletes |
 | --- | --- | --- | --- | --- |
@@ -153,7 +156,8 @@ Queue depth effect on one poll:
 10 jobs: 1 list + 12 gets + 1 put
 ```
 
-Daily budgets on the free plan, from these numbers:
+Daily budgets on the free plan, from these numbers (2026-10-15, before the credits work — §8
+re-derives the session/login costs that changed):
 
 - **Background worker mode dies in ~50 minutes.** It polls every 3 s = 28,800 polls/day; each
   poll costs 1 list against the 1,000 lists/day allowance → `1000 × 3 s = 50 min`. After that
@@ -223,7 +227,8 @@ only inside the request).
 | Duplicate username | **409** |
 | `POST /api/login` afterwards | **200** |
 
-**Operation cost per request (instrumented harness):**
+**Operation cost per request (instrumented harness, 2026-10-15 — before the credits work; the
+2026-10-22 table below supersedes the session/login rows):**
 
 | Request | KV ops | Detail |
 | --- | --- | --- |
@@ -248,3 +253,51 @@ stands unchanged. Only the Workers AI side of the free plan got more expensive �
 **Save theme** (1 write). Both are inside the free-plan allowances quoted above; the only
 new failure mode is a KV read that throws, which falls back to the built-in look instead of
 failing the page (`system-rules.md` RULE 19).
+
+**Update 2026-10-22 (daily credits):** derivations from the code, not new wrangler measurements.
+
+| Operation | KV ops now | Detail |
+| --- | --- | --- |
+| `GET /api/session` | **3 reads** | session + `user:<name>` (for `usertype`) + `credits:<name>` |
+| `POST /api/login` | **3** | 1 user read + 1 session write + 1 credits read (the plan comes from the record already read) |
+| `POST /api/signup` | **3 writes + 2 reads + 1 list** | user + email-index reads, the bounded legacy `list()`, then user, email index and session writes |
+| `GET /api/credits` | **3 reads** | session + user + credits |
+| `GET /image/gen` | **4 ops** | session read + user read + credits read + credits write (1 image) |
+| `POST /api/script` · `/api/voiceover` | **+4 ops** each when signed in | session + user reads, credits read + write |
+| `GET /api/config/users?pw=` | 1 list + up to **100 reads** | 50 accounts × (user + credits) |
+
+Consequences for the free plan (1,000 writes / 100,000 reads per day):
+
+- Image generations are **write-bound**: at most ~1,000 metered images/day across the whole
+  deployment, i.e. 20 free accounts at their full 50/day, or one paid account's 1,200/day does
+  not fit in a single day's writes. A production launch needs Durable Objects or D1 for counters
+  (the KV record is deliberately small and TTL-bounded so migrating is mechanical).
+- Reads are not the constraint: ~25,000 metered generations/day fit in the read allowance.
+- The settings-page listing is bounded at 50 accounts on purpose: 101 ops per load leaves room
+  under the 1,000-operations-per-invocation limit.
+
+**Bug Fix Session #206 (2026-10-22, freemium `/free`):** guest traffic adds one KV record per
+address per day, keyed `ipcredits:<sha256>`, with the same 2-day TTL and lazy daily reset.
+
+| Operation | KV ops now | Detail |
+| --- | --- | --- |
+| `GET /free` | **1 read** | `config:theme`; the `yvs_free` cookie is a response header, no KV write |
+| `GET /studio` (signed in) | **3 reads** | theme + session + user record |
+| `GET /image/gen` (guest, no session cookie) | **2 ops** | `ipcredits:` read + write |
+| `GET /image/gen` (guest with a stale session cookie) | **3 ops** | failed session read + `ipcredits:` read + write |
+| `GET /image/gen` (cold anonymous) | **0 ops** | no cookie to look up, `401` returned before KV |
+| `GET /api/credits` (guest) | **1 read** | `ipcredits:` read |
+| `GET /api/config/ipcredits?pw=` | 1 list + up to **51 reads** | 50 IP records (one get each) |
+
+Consequences:
+
+- Guest generations are **write-bound exactly like account generations**: one KV write per image.
+  A busy freemium day shares the same ~1,000-writes/day free-plan ceiling; 10 images per address
+  means at most 100 distinct guest addresses can max out their allowance per day on the free
+  plan.
+- Guest rows are only created by a metered call, and a row is one small JSON value expiring
+  after 2 days, so the table cannot grow without bound while `expirationTtl` is honoured.
+- `GET /api/config/ipcredits` is bounded at 50 rows for the same per-invocation reason as
+  `GET /api/config/users`: 51 ops per load leaves headroom under the 1,000-operation limit.
+- The `unknown` bucket (requests with no address header) is one row for the whole deployment;
+  it fails closed at 10 images rather than open.

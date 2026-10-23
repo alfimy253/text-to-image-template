@@ -19,12 +19,29 @@ reflect the current day-rotating URL.
 Severity: **S1** security/abuse · **S2** correctness/data loss · **S3** dead code / wrong
 documentation · **S4** cosmetic.
 
+**2026-10-23 — Bug Fix Session #211.** The documentation-vs-code register in `system-rules.md`
+found two runtime defects, both fixed in `src/index.ts` and recorded in
+`bug-fix-session-211.md`: a guest credit refund used to rewrite `ipcredits:<hash>` without the
+`ip`/`maskedIp`/`hash`/`scope` fields, and `GET /api/config/workers` used to throw a `TypeError`
+when the Worker ran without a KV binding. The other 20 register findings were prose drift and are
+listed in that register's resolution table.
+
+**2026-10-23 — Bug Fix Session #240.** A feature session, not an audit: the studio adopted the
+chrome and the four extra skins of an uploaded `video_bulk_production` reference. No new runtime
+finding in the list below was touched. It did add one *structural* fact worth recording for the
+next audit: `#video-accordions` used to exist **twice** in the served markup (one empty host in
+each editor column); the pre-#240 `initVideoStudio()` wrote into the first match, so the second was
+dead markup. The rebuild leaves exactly one host, inside `.editor-build`, and the legacy
+audio/title/caption/controls panels now live in a `display:none` `.engine-panels` block instead of
+being hidden at boot by script. Record: `bug-fix-session-240.md`; new rule: `system-rules.md`
+RULE 22.
+
 | # | Severity | Finding | Status |
 | --- | --- | --- | --- |
-| 1 | S1 | Every data route is anonymous (render, worker, AI, config) | open |
+| 1 | S1 | Most data routes are anonymous (render, worker, `/api/script`, `/api/voiceover`, config GETs). **`/image/gen` is metered per account (RULE 20) or per IP for `/free` guests (RULE 21)** | partially fixed |
 | 2 | S1 | `POST /api/worker/deliver` lets anyone overwrite any job's output | open |
 | 3 | S1 | Sessions never expire in KV; cookie has no `Secure` | open |
-| 4 | S1 | No rate limiting on login/signup/AI routes | open |
+| 4 | S1 | No rate limiting on login/signup/AI routes. **Images are capped per account per day** (50 free / 1,200 paid) **and per IP for guests** (10); scripts and voiceovers remain unlimited by design | partially fixed |
 | 5 | S1 | Settings password hard-coded + client-side only | open (documented) |
 | 6 | S2 | `getBlobStore()` silently zero-fills missing parts → corrupt MP4 | open |
 | 7 | S2 | Job claiming is neither FIFO nor atomic | open |
@@ -55,9 +72,9 @@ documentation · **S4** cosmetic.
   accounts past #1,000 were invisible to the scan), and one `get` per account exceeds the
   documented **1,000 external operations per invocation** at ~1,000 users (measured: aborted at
   1,001 ops → `500`).
-- **After:** the cap is gone (`src/index.ts:4046` — "USER AUTH HELPERS (KV-backed, unlimited
+- **After:** the cap is gone (`src/index.ts` — "USER AUTH HELPERS (KV-backed, unlimited
   users)"), and email uniqueness is a single keyed read of `email:<address>`
-  (`AUTH_EMAIL_PREFIX`, `src/index.ts:4064`), written at signup. Accounts predating the index are
+  (`AUTH_EMAIL_PREFIX` in `src/index.ts`), written at signup. Accounts predating the index are
   covered by a bounded legacy scan that only runs while the namespace holds
   `<= AUTH_LEGACY_SCAN_MAX` (200) accounts — i.e. `<= 200` gets, always inside the operation
   budget.
@@ -131,8 +148,9 @@ Workers AI neuron cost doubled; KV is untouched).
 ### 1 — Every data route is anonymous
 
 **Evidence.** `handleAuthApi` only claims `/api/session`, `/api/login`, `/api/signup`,
-`/api/logout` (`src/index.ts:4161-4679`); the session cookie is read in exactly three places
-(`4146`, `4213`, `4636` — write, session lookup, logout). No other route consults the session, and
+`/api/logout` (inside `handleAuthApi()`); the session cookie is read in exactly three places
+(`POST /api/signup` and `POST /api/login` write it, `GET /api/session` looks it up, and
+`POST /api/logout` deletes it). No other route consults the session, and
 the browser-side overlay (`initAuth`, `app-js.ts`) is a UI gate only.
 
 **Impact.** Anyone who can reach the Worker URL can, without an account:
@@ -140,7 +158,7 @@ the browser-side overlay (`initAuth`, `app-js.ts`) is a UI gate only.
 - `POST /api/render` — queue jobs; 10 in-flight jobs are enough to make the app return
   `{status:"busy"}` for everyone (the cap becomes a denial-of-service lever against real users);
 - `GET /api/worker/poll` — **claim other people's jobs and read their media**: the response
-  carries the video's assets and audio track as base64 (`src/index.ts:3706+`);
+  carries the video's assets and audio track as base64 (`POST /api/render`);
 - `GET /api/render/<id>` — download another user's finished MP4 (ids are random, but the endpoint
   itself performs no ownership check);
 - `POST /api/script`, `POST /api/voiceover`, `GET /tts`, `GET /image/*` — consume Workers AI
@@ -170,10 +188,10 @@ delivery unless the job is `running`.
 
 **Evidence.** Both session writes pass no expiry options —
 `put("session:" + token, JSON.stringify({username, email, createdAt}))`
-(`src/index.ts:4483` on signup, `4588` on login) — whereas job and blob writes all use
+(`POST /api/signup` and `POST /api/login`) — whereas job and blob writes all use
 `expirationTtl`. The cookie is
 `yvs_session=…; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000` (`authSessionCookie`,
-`src/index.ts:4146`) — no `Secure`.
+`authSessionCookie()`) — no `Secure`.
 
 **Impact.** Every login permanently adds a KV key: with the cap removed this now grows without
 bound (the 1 GB free storage is consumed by stale sessions, not by users). The cookie can be sent
@@ -199,10 +217,12 @@ TTL), a login attempt counter with backoff, and a hard cap on concurrent unauthe
 
 ### 5 — Settings password is hard-coded and enforced client-side
 
-**Evidence.** `CONFIG_PASSWORD = "#123admin%"` exists in `src/index.ts:355` **and** in
+**Evidence.** `CONFIG_PASSWORD = "#123admin%"` exists in `src/index.ts` **and** in
 `src/client/config-page-js.ts`; the gate is a JS `===` comparison in the browser, so the value
-ships in the page source. The only server-side checks are `POST /api/config/workers` and
-`POST /api/config/theme` (`body.pw !== CONFIG_PASSWORD → 403`).
+ships in the page source. The server-side checks are the six operator endpoints —
+`POST /api/config/theme`, `POST /api/config/workers`, `GET|POST /api/config/users` and
+`GET|POST /api/config/ipcredits` — each comparing `pw`/`?pw=` against `CONFIG_PASSWORD`
+(`403` on a mismatch). The two `GET`s for theme and workers are open, as documented in RULE 3.
 
 **Impact.** The current settings path is `/{current-day}/config/uvxyz`, with the day taken from
 Asia/Taipei on each request; the old bare `/config/uvxyz` path and stale day paths return `404`.
@@ -218,9 +238,9 @@ short-lived signed token after a server-side check; rotate by updating the secre
 
 ### 6 — `getBlobStore()` silently zero-fills missing parts
 
-**Evidence.** In `getBlobStore` (`src/index.ts:358`), each part is read with
+**Evidence.** In `getBlobStore()`, each part is read with
 `await env.KV_BINDING.get("blob:"+id+":"+i, "stream")` and `if (!body) { return; }`
-(`src/index.ts:407`) — a missing part leaves its slice of the pre-allocated `Uint8Array` as
+(`getBlobStore()`) — a missing part leaves its slice of the pre-allocated `Uint8Array` as
 zeros, and the function still returns `{bytes, contentType, total}`.
 
 **Impact.** A partially expired or partially written blob produces a **corrupt MP4/JSON with no
@@ -235,7 +255,7 @@ incomplete"`.
 
 ### 7 — Job claiming is neither FIFO nor atomic
 
-**Evidence.** `listRenderJobs()` (`src/index.ts:434`) reads the keys with
+**Evidence.** `listRenderJobs()` reads the keys with
 `Promise.all(list.keys.map(...))` and pushes into an array — so the order is **completion
 order**, not key order — and the poll handler takes the first match
 (`jobs.find(j => j.status === "queued")`). Claiming is a separate `put`, so two workers polling
@@ -251,7 +271,7 @@ written with `putIfAbsent` semantics outside KV) — KV alone cannot express com
 
 ### 8 — ASI bug: `return` on its own line returns `undefined`
 
-**Evidence.** `findWavChunk` (`src/index.ts:2851`) contains
+**Evidence.** `findWavChunk` contains
 
 ```js
 			return
@@ -276,7 +296,7 @@ returns `undefined`).
 
 ### 9 — One-frame slides divide by zero
 
-`const p = f / (frames - 1);` (`app-js.ts:12849`). `framesForSlide()` returns
+`const p = f / (frames - 1);` (`app-js.ts`, inside the frame loop). `framesForSlide()` returns
 `Math.max(1, Math.round(30 * duration))`, so a slide whose duration is `<= 1/60 s` yields
 `frames === 1` → `p = 0/0 = NaN` → `ease = NaN` → the canvas receives non-finite transforms and
 the frame renders blank (per spec, non-finite draw arguments are ignored). Reachable only with an
@@ -320,7 +340,7 @@ pre-index signup scan — so `grep` results (and any future edit) can target the
 
 ### 16 — Duplicated and unused constants / inconsistent limits
 
-- `VIDEO_BATCH_SIZE = 2` (`app-js.ts:6152`) is documented as batch rendering in two comments and
+- `VIDEO_BATCH_SIZE = 2` (`app-js.ts:6149`) is documented as batch rendering in two comments and
   never read; the queue is strictly sequential.
 - `AI_IMAGE_WIDTH = 854` / `AI_IMAGE_HEIGHT = 480` (`app-js.ts:8266`) are unused, and the
   surrounding comments disagree with each other ("480px landscape (832x480)" vs "854x480"); the
@@ -333,8 +353,8 @@ pre-index signup scan — so `grep` results (and any future edit) can target the
   weight — its clamp can only ever return 9.
 - `STATUS_COLORS.queued` is unreachable; no client path assigns `queued` to a video.
 - `AUTH_MAX_USERS` was duplicated in both worker and client (removed with the cap).
-- `/tts` caps input at 2,000 chars (`src/index.ts:3236-3243`) while `/api/voiceover` accepts 8,000
-  (`2068-2072`) and chunks at 500 — three different limits for the same upstream engine. `/tts`
+- `/tts` caps input at 2,000 chars (`GET /tts` in `src/index.ts`) while `/api/voiceover` accepts 8,000
+  (the 8,000-char cap) and chunks at 500 — three different limits for the same upstream engine. `/tts`
   also always labels its output `audio/mpeg`, even when the upstream returns WAV, whereas
   `/api/voiceover` sniffs the container.
 - `VIDEO_MAX_VIDEOS = 10` vs the `addVideoAccordion()` comment "max 7".
@@ -353,7 +373,7 @@ a placeholder and document `wrangler kv namespace create KV_BINDING`.
 ### 18 — Unbounded client poll loop
 
 `apiRenderVideo` polls `GET /api/render/<id>` every 4 s inside `while (true)`
-(`app-js.ts:9951`) with no attempt cap, timeout or cancel button. In practice the loop ends when
+(`apiRenderVideo()` in `app-js.ts`) with no attempt cap, timeout or cancel button. In practice the loop ends when
 the job record expires (1-hour `expirationTtl`) and the request 404s — but a dead worker costs
 ~900 pointless polls and leaves the status line spinning until then.
 
@@ -377,8 +397,7 @@ code enumerated exactly those records — but if that matters for compliance, ha
 
 - **No XSS found.** The accordions, AI result cards, auth overlay, footer and the config page build
   nodes with `createElement`/`textContent`. The only three `innerHTML` writes are the legacy cards
-  and the legacy custom-image card, and both escape user text via `escapeHTML()` (`app-js.ts:2048,
-  2238, 2554`; call sites 2069, 2073, 2574). File names, prompts and the worker's `job.name` never
+  and the legacy custom-image card, and both escape user text via `escapeHTML()` (the four `innerHTML` assignments in the legacy card builders). File names, prompts and the worker's `job.name` never
   reach an unescaped `innerHTML`.
 - **Sticker coverage is complete.** All seven UI option values (`none`, `like`, `love`,
   `subscribe`, `like-subscribe`, `watch`, `watch-like-subscribe`) exist in `STICKER_PRESETS` and in
@@ -393,13 +412,14 @@ code enumerated exactly those records — but if that matters for compliance, ha
   buffer); 20 MB chunks sit inside the 25 MiB KV value limit.
 - **No unhandled ASI hazards** other than #8 — every other bare `return` in all five source files
   is followed by a closing brace.
-- **Sessions, jobs and blobs are the only KV key families**, and the TTLs that exist (3600 s jobs,
-  7200 s blobs) are consistent with the flows documented in `userflow.md`.
-- **The user-visible hint strings match the code** (inventoried 2026-10-15, measured on the served
-  pages: 20 tooltips · 8 placeholders · 34 `alert()` call sites · 13 note/hint/tip class usages
-  plus 7 notes/status elements in the settings script ≈ 82 strings, now documented as
-  `system-rules.md` RULE 18 — the settings script contributes 7 note/status elements and 2
-  alerts; the studio's onboarding hint was reworded from "red" to "round" for the themes). Every limit quoted in copy equals its constant — `Max 5 GIF · 25
+- **KV uses the nine key families listed in `system-rules.md` RULE 15**, and every TTL matches the
+  flows documented in `userflow.md`: 3600 s jobs, 7200 s blobs, and the 2-day `credits:` /
+  `ipcredits:` counters.
+- **The user-visible hint strings match the code** (re-measured on the served pages 2026-10-23:
+  21 tooltips · 7 placeholders · 35 `alert()` call sites · 17 note/hint/tip class usages plus
+  7 notes/status elements in the settings script ≈ 87 strings — see `system-rules.md` RULE 18 for
+  the full inventory; the settings script contributes 7 note/status elements and 2 alerts; the
+  studio's onboarding hint was reworded from "red" to "round" for the themes). Every limit quoted in copy equals its constant — `Max 5 GIF · 25
   images · 5 MP4 (1:00 each, silent)` ↔ `MAX_*_UPLOADS`/`MP4_MAX_DURATION_S`, `Add a video (up
   to 10)` ↔ `VIDEO_MAX_VIDEOS`, `Caption text (max 40 characters)` ↔ `CAPTION_MAX_CHARS`, the
   sticker rectangle 435 × 150 ↔ `STICKER_WIDTH/HEIGHT`, `max 25 seconds` ↔ the composer cap,
@@ -429,3 +449,46 @@ code enumerated exactly those records — but if that matters for compliance, ha
 5. **Repair the toolchain** (#11, #12, #17) so regressions can be caught: green `tsc`, delete the
    stale duplicate, parameterise the namespace id.
 6. **Small clean-ups** (#8, #9, #10, #16, #18, #19) — one line each, mostly deletions.
+
+---
+
+## Credits & plans (2026-10-22)
+
+- `/image/gen` is no longer anonymous: when `KV_BINDING` is bound it resolves a session (plan
+  from `user:<name>.usertype`), else the `/free` guest cookie (10/day per IP), else `401`;
+  every call consumes one image credit (`429` at the daily limit, refund on model error).
+  Without a KV binding the gate is skipped, as in the previous open-access mode.
+  `/image/:i` (the two fixed demo prompts) stays unmetered so the landing page can render its
+  sample cards before sign-in.
+- Per-account counters live in `credits:<username>` and are lazy-reset by comparing the stored
+  `day` with the current Asia/Taipei date — there is no scheduled Worker.
+- Plans are stored on the user record (`user:<username>.usertype`, `free` | `paid_user`) and are
+  changed from the settings page via `/api/config/users`. "Paid" is operator-assigned; no payment
+  provider is integrated.
+- Remaining risk: KV is eventually consistent, so parallel generations can overshoot a limit by
+  the number of in-flight requests. Bounded and self-correcting at the daily reset.
+
+---
+
+## Bug Fix Session #206 — freemium access and per-IP credits (2026-10-22)
+
+Full record: `bug-fix-session-206.md`; system rule: `system-rules.md` RULE 21.
+
+- **New public surface.** `GET /free` serves the studio to anyone and marks the browser with
+  `yvs_free=1`. `GET /studio` (accounts) and `GET /paid` (`paid_user`) are the plan-restricted
+  variants; guests are redirected to `/free`.
+- **Guest plan.** 10 AI images/day per IP; videos, scripts and voiceovers unlimited. A cold
+  anonymous `/image/gen` without the cookie stays `401`, so the freemium tier is reachable only
+  through the documented URL.
+- **IP table.** Guest counters live in `ipcredits:<sha256("yvs-guest:"+ip)>` (2-day TTL) and are
+  surfaced to operators by `GET /api/config/ipcredits` + the settings **Guest credits by IP**
+  table. Only the masked address (`203.0.113.0`) is stored; the raw IP is never written.
+- **Known limits (accepted, documented):**
+  - Rotating IP addresses multiplies the 10/day allowance. The bucket is a product limit, not
+    anti-abuse; a WAF/rate-limit rule is the right control for that.
+  - Shared NAT (office, school, carrier) gets 10 images/day for the whole egress address.
+  - `/paid` and `/studio` are navigation gates on a client-side shell; API metering remains the
+    real boundary.
+  - KV eventual consistency can overshoot the guest limit by the number of in-flight requests.
+- **Privacy.** No raw address is persisted. The hash is salted (`yvs-guest:`) and truncated to
+  40 hex characters; the operator view shows the network-masked address only.

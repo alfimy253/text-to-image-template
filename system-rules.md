@@ -10,9 +10,22 @@
 > SRT writer), RULE 18 (the user-visible hint inventory) was added, and RULE 19 (the three
 > skins) was added when the settings page gained its Appearance group. On 2026-10-16, RULE 3
 > was updated for the Asia/Taipei day-rotating settings route.
+> 2026-10-22 revisions: RULE 20 (daily credits, plans, `/api/credits`, `/api/config/users`) was
+> added, the landing page was re-skinned onto the RULE 19 theme tokens instead of its own palette,
+> and `/image/gen` became session-gated and metered.
+> **Bug Fix Session #206 (2026-10-22):** RULE 21 was added — plan-based URLs (`/free`, `/studio`,
+> `/paid`), the freemium guest plan (10 AI images/day per IP), and the `ipcredits:` table behind
+> the settings page. The full session record is `bug-fix-session-206.md`.
+> **2026-10-23 documentation consistency pass:** the 22 findings from the 2026-10-22 audit were
+> fixed across `system-rules.md`, `README.md`, `userflow.md`, `bug-audit.md`, `kv-scale-test.md`
+> and `bug-fix-session-206.md`; the resolved register is at the end of this file.
+> **Bug Fix Session #211 (2026-10-23):** the two runtime defects that pass found — a guest refund
+> erasing the IP row's identity (§3.3) and `GET /api/config/workers` throwing without a KV
+> binding (§6.1) — were fixed in `src/index.ts`. The full record is `bug-fix-session-211.md`.
 >
 > Companion documents: `userflow.md` (the actor-level flows these rules produce),
-> `README.md` (the user-facing summary), `bug-audit.md` and `kv-scale-test.md` (evidence).
+> `README.md` (the user-facing summary), `bug-audit.md`, `kv-scale-test.md`,
+> `bug-fix-session-206.md` and `bug-fix-session-211.md` (evidence).
 
 ---
 
@@ -20,10 +33,12 @@
 
 - The Worker is a single default-exported `fetch(request, env)` handler with sequential
   `if` branches and **no router library** (`src/index.ts:124`).
-  - Routes are matched in a fixed order: `/` → `/image/:i` → `/image/gen` → auth API →
-    KV guard → `/{current-day}/config/uvxyz` → `/api/script` → `/api/voiceover` → `/tts` →
-    `/api/render` (POST) → `/api/render/:id` (GET) → `/api/worker/*` →
-    `/api/config/theme` → `/api/config/workers`.
+  - Routes are matched in a fixed order: `/` → `/free` `/studio` `/paid` → `/image/:i` →
+    `/image/gen` → auth API (`/api/session`, `/api/credits`, `/api/login`, `/api/signup`,
+    `/api/logout`) → render KV guard → `/{current-day}/config/uvxyz` → `/api/script` →
+    `/api/voiceover` → `/tts` → `/api/render` (POST) → `/api/render/:id` (GET) →
+    `/api/worker/*` → `/api/config/theme` → `/api/config/workers` → `/api/config/users` →
+    `/api/config/ipcredits` → 404.
   - Unmatched requests fall through to `new Response("Not Found", { status: 404 })`.
     - Restriction: the 404 body is plain text, not JSON — clients that always
       `.json()` will swallow it (the client relies on status codes instead).
@@ -41,10 +56,11 @@
     `__APP_CSS__`, `__APP_JS__`, `__TEMPLATE_COMPOSER_JS__`, `__PROMPTS_JSON__`.
   - Replacements use *replacer functions* so `$&`-style patterns inside the injected
     JS/CSS are never interpreted; the cached string is never mutated afterwards.
-    - Two routes `.replace()` a **copy**: `/{current-day}/config/uvxyz` (prepends
-      `window.__CONFIG_PAGE = true;` and injects the settings script) and, since the theme
-      feature, **both** HTML routes, which stamp `data-theme="…"` into the `<html>` tag
-      (see RULE 19). The cached string itself is still never mutated.
+    - Every HTML route `.replace()`s a **copy**: the settings page prepends
+      `window.__CONFIG_PAGE = true;` and injects the settings script; `/`, `/free`, `/studio`,
+      `/paid` and the settings page stamp `data-theme="…"` (RULE 19) and the three plan routes
+      also inject `window.__PLAN_MODE` (RULE 21). The cached string itself is still never
+      mutated.
     - Restriction: `__PROMPTS_JSON__` (from `src/prompts.ts`) is the **only** server-side
       interpolation into the client script — every other value the client needs comes from
       an API call.
@@ -58,7 +74,7 @@
 
 ---
 
-## RULE 2 — Accounts are KV-backed with no user cap and client-side-only enforcement
+## RULE 2 — Accounts are KV-backed with no user cap; most data routes stay anonymous
 
 - `POST /api/signup` enforces, in this order:
   - `username` must match `^[a-zA-Z0-9_]{3,20}$` → otherwise `400`.
@@ -70,9 +86,9 @@
       and sessions (sessions are written with no TTL — see below), against the 1 GB free storage.
     - Restriction: signup is 2 reads + 1 list + 3 writes (user record, email index, session), so
       the free plan allows ≈333 new accounts/day on the 1,000-writes/day allowance.
-  - Duplicate username → `409` (`user:<lowercased>`, 1 keyed read).
-  - Duplicate email → `409`, checked with **one keyed read** of the index
+  - Duplicate email → `409`, checked first with **one keyed read** of the index
     `email:<lowercased address>`, written on every successful signup.
+  - Duplicate username → `409` (`user:<lowercased>`, 1 keyed read).
     - Restriction: the index key is the plaintext address (the address was already in the user
       record; hashing the key is the hardening option if that matters). See audit #20.
   - Legacy accounts (created before the index existed) have no `email:` key, so signup also runs
@@ -88,8 +104,9 @@
     past #1,000 were invisible) and did one `get` per user to test emails (**1,000 external
     operations per invocation**, so signup failed from ~1,000 accounts; measured abort at
     1,001 ops → `500`).
-  - Measured scaling (see `kv-scale-test.md`): session/login/signup cost a constant
-    1 read / 1 read + 1 write / 1 list regardless of namespace size — 3,000 keys neither slows
+  - Measured scaling (see `kv-scale-test.md`): session costs a constant 3 reads (session +
+    `user:` + `credits:`), login 3 ops (user read + session write + credits read) and signup
+    6 ops (2 gets + 1 list + 3 puts) regardless of namespace size — 3,000 keys neither slows
     the app nor breaches the free plan's 1 GB / unlimited-keys allowance. The free-plan risk is
     the *operation pattern* (worker polling burns the 1,000 list/day allowance in ~50 minutes),
     not the user count.
@@ -105,18 +122,22 @@
       **without an expiry**, so sessions live in KV forever while the cookie dies in 30 days.
     - Restriction: there is no session rotation, no device list, and logout deletes only the
       one token.
-  - `GET /api/session` reads the cookie, looks up KV, returns `{authenticated:true,user}`,
-    or `401` when the cookie/record is missing.
+  - `GET /api/session` reads the cookie, looks up KV, and returns
+    `{authenticated:true, user:{username,email,usertype}, plan, credits}`, or `401` when the
+    cookie/record is missing. The plan/credits reads are best-effort: a KV error falls back to
+    the free plan and empty counters instead of failing the session.
 - The sign-in gate is **UI-only**.
   - `initAuth()` runs `GET /api/session`; on `200` it opens the studio and shows the account
     footer. On `401` it keeps the public landing visible and the studio hidden; the top **Sign up**
     link, bottom **Log in** link and primary studio CTA open the existing auth modal. On `503`
     (KV unbound) or a network error, the landing remains visible and the primary CTA opens the
     studio, preserving the previous open-access fallback.
-    - Restriction: no route except the auth endpoints themselves checks a session. Every
-      data/rendering endpoint (`/image/*`, `/api/script`, `/api/voiceover`, `/tts`,
-      `/api/render*`, `/api/worker/*`, `GET /api/config/workers`) is anonymous. The login
-      modal is a usability gate, not an authorization boundary.
+    - Restriction: `/image/:i`, `/api/script`, `/api/voiceover`, `/tts`, `/api/render*`,
+      `/api/worker/*`, `GET /api/config/theme` and `GET /api/config/workers` never check a
+      session; the login modal is a usability gate for the studio UI, not an authorization
+      boundary for them. The exceptions are `/image/gen` (session or freemium cookie, metered —
+      RULES 20/21), the plan routes `/studio` and `/paid` (session, RULE 21), and the
+      password-gated `/api/config/users` + `/api/config/ipcredits` (RULE 3).
   - The auth modal is built lazily when an account action is used; the HttpOnly cookie is the
     persistence mechanism (no `localStorage`/`sessionStorage`/IndexedDB anywhere in the client).
     - Restriction: closing the tab loses all unsaved studio state (uploads, prompts, scripts)
@@ -136,16 +157,19 @@
   - Restriction: the rotating path is not an authorization boundary. The page still relies on
     the client-side password gate described below.
 - The settings password is the literal `"#123admin%"`, duplicated in two places:
-  - the Worker constant `CONFIG_PASSWORD` (`src/index.ts:355`), and
+  - the Worker constant `CONFIG_PASSWORD` (`src/index.ts`), and
   - the client script `CONFIG_PASSWORD` (`src/client/config-page-js.ts`).
   - Restriction: the gate is a client-side `===` comparison, so it is cosmetic — the value is
-    readable in the served HTML/JS. Its server-side uses are `POST /api/config/workers` and
-    `POST /api/config/theme`, both of which require `body.pw === CONFIG_PASSWORD`.
+    readable in the served HTML/JS. Its server-side uses are the six operator endpoints:
+    `POST /api/config/theme`, `POST /api/config/workers`, `GET|POST /api/config/users` and
+    `GET|POST /api/config/ipcredits` — the GETs take `?pw=`, the POSTs `body.pw`, and all six
+    compare against `CONFIG_PASSWORD` (`403` otherwise).
   - Restriction: rotating the password therefore requires editing both files and redeploying.
 - Appearance group (added with the theme feature, RULE 19):
-  - three radio cards (Studio / Strata / Stellar) with CSS-only preview swatches, a status
-    line and a **Save theme** button; the group is hidden while the mode select is on
-    "Background worker".
+  - **seven** radio cards (Studio / Aerial / Stellar / Night Lab / Warm Paper / Swiss /
+    Neo Brutalist) with CSS-only preview swatches, a status line and a **Save theme** button;
+    the group is hidden while the mode select is on "Background worker". The cards wrap
+    (`flex: 1 1 150px`) so seven fit in rows rather than being squeezed into one.
   - Restriction: the preview is client-side only — picking a card restyles the page
     immediately but stores nothing, so an unsaved pick is lost on reload.
   - Restriction: the theme is a **global** setting (one page serves every visitor), not a
@@ -160,7 +184,9 @@
 - Registered worker URLs:
   - `POST /api/config/workers` trims the array, drops empties, keeps at most **3** URLs, and
     rejects any entry longer than 500 chars or not matching `^https?://` → `400`.
-  - `GET /api/config/workers` returns `{success:true, urls}` with **no password**.
+  - `GET /api/config/workers` returns `{success:true, urls}` with **no password**; with no
+    `KV_BINDING` it answers `{success:true, urls:[]}` (200) so the settings page still renders,
+    while `POST` answers `503 "User storage not configured"` like the other operator endpoints.
     - Restriction: the registry is readable by anyone and its entries are never contacted by
       the system — dispatching to registered workers does not exist. Each worker operator must
       open their own current-day settings tab and press **Start worker**; that tab polls the queue.
@@ -288,8 +314,8 @@
     - Word targets per minute: 210 / 170 / 140 / 110 (used only to steer the prompt).
   - `env.AI` missing → `503 "AI binding not configured"`.
 - **Two AI stages per request**, both on `SCRIPT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"`
-  (`src/index.ts:1187` SEO constants, `:1355` keyword parser, `:1652` frequency check,
-   `:1762` keyword stage, `:1888` writer stage).
+  (`SEO_*` constants, `parseKeywordSet()`, `keywordUsageError()` and the two stage builders
+  in `src/index.ts`).
   1. **Keyword planner** — `max_tokens: 512`, `temperature: 0.6`, **3 attempts**, JSON only:
      `{"longTail":[{"keyword":"…","short":["…","…"]},{…}]}`.
      - exactly **2 long-tail keywords** (`SEO_LONG_TAIL`), each at most **6 words**
@@ -483,7 +509,7 @@
   | `balanced` (720p · Balanced, default) | 1280 × 720 | 2 500 000 | 160 000 |
   | `high` (720p · High) | 1280 × 720 | 5 000 000 | 192 000 |
 
-  - `FPS = 30` is a constant, not configurable (`app-js.ts:12155`); `KEYFRAME_INTERVAL = FPS * 10`
+  - `FPS = 30` is a constant, not configurable (`FPS` in `app-js.ts`); `KEYFRAME_INTERVAL = FPS * 10`
     (10 s) and creates no visual transitions.
   - The canvas is resized to the preset before encoding, otherwise `VideoFrame` and
     `VideoEncoder` disagree on dimensions.
@@ -505,7 +531,7 @@
     audioBitrate) / 8`; above **250 MB** the user must confirm "may crash the tab"
     (declining returns `skipped`).
   - Encoder backpressure: `waitForEncoder()` blocks while `encodeQueueSize > 12`
-    (`MAX_ENCODE_QUEUE`, `app-js.ts:12597`) and rethrows any asynchronous encoder error.
+    (`MAX_ENCODE_QUEUE` in `app-js.ts`) and rethrows any asynchronous encoder error.
   - Progress bar: audio owns the first 25 %, video frames the remaining 75 %.
   - Cleanup always closes the encoder and aborts a half-written file stream.
 
@@ -517,7 +543,7 @@
   compositing → disposal handling → `{width,height,frames[],startMs[],loopMs}`.
 - Memory guard: `BUDGET_BYTES = 120 MB` for all stored frames
   (`frames * w * h * 4`); if exceeded, every frame is downscaled by
-  `sqrt(BUDGET / raw)` clamped to a floor of `0.15` (`app-js.ts:5661`).
+  `sqrt(BUDGET / raw)` clamped to a floor of `0.15` (`BUDGET_BYTES` in `app-js.ts`, 120 MB).
   - Restriction: huge GIFs still decode at full size first; the budget only limits what stays
     in memory, and the floor means a pathological GIF can still exceed the target.
 - At render time a scratch canvas holds the current GIF frame; the frame index is derived from
@@ -588,14 +614,20 @@
 
 - KV key families:
   - `user:<lowercased username>` — no TTL (permanent).
+  - `email:<lowercased address>` — no TTL (signup uniqueness index; plaintext address).
   - `session:<hex token>` — no TTL (permanent until logout).
   - `job:<jobId>` — TTL 3600 s.
   - `blob:<id>:<part>` and `blob:<id>:_idx` — TTL 7200 s (payloads *and* delivered MP4s).
   - `config:workers` — no TTL (single JSON string).
+  - `config:theme` — no TTL (one of `default | strata | stellar`).
+  - `credits:<lowercased username>` — TTL 2 days (RULE 20 daily counters).
+  - `ipcredits:<40-hex hash>` — TTL 2 days (RULE 21 guest counters).
 - Consequences to state plainly to users:
   - a delivered MP4 is downloadable for roughly 2 hours, and its job record disappears after 1;
   - a browser tab close discards all studio work (no localStorage/IndexedDB usage at all);
-  - accounts and sessions are effectively permanent, so any KV cleanup must be manual.
+  - accounts, sessions, the email index and the two config keys are permanent, so any KV cleanup
+    must be manual; the two credit families are the only TTL-bounded user data and simply start
+    a fresh day at zero after they expire.
 
 ---
 
@@ -606,6 +638,9 @@
   namespace binding `KV_BINDING` with a **hard-coded production namespace id**.
   - Restriction: without `KV_BINDING` the app still boots, but auth answers `503` and all
     render/worker routes answer `503 "Render storage not configured (bind the KV namespace)"`.
+    The two open config GETs keep working: `/api/config/theme` self-defaults to `"default"` and
+    `/api/config/workers` returns `200 {success:true,urls:[]}` (Bug Fix Session #211); their
+    `POST`s answer `503`.
   - Restriction: TypeScript types come from `worker-configuration.d.ts` via
     `"types": ["./worker-configuration.d.ts"]`; run `npm run cf-typegen` after changing bindings.
 - Scripts: `dev` (`wrangler dev`), `deploy` (`wrangler deploy`), `check` (`tsc && wrangler
@@ -640,7 +675,9 @@
   simultaneous signups can both succeed with the same username or email (see RULE 2). The old
   7-user cap that this entry used to describe no longer exists.
 - **Client-only gates:** both the account overlay and the settings password are cosmetic from a
-  security standpoint; every data route is anonymous (see RULE 2, RULE 3).
+  security standpoint; apart from `/image/gen` (metered) and the password-gated
+  `/api/config/users` + `/api/config/ipcredits`, no data route checks a credential (see RULE 2,
+  RULE 3).
 - **Duplicated SEO copy:** the client's SEO hint text and chip tooltips (RULE 18) are hand-copied
   from the Worker's `SEO_*` constants (RULE 7): changing a constant without changing the copy
   leaves the UI stating the old rule, and nothing fails loudly.
@@ -663,12 +700,21 @@
   `class="…note…"` / `class="…hint…"` / `class="…tip…"` in the three template literals that become
   the page — `src/client/app-js.ts` (`APP_JS`), `src/client/markup.ts` (`PAGE_MARKUP`) and
   `src/client/template-composer-js.ts` (`TEMPLATE_COMPOSER_JS`).
-- Counts, measured on the two served pages on 2026-10-18: **21 tooltips · 7 placeholders ·
-  34 `alert()` call sites** (32 in the studio script: 26 `app-js.ts` + 6 `template-composer-js.ts`;
-  2 in the settings script) **· 13 note/hint/tip class usages** in the studio markup plus
-  **7 notes/status elements** built by the settings script — ≈ 82 user-visible hint strings.
-  - Per source file: `app-js.ts` 26/13/5 (alerts/tooltips/placeholders), `template-composer-js.ts`
-    6/7/1, `markup.ts` 0/1/1, `config-page-js.ts` 2/0/0.
+- Counts, re-measured on the two served pages on 2026-10-23 (after Bug Fix Session #240):
+  **22 tooltips · 7 placeholders · 35 `alert()` call sites** (33 in the studio script: 27
+  `app-js.ts` + 6 `template-composer-js.ts`; 2 in the settings script) **· 17 note/hint/tip class
+  usages** in the page markup (13 of them predate Bug Fix Session #206) plus **7 notes/status
+  elements** built by the settings script — ≈ 88 user-visible hint strings.
+  - Per source file: `app-js.ts` 27/13/5 (alerts/tooltips/placeholders), `template-composer-js.ts`
+    6/7/1, `markup.ts` 0/2/1, `config-page-js.ts` 2/0/0.
+  - Bug Fix Session #240 moved the Add Video button into the page heading and added the top bar,
+    the two views and four status lines — one extra tooltip (**Generate** in the top bar) and
+    four extra status elements (`#batch-note`, `#concept-count`, `#preview-state`,
+    `#batch-empty`), all listed below. No new `alert()` and no new placeholder.
+  - Bug Fix Session #206 added the credits/guest strings listed below (auth overlay notes, the
+    credits popover, the `401`/`429` bodies, the settings guest table) **and one alert** — the
+    pre-submit quota box in `submitAiImages()` — which is why the alert count moved from 34 to 35.
+    The tooltip/placeholder counts did not change.
   - Restriction: every one of them is a literal inside a template literal, and the client has no
     access to the Worker's constants - each number in a hint is a **hand-copied duplicate** of a
     constant, i.e. the same drift risk as the hard-coded settings password (RULE 3) and the
@@ -693,20 +739,33 @@
 | `Send all of this video's elements to the render API` | **☁️ API** tooltip | the `/api/render` payload (RULE 4) |
 | `Compose a portrait or landscape MP4 (max 25 seconds) from a design template …` | `Add video from template` tooltip | the composer caps 1-25 s (RULE 13) |
 | `Tip: each template is a looping motion design … The clip is silent …` | composer panel (`.tpl-tips`) | composer motion controls + the silent-clip rule (RULE 13) |
-| `Theme for the studio page — every visitor sees it. Strata and Stellar follow the HTML5UP designs of the same name.` | settings page, Appearance group (`.cfg-note`) | RULE 19 (three skins, global setting) |
-| `Built-in dark studio (default)` · `Light panels, teal accents` · `Violet gradient, frosted panels` | theme cards (`.cfg-theme-sub`) | what each skin in `CONFIG_THEMES` looks like |
-| `Current theme: Studio (default).` / `Current theme: Strata.` | Appearance status line | the value stored under `config:theme` |
+| `Theme for the studio page — every visitor sees it. Aerial and Stellar follow the HTML5UP designs of the same name; Night Lab, Warm Paper, Swiss and Neo Brutalist are the studio's own skins.` | settings page, Appearance group (`.cfg-note`) | RULE 19 (seven skins, global setting) |
+| `Built-in dark studio (default)` · `Blue sky, mountains, white accents` · `Violet gradient, frosted panels` · `Charcoal lab, lime accent` · `Warm light paper, coral accent` · `Clean white, electric blue` · `Cream, hard black lines, lime` | theme cards (`.cfg-theme-sub`) | what each skin in `CONFIG_THEMES` looks like |
+| `Current theme: Studio (default).` / `Current theme: Night Lab.` / `Current theme: Neo Brutalist.` | Appearance status line (`themeLabel()`) | the value stored under `config:theme` |
 | `Preview only — press Save theme to apply it for everyone.` | Appearance status line after picking | the preview is client-side only (RULE 19) |
 | `Saved — reload the studio page to see the new theme.` | Appearance status line after saving | server-side injection on the next page render |
+| `Free plan: 50 AI images every day · unlimited videos, AI scripts and voiceovers.` / `Paid plan (paid_user): 1,200 AI images every day.` | auth overlay (`.auth-plan-note`) | `CREDIT_PLANS.free/paid_user.limits` (RULE 20) |
+| `No account? Open the free studio — 10 AI images a day, counted per IP address.` | auth overlay (`.auth-guest-note`, link to `/free`) | `GUEST_PLAN.limits.images = 10`, `ipcredits:` keying (RULE 21) |
+| `Daily credits` · `Video projects Unlimited` · `AI images N / limit left today` · `AI scripts Unlimited` · `Voiceovers Unlimited` · `Used today: n images · n scripts · n voiceovers` · `Renews in Nh Nm (midnight UTC+8)` | credits pill + popover (`.credit-pill`, `.credit-popover`) | `CREDIT_PLANS`, `creditSummary()`, `creditResetsAt()` (RULE 20) |
+| `Create a free account — 50 images/day` | guest credits popover (`.credit-signup`) | the `free` plan's image limit vs the guest's 10 (RULE 21) |
+| `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).` + `Create a free account for 50 images per day.` (guests) | `429` body, shown in `#va-ai-status-N` and the quota alert | the same plan limits + the guest upgrade path (RULE 20/21) |
+| `Sign in to generate AI images — every free account gets 50 images per day. No account? Open /free for 10 images per day.` | `401` body from `/image/gen` | the `free` and guest image limits |
+| `Free: 50 AI images per day. Paid (paid_user): 1,200 AI images per day. … Counters renew every day at midnight (UTC+8).` | settings page, Plans & credits (`.cfg-note`) | `CREDIT_PLANS` + `creditResetsAt()` (RULE 20) |
+| `Guest credits by IP` / `Visitors who never sign in (GET /free) get 10 AI images per day. …` | settings page, guest table (`.cfg-group-title`, `.cfg-note`) | `GUEST_PLAN`, the `ipcredits:` table (RULE 21) |
 
-### Blocking `alert()` boxes (31 — the app's only modal feedback)
+### Blocking `alert()` boxes (35 — the app's only modal feedback)
 
 - Media intake: `You can add at most <n> images (jpg, png, jpeg).` / `… GIFs.` / `… MP4 clips.`,
   `'<file>' is <n>s long. Each MP4 clip must be at most 1:00.`, `'<file>' could not be read as an MP4 clip.`,
   `Could not read that audio file. Please upload a valid MP3.`,
   `Could not decode that GIF animation. It was added as a still image instead.`,
   `You can add at most 10 videos.`
-- AI images: `Enter an image prompt first.`, `Image generation failed: <error>`
+  Inside an accordion the three media caps are prefixed with `Video <n>: ` (e.g.
+  `Video 2: you can add at most 5 GIFs.`).
+- AI images: `Enter an image prompt first.`, `Image generation failed: <error>`, and the
+  pre-submit quota alert
+  `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).`
+  (guests also get `Create a free account for 50 images per day.`).
 - Render: `Please wait for images to generate or upload your own!` (also gates the **🎬 Generate
   Videos** button), `<project>: add at least one image, GIF or MP4 first.`,
   `A video is already being generated — please wait for it to finish.`,
@@ -714,7 +773,8 @@
   `Your browser cannot encode audio (WebCodecs AudioEncoder missing). Rendering a silent video.`,
   `Audio could not be encoded. Rendering a silent video.`,
   `Video rendering failed: <error>\n\nTry reducing the number of images or closing other browser tabs.`
-- Render API (**☁️ API**): `API error: <error>`, `API: <message>`, `API: job expired or not found.`
+- Render API (**☁️ API**): `API error: <error>`, `API: <message>`, `API: job expired or not found.`,
+  `Render failed: <error>`.
 - Composer: `The MP4 muxer failed to load. Reload the page and try again.`,
   `Your browser does not support WebCodecs. Please use modern Chrome, Edge, or Safari.`,
   `Video export failed: <error>`, `Video N: you can add at most 5 MP4 clips.`,
@@ -729,17 +789,23 @@
 
 ### Onboarding and empty-state hints
 
-- `Click the round Add Video button (top left), then press Generate.` (`.action-hint` in the
-  main panel; it said "red" until the theme work — the button is amber in the default skin
-  but teal or white in the other two).
+- `Click ＋ Add Video above, then press Generate.` (`.action-hint` in the preview card; the
+  button it names is the **＋ Add Video** control in the page heading, and **Generate** exists
+  twice by design — `#render-btn` in the action bar and `#top-generate` in the top bar).
+- `Every video in this project` → `N videos · read-only index` (`#batch-note`),
+  `N of 10 videos` (`#concept-count`), `idle` → `N in queue` (`#preview-state`) and
+  `No videos yet — press ＋ Add Video to start, then open it here or in the Editor.`
+  (`#batch-empty`, Bug Fix Session #240). The first three are written by `renderBatchTable()`,
+  so they always agree with `videoProjects`; the `10` in the count is a hand-copied duplicate of
+  `VIDEO_MAX_VIDEOS`, the same drift risk as the rest of this table.
 - `Pick a template — each preview is the real animation` (composer status),
   `Preview:` (main panel caption preview).
 - Placeholders: `Enter your video title...` (main panel + accordion), `Topic (uses the video title
   if empty)`, `Describe the image (always 480px landscape)`, `Text (max 12 chars)` (composer
   text-layer input).
-- Restriction: the settings page breaks the alert convention on purpose — it reports through
-  status lines (`.cfg-note`, `.cfg-status`) instead of `alert()`s, so a failed theme save
-  leaves the picker usable.
+- Restriction: the settings page reports through status lines (`.cfg-note`, `.cfg-status`) for
+  the theme save and every guest-table action, so a failed theme save leaves the picker usable;
+  only the worker-URL save uses `alert()` (`Save failed: …` — 2 of the 35 call sites).
 - Restriction: inside a video accordion the *only* explanation of the SEO rule is the always-visible
   `.va-note` line under the section title - the keyword chips appear only **after** a successful
   generation, so the rule must be readable *before* the first click. That is why the hint line is
@@ -747,9 +813,9 @@
 
 ---
 
-## RULE 19 — The studio ships three skins, chosen globally on the settings page
+## RULE 19 — The studio ships seven skins, chosen globally on the settings page
 
-- Three looks, selected by the `data-theme` attribute on `<html>`; **absence of the attribute is
+- Seven looks, selected by the `data-theme` attribute on `<html>`; **absence of the attribute is
   the default** (the amber-on-charcoal studio look that shipped first).
   - `strata` — legacy API/storage value for **Aerial**: blue sky and a bundled mountain
     backdrop, diagonal overlays, white type and translucent blue panels, adapted from
@@ -757,26 +823,44 @@
     choices get the new look without a KV migration. Motion respects reduced-motion settings.
   - `stellar` — pink-to-violet 45° gradient backdrop with a fixed dot overlay and frosted
     translucent panels (same provenance: HTML5UP "Stellar").
+  - `nightlab` — charcoal lab (#0b0d12 backdrop, #141923 panels) with a lime `#baff61` accent
+    and 15px corners. The first of the four skins ported from the uploaded
+    `video_bulk_production` reference (Bug Fix Session #240).
+  - `paper` — warm paper (#f0ece3 / #fffdf7) with a coral `#e85f42` accent, dark ink and soft
+    corners; the light skin with the most surface texture.
+  - `swiss` — white (#f4f5f7 / #ffffff) with electric blue `#2364f5`, tight corners and no
+    shadow; the neutral light skin.
+  - `neo` — cream (#f6f3e9 / #fffdf5) with lime `#d8ff00`, 2px `#111` borders, a hard
+    `4px 4px 0 #111` shadow and uppercase labels; the brutalist skin.
+  - Restriction: the four new skins changed **colour tokens only**. The layout they sit in is the
+    same for every skin (RULE 22) — exactly like the uploaded reference, where one markup serves
+    all four of its skins.
   - Restriction: the CSS is **additive**. Every rule is scoped `html[data-theme=…]` (or
     `html[data-theme]`), so without the attribute not a single declaration applies and the default
     look is byte-identical to before the feature.
 - Storage and API:
-  - one KV key, `config:theme`, value `default | strata | stellar`, no `expirationTtl`.
-  - `GET /api/config/theme` → `{success, theme, themes:[default,strata,stellar]}`; open (no
-    password).
+  - one KV key, `config:theme`, value
+    `default | strata | stellar | nightlab | paper | swiss | neo`, no `expirationTtl`. The three
+    pre-#240 values keep working unchanged; no KV migration was needed to add four skins.
+  - `GET /api/config/theme` → `{success, theme, themes:[default,strata,stellar,nightlab,paper,
+    swiss,neo]}`; open (no password). The `themes` array is what the picker renders, so the
+    settings page and the whitelist cannot drift apart by omission.
     - Restriction: it is the only config GET besides `/api/config/workers` that answers
       anonymously; it leaks nothing but the skin name, and the page itself already carries it.
   - `POST /api/config/theme` `{pw, theme}` → `403` wrong password, `400 Unknown theme` (anything
     outside the whitelist, including lowercase misses and attribute-injection attempts),
     `503 Theme storage unavailable` if the KV write throws.
-  - Restriction: only the three whitelisted strings can ever be written or injected — the value
+  - Restriction: only the seven whitelisted strings can ever be written or injected — the value
     is lower-cased and checked against `CONFIG_THEMES` **before** the key is touched, and
-    `applyTheme()` only ever builds `data-theme="<name>"` from that whitelist.
+    `applyTheme()` only ever builds `data-theme="<name>"` from that whitelist. `NEO` is accepted
+    as `neo`; `bogus` is a `400`.
 - Injection is server-side, so there is no flash of the wrong theme:
   - `applyTheme(html, theme)` rewrites a **copy** of the cached page at the literal
-    `<html lang="en">` → `<html lang="en" data-theme="strata|stellar">`; `default` returns the
-    cached string untouched (1 `String.replace` for a themed page, 0 for the default).
-  - Both HTML routes do it: `GET /` and `GET /{current-day}/config/uvxyz`.
+    `<html lang="en">` → `<html lang="en" data-theme="<name>">` for any of the six non-default
+    names; `default` returns the cached string untouched (1 `String.replace` for a themed page,
+    0 for the default).
+  - Every HTML route does it: `GET /`, `/free`, `/studio`, `/paid` (the three plan routes
+    through `appPageResponse()`) and `GET /{current-day}/config/uvxyz`.
   - Restriction: it costs **one extra KV read per page render** (see `kv-scale-test.md` §5) and
     cannot be cached across requests, because a theme change must apply on the next load.
   - Degradation: no `KV_BINDING` → `default`; a throwing `KV_BINDING.get` → `default` (the page
@@ -784,10 +868,12 @@
     above.
 - The picker lives in the settings page's **Appearance** group (RULE 3) and previews instantly by
   setting/removing `data-theme` on `document.documentElement`.
-  - Restriction: the theme names exist in **three** places that must be kept in step — the worker
-    whitelist (`CONFIG_THEMES`), the CSS token blocks (`html[data-theme="…"]`) and the picker's
-    `themeOptions` array. A fourth theme needs all three (plus a preview class), and the worker's
-    `400` is the only guard against a half-added theme.
+  - Restriction: the theme names exist in **four** places that must be kept in step — the worker
+    whitelist (`CONFIG_THEMES`, `src/index.ts`), the CSS token block (`html[data-theme="…"]`
+    in `src/client/styles.ts`), the picker's `themeOptions` array
+    (`src/client/config-page-js.ts`) and the card's swatch class
+    (`.cfg-preview-<name>`). A new theme needs all four; the worker's `400` is the only guard
+    against a half-added theme, and a missing swatch only degrades to an empty chip.
   - Restriction: `applyTheme()` matches the literal `<html lang="en">`; changing that tag (for
     example adding a second attribute in `markup.ts`) silently disables theming everywhere.
   - Unrelated to the theme: the studio's *rendered* output (fonts, colours, sticker, captions) is
@@ -808,3 +894,505 @@
   80px strip; the five photo designs are gone.
 - Editor values have labels beneath them. Blur/opacity sliders show live numeric values.
   The sticky Add/Close footer centers its buttons on both axes.
+
+---
+
+## RULE 20 — Daily credits are per-account, plan-based and reset in Asia/Taipei
+
+- Every user record (`user:<username>`) carries `usertype`; `free_user` and any missing/unknown
+  value read as the canonical `free` plan (so pre-credits accounts keep working).
+  - `free` — unlimited video projects, unlimited AI scripts, unlimited voiceovers and
+    **50 AI images per day**.
+  - `paid_user` — the same unlimited tools plus **1,200 AI images per day**.
+  - New accounts are written with `usertype: "free"` by `POST /api/signup`.
+- Today's counters live in `credits:<username>`:
+  `{day:"YYYY-MM-DD", videos, images, scripts, voiceovers, updatedAt}` with a 2-day TTL.
+  - The `day` stamp is authoritative: a record from an earlier day parses back as all-zero usage
+    and is rewritten by the next consume, so no cron / scheduled Worker is needed.
+  - The boundary is midnight Asia/Taipei (UTC+8, no DST); `creditDay()` and `creditResetsAt()`
+    use a fixed `+8h` offset and the API reports the next reset as an ISO timestamp.
+  - Restriction: the TTL only garbage-collects dormant accounts; the reset itself is lazy and
+    depends on a request arriving.
+- Enforcement is server-side; the client is only a hint.
+  - `GET /image/gen` — with KV bound it resolves a session → the account plan, else the
+    `yvs_free` freemium cookie → `GUEST_PLAN` (RULE 21), else `401`. It consumes one `images`
+    credit *before* the model runs and **refunds** it when `env.AI.run` throws. At the daily
+    limit it answers `429 {success:false,error,credits}`; success responses carry
+    `X-Credit-Plan`, `X-Credit-Images-Limit`, `X-Credit-Images-Remaining`, `X-Credit-Day`,
+    `X-Credit-Reset` and `X-Credit-Scope` (`account` or `ip`).
+  - The two fixed demo prompts on `/image/:i` are samples and stay unmetered (the landing page
+    fetches them before anyone signs in).
+  - `POST /api/script` and `POST /api/voiceover` are unlimited; their counters increment as
+    best-effort telemetry and a credits failure can never fail the route.
+  - With `KV_BINDING` unbound (open-access/e2e mode) there is no gate and no counting, which
+    preserves the previous behavior.
+- `GET /api/credits` returns
+  `{usertype, plan:{id,label,limits}, day, resetsAt, used, remaining}`; a `null` limit/remaining
+  field means "unlimited".
+- Plan changes are a settings-page DB operation:
+  - `GET /api/config/users?pw=…` lists up to 50 accounts with plan, today's usage and remaining
+    allowances (one user read + one credits read per account).
+  - `POST /api/config/users {pw, username, usertype, resetCredits?}` rewrites
+    `user:<name>.usertype` and optionally deletes `credits:<name>`.
+  - Both are password-gated (`403`) and KV-gated (`503`); the plan change applies on the account's
+    next request because every credit read re-reads the user record.
+  - Restriction: there is no payment provider here — "paid" means an operator set
+    `usertype: "paid_user"`.
+  - Restriction: the settings password is a shared constant bundled with the settings page script,
+    so a public deployment cannot treat this route as a secure billing console. It is an operator
+    tool for a trusted instance; real billing needs per-user roles and a payment provider.
+  - Restriction: KV is eventually consistent, so concurrent generations can overshoot by the
+    in-flight count; the overshoot is bounded and self-corrects at the next daily reset.
+- Client:
+  - `/api/session`, signup and login already return `plan` + `credits`; the studio paints the
+    fixed `.credit-pill` (plan + `N / limit left today`) and its popover (unlimited rows, used
+    today, reset countdown).
+  - `submitAiImages()` pre-checks the remaining images, stops the variant loop on `401`/`429`,
+    applies the `credits` payload returned by a `429`, and refreshes `/api/credits` after the pair.
+  - Sign-out clears the pill (`resetCredits()`); the account box shows a
+    "Plan: … — … left today" line.
+
+### UI refinements (2026-10-22)
+
+- The landing page no longer carries a second, hand-mixed palette.
+  `html[data-theme] .landing-page` remaps every `--landing-*` token to the active theme's `--t-*`
+  tokens, makes the landing surface transparent so the skin's own body backdrop (Aerial sky /
+  Stellar gradient) shows through, and re-skins the nav, buttons, preview card, feature cards and
+  the new plan cards.
+- `--landing-accent` now defaults to `var(--accent)` (the studio amber `#f59e0b`, previously
+  `#f5ad57`); themed skins use the theme's heading/accent token (white).
+- New landing section `#landing-plans` (nav link **Plans**) documents both plans and the nightly
+  renewal at midnight UTC+8.
+
+---
+
+## RULE 21 — Plan-based URLs and the freemium (/free) guest tier
+
+**Bug Fix Session #206.** The site serves the same studio shell from three plan-specific
+addresses and gives visitors without an account a small, IP-metered allowance.
+
+- **Actor types.** `anonymous` (no session, no freemium cookie), `guest` (no session, came
+  through `/free`), `free` and `paid_user` (session). `guest` is an actor, not an assignable
+  plan: `GET|POST /api/config/users` still accepts only `free` and `paid_user`.
+- **URL matrix** (`PLAN_MODE_BY_ROUTE` + `appPageResponse()` in `src/index.ts`):
+
+  | Route | anonymous | `free` | `paid_user` |
+  | --- | --- | --- | --- |
+  | `GET /` | landing | landing | landing |
+  | `GET /free` | freemium studio + cookie | studio shell | studio shell |
+  | `GET /studio` | `302 /free` | studio | studio |
+  | `GET /paid` | `302 /free` | `302 /studio` | studio |
+
+  - `/free`, `/studio` and `/paid` return the identical cached HTML plus
+    `window.__PLAN_MODE` (`freemium` / `studio` / `paid`) and `Cache-Control: no-store`.
+  - `/free` answers `200` for signed-in users too; the client keeps the account session, so
+    the same URL works as a "try it" link and as the guest entry.
+  - Restriction: the studio is client-side, so these routes are navigation boundaries, not a
+    security boundary. The data boundary is the credits gate on `/image/gen`.
+- **Freemium cookie.** `GET /free` sets
+  `yvs_free=1; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`.
+  - Anonymous `/image/gen` without the cookie is `401` (message points at `/free`).
+  - The cookie only unlocks the IP bucket; it carries no identity and cannot raise the limit.
+- **Guest plan (`GUEST_PLAN`).** `{id:"guest", label:"Guest", limits:{videos:null, images:10,
+  scripts:null, voiceovers:null}}` — 10 AI images per day, everything else unlimited.
+- **Per-IP counters.** Key `ipcredits:<sha256("yvs-guest:" + ip).hex.slice(0,40)>`.
+  - Address source: `CF-Connecting-IP`, else the first `X-Forwarded-For` hop, else `"unknown"`
+    (one shared bucket — fails closed at 10 images).
+  - Record: `{day, videos, images, scripts, voiceovers, updatedAt, ip, maskedIp, hash, scope}`,
+    TTL 2 days, same lazy Asia/Taipei rollover as `credits:<username>` (RULE 20). A model
+    failure refunds the image and re-merges the identity, so the row keeps its masked address.
+  - Only the masked address is persisted (`203.0.113.0` / `2001:db8:1:2::`); the raw address is
+    never written.
+  - Restriction: one bucket per egress address — a shared NAT gets 10/day for the whole network.
+  - Restriction: KV is eventually consistent, so concurrent guest requests can overshoot by the
+    in-flight count (same as accounts).
+- **Enforcement.**
+  - `GET /image/gen` resolves session → account plan, else `yvs_free` cookie → guest plan, else
+    `401`. A model failure refunds the credit for both key types; success carries
+    `X-Credit-Scope: account|ip` in addition to the RULE 20 headers.
+  - `POST /api/script` and `POST /api/voiceover` remain unlimited for every actor; guests book
+    usage against the IP record as best-effort telemetry.
+  - `GET /api/credits` returns the guest summary (`authenticated:false, guest:true, scope:"ip"`,
+    masked `ip`) for a freemium cookie instead of `401`.
+- **Operator table.** `GET /api/config/ipcredits?pw=…` lists up to 50 guest rows
+  (masked IP, hash, used, remaining, `updatedAt`); `POST {pw, key}` deletes one row (reset).
+  Both are password-gated (`403`) and KV-gated (`503`). The settings page renders them as the
+  **Guest credits by IP** table and hides the group in background-worker mode.
+- **Client.**
+  - `PLAN_MODE = window.__PLAN_MODE || ""`; on `/free`, a `401` from `/api/session` boots the
+    studio as `authAccess = "freemium"` and paints the guest credits pill
+    (**Guest · 10 / 10 left today**).
+  - The guest popover adds **Create a free account — 50 images/day** (opens the sign-up
+    overlay); the `429` body and pre-submit check add the same upgrade hint.
+  - Signing out of `/free` returns to guest mode rather than the landing page.
+  - The auth overlay links to `/free`; the landing nav, plans section and footer all link to
+    the freemium studio.
+- **Documentation.** The complete session record (matrix, payloads, privacy notes, test
+  evidence) is `bug-fix-session-206.md`.
+
+
+---
+
+## RULE 22 — The studio shell is one state behind two views
+
+- The studio page is a **shell** (top bar, page heading) around two sibling views inside
+  `main.app-main`; exactly one carries `.active` and the layout block does the rest
+  (`#studio-app .view { display: none }` / `.view.active { display: block }`):
+  - `#view-table` — the **Bulk grid**: a read-only index of `videoProjects`, one row per video
+    (number, title, prompt excerpt, scene counts, MP3 length, state, **Open ↗**).
+  - `#view-editor` — the **Editor**: `.studio-card.editor-build` (`#video-accordions`) beside
+    `.studio-card.preview-card` (canvas, progress, status, action bar). It is the boot view.
+- The switch is `#view-switch` → `[data-layout="table"|"editor"]`, handled by
+  `setStudioLayout()`. The choice is a **module variable**; RULE 15 forbids client storage, so a
+  reload always starts in the Editor.
+- The grid is a **view, not a controller** (Bug Fix Session #240):
+  - `renderBatchTable()` rebuilds `#batch-rows` from the same `videoProjects` array the engine
+    uses; it never creates, copies, deletes or persists a project.
+  - **Open ↗** calls `focusVideoInEditor(n)`, which switches the view, expands `#va-body-N` /
+    `#va-arrow-N` with the same inline-`display` mechanism as `toggleVideoAccordion()` and scrolls
+    the accordion into view.
+  - A delegated `input` listener on `#video-accordions` re-renders the grid when `#va-title-N` or
+    `#va-ai-prompt-N` changes, and `updateVideoStatus(n)` re-renders it after a status change, so
+    the two views cannot show different states.
+  - Restriction: there are **no bulk operations** — no checkbox column, duplicate, delete, export,
+    search or queue badge. The uploaded reference had them; this app does not, and the grid
+    deliberately does not pretend to.
+- Only **re-parenting** was allowed: `initVideoStudio()` hides `.audio-panel`, `.controls` and
+  `#gallery`, moves `#render-btn` into `#action-bar`, and every handler looks nodes up by `id` or
+  class — never by parent. The legacy panels live on in `.engine-panels`
+  (`display: none` in CSS, so nothing flashes before the script runs) and their ids
+  (`#file-upload`, `#upload`, `#quality-select`, …) are still in the DOM.
+- **No timeline.** The reference's `.timeline` dock (`.timehead`, `.timebody`, `.cliprow`,
+  `.playhead`, `.wave`) has no engine in this app, so no markup or JS is emitted; a
+  `display: none !important` guard keeps a stray fragment from ever rendering.
+- The shell is **global**, not per-skin (RULE 19): the seven skins recolour it through `--t-*`.
+  Omitted because they had no function: the reference's left rail, metric strip, in-bar theme
+  picker, preview hero / scene strip / detail grid / play button.
+- The fixed credits pill is parked under the sticky bar with
+  `#studio-app:not([hidden]) ~ .credit-pill { top: 78px }` (66px under 560px); on the landing page
+  it keeps its own corner.
+- Record: `bug-fix-session-240.md`.
+
+---
+
+## Documentation vs code — inconsistency register (2026-10-22)
+
+> Produced by reading every Markdown file against the working tree at commit `e53796f`
+> (`src/index.ts` 7,156 lines at that commit — 7,205 after the fix pass · `src/client/app-js.ts`
+> 14,832 lines · served page 708,110 B with 1 inline script · CSS 420,563 B). Behavioural claims were re-checked by bundling the worker with
+> esbuild and running it against a counting mock KV; counts were re-measured on the source with
+> `grep`/`wc`; sizes come from `createHTML()` and the CSS parse.
+>
+> Severity: **H** = would give a reader the wrong access-control or data-retention model ·
+> **M** = wrong behaviour, number, or API shape · **L** = stale copy, anchor, or historical table.
+>
+> **Status (2026-10-23): every finding below is fixed.** Twenty-one were documentation-only;
+> §3.3 also needed a code change (`creditRefundKey()` now re-merges the guest identity on a
+> refund), and §6.1 — found while fixing — needed a two-line guard.
+> The entries are kept verbatim as the record of what was wrong; what changed is in the table
+> below and in *Additional drift found while fixing*. Verification: the four mock-KV suites pass
+> (43 + 11 + 8 + 15 = 77 checks), `npx tsc --noEmit` still reports only the pre-existing 48
+> errors, and the live `wrangler dev` smoke test was re-run (`/free`, `/studio`, `/api/credits`,
+> `/image/gen` refund).
+
+| # | Resolution |
+| --- | --- |
+| 1.1 | RULE 2, RULE 17 and `userflow.md` §1 now list the anonymous routes and the three exceptions. |
+| 1.2 | RULE 20 documents session → `yvs_free` → `401`, plus `X-Credit-Scope`; the `bug-audit.md` "Credits & plans" bullet was rewritten. |
+| 1.3 | `README.md` routes table + freemium bullet and `userflow.md` §2 now say "when KV is bound"; the unbound open mode is stated. |
+| 1.4 | RULE 1's route list now includes the plan routes, all five auth paths and the two config GETs, before the `404`. |
+| 1.5 | RULE 3 and `bug-audit.md` #5 list all six password-checked endpoints; the theme/workers GETs are marked open. |
+| 1.6 | `bug-fix-session-206.md` §3 split the row into one open row and one password row. |
+| 1.7 | RULE 1, RULE 19 and `userflow.md` §7 say "every HTML route (five today)". |
+| 2.1 | RULE 18 recounts 35 alerts (27 + 6 + 2), adds the quota alert, `Render failed:` and the `Video N:` cap messages, and the heading now says 35. |
+| 2.2 | RULE 18 (table + RULE 3's card list) now quote the Aerial card, the Aerial group note and "Current theme: Aerial." |
+| 2.3 | RULE 18 scopes "never alerts" to the theme save and names the two worker-save alerts. |
+| 2.4 | `bug-audit.md`'s verified bullet is re-measured (21/7/35/17 ≈ 87) and defers to RULE 18 instead of restating counts. |
+| 2.5 | RULE 2 and `kv-scale-test.md` §8 use 3-read session, 3-op login and 6-op signup (2 gets + 1 list + 3 puts). |
+| 3.1 | RULE 15 lists all nine key families and their TTLs; the "permanent" sentence is scoped to the non-credit keys. |
+| 3.2 | `bug-audit.md`'s verified list points at RULE 15's nine families. |
+| 3.3 | **Code fixed (Bug Fix Session #211):** `creditRefundKey(env,key,kind,amount=1,meta=null)` merges the identity back after the state read, and the guest failure path passes `guestCreditMeta(creditGuest)`. Harness: a throwing `AI.run` returns `500` and the `ipcredits:` row keeps `ip`/`maskedIp`/`hash`/`scope`. Record: `bug-fix-session-211.md` §2. |
+| 4.1 | `userflow.md` §3c shows `usertype:"guest"` plus the plan object. |
+| 4.2 | `userflow.md` §3b/§3c describe the `<n> of 2 failed: <error>` status line and the final alert. |
+| 4.3 | `userflow.md` §8 adds the `/free` guest boot and lists all five theme routes. |
+| 4.4 | `userflow.md` §2/§6 and `bug-audit.md` #7 now describe the completion-order claim (no FIFO guarantee). |
+| 5.1 | `userflow.md` header re-measured (≈7,200 / 14,832 lines, ~700 KB) and the `src/page.ts` comment was updated. |
+| 5.2 | Drifted `path:line` references were replaced with function/constant names in RULE 3/11/19, `userflow.md` §9, `bug-audit.md` and `kv-scale-test.md` §4a; the table above is kept as the historical record. |
+| 5.3 | `kv-scale-test.md` §2/§5 are labelled pre-fix measurements, §8's signup row is corrected to 2 gets + 1 list + 3 puts, and §4a now cites the pre-fix signup handler. |
+
+### 1. Access control, gates and routes
+
+**1.1 "Every data route is anonymous" — RULE 2, RULE 17, `userflow.md` §1. [H] — ✅ fixed 2026-10-23**
+Doc says: RULE 2's heading promises *client-side-only enforcement* and its restriction says
+"no route except the auth endpoints themselves checks a session. Every data/rendering endpoint
+(`/image/*`, …) is anonymous"; RULE 17 repeats "every data route is anonymous"; userflow's actor
+table says "All data routes (… `/image/*` …) are unauthenticated".
+Code does: `/image/gen` resolves the session before generating (`src/index.ts:355–424`), `/studio`
+and `/paid` resolve it before serving the shell (`:167–216`), and `/api/credits` reads it as well.
+Still anonymous: `/image/:i`, `/api/script`, `/api/voiceover`, `/tts`, `/api/render*`,
+`/api/worker/*`, `GET /api/config/theme`, `GET /api/config/workers`.
+Fix: replace the three passages with that list.
+
+**1.2 `/image/gen` documented as session-only — RULE 20 and `bug-audit.md` "Credits & plans". [H] — ✅ fixed 2026-10-23**
+Doc says: "with KV bound it requires a session (`401` otherwise)" and "requires `yvs_session` …
+(`401` signed out, `429` at the daily limit)".
+Code does: session → `yvs_free` cookie → guest plan (`GUEST_PLAN`, 10/day per IP) → only a request
+with neither gets `401` (`src/index.ts:341–424`). Success also carries `X-Credit-Scope`
+(`:496`). The audit bullet also contradicts its own "Bug Fix Session #206" section a few lines
+below it.
+Fix: add the guest step and `X-Credit-Scope` to RULE 20; reword the audit bullet.
+
+**1.3 The `401` is documented as unconditional — `README.md` routes table + freemium bullet. [M] — ✅ fixed 2026-10-23**
+Doc says: "`401` cold anonymous" and "Anonymous image generation is only unlocked by the
+`yvs_free=1` cookie that `/free` sets".
+Code does: when `KV_BINDING` is unbound the whole gate is skipped (`if (env && env.KV_BINDING)`,
+`src/index.ts:355`) and generation stays free and unmetered — exactly as RULE 20 and
+`bug-fix-session-206.md` §6 (resolution order, item 4) say. `userflow.md` §2 repeats the absolute claim.
+Fix: write "with KV bound" in both places.
+
+**1.4 Route order list — RULE 1. [M] — ✅ fixed 2026-10-23**
+Doc says: `/` → `/image/:i` → `/image/gen` → auth API → KV guard → settings → `/api/script` →
+`/api/voiceover` → `/tts` → `/api/render` → `/api/render/:id` → `/api/worker/*` →
+`/api/config/theme` → `/api/config/workers`.
+Code does: `/free` `/studio` `/paid` are matched immediately after `/` (`src/index.ts:167`), and
+`/api/config/users` (`:4651`) and `/api/config/ipcredits` (`:5013`) are matched after
+`/api/config/workers`, before the 404 (`:5207`).
+Fix: extend the list (order is load-bearing: `/image/gen` is matched after `/image/:i`).
+
+**1.5 Only two endpoints use the settings password — RULE 3 and `bug-audit.md` #5. [M] — ✅ fixed 2026-10-23**
+Doc says: "Its server-side uses are `POST /api/config/workers` and `POST /api/config/theme`"; the
+audit says "The only server-side checks are `POST /api/config/workers` and
+`POST /api/config/theme`".
+Code does: six endpoints compare the same constant — `POST /api/config/theme`
+(`src/index.ts:4410`), `POST /api/config/workers` (`:4559`), `GET|POST /api/config/users`
+(`:4662`/`:4668`) and `GET|POST /api/config/ipcredits` (`:5023`/`:5029`) — each returning
+`403 Wrong password`.
+Fix: list all six and keep the "the gate is not a real auth boundary" conclusion.
+
+**1.6 `GET|POST /api/config/*` marked password-only — `bug-fix-session-206.md` §3. [L] — ✅ fixed 2026-10-23**
+Doc says: a single row, "`GET|POST /api/config/*` | password | password | password".
+Code does: `GET /api/config/theme` (`src/index.ts:4378`) and `GET /api/config/workers` (`:4506`)
+answer anonymously; only the two GETs for users/ipcredits need `?pw=`. RULE 3, RULE 19 and
+`userflow.md` §2 already say this correctly.
+Fix: split the row into "theme/workers GET open, everything else password".
+
+**1.7 "Both HTML routes" — RULE 1, RULE 19, `userflow.md` §7. [L] — ✅ fixed 2026-10-23**
+Doc says: "Two routes `.replace()` a copy … and **both** HTML routes, which stamp
+`data-theme="…"`"; "Both HTML routes do it: `GET /` and `GET /{current-day}/config/uvxyz`"; "(both
+HTML routes stamp data-theme on `<html>` from then on)".
+Code does: five routes serve the shell and all call `applyTheme()` — `/` (`src/index.ts:140`),
+`/free` `/studio` `/paid` (through `appPageResponse`, `:6363`) and the settings page (`:898`).
+Fix: say "every HTML route (5 today)" and stop counting them.
+
+### 2. Credits, counts and UI contract text
+
+**2.1 `alert()` counts and inventory — RULE 18. [M] — ✅ fixed 2026-10-23**
+Doc says: "34 `alert()` call sites (32 in the studio script: 26 `app-js.ts` + 6
+`template-composer-js.ts`; 2 in the settings script)", while the section heading says
+"Blocking `alert()` boxes (31 …)".
+Code does: 27 in `app-js.ts` + 6 in `template-composer-js.ts` = 33 in the page, plus 2 in
+`config-page-js.ts` = **35**; `app-js.ts` is the file that is off (27, not 26; the quota alert at
+`app-js.ts:8365` is one of the call sites the old count missed). The bullet list also omits the per-video cap alerts
+(`Video N: you can add at most … GIFs/images/MP4 clips`, `:6744`, `:6762`, `:6779`, `:8766`), the
+`Render failed: <error>` alert (`:11211`) and the quota alert itself.
+Fix: recount to 35, and either add the five missing messages or state that the list covers distinct
+messages only.
+
+**2.2 Theme strings — RULE 18 table. [M] — ✅ fixed 2026-10-23**
+Doc says: the theme cards are `Built-in dark studio (default)` · `Light panels, teal accents` ·
+`Violet gradient, frosted panels`; the group note says "Strata and Stellar follow the HTML5UP
+designs"; the status line is "Current theme: … / Current theme: Strata."
+Code does: `Blue sky, mountains, white accents` for the Aerial card, "Aerial and Stellar follow
+the HTML5UP designs of the same name", and "Current theme: Aerial." (the `themeOptions` array and
+`loadTheme` in `config-page-js.ts`).
+Fix: update the three strings (the rest of the repo already uses Aerial).
+
+**2.3 "The settings page never alerts" — RULE 18 restriction. [L] — ✅ fixed 2026-10-23**
+Doc says: "the settings page breaks the alert convention … it reports through status lines
+(`.cfg-note`, `.cfg-status`) instead of `alert()`s".
+Code does: the worker-save handler has two alerts (`alert("Save failed: …")`,
+`alert("Save failed: network error")`) — RULE 18's own per-file line already says
+`config-page-js.ts 2/0/0`.
+Fix: scope the sentence to the theme save, which does use `themeStatus`.
+
+**2.4 Tooltip/placeholder/alert totals — `bug-audit.md` "every claim verified" section. [L] — ✅ fixed 2026-10-23**
+Doc says: "20 tooltips · 8 placeholders · 34 `alert()` call sites … ≈ 82 strings".
+Code does: 21 `title="` · 7 `placeholder="` · 35 alerts. Per file, as alerts/tooltips/
+placeholders: `app-js.ts` 27/13/5, `template-composer-js.ts` 6/7/1, `markup.ts` 0/1/1 and
+`config-page-js.ts` 2/0/0. RULE 18 already quotes 21/7; only its alert number is wrong (see 2.1).
+Fix: reference RULE 18 instead of restating the numbers.
+
+**2.5 Signup and session operation counts — RULE 2 and `kv-scale-test.md`. [L] — ✅ fixed 2026-10-23**
+Doc says: "session/login/signup cost a constant 1 read / 1 read + 1 write / 1 list"; the KV doc's
+credits table says signup is "3 writes + 3 reads".
+Code does: signup at a >200-key namespace is **2 gets + 1 list + 3 puts = 6 ops** (re-measured with
+the counting mock; RULE 2's own bullet states those six ops), and `GET /api/session` has been
+**3 reads** since the credits work (session + `user:` + `credits:`). At ≤200 keys signup adds one
+get per existing account.
+Fix: reuse the six-op sentence and the 3-read session figure in both documents.
+
+### 3. KV records and data lifetime
+
+**3.1 The KV key-family list is incomplete — RULE 15. [M] — ✅ fixed 2026-10-23**
+Doc says: five families — `user:`, `session:`, `job:`, `blob:`, `config:workers`.
+Code does: nine — add `email:<address>` (`src/index.ts:5266`), `config:theme` (`:33`),
+`credits:<username>` (`:5384`) and `ipcredits:<hash>` (`:5476`). The credits/ipcredits records
+carry a **2-day TTL** (`:5692`), so "accounts and sessions are effectively permanent" is no longer
+the whole story.
+Fix: add the four rows, their TTLs, and a note that the two credit families are the only
+TTL-bounded user data.
+
+**3.2 "Sessions, jobs and blobs are the only KV key families" — `bug-audit.md` verified list. [M] — ✅ fixed 2026-10-23**
+Doc says exactly that.
+Code does: the nine families above; even `config:workers` and `email:` contradict the sentence.
+Fix: delete the sentence or point at RULE 15.
+
+**3.3 Guest record shape is not preserved by a refund — RULE 21 and `bug-fix-session-206.md` §5.2. [M] — ✅ fixed 2026-10-23**
+Doc says: the record is
+`{day, videos, images, scripts, voiceovers, updatedAt, ip, maskedIp, hash, scope}`, and the
+operator table always shows the masked address.
+Code does: `creditRefundKey()` rewrites the state without the `meta` object
+(`src/index.ts:5929`), so a failed guest image leaves
+`{day, videos, images, scripts, voiceovers, updatedAt}` — no `ip`/`maskedIp`/`hash`/`scope`. The
+settings query then falls back to `ip: "unknown"` (`:5120`), so the row loses its address after any
+model failure. Verified by running the bundled worker with a throwing `AI.run`: `500`, then the
+`ipcredits:` value above.
+Fix: either pass the identity into the refund so `meta` survives, or document the "unknown" row;
+until then the doc's record shape is aspirational.
+
+### 4. Client flows and failure paths
+
+**4.1 `/api/credits` guest shape — `userflow.md` §3c. [L] — ✅ fixed 2026-10-23**
+Doc says: `→ {plan:"guest", remaining.images:10, scope:"ip", ip:"203.0.113.0"}`.
+Code does: `plan` is an object (`{id:"guest", label:"Guest", limits:{…}}`); the string "guest" is in
+`usertype` (`src/index.ts:6594–6640`, plus `authenticated:false`, `guest:true`, `user:null`).
+Fix: show `usertype:"guest"` and the plan object.
+
+**4.2 401/429 text presented as the status line — `userflow.md` §3b/§3c. [L] — ✅ fixed 2026-10-23**
+Doc says: `401 → "Sign in to generate AI images"` and `429 → "Daily image credits used up (…)"` as
+the visible line.
+Code does: those sentences are the worker's JSON `error` values; the AI panel writes
+`"<n> of 2 failed: <error>"` into `#va-ai-status-N`, and only when both variants fail does it
+`alert("Image generation failed: <error>")` (`app-js.ts:8538–8560`).
+Fix: label them "worker `error`" and add the status-line form.
+
+**4.3 Failure matrix ignores `/free` — `userflow.md` §8. [M] — ✅ fixed 2026-10-23**
+Doc says: "Session cookie invalid → `401` → landing page stays visible; studio entry opens the auth
+overlay", and "Theme KV missing or erroring → `GET /`, `GET /{current-day}/config/uvxyz`".
+Code does: on `/free` an invalid session (or a network error) boots the **guest** studio
+(`app-js.ts:12070–12090`), and the theme fallback covers all five HTML routes (see 1.7).
+Fix: add the `/free` exception and the other routes to those two rows.
+
+**4.4 Worker poll "oldest" vs "not FIFO" — `userflow.md` §2/§6 vs `bug-audit.md` #7. [L] — ✅ fixed 2026-10-23**
+Doc says: the poll "claims the oldest queued job" (userflow), while the audit says claiming is
+"neither FIFO nor atomic" and "Jobs are not processed oldest-first".
+Code does: `jobs.find(j => j.status === "queued")` over the KV `list()` order, with no explicit sort
+(`src/index.ts:4141`). The two documents cannot both be right as written; the code has no ordering
+guarantee of its own.
+Fix: describe it as "the first queued key in KV's lexicographic list (job ids are time-prefixed)"
+and align audit #7.
+
+### 5. Sizes, line anchors and historical tables
+
+**5.1 File sizes and line counts. [L] — ✅ fixed 2026-10-23**
+Doc says: `src/index.ts` (4,922 lines) and `src/client/app-js.ts` (13,860 lines) in
+`userflow.md`'s evidence header; "~640 KB HTML string" in `userflow.md` §1 and the `src/page.ts`
+comment.
+Actual at `e53796f`: 7,156 and 14,832 lines; 708,110 bytes (≈692 KiB) — 7,205 lines after the fix
+pass, with `app-js.ts` and the page size unchanged. The 4,922/13,860 pair predates both the
+credits and the #206 work.
+Fix: re-measure or drop exact numbers; "≈700 KB" is accurate enough for prose.
+
+**5.2 `path:line` anchors have drifted. [L] — ✅ fixed 2026-10-23**
+Of the 15 unique `src/index.ts:NNN` references outside this register, only `:124` (the `fetch`
+handler) still lands on the described code. Representative drift:
+
+| Documented | Described as | What that line is now | Correct line (at `e53796f`) |
+| --- | --- | --- | --- |
+| `src/index.ts:355` (RULE 3, audit #5) | `CONFIG_PASSWORD` | `null;` | 631 |
+| `src/index.ts:4046` (audit #15) | user-auth helpers banner | `headers: {` | 5248 |
+| `src/index.ts:4064` (audit #15) | `AUTH_EMAIL_PREFIX` | `"failed"` | 5266 |
+| `src/index.ts:4383` (kv-scale §4a) | `list({prefix:"user:"})` | `request.method ===` | 6800 |
+| `src/index.ts:3236` (audit #16) | `/tts` 2 000-char cap | blank line | 3735 |
+| `app-js.ts:11039` (userflow §9) | `initAuth` | (credits module) | 11973 |
+| `app-js.ts:12150` (userflow §9) | `generateMP4` | (voiceover modal) | 13122 |
+| `app-js.ts:12155` (RULE 11) | `FPS = 30` | `toggleScriptBox` | 13391 |
+| `app-js.ts:12597` (RULE 11) | `MAX_ENCODE_QUEUE` | `let current` | 13833 |
+| `app-js.ts:9951` (audit #18) | render-API poll loop | `authAccess = "required";` | 11154 |
+
+The same drift affects `userflow.md` §9 (every entry after `addAiToVideo` is 70–1 300 lines low)
+and `bug-audit.md` #15/#16. The "Correct line" values above were measured at `e53796f`; the
+2026-10-23 fixes added 30 lines below `src/index.ts:4520` (the no-KV guard for
+`/api/config/workers`), so treat the symbol names, not the numbers, as the durable reference.
+Fix: cite function/constant names instead of line numbers, or re-measure anchors at the end of the
+change (they are the first thing to rot).
+
+**5.3 Pre-fix cap tables still presented as current — `kv-scale-test.md` §2/§5. [M] — ✅ fixed 2026-10-23**
+Doc says: the §2 table shows `signup → 1 list → 403` at 7/100/1,000/3,000/10,000 keys, and §5 has
+"Signup (below the cap)" / "Signup (at/over the cap)" rows.
+Code does: there is no cap (removed in audit #15); signup at 3,000 keys returns `200` in 6 ops
+(2 gets + 1 list + 3 puts). The document's own verdict and §8 say this, so §2/§5 now contradict
+§8; §4a's `src/index.ts:4383` anchor is also stale (see 5.2).
+Fix: mark §2/§5 as pre-fix measurements (they are valuable history) and re-anchor §4a.
+
+### 6. Additional drift found while fixing (2026-10-23)
+
+These were not in the original 22; they surfaced while editing the affected sections and are
+fixed in the same pass.
+
+**6.1 `GET /api/config/workers` crashed without a KV binding. [M] — fixed in code (Bug Fix
+Session #211, `bug-fix-session-211.md` §3).** RULE 3
+documented it as an open endpoint and RULE 16 promises the app boots without KV, but the handler
+dereferenced `env.KV_BINDING` unguarded: a KV-less request threw a `TypeError` out of `fetch()`
+(`500`/Workers error 1101) instead of returning a list. It now returns `{success:true,urls:[]}`
+(200) and `POST` returns `503 "User storage not configured (bind the KV namespace)"`.
+
+**6.2 RULE 18's note-line total excluded Bug Fix Session #206. [L] — fixed.** The sentence said
+"13 note/hint/tip class usages ... ≈ 82 strings" and that #206 added "no new alerts". The page now
+has 17 note/hint/tip class usages (four were added with the guest notes) and #206 added the
+pre-submit quota alert, so the totals are 17 / ≈ 87 and the alert count is 35.
+
+**6.3 RULE 2's `/api/session` payload was incomplete. [L] — fixed.** It returned
+`{authenticated:true,user}` in the rule, while the route has returned
+`user:{username,email,usertype}` + `plan` + `credits` since the credits work.
+
+**6.4 RULE 2's duplicate-check order was reversed. [L] — fixed.** The code checks the
+`email:` index first and `user:<name>` second; the rule listed username first.
+
+**6.5 RULE 3 still called the second theme card "Strata". [L] — fixed.** The UI label is
+**Aerial**; `strata` is only the stored/API value (RULE 19). The card list now says
+Studio / Aerial / Stellar.
+
+**6.6 `userflow.md` over-claimed two behaviours. [L] — fixed.** §4.2 said `validateSrt()` enforces
+"≤42-char cues" (it is prompt text only; the validator checks shape, overlap and duration), and §3
+said logout always returns to the landing page (on `/free` it drops to guest mode).
+
+**6.7 `bug-fix-session-206.md` pointed at a nonexistent §9. [L] — fixed.** The KV follow-up now
+cites `kv-scale-test.md` §8, the last section of that document.
+
+### Suggested fix order
+
+1. **Access-control prose first** (1.1–1.3): those three passages define how the system is
+   understood and are now materially wrong.
+2. **Contract text and inventories** (2.1, 2.2, 3.3): the UI strings and the record shape are
+   what future changes copy from.
+3. **Totals, anchors and history** (2.4, 2.5, 5.1–5.3): mechanical, can be batched in one pass.
+
+> Method note for the next audit: the fastest reliable cross-check is the pair of harnesses in
+> `bug-fix-session-206.md` §9 (77 checks) plus `grep -c 'alert('`, `wc -l` and a `createHTML()`
+> byte count. Do not trust a line number written before the last feature branch.
+
+### Register addendum — Bug Fix Session #240 (2026-10-23)
+
+> The feature session that adopted the `video_bulk_production` chrome and four extra skins changed
+> the page structure, the skin count and a handful of UI strings. Everything it invalidated is
+> listed here, and every entry was fixed in the same commit.
+
+| # | Drift | Resolution |
+| --- | --- | --- |
+| 7.1 | RULE 19 said **three** skins and named the theme names in three places. | Rule retitled **seven skins**; four token blocks, four picker cards and four swatches added; the "three places" restriction is now **four** (whitelist, token block, `themeOptions`, `.cfg-preview-*`). |
+| 7.2 | RULE 3 described three Appearance cards. | Now seven, wrapping at `flex: 1 1 150px`. |
+| 7.3 | RULE 18 quoted `Click the round Add Video button (top left), then press Generate.` and the three-card theme notes. | Rewritten for the heading button, plus the four new status lines (`#batch-note`, `#concept-count`, `#preview-state`, `#batch-empty`), the seven-card theme note and the `themeLabel()` status line. Tooltip count 21 → **22**; alerts and placeholders unchanged. |
+| 7.4 | **No rule described the page structure.** §3 of every earlier document described `.header` + `.studio` + hidden panels. | New **RULE 22** documents the shell (`app-top`, `main.app-main`, two views, `.engine-panels`), the read-only grid, the memory-only view choice and the absence of the timeline. |
+| 7.5 | `README.md` and `userflow.md` claimed three themes and a single-canvas studio. | Feature bullet, limits, `userflow.md` §11 and the header counts updated. |
+| 7.6 | No document said what the studio deliberately *lacks*. | RULE 22 and `bug-fix-session-240.md` §6 name the dropped reference widgets (timeline, rail, metrics, in-bar picker, preview fake widgets, bulk operations). |

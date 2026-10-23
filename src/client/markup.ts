@@ -16,8 +16,9 @@ export const PAGE_MARKUP = `
 
 <html lang="en">
 
-<!-- index.ts writes data-theme="strata" / "stellar" into the
-     html element above when the settings page has picked a theme. -->
+<!-- index.ts writes data-theme="strata" / "stellar" / "nightlab" /
+     "paper" / "swiss" / "neo" into the html element above when the
+     settings page has picked a theme (Bug Fix Session #240). -->
 
 <head>
 
@@ -33,7 +34,7 @@ export const PAGE_MARKUP = `
 		name="description"
 		content="Turn images, music and ideas into polished videos with YouTube Vibe Studio. Create scenes, scripts, captions and MP4s in one browser-based workspace."
 	>
-	<meta name="theme-color" content="#101116">
+	<meta name="theme-color" content="#0f1115">
 
 
 	<!-- Oswald comes from Google Fonts.
@@ -78,6 +79,8 @@ export const PAGE_MARKUP = `
 			<nav class="landing-nav-links" aria-label="Main navigation">
 				<a href="#landing-process">How it works</a>
 				<a href="#landing-features">Features</a>
+				<a href="#landing-plans">Plans</a>
+				<a href="/free">Free studio</a>
 			</nav>
 
 			<a class="landing-signup" href="#signup" data-auth-open="signup">
@@ -100,7 +103,7 @@ export const PAGE_MARKUP = `
 						</a>
 					</div>
 					<div class="landing-microcopy">
-						<span>Made for creators</span><i aria-hidden="true"></i><span>Rendered in your browser</span>
+						<span>Made for creators</span><i aria-hidden="true"></i><span>50 free AI images daily</span><i aria-hidden="true"></i><span>Rendered in your browser</span>
 					</div>
 				</div>
 
@@ -184,6 +187,51 @@ export const PAGE_MARKUP = `
 				</div>
 			</section>
 
+
+			<section class="landing-plans" id="landing-plans">
+				<div class="landing-plans-heading">
+					<p class="landing-eyebrow"><span aria-hidden="true"></span> DAILY CREDITS, NO SURPRISES</p>
+					<h2>Start free.<br><span>Go bigger when you're ready.</span></h2>
+					<p>Unlimited video projects, AI scripts and voiceovers on every plan. Image credits renew every day, so tomorrow is always a fresh canvas.</p>
+				</div>
+				<div class="landing-plan-grid">
+					<article class="landing-plan-card">
+						<div class="landing-plan-top">
+							<span class="landing-plan-badge">FREE PLAN</span>
+							<span class="landing-plan-price">$0</span>
+						</div>
+						<h3>Free</h3>
+						<p>For creators trying ideas and shipping their first videos.</p>
+						<ul class="landing-plan-list">
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> video projects</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>50</b> AI images every day</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> AI script generation</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> voiceovers</span></li>
+						</ul>
+						<button class="landing-primary" type="button" data-auth-open="signup">Create a free account <span aria-hidden="true">↗</span></button>
+						<p class="landing-plan-note">No card required. Every new account starts on the free plan.</p>
+					</article>
+					<article class="landing-plan-card landing-plan-featured">
+						<div class="landing-plan-top">
+							<span class="landing-plan-badge">PAID PLAN</span>
+							<span class="landing-plan-price">1,200<span>images / day</span></span>
+						</div>
+						<h3>Paid</h3>
+						<p>For channel builders who generate every single day.</p>
+						<ul class="landing-plan-list">
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> video projects</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>1,200</b> AI images every day</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> AI script generation</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> voiceovers</span></li>
+						</ul>
+						<button class="landing-primary" type="button" data-auth-open="signup">Request paid access <span aria-hidden="true">↗</span></button>
+						<p class="landing-plan-note">Paid accounts are activated by the studio team after signup.</p>
+					</article>
+				</div>
+				<p class="landing-plans-reset">All credits renew every day at midnight (UTC+8).</p>
+			<p class="landing-plans-guest">No account yet? <a href="/free">Open the free studio <span aria-hidden="true">↗</span></a> — 10 AI images a day, counted per IP address.</p>
+			</section>
+
 			<section class="landing-cta">
 				<div><p class="landing-eyebrow"><span aria-hidden="true"></span> YOUR NEXT IDEA IS WAITING</p><h2>Let’s make something<br><span>worth watching.</span></h2></div>
 				<button class="landing-primary landing-cta-button" type="button" data-studio-open>Open the studio <span aria-hidden="true">↗</span></button>
@@ -192,32 +240,95 @@ export const PAGE_MARKUP = `
 
 		<footer class="landing-footer">
 			<div class="landing-footer-brand"><span class="landing-brand-mark" aria-hidden="true">V</span><div><b>VIBE STUDIO</b><span>Make your next idea move.</span></div></div>
-			<nav class="landing-footer-menu" aria-label="Account menu"><span>Already have an account?</span><a href="#login" data-auth-open="login">Log in <span aria-hidden="true">↗</span></a></nav>
+			<nav class="landing-footer-menu" aria-label="Account menu"><a href="/free">Try the free studio <span aria-hidden="true">↗</span></a><span>Already have an account?</span><a href="#login" data-auth-open="login">Log in <span aria-hidden="true">↗</span></a></nav>
 			<div class="landing-footer-bottom"><span>© 2026 YouTube Vibe Studio</span><span>Built for the stories you want to tell.</span></div>
 		</footer>
 	</div>
 
 	<div id="studio-app" class="studio-app" hidden>
 
-	<div class="header">
+	<!-- ======================================================
+	     TOP BAR (BUG FIX SESSION #240)
+	     Sticky chrome: brand, the Bulk grid / Editor switch
+	     and the generate action. The reference mockup's theme
+	     picker is a settings-page control here, so it is not
+	     duplicated in the bar.
+	     ====================================================== -->
 
-				<button
+	<header class="app-top">
+
+		<div class="app-brand">
+			<span class="app-mark" aria-hidden="true">V</span>
+			<span class="app-name">VIBE <b>STUDIO</b></span>
+		</div>
+
+		<div class="grow"></div>
+
+		<div
+			class="view-switch"
+			id="view-switch"
+			role="tablist"
+			aria-label="Studio layout"
+		>
+			<button
+				type="button"
+				class="view-switch-btn"
+				id="layout-table"
+				data-layout="table"
+				role="tab"
+				aria-selected="false"
+			>\u25a6 Bulk grid</button>
+			<button
+				type="button"
+				class="view-switch-btn active"
+				id="layout-editor"
+				data-layout="editor"
+				role="tab"
+				aria-selected="true"
+			>\u25eb Editor</button>
+		</div>
+
+		<button
+			type="button"
+			class="app-generate"
+			id="top-generate"
+			onclick="onGenerateClick()"
+			title="Render and download the MP4"
+		>\u2726 Generate</button>
+
+	</header>
+
+
+	<main class="app-main">
+
+	<div class="header heading">
+
+		<div class="heading-copy">
+
+			<div class="kicker">VIDEO WORKSPACE</div>
+
+			<h1>
+				\ud83c\udfac YouTube Vibe Studio
+			</h1>
+
+			<p>
+				Generates AI scenes, adds your MP3
+				soundtrack, and exports a cinematic MP4.
+			</p>
+
+		</div>
+
+		<div class="heading-actions">
+
+			<button
 			type="button"
 			id="bulk-toggle"
 			class="bulk-toggle"
 			onclick="addVideoAccordion()"
-			title="Add a video (up to 10)">+ Add Video
-		</button>
+			title="Add a video (up to 10)">\uff0b Add Video
+			</button>
 
-
-		<h1>
-			\ud83c\udfac YouTube Vibe Studio
-		</h1>
-
-		<p>
-			Generates AI scenes, adds your MP3
-			soundtrack, and exports a cinematic MP4.
-		</p>
+		</div>
 
 	</div>
 
@@ -235,10 +346,78 @@ export const PAGE_MARKUP = `
 
 
 	<!-- ======================================================
-	     VIDEO STUDIO
+	     BULK GRID (view 1)
+	     A read-only index of the videos in this project.
+	     No bulk operations \u2014 the accordions stay the editor.
 	     ====================================================== -->
 
+	<section id="view-table" class="view">
+
+		<div class="studio-card table-card">
+
+			<div class="card-head">
+				<strong>Batch canvas</strong>
+				<span class="card-note" id="batch-note">Every video in this project</span>
+			</div>
+
+			<div class="table-scroll">
+
+				<table class="batch-table">
+
+					<thead>
+						<tr>
+							<th>\u2116</th>
+							<th>Video</th>
+							<th>Scenes</th>
+							<th>Audio</th>
+							<th>State</th>
+							<th></th>
+						</tr>
+					</thead>
+
+					<tbody id="batch-rows"></tbody>
+
+				</table>
+
+			</div>
+
+			<div class="table-empty" id="batch-empty">
+				No videos yet \u2014 press \uff0b Add Video to start,
+				then open it here or in the Editor.
+			</div>
+
+		</div>
+
+	</section>
+
+
+	<!-- ======================================================
+	     VIDEO STUDIO (view 2) \u2014 the editor
+	     ====================================================== -->
+
+	<section id="view-editor" class="view active">
+
 	<div class="studio">
+
+		<div class="studio-card editor-build">
+
+			<div class="card-head">
+				<strong>Build your video</strong>
+				<span class="card-note" id="concept-count">0 videos</span>
+			</div>
+
+			<div id="video-accordions"></div>
+
+		</div>
+
+
+		<div class="studio-card preview-card">
+
+			<div class="card-head">
+				<i class="preview-dot" aria-hidden="true"></i>
+				<strong>Preview monitor</strong>
+				<span class="card-note" id="preview-state">idle</span>
+			</div>
 
 		<div class="canvas-container">
 
@@ -259,6 +438,47 @@ export const PAGE_MARKUP = `
 
 		</div>
 
+
+		<div
+			class="progress-bar-container"
+			id="progress-container"
+		>
+
+			<div
+				class="progress-bar"
+				id="progress-bar"
+			></div>
+
+		</div>
+
+
+		<div
+			class="status-text"
+			id="status-text"
+		>
+			Compiling video...
+		</div>
+
+
+		<div
+			class="action-bar"
+			id="action-bar"
+		>
+			<span
+				class="action-hint"
+				id="action-hint"
+			>
+				Click \uff0b Add Video above, then
+				press Generate.
+			</span>
+		</div>
+
+
+
+		</div><!-- .preview-card -->
+
+
+		<div class="engine-panels">
 
 		<!-- ======================================================
 		     AUDIO TRACK (MP3)
@@ -572,45 +792,6 @@ export const PAGE_MARKUP = `
 
 		</div>
 
-		<div
-			class="progress-bar-container"
-			id="progress-container"
-		>
-
-			<div
-				class="progress-bar"
-				id="progress-bar"
-			></div>
-
-		</div>
-
-
-		<div
-			class="status-text"
-			id="status-text"
-		>
-			Compiling video...
-		</div>
-
-
-		<div
-			class="action-bar"
-			id="action-bar"
-		>
-			<span
-				class="action-hint"
-				id="action-hint"
-			>
-				Click the round Add Video button (top
-				left), then press Generate.
-			</span>
-		</div>
-
-		<div
-			id="video-accordions"
-		>
-		</div>
-
 
 		<div class="controls">
 
@@ -665,8 +846,13 @@ export const PAGE_MARKUP = `
 
 		</div>
 
-	</div>
+		</div><!-- .engine-panels -->
 
+	</div><!-- .studio -->
+
+	</section>
+
+	</main>
 
 
 	<div
