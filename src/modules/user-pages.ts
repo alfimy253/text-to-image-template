@@ -361,7 +361,7 @@ export async function renderAccountPageResponse(
 					<a href="/upgrade" class="site-btn site-btn-primary" id="account-upgrade-btn">
 						${isPaid ? "View Upgrade & Payment Details →" : "⚡ Upgrade to Paid Plan →"}
 					</a>
-					<a href="${isPaid ? "/paid" : "/free"}" class="site-btn">Open Video Studio</a>
+					<a href="${isPaid ? "/paid" : "/studio"}" class="site-btn">Open Video Studio</a>
 					<button type="button" class="site-btn" id="account-logout-btn">Sign Out</button>
 				</div>
 			</section>

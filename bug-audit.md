@@ -42,7 +42,7 @@ RULE 22.
 | 2 | S1 | `POST /api/worker/deliver` lets anyone overwrite any job's output | open |
 | 3 | S1 | Sessions never expire in KV; cookie has no `Secure` | open |
 | 4 | S1 | No rate limiting on login/signup/AI routes. **Images are capped per account per day** (50 free / 1,200 paid) **and per IP for guests** (10); scripts and voiceovers remain unlimited by design | partially fixed |
-| 5 | S1 | Settings password hard-coded + client-side only | open (documented) |
+| 5 | S1 | Settings password hard-coded in Worker source; query-string admin credentials | open (documented) |
 | 6 | S2 | `getBlobStore()` silently zero-fills missing parts → corrupt MP4 | open |
 | 7 | S2 | Job claiming is neither FIFO nor atomic | open |
 | 8 | S2 | ASI bug: `return` / `null;` returns `undefined` (`findWavChunk`) | open (benign today) |
@@ -221,22 +221,24 @@ neurons/day on the free plan) and the KV write quota.
 **Recommended fix.** Per-IP + per-username throttling (Durable Object or KV counter with a short
 TTL), a login attempt counter with backoff, and a hard cap on concurrent unauthenticated AI calls.
 
-### 5 — Settings password is hard-coded and enforced client-side
+### 5 — Settings password is hard-coded; some admin APIs put it in the query string
 
-**Evidence.** `CONFIG_PASSWORD = "#123admin%"` exists in `src/index.ts` **and** in
-`src/client/config-page-js.ts`; the gate is a JS `===` comparison in the browser, so the value
-ships in the page source. The server-side checks are the six operator endpoints —
-`POST /api/config/theme`, `POST /api/config/workers`, `GET|POST /api/config/users` and
-`GET|POST /api/config/ipcredits` — each comparing `pw`/`?pw=` against `CONFIG_PASSWORD`
-(`403` on a mismatch). The two `GET`s for theme and workers are open, as documented in RULE 3.
+**Evidence.** The active Worker has `CONFIG_PASSWORD = "#123admin%"` in `src/index.ts`.
+The current `src/client/config-page-js.ts` does **not** contain that literal: its inline unlock
+card posts the entered value to `POST /api/config/verify`, then keeps it in memory as
+`unlockedPw`. Server-side config/admin routes compare body/query `pw` against the constant and
+return `403` on mismatch. The older client-side duplicate remains only in the unimported
+`src/index.ts.original` snapshot.
 
-**Impact.** The current settings path is `/{current-day}/config/uvxyz`, with the day taken from
-Asia/Taipei on each request; the old bare `/config/uvxyz` path and stale day paths return `404`.
-The rotating path is still only obscurity, not authentication: the password "protection" on the
-current route remains client-side decoration and the password is visible in the served source.
+**Impact.** Anyone with the source has the shared administrator password; it is not a per-admin
+credential. The rotating settings path is only an address convention, not authentication. Admin
+payment list/image URLs also serialize `?pw=…`, which can expose the password through browser
+history, copied URLs and HTTP logs. The current full-page settings client itself does not ship
+the literal in its script.
 
-**Recommended fix.** Move the secret into a Worker secret (`env.CONFIG_PASSWORD`) and issue a
-short-lived signed token after a server-side check; rotate by updating the secret only.
+**Recommended fix.** Move the password into a Worker secret (`env.CONFIG_PASSWORD`), replace
+query-string credentials with a short-lived signed admin session, and rotate without editing
+application source.
 
 ---
 

@@ -188,6 +188,10 @@ export function validateAndNormalizeBlocks(
 		}
 	}
 
+	if (normalized.length > 100) {
+		return { ok: false, error: "Too many content blocks (max 100)." };
+	}
+
 	return { ok: true, blocks: normalized };
 }
 
@@ -512,8 +516,10 @@ export async function handleCmsApiRoutes(
 			);
 		}
 		const pages = await readCmsPages(env);
-		const filtered = pages.filter(
-			(p) => p.id !== targetId && p.slug !== targetSlug
+		// An id identifies one record. If a caller supplies both fields, do not
+		// interpret a second, unrelated slug as another deletion target.
+		const filtered = pages.filter((p) =>
+			targetId ? p.id !== targetId : p.slug !== targetSlug
 		);
 		if (filtered.length === pages.length) {
 			return cmsJson({ success: false, error: "Page not found" }, 404);

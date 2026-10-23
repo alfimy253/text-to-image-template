@@ -31,6 +31,18 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   flight the app renders the video locally instead.
 - **Accounts.** KV-backed sign-up/sign-in, unlimited accounts (each with an `email:<address>`
   uniqueness index).
+- **Account dashboard and manual upgrades.** `/account` shows the signed-in profile, live daily
+  allowance, plan, recent receipts and the correct studio destination (`/studio` for free,
+  `/paid` for paid). `/upgrade` displays editable local-gateway instructions and a signed-in
+  screenshot uploader. This is **manual payment verification**, not an automated payment provider:
+  an administrator reviews the receipt, enters its transaction number and approves it, which sets
+  `usertype = "paid_user"`; the next credit/request read receives the 1,200-image allowance.
+  Receipt images are restricted to their owner or the settings administrator.
+- **Basic CMS.** The current-day settings page's **CMS Pages** tab creates, edits and deletes up
+  to **8** public, single-level pages. Blocks are paragraphs and HTTP(S) image URLs (two images
+  per row), with reorder/remove controls and an escaped live preview. Each page can inject its
+  link into the shared top menu or footer. Reserved/nested routes, duplicate slugs, data-URI image
+  uploads and more than 100 blocks are rejected; public text is HTML-escaped.
 - **Daily credits.** Every account is on a plan (`usertype`): **free** — unlimited video projects,
   unlimited AI scripts, unlimited voiceovers and **50 AI images per day**; **paid_user** —
   everything in free plus **1,200 AI images per day**. Counters live in KV
@@ -64,19 +76,28 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   sections inside) beside a sticky preview monitor that takes 35% — the same split in every theme.
   The grid reads the same project array the engine renders; it has no bulk operations, and the
   view choice is memory-only. There is deliberately **no timeline**.
-- **Template composer.** The "Add video from template" link opens a modal with two galleries:
-  **8 motion-typography templates** (Halo Warp, Terminal Fracture, Ribbon Editorial, Portal
-  Type, Comic Burst, Dream Echo, Perspective Fold, Liquid Bloom — adapted from the uploaded
-  Typography Motion Studio III HTML) and **14 interactive Reel scenes** (Kinetic Typography,
-  Duotone, Neon, Glitch Art and Vox Magazine — adapted from the uploaded Reel Editor v4 HTML).
-  Motion templates retain dynamic text layers, photo entry/motion controls, animation speed,
-  up to 2 photos and animated backgrounds. In Reel scenes, click a text layer, shape or
-  background in the preview to load the matching inspector; drag it to reposition, edit its
-  content, colour, font, size, animation, transition and speed, add text, and choose a sticker
-  or background image. Both editors render through the same canvas used for the live preview
-  and H.264 MP4 export (WebCodecs + mp4-muxer, no screen capture). **⬇ Export MP4** downloads
-  the result; **➕ Add to Video N** inserts it into that accordion's gallery as a normal clip.
-  Portrait 9:16 or landscape 16:9, 1–25 s.
+- **Large accordion controls.** In every theme, buttons inside each **Video N** accordion use the
+  Upload Image proportions (`12px 24px` padding, 1rem type, at least 48px high/wide). Neo
+  Brutalist gives every one of those buttons square corners, including icon and remove buttons.
+- **Template composer.** The "Add video from template" link opens two galleries, with
+  **Interactive scenes selected by default**. Motion templates and their tab/cards are no longer
+  exposed. **Interactive scenes · 15** contains the 14 Reel designs (Kinetic Typography, Duotone,
+  Neon, Glitch Art and Vox Magazine) plus **3D Ring Carousel**, ported only from the uploaded
+  editorial demo's eight-card rotating ring—not its flip book, sound, page chrome or ambient
+  particles. **Shape animations · 13** contains Morphing SVG Blob, Rotating 3D Box, Pulsing Ripple
+  Ring, Floating Glass Card, Orbiting Satellite, DNA Helix Pulse, Infinite Tunnel Zoom,
+  Kaleidoscope Spinner, Elastic Bounce Ball, Audio Equalizer Bars, Diamond Crystal Spin, Neon Laser
+  Beam and Shimmer Spinner Ring; particle/confetti effects remain omitted.
+  In Reel scenes, element tags sit below the left preview. Click a tag or canvas object to edit its
+  content, colour, font, size, animation, transition, speed and position; drag to reposition.
+  **＋ Text** becomes **＋ Graphic** for a selected graphic. Compact colour boxes offer 12 solids,
+  a custom colour and one row of four gradients. The ring has visibility, rotation-speed, radius,
+  card-size, 3D-tilt, X/Y and reset controls; its eight CORS-loaded editorial images have a
+  deterministic illustrated fallback. Shape animations have colour, background, size, speed and
+  X/Y controls. Every gallery previews through the same canvas used for H.264 MP4 export
+  (WebCodecs + mp4-muxer, no screen capture). **⬇ Download MP4** is the single download action;
+  **➕ Add to Video N** performs the same render without downloading and inserts it directly into
+  that accordion's gallery as a normal clip. Portrait 9:16 or landscape 16:9, 1–25 s.
 
 ## Limits worth knowing
 
@@ -90,7 +111,9 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 | SEO keywords | exactly 1 long-tail (said exactly 2×) + exactly 4 short keywords (each said exactly 2×); one short keyword in the AI title (≤70 chars), one in at least 1 heading |
 | Voiceover | 8,000 characters max, chunked at 500; English in the UI |
 | Render API | 10 in-flight jobs, 60 MB payload, outputs kept 2 h (job records 1 h) |
-| Theme | one setting for the whole deployment: `default` · `strata` · `stellar` |
+| CMS | 8 pages · 100 blocks/page · flat slug up to 64 chars · paragraph text up to 20,000 chars/block · HTTP(S) image URLs only |
+| Payment screenshots | PNG/JPEG/WEBP/GIF magic bytes · 5 MiB · authentication required · manual admin approval |
+| Theme | one setting for the whole deployment: `default` · `strata` · `stellar` · `nightlab` · `paper` · `swiss` · `neo` |
 | Free plan (`usertype: free`) | unlimited videos · 50 AI images/day · unlimited AI scripts · unlimited voiceovers |
 | Paid plan (`usertype: paid_user`) | unlimited videos · 1,200 AI images/day · unlimited AI scripts · unlimited voiceovers |
 | Free-plan alias | `free_user` (or any value other than `paid_user`) is read as `free` |
@@ -141,9 +164,10 @@ npx wrangler tail     # live logs
 Bindings in `wrangler.json`:
 
 - `ai` → Workers AI (required by `/image/*`, `/api/script`, `/api/voiceover`)
-- `kv_namespaces` → `KV_BINDING` (required by accounts, the render API and the worker queue; the
-  landing page remains available if it is missing, and the studio can still be opened through its
-  primary CTA. Account and render routes answer `503` without KV.)
+- `kv_namespaces` → `KV_BINDING` (required by accounts, the render API/worker queue, persistent
+  CMS pages and payment uploads/approvals; the landing page remains available if it is missing,
+  and the studio can still be opened through its primary CTA. Account/render routes and CMS/payment
+  writes answer `503` without KV. Public CMS listing/pages are empty/404 without stored pages.)
 
 The settings page is password-gated and uses **`/{current-day}/config/uvxyz`**, where
 `{current-day}` is the unpadded day of month (1–31) in **Asia/Taipei**. For example, on
@@ -154,8 +178,10 @@ Neo Brutalist* → **Save theme**), manages **plans
 & credits** (set an account to `free` or `paid_user`, optionally reset today's counters), reviews
 **guest credits by IP** (masked address, today's usage, remaining images, reset), registers
 background worker URLs, and can switch a tab into "Background worker" mode to consume the render
-queue. The landing page uses the same theme tokens as the studio, so the chosen skin covers the
-whole site.
+queue. Its other tabs edit the **Local Payment Gateway** instructions, review paginated **Payment
+Transactions** and approve verified transaction numbers, and manage **CMS Pages** with the Add
+Page editor/live preview. The landing page uses the same theme tokens as the studio, so the chosen
+skin covers the whole site.
 
 ## Routes
 
@@ -165,13 +191,24 @@ whole site.
 | `GET /free` | Freemium studio for everyone; sets `yvs_free=1` so guests can spend 10 image credits/day per IP |
 | `GET /studio` | Account studio (`free_user` / `paid_user`); guests are redirected to `/free` |
 | `GET /paid` | Paid-tier studio (`paid_user` only); guests → `/free`, free accounts → `/studio` |
+| `GET /account` | Account dashboard: inline auth when signed out; profile, credits, plan, recent receipts and studio/payment actions when signed in |
+| `GET /upgrade` | Public local-gateway instructions; inline auth when signed out, screenshot uploader/history when signed in |
 | `GET /{current-day}/config/uvxyz` | Settings / background-worker page; current Asia/Taipei day only (e.g. `/16/config/uvxyz` on 2026-10-16) |
+| `GET /{slug}` | Public CMS page after all built-in routes; one flat non-reserved slug, otherwise `404` |
 | `GET /image/:i` | Workers AI demo image (unmetered, index into `prompts[]`) |
 | `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` for a cold anonymous request when KV is bound, `429` at the limit, `X-Credit-*` headers on success |
 | `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated SRT (with keyword counts) |
 | `POST /api/voiceover` · `GET /tts` | MeloTTS voiceover / fallback TTS proxy |
 | `GET /api/session` · `POST /api/signup` · `POST /api/login` · `POST /api/logout` | Accounts (session/signup/login include `usertype`, `plan` and `credits`) |
 | `GET /api/credits` | Today's plan, used counters, remaining allowances and `resetsAt` — for the signed-in user, or the IP-keyed guest plan after `/free` |
+| `POST /api/payments/upload` | Signed-in PNG/JPEG/WEBP/GIF receipt upload (multipart or JSON data URL), max 5 MiB; creates a `pending` record |
+| `GET /api/payments/my` · `GET /api/payments/image/:id` | Signed-in user's receipt history / owner-only receipt bytes |
+| `POST /api/config/verify` | Verifies the settings password for the full-page inline unlock and returns the active theme |
+| `GET`/`POST /api/config/payment-gateway` | Public gateway details / update name, details and upload instructions with the settings password |
+| `GET /api/config/payments` · `GET /api/config/payments/image/:id` | Password-gated paginated admin review (default 5, max 24/page) / admin receipt bytes |
+| `POST /api/config/payments/approve` | Password-gated approval with a required, unique transaction number; marks receipt approved and promotes its account to `paid_user` |
+| `GET /api/cms/pages` | Public saved CMS page list (`maxPages: 8`); no authentication because saved pages are public |
+| `GET`/`POST`/`DELETE /api/config/cms` · `POST /api/config/cms/delete` | Password-gated CMS list / create-or-update / delete; `POST` accepts an optional page `id`, and duplicate slugs return `409` |
 | `POST /api/render` · `GET /api/render/:jobId` | Submit a render job / poll and download |
 | `GET /api/worker/poll` · `POST /api/worker/deliver` · `POST /api/worker/failed` | Background worker queue |
 | `GET`/`POST /api/config/workers` | Registered worker URLs (max 3, `POST` needs the settings password) |
@@ -186,7 +223,10 @@ whole site.
 - **`system-rules.md`** — the high-level system rules with the nested technical detail,
   invariants and restrictions behind each of them (RULE 7 = the SEO script, RULE 18 = the
   inventory of every user-visible hint: tooltips, notes, placeholders and alerts, RULE 19 =
-  the seven themes and where the choice is stored, RULE 22 = the studio shell and its two views).
+  the seven themes and where the choice is stored, RULE 22 = the studio shell and its two views,
+  RULE 23 = CMS, payments and the account dashboard).
+- **`new_requirements.md`** — the modular CMS/payment/account requirement notes and KV schema;
+  the README, userflow and system rules describe the verified current behavior.
 - **`kv-scale-test.md`** — measured KV behaviour (operations per request, list-page caps,
   free-tier allowance maths) with the reproduction commands.
 - **`bug-audit.md`** — the current bug and inconsistency audit, with severity and fixes.
@@ -203,8 +243,10 @@ whole site.
 
 ## Notes for contributors
 
-- `src/index.ts` holds every route; `src/page.ts` assembles the page from
-  `src/client/{markup,styles,app-js,template-composer-js}.ts` and is cached per isolate.
+- `src/index.ts` holds the route table and delegates the modular CMS/payment/account surfaces to
+  `src/modules/{cms,payments,user-pages}.ts`; `src/page.ts` assembles and caches the studio page.
+  Template code is split across `template-composer-js.ts`, `template-scene-editor.ts`,
+  `template-ring-carousel.ts` and `template-shape-animations.ts`.
 - The client files are template literals whose escapes are load-bearing — do not reformat them.
 - `src/index.ts.original` is a stale pre-split snapshot of the worker (kept for reference only;
   never imported).
