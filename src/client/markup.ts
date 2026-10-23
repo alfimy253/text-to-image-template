@@ -81,6 +81,7 @@ export const PAGE_MARKUP = `
 				<a href="#landing-features">Features</a>
 				<a href="#landing-plans">Plans</a>
 				<a href="/free">Free studio</a>
+				<a href="/account">Account</a><!--__CMS_TOP_LINKS__-->
 			</nav>
 
 			<a class="landing-signup" href="#signup" data-auth-open="signup">
@@ -240,7 +241,7 @@ export const PAGE_MARKUP = `
 
 		<footer class="landing-footer">
 			<div class="landing-footer-brand"><span class="landing-brand-mark" aria-hidden="true">V</span><div><b>VIBE STUDIO</b><span>Make your next idea move.</span></div></div>
-			<nav class="landing-footer-menu" aria-label="Account menu"><a href="/free">Try the free studio <span aria-hidden="true">↗</span></a><span>Already have an account?</span><a href="#login" data-auth-open="login">Log in <span aria-hidden="true">↗</span></a></nav>
+			<nav class="landing-footer-menu" aria-label="Account menu"><a href="/free">Try the free studio <span aria-hidden="true">↗</span></a><a href="/upgrade">Upgrade</a><!--__CMS_FOOTER_LINKS__--><span>Already have an account?</span><a href="#login" data-auth-open="login">Log in <span aria-hidden="true">↗</span></a></nav>
 			<div class="landing-footer-bottom"><span>© 2026 YouTube Vibe Studio</span><span>Built for the stories you want to tell.</span></div>
 		</footer>
 	</div>
@@ -297,6 +298,7 @@ export const PAGE_MARKUP = `
 		>\u2726 Generate</button>
 
 	</header>
+	<!--__CMS_STUDIO_TOP_LINKS__-->
 
 
 	<main class="app-main">
@@ -853,6 +855,7 @@ export const PAGE_MARKUP = `
 	</section>
 
 	</main>
+	<!--__CMS_STUDIO_FOOTER__-->
 
 
 	<div

@@ -17,6 +17,18 @@
 import { MODEL, prompts } from "./prompts";
 import { createHTML } from "./page";
 import { CONFIG_PAGE_SCRIPT } from "./client/config-page-js";
+import {
+	applyCmsLinksToStudioHtml,
+	handleCmsApiRoutes,
+	handleCmsPublicPageRoute,
+	readCmsPages
+} from "./modules/cms";
+import { handlePaymentRoutes } from "./modules/payments";
+import {
+	renderAccountPageResponse,
+	renderUpgradePageResponse
+} from "./modules/user-pages";
+import { handleSeoScriptGeneration } from "./modules/script-seo";
 
 /*
  * =============================================================
@@ -147,19 +159,54 @@ export default {
 			url.pathname === "/"
 		) {
 
+			const [landingTheme, landingCmsPages] =
+				await Promise.all([
+					readTheme(env),
+					readCmsPages(env)
+				]);
+
 			return new Response(
-				applyTheme(
-					createHTML(),
-					await readTheme(env)
+				applyCmsLinksToStudioHtml(
+					applyTheme(
+						createHTML(),
+						landingTheme
+					),
+					landingCmsPages
 				),
 				{
 					status: 200,
 
 					headers: {
 						"Content-Type":
-							"text/html; charset=UTF-8"
+							"text/html; charset=UTF-8",
+						"Cache-Control":
+							"no-store"
 					}
 				}
+			);
+		}
+
+		if (
+			request.method === "GET" &&
+			url.pathname === "/account"
+		) {
+			return renderAccountPageResponse(
+				request,
+				env,
+				await readTheme(env),
+				creditSessionUser
+			);
+		}
+
+		if (
+			request.method === "GET" &&
+			url.pathname === "/upgrade"
+		) {
+			return renderUpgradePageResponse(
+				request,
+				env,
+				await readTheme(env),
+				creditSessionUser
 			);
 		}
 
@@ -914,22 +961,27 @@ export default {
 		) {
 
 			let cfgHtml =
-				applyTheme(
-					createHTML(),
-					await readTheme(env)
+				applyCmsLinksToStudioHtml(
+					applyTheme(
+						createHTML(),
+						await readTheme(env)
+					),
+					[]
 				);
 
 			cfgHtml =
 				cfgHtml.replace(
 					"<script>",
-					"<script>window.__CONFIG_PAGE = true;</" +
+					() =>
+						"<script>window.__CONFIG_PAGE = true;</" +
 						"script>\r\n<script>"
 				);
 
 			cfgHtml =
 				cfgHtml.replace(
 					"</body>",
-					CONFIG_PAGE_SCRIPT +
+					() =>
+						CONFIG_PAGE_SCRIPT +
 						"</body>"
 				);
 
@@ -984,1554 +1036,39 @@ export default {
 			url.pathname === "/api/script"
 		) {
 
-			/*
-			 * AI scripts are unlimited on both plans (free and
-			 * paid_user). The counter is informational, so a
-			 * credits read/write failure must never fail the
-			 * script itself.
-			 */
-			if (
-				env &&
-				env.KV_BINDING
-			) {
-
-				try {
-
-					const scriptCreditUser =
-						await creditSessionUser(
+			return handleSeoScriptGeneration(
+				request,
+				url,
+				env,
+				SCRIPT_MODEL,
+				async () => {
+					/*
+					 * AI scripts are unlimited on both plans (free and
+					 * paid_user). Record usage only after request inputs
+					 * validate so 400/503 rejections do not inflate counters.
+					 */
+					if (env && env.KV_BINDING) {
+						const scriptCreditUser = await creditSessionUser(
 							request,
 							env
 						);
-
-					if (scriptCreditUser) {
-
-						await creditConsume(
-							env,
-							scriptCreditUser.username,
-							scriptCreditUser.usertype,
-							"scripts"
-						);
-
+						if (scriptCreditUser) {
+							await creditConsume(
+								env,
+								scriptCreditUser.username,
+								scriptCreditUser.usertype,
+								"scripts"
+							);
+						} else if (hasFreemiumCookie(request)) {
+							await guestCreditConsume(
+								env,
+								await guestCreditIdentity(request),
+								"scripts"
+							);
+						}
 					}
-					else if (
-						hasFreemiumCookie(
-							request
-						)
-					) {
-
-						/*
-						 * Guest scripts are unlimited; the
-						 * IP row records usage only.
-						 */
-						await guestCreditConsume(
-							env,
-							await guestCreditIdentity(
-								request
-							),
-							"scripts"
-						);
-
-					}
-
-				}
-				catch (creditError) {
-
-					/* usage tracking is best-effort */
-
-				}
-
-			}
-
-			const body =
-				await request.json().catch(
-					() => ({})
-				);
-
-			const topic =
-				String(
-					body.topic ||
-						"my video"
-				).trim().slice(0, 160);
-
-			const minutes =
-				Number(
-					(body.minutes === undefined ||
-						body.minutes === null ||
-						body.minutes === "")
-						? 1
-						: body.minutes
-				);
-
-			const speed =
-				String(
-					body.speed ||
-						"medium"
-				).toLowerCase().trim();
-
-			/*
-				* Words per minute for
-				* each speech speed.
-			*/
-			const SPEED_WORDS =
-				{
-					"super fast":
-						210,
-					"fast":
-						170,
-					"medium":
-						140,
-					"slow":
-						110
-				};
-
-			if (
-				!env.AI
-			) {
-
-				return json(
-					{
-						success: false,
-						error:
-							"AI binding not configured"
-					},
-					503
-				);
-
-			}
-
-			if (
-				!Number.isInteger(minutes) ||
-				minutes < 1 ||
-				minutes > 6
-			) {
-
-				return json(
-					{
-						success: false,
-						error:
-							"Minutes must be 1-6"
-					},
-					400
-				);
-
-			}
-
-			if (
-				!SPEED_WORDS[speed]
-			) {
-
-				return json(
-					{
-						success: false,
-						error:
-							"Speech must be super fast, fast, medium or slow"
-					},
-					400
-				);
-
-			}
-
-			console.log(
-				"[script] start",
-				{
-					topic:
-						topic.slice(
-						0,
-						80),
-					minutes:
-						minutes,
-					speed:
-						speed,
-					model:
-						SCRIPT_MODEL
 				}
 			);
-
-			const endStamp =
-				"00:" +
-					String(minutes).padStart(2, "0") +
-					":00,000";
-
-			const wordTarget =
-				SPEED_WORDS[speed] * minutes;
-
-			/*
-				* Server-side SRT
-				* validation: strips
-				* fences/prose, parses
-				* the cues, checks the
-				* timestamps and the
-				* total duration (must
-				* stay UNDER the
-				* selected minutes).
-				* Returns { ok, error,
-				* srt, endMs }.
-				*/
-			function validateSrt(
-				text,
-				minutes
-			) {
-
-				let srt =
-					String(
-						text ||
-							""
-					).replace(
-						/[\u0000-\u0008\u000B\u000E-\u001F]/g,
-						""
-					).trim();
-
-				if (
-					srt.indexOf(
-						"```"
-					) !== -1
-				) {
-
-					const parts =
-						srt.split(
-							"```"
-						);
-
-					srt =
-						(parts[1] ||
-							srt).trim();
-
-				}
-
-				const lines =
-					srt.split(
-						/\r?\n/
-					);
-
-				/*
-					* Drop any prose the
-					* model puts before
-					* the first cue
-					* number.
-					*/
-				let firstCue =
-					-1;
-
-				for (
-					let li = 0;
-					li < lines.length;
-					li++
-				) {
-
-					if (
-						/^[0-9]+$/.test(
-							lines[li].trim()
-						)
-					) {
-
-						firstCue =
-							li;
-
-						break;
-
-					}
-
-				}
-
-				if (
-					firstCue === -1
-				) {
-
-					return {
-						ok: false,
-						error:
-							"no SRT cues found in the model output"
-					};
-
-				}
-
-				srt =
-					lines
-						.slice(firstCue)
-						.join("\n");
-
-				const cueLines =
-					srt.split(
-						/\r?\n/
-					);
-
-				const STAMP =
-					/([0-9]{1,2}):([0-9]{2}):([0-9]{2}),([0-9]{3})/;
-
-				const cues =
-					[];
-
-				let bad =
-					"";
-
-				let current =
-					null;
-
-				const toMs =
-					(h, m, s, ms) =>
-						((Number(h) * 60 +
-							Number(m)) * 60 +
-							Number(s)) *
-						1000 +
-						Number(ms);
-
-				for (
-					let li = 0;
-					li < cueLines.length;
-					li++
-				) {
-
-					const line =
-						cueLines[li]
-							.trim();
-
-					if (
-						!line
-					) {
-						continue;
-					}
-
-					if (
-						/^[0-9]+$/.test(
-							line
-						)
-					) {
-
-						current =
-							{
-								startMs:
-									0,
-								endMs:
-									0,
-								text:
-									""
-							};
-
-						cues.push(
-							current
-						);
-
-						continue;
-
-					}
-
-					if (
-						line.indexOf(
-							"-->"
-						) !== -1
-					) {
-
-						if (
-							!current
-						) {
-
-							bad =
-								"timestamp without a cue number";
-
-							break;
-
-						}
-
-						const sides =
-							line.split(
-								"-->"
-							);
-
-						const a =
-							STAMP.exec(
-								String(
-									sides[0]
-								)
-							);
-
-						const b =
-							STAMP.exec(
-								String(
-									sides[1] ||
-										""
-								)
-							);
-
-						if (
-							!a ||
-							!b
-						) {
-
-							bad =
-								"broken timestamp: " +
-								line.slice(
-									0,
-									60
-								);
-
-							break;
-
-						}
-
-						current.startMs =
-							toMs(
-								a[1],
-								a[2],
-								a[3],
-								a[4]
-							);
-
-						current.endMs =
-							toMs(
-								b[1],
-								b[2],
-								b[3],
-								b[4]
-							);
-
-						if (
-							current.startMs >=
-								current.endMs
-						) {
-
-							bad =
-								"cue starts at or after its end: " +
-								line.slice(
-									0,
-									60
-								);
-
-							break;
-
-						}
-
-						if (
-							cues.length >
-								1 &&
-							cues[cues.length -
-								2].endMs >
-								current.startMs
-						) {
-
-							bad =
-								"overlapping cues at: " +
-								line.slice(
-									0,
-									60
-								);
-
-							break;
-
-						}
-
-						continue;
-
-					}
-
-					if (
-						current
-					) {
-
-						current.text =
-							current.text
-								? current.text +
-									" " +
-									line
-								: line;
-
-					}
-
-				}
-
-				if (
-					bad
-				) {
-
-					return {
-						ok: false,
-						error:
-							bad
-					};
-
-				}
-
-				const realCues =
-					cues.filter(
-						(c) =>
-							c.text &&
-							c.endMs >
-							c.startMs
-					);
-
-				if (
-					!realCues.length
-				) {
-
-					return {
-						ok: false,
-						error:
-							"no valid SRT cues in the model output"
-					};
-
-				}
-
-				const endMs =
-					realCues[
-						realCues.length -
-							1
-					].endMs;
-
-				if (
-					endMs < 10000
-				) {
-
-					return {
-						ok: false,
-						error:
-							"script too short (" +
-							Math.round(
-								endMs / 1000
-							) +
-							"s) for " +
-							minutes +
-							" minute(s)"
-					};
-
-				}
-
-				if (
-					endMs >
-						minutes * 60 *
-						1000 + 1500
-				) {
-
-					return {
-						ok: false,
-						error:
-							"script is " +
-							Math.round(
-								endMs / 1000
-							) +
-							"s long - it must stay under " +
-							minutes +
-							" minute(s)"
-					};
-
-				}
-
-				return {
-					ok: true,
-					srt:
-						srt,
-					endMs:
-						endMs
-				};
-
-			}
-
-			/*
-			 * SEO layer (2026-10-23 revision - every rule
-			 * documented before this date was removed). The
-			 * default script is an EXPLAINER video written
-			 * around a keyword set that is planned first and
-			 * verified afterwards:
-			 *
-			 *   - exactly SEO_LONG_TAIL long-tail keyword,
-			 *     spoken EXACTLY SEO_LONG_FREQ_MIN times
-			 *     (min = max = 2);
-			 *   - exactly SEO_SHORT_TOTAL unique short-tail
-			 *     keywords (min = max = 4), each spoken
-			 *     EXACTLY SEO_SHORT_FREQ_MIN times
-			 *     (min = max = 2);
-			 *   - the planned video TITLE must include at
-			 *     least one of the short-tail keywords;
-			 *   - at least SEO_HEADINGS_MIN heading (an
-			 *     explainer always has one) and at least one
-			 *     heading must include a short-tail keyword -
-			 *     the same one as the title's is allowed.
-			 *
-			 * The rules are REDUNDANT on purpose: the model
-			 * system instruction states them AND this layer
-			 * re-enforces them - frequencies are counted on
-			 * the spoken words and a violation is sent back
-			 * to the model as the retry reason (same
-			 * 3-attempt loop as the SRT validation).
-			 *
-			 * Future: scripts without SEO and non-explainer
-			 * scripts will bypass this layer; the enforcement
-			 * is isolated in parseKeywordSet(), the SEO brief
-			 * and keywordUsageError() so a plain-script mode
-			 * can skip all three.
-			 */
-			const SEO_LONG_TAIL =
-				1;
-			const SEO_SHORT_TOTAL =
-				4;
-			const SEO_SHORT_WORDS_MAX =
-				3;
-			const SEO_LONG_WORDS_MAX =
-				6;
-			const SEO_LONG_FREQ_MIN =
-				2;
-			const SEO_LONG_FREQ_MAX =
-				2;
-			const SEO_SHORT_FREQ_MIN =
-				2;
-			const SEO_SHORT_FREQ_MAX =
-				2;
-			const SEO_HEADINGS_MIN =
-				1;
-			const SEO_HEADING_WORDS_MAX =
-				12;
-			const SEO_TITLE_MAX =
-				70;
-
-			/*
-			 * Reads the text out of whichever shape the
-			 * model returns: chat array, { response }
-			 * object, or a plain string.
-			 */
-			function aiText(result: any) {
-
-				if (
-					result &&
-					result[0] &&
-					result[0].message
-				) {
-					return String(
-						result[0].message.content ||
-							""
-					).trim();
-				}
-
-				if (
-					result &&
-					typeof result.response ===
-						"string"
-				) {
-					return result.response.trim();
-				}
-
-				if (
-					typeof result === "string"
-				) {
-					return result.trim();
-				}
-
-				return "";
-
-			}
-
-			/*
-			 * Counts how often a keyword is spoken. Matching is
-			 * case-insensitive, tolerates any whitespace between
-			 * the words and uses word boundaries so "ai" is not
-			 * counted inside "said".
-			 */
-			function keywordCount(
-				text: string,
-				keyword: string
-			) {
-
-				const escaped =
-					String(keyword || "")
-						.toLowerCase()
-						.trim()
-						.replace(
-							/[.*+?^${}()|[\]\\]/g,
-							"\\$&"
-						)
-						.replace(
-							/\s+/g,
-							"\\s+"
-						);
-
-				if (!escaped) {
-					return 0;
-				}
-
-				const hits =
-					String(text || "")
-						.toLowerCase()
-						.match(
-							new RegExp(
-								"\\b" +
-									escaped +
-									"\\b",
-								"g"
-							)
-						);
-
-				return hits
-					? hits.length
-					: 0;
-
-			}
-
-			/*
-			 * The spoken words of an SRT block: cue numbers and
-			 * timestamp lines removed. This is what the keyword
-			 * frequencies are counted against, because it is what
-			 * the narrator actually says.
-			 */
-			function srtSpokenText(srt: string) {
-
-				const words =
-					[];
-
-				const lines =
-					String(srt || "").split(
-						/\r?\n/
-					);
-
-				for (
-					let li = 0;
-					li < lines.length;
-					li++
-				) {
-
-					const line =
-						lines[li].trim();
-
-					if (!line) {
-						continue;
-					}
-
-					if (
-						/^[0-9]+$/.test(line)
-					) {
-						continue;
-					}
-
-					if (
-						line.indexOf("-->") !==
-						-1
-					) {
-						continue;
-					}
-
-					words.push(line);
-
-				}
-
-				return words.join(" ");
-
-			}
-
-			/*
-			 * Parses + validates the keyword JSON. Returns
-			 * { ok, error, data }. data = { longTail: [{ keyword,
-			 * short: [...] }], shorts: [...] } with every keyword
-			 * lower-cased and whitespace-collapsed.
-			 */
-			function parseKeywordSet(text: string) {
-				let raw =
-					String(text || "")
-						.replace(
-							/[\u0000-\u0008\u000B\u000E-\u001F]/g,
-							""
-						)
-						.trim();
-				if (
-					raw.indexOf("```") !== -1
-				) {
-					const parts =
-						raw.split("```");
-					raw =
-						(parts[1] || raw).trim();
-				}
-				const start =
-					raw.indexOf("{");
-				const end =
-					raw.lastIndexOf("}");
-				if (
-					start === -1 ||
-					end <= start
-				) {
-					return {
-						ok: false,
-						error:
-							"no JSON object in the keyword output"
-					};
-				}
-				let data: any =
-					null;
-				try {
-					data =
-						JSON.parse(
-							raw.slice(
-								start,
-								end + 1
-							)
-						);
-				}
-				catch (jsonError) {
-					return {
-						ok: false,
-						error:
-							"the keyword reply was not valid JSON"
-					};
-				}
-				/*
-				 * Exactly ONE long-tail keyword. Lenient
-				 * shapes: a bare string, ["one entry"] or
-				 * {keyword:"..."} all read as the keyword,
-				 * so a model that answers in the old array
-				 * shape is not punished with a retry.
-				 */
-				let longRaw: any =
-					data ? data.longTail : null;
-				if (
-					Array.isArray(longRaw)
-				) {
-					longRaw =
-						longRaw[0] &&
-						typeof longRaw[0] ===
-							"object"
-							? longRaw[0].keyword
-							: longRaw[0];
-				}
-				if (
-					longRaw &&
-					typeof longRaw === "object"
-				) {
-					longRaw =
-						longRaw.keyword;
-				}
-				const longTail =
-					String(longRaw || "")
-						.trim()
-						.toLowerCase()
-						.replace(
-							/\s+/g,
-							" "
-						);
-				if (!longTail) {
-					return {
-						ok: false,
-						error:
-							'the JSON needs a "longTail" keyword'
-					};
-				}
-				if (
-					longTail.split(" ")
-						.length >
-						SEO_LONG_WORDS_MAX
-				) {
-					return {
-						ok: false,
-						error:
-							'the long-tail keyword "' +
-							longTail +
-							'" is longer than ' +
-							SEO_LONG_WORDS_MAX +
-							" words"
-					};
-				}
-				/*
-				 * Exactly SEO_SHORT_TOTAL unique short-tail
-				 * keywords. Duplicates collapse first, so a
-				 * repeated short fails the total.
-				 */
-				const shortList =
-					data &&
-					Array.isArray(data.short)
-						? data.short
-						: null;
-				if (!shortList) {
-					return {
-						ok: false,
-						error:
-							'the JSON needs a "short" array'
-					};
-				}
-				const shorts =
-					[];
-				for (
-					const shortEntry of shortList
-				) {
-					const shortKeyword =
-						String(shortEntry || "")
-							.trim()
-							.toLowerCase()
-							.replace(
-								/\s+/g,
-								" "
-							);
-					if (!shortKeyword) {
-						return {
-							ok: false,
-							error:
-								"a short keyword is empty"
-						};
-					}
-					if (
-						shortKeyword.split(" ")
-							.length >
-							SEO_SHORT_WORDS_MAX
-					) {
-						return {
-							ok: false,
-							error:
-								'the short keyword "' +
-								shortKeyword +
-								'" is longer than ' +
-								SEO_SHORT_WORDS_MAX +
-								" words"
-						};
-					}
-					if (
-						shorts.indexOf(
-							shortKeyword
-						) === -1
-					) {
-						shorts.push(
-							shortKeyword
-						);
-					}
-				}
-				if (
-					shorts.length !==
-						SEO_SHORT_TOTAL
-				) {
-					return {
-						ok: false,
-						error:
-							"there must be exactly " +
-							SEO_SHORT_TOTAL +
-							" short keywords, not " +
-							shorts.length
-					};
-				}
-				/*
-				 * The explainer TITLE: at least one of the
-				 * short-tail keywords must appear in it
-				 * (word-boundary match, case-insensitive).
-				 */
-				const title =
-					String(
-						(data && data.title) ||
-							""
-					).trim();
-				if (!title) {
-					return {
-						ok: false,
-						error:
-							'the JSON needs a "title" string'
-					};
-				}
-				if (
-					title.length >
-						SEO_TITLE_MAX
-				) {
-					return {
-						ok: false,
-						error:
-							"the title is longer than " +
-							SEO_TITLE_MAX +
-							" characters"
-					};
-				}
-				let titleHasShort =
-					false;
-				for (const kw of shorts) {
-					if (
-						keywordCount(
-							title,
-							kw
-						) > 0
-					) {
-						titleHasShort =
-							true;
-						break;
-					}
-				}
-				if (!titleHasShort) {
-					return {
-						ok: false,
-						error:
-							"the title must include at least one of the short keywords"
-					};
-				}
-				/*
-				 * HEADINGS: every default script is an
-				 * explainer, so at least SEO_HEADINGS_MIN
-				 * heading is required and one heading (the
-				 * same short keyword as the title's is
-				 * allowed) must include a short keyword.
-				 */
-				const headingList =
-					data &&
-					Array.isArray(
-						data.headings
-					)
-						? data.headings
-						: null;
-				if (
-					!headingList ||
-					headingList.length <
-						SEO_HEADINGS_MIN
-				) {
-					return {
-						ok: false,
-						error:
-							'the JSON needs a "headings" array with at least ' +
-							SEO_HEADINGS_MIN +
-							" heading"
-					};
-				}
-				const headings =
-					[];
-				for (
-					const headingEntry of headingList
-				) {
-					const heading =
-						String(
-							headingEntry ||
-								""
-						)
-							.trim()
-							.replace(
-								/\s+/g,
-								" "
-							);
-					if (!heading) {
-						return {
-							ok: false,
-							error:
-								"a heading is empty"
-						};
-					}
-					if (
-						heading.split(" ")
-							.length >
-							SEO_HEADING_WORDS_MAX
-					) {
-						return {
-							ok: false,
-							error:
-								'the heading "' +
-								heading +
-								'" is longer than ' +
-								SEO_HEADING_WORDS_MAX +
-								" words"
-						};
-					}
-					headings.push(
-						heading
-					);
-				}
-				let headingHasShort =
-					false;
-				for (const heading of headings) {
-					for (const kw of shorts) {
-						if (
-							keywordCount(
-								heading,
-								kw
-							) > 0
-						) {
-							headingHasShort =
-								true;
-							break;
-						}
-					}
-					if (headingHasShort) {
-						break;
-					}
-				}
-				if (!headingHasShort) {
-					return {
-						ok: false,
-						error:
-							"at least one heading must include a short keyword"
-					};
-				}
-				return {
-					ok: true,
-					data: {
-						title:
-							title,
-						headings:
-							headings,
-						longTail:
-							longTail,
-						shorts:
-							shorts
-					}
-				};
-			}
-			/*
-			 * Returns "" when the spoken script honours the
-			 * keyword rules, otherwise the exact problem (used
-			 * as the retry hint).
-			 */
-			function keywordUsageError(
-				spokenText: string,
-				keywordSet: any
-			) {
-				const longCount =
-					keywordCount(
-						spokenText,
-						keywordSet.longTail
-					);
-				if (
-					longCount <
-						SEO_LONG_FREQ_MIN
-				) {
-					return (
-						'the long-tail keyword "' +
-						keywordSet.longTail +
-						'" appears ' +
-						longCount +
-						" time(s); it must appear exactly " +
-						SEO_LONG_FREQ_MIN +
-						" times"
-					);
-				}
-				if (
-					longCount >
-						SEO_LONG_FREQ_MAX
-				) {
-					return (
-						'the long-tail keyword "' +
-						keywordSet.longTail +
-						'" appears ' +
-						longCount +
-						" times; it must appear exactly " +
-						SEO_LONG_FREQ_MAX +
-						" times"
-					);
-				}
-				for (
-					const shortKeyword of keywordSet.shorts
-				) {
-					const count =
-						keywordCount(
-							spokenText,
-							shortKeyword
-						);
-					if (
-						count <
-							SEO_SHORT_FREQ_MIN
-					) {
-						return (
-							'the short keyword "' +
-							shortKeyword +
-							'" appears ' +
-							count +
-							" time(s); it must appear exactly " +
-							SEO_SHORT_FREQ_MIN +
-							" times"
-						);
-					}
-					if (
-						count >
-							SEO_SHORT_FREQ_MAX
-					) {
-						return (
-							'the short keyword "' +
-							shortKeyword +
-							'" appears ' +
-							count +
-							" times; it must appear exactly " +
-							SEO_SHORT_FREQ_MAX +
-							" times"
-						);
-					}
-				}
-				return "";
-			}
-
-			const basePrompt =
-				"You are a professional video script writer for EXPLAINER videos - every default script explains its topic section by section, in natural spoken English. Answer with ONLY valid SRT subtitle text, nothing else. " +
-				"Write a YouTube narration script as SRT subtitles about: " +
-					topic +
-					". The video is " +
-					minutes +
-					" minute(s) long and the TOTAL duration of your SRT must stay UNDER " +
-					minutes +
-					" minute(s): the final timestamp must end at or before " +
-					endStamp +
-					" and must never exceed it. The speaker talks " +
-					speed +
-					" (about " +
-					wordTarget +
-					" words total). Output ONLY valid SRT: each cue is a number, a line like 00:00:00,000 --> 00:00:04,000, then the subtitle text, with a blank line between cues. Keep each subtitle line under 42 characters. Timestamps start at 00:00:00,000, never overlap, and use the whole duration. Plain spoken English only - no headings, no markdown, no code fences, nothing outside the SRT.";
-
-			/*
-				* Generate + validate,
-				* retrying with the
-				* specific problem added
-				* to the prompt (max 3
-				* attempts).
-				*/
-			try {
-
-				/*
-				 * Stage 1: plan the SEO keyword set. The
-				 * planner gets its own 3 attempts, and an
-				 * invalid set never reaches the writer.
-				 */
-				const keywordPrompt =
-					"You are an SEO strategist for YouTube explainer videos. Answer with ONLY one JSON object, no prose and no code fences. " +
-					"The video topic is: " +
-					topic +
-					". Plan exactly " +
-					SEO_LONG_TAIL +
-					" long-tail keyword (2-" +
-					SEO_LONG_WORDS_MAX +
-					" words, lower case, a specific search phrase that expands the topic) and exactly " +
-					SEO_SHORT_TOTAL +
-					" unique short-tail keywords (1-" +
-					SEO_SHORT_WORDS_MAX +
-					" words each, lower case, closely related to the topic). " +
-					"Also plan the video TITLE (at most " +
-					SEO_TITLE_MAX +
-					" characters): it MUST include at least one of the " +
-					SEO_SHORT_TOTAL +
-					" short-tail keywords. And plan at least " +
-					SEO_HEADINGS_MIN +
-					" section HEADING(S) (at most " +
-					SEO_HEADING_WORDS_MAX +
-					" words each) because the script is an explainer video; at least one heading MUST include one of the short-tail keywords - the same one the title uses is allowed. " +
-					'Reply with exactly this JSON shape: {"title":"the video title","headings":["first section heading","second section heading"],"longTail":"the one long tail keyword","short":["short one","short two","short three","short four"]}';
-
-				let keywordSet =
-					null;
-
-				let keywordError =
-					"";
-
-				for (
-					let attempt = 1;
-					attempt <= 3;
-					attempt++
-				) {
-
-					const prompt =
-						keywordPrompt +
-						(attempt > 1
-							?
-								" Your previous attempt was rejected: " +
-								keywordError +
-								" Try again and fix that exact problem."
-							: "");
-
-					console.log(
-						"[script] keywords attempt",
-						{
-							attempt:
-								attempt,
-							promptChars:
-								prompt.length
-						}
-					);
-
-					const result =
-						await env.AI.run(
-							SCRIPT_MODEL,
-							{
-								prompt:
-									prompt,
-								max_tokens:
-									512,
-								temperature:
-									0.6
-							}
-						);
-
-					const check =
-						parseKeywordSet(
-							aiText(result)
-						);
-
-					if (check.ok) {
-
-						keywordSet =
-							check.data;
-
-						break;
-
-					}
-
-					keywordError =
-						check.error;
-
-					console.log(
-						"[script] keywords invalid",
-						{
-							attempt:
-								attempt,
-							reason:
-								keywordError
-						}
-					);
-
-				}
-
-				if (!keywordSet) {
-
-					return json(
-						{
-							success: false,
-							error:
-								"SEO keywords invalid (" +
-								keywordError +
-								") - try again"
-						},
-						500
-					);
-
-				}
-
-				console.log(
-					"[script] keywords ok",
-					{
-						title:
-							keywordSet.title,
-						headings:
-							keywordSet.headings,
-						longTail:
-							keywordSet.longTail,
-						shorts:
-							keywordSet.shorts
-					}
-				);
-
-				/*
-				 * Stage 2: the writer gets the keyword set and
-				 * its frequency rules spelled out. The rules are
-				 * also enforced after generation (see below), so
-				 * a script that ignores them is rejected and
-				 * rewritten with the exact problem attached.
-				 */
-				const userPrompt =
-					basePrompt +
-					"SEO rules - mandatory and REDUNDANTLY re-checked by the server after you answer, so a violation is rejected: " +
-					"the narration must say the long-tail keyword \"" +
-					keywordSet.longTail +
-					"\" EXACTLY " +
-					SEO_LONG_FREQ_MIN +
-					" times - not " +
-					(SEO_LONG_FREQ_MIN - 1) +
-					" times and not " +
-					(SEO_LONG_FREQ_MAX + 1) +
-					" times. It must also say each of these " +
-					SEO_SHORT_TOTAL +
-					" short-tail keywords EXACTLY " +
-					SEO_SHORT_FREQ_MIN +
-					" times each: " +
-					keywordSet.shorts.join("; ") +
-					". Work every keyword into natural spoken sentences - never read them out as a list. " +
-					"This is an explainer video. Its title is \"" +
-					keywordSet.title +
-					"\" and its section headings are: " +
-					keywordSet.headings.join("; ") +
-					" - take the narration through those sections in order. The title includes a short-tail keyword and at least one heading includes one; both are already fixed, never alter or spell them out. ";
-
-				let lastError =
-					"";
-
-				for (
-					let attempt = 1;
-					attempt <= 3;
-					attempt++
-				) {
-
-					const prompt =
-						userPrompt +
-						(attempt > 1
-							?
-							" Your previous attempt was rejected: " +
-								lastError +
-								" Try again and fix that exact problem."
-							: "");
-
-					console.log(
-						"[script] attempt",
-						{
-							attempt:
-								attempt,
-							promptChars:
-								prompt.length
-						}
-					);
-
-					const result =
-						await env.AI.run(
-							SCRIPT_MODEL,
-							{
-								prompt:
-									prompt,
-								max_tokens:
-									2048,
-								temperature:
-									0.7
-							}
-						);
-
-					/*
-					 * Same response shapes as the
-					 * keyword stage: chat array,
-					 * { response } object or a plain
-					 * string.
-					 */
-					const srt =
-						aiText(result);
-
-					const check =
-						validateSrt(
-							srt,
-							minutes
-						);
-
-					/*
-					 * A script only passes when the SRT
-					 * is valid AND the spoken words hit
-					 * the keyword frequencies. The rule
-					 * that failed becomes the retry
-					 * reason handed back to the model.
-					 */
-					const spokenText =
-						check.ok && check.srt
-							? srtSpokenText(
-									check.srt
-								)
-							: "";
-
-					const problem =
-						check.ok
-							? keywordUsageError(
-									spokenText,
-									keywordSet
-								)
-							: check.error;
-
-					if (!problem) {
-
-						/*
-						 * The counts are measured on
-						 * the final script, so the web
-						 * app can show what was really
-						 * written.
-						 */
-						const keywords = {
-							longTail: {
-								keyword:
-									keywordSet.longTail,
-								count:
-									keywordCount(
-										spokenText,
-										keywordSet.longTail
-									),
-								min:
-									SEO_LONG_FREQ_MIN,
-								max:
-									SEO_LONG_FREQ_MAX
-							},
-							short:
-								keywordSet.shorts.map(
-									(kw) => ({
-										keyword:
-											kw,
-										count:
-											keywordCount(
-												spokenText,
-												kw
-											),
-										min:
-											SEO_SHORT_FREQ_MIN,
-										max:
-											SEO_SHORT_FREQ_MAX
-									})
-								)
-						};
-
-						console.log(
-							"[script] ok",
-							{
-								attempt:
-									attempt,
-								srtChars:
-									check
-										.srt.length,
-								keywords:
-									keywords.short.map(
-										(x) =>
-											x.keyword +
-											" x" +
-											x.count
-									)
-							}
-						);
-
-						return json(
-							{
-								success:
-									true,
-								srt:
-									check
-										.srt,
-								title:
-									keywordSet.title,
-								headings:
-									keywordSet.headings,
-								keywords:
-									keywords,
-								model:
-									SCRIPT_MODEL
-							}
-						);
-
-					}
-
-					lastError =
-						problem;
-
-					console.log(
-						"[script] invalid",
-						{
-							attempt:
-								attempt,
-							reason:
-								lastError
-						}
-					);
-
-
-				}
-
-				return json(
-					{
-						success: false,
-						error:
-							"Script output invalid (" +
-								lastError +
-								") - try again"
-					},
-					500
-				);
-
-			}
-
-			catch (error) {
-
-				console.log(
-					"[script] error",
-					{
-						error:
-							error.message ||
-							String(error)
-					}
-				);
-
-				return json(
-					{
-						success: false,
-						error:
-							error.message ||
-							"Script generation failed"
-					},
-					500
-				);
-
-			}
 
 		}		/*
 			* Voiceover (MeloTTS):
@@ -3483,8 +2020,7 @@ export default {
 
 					}
 
-					return
-						null;
+					return null;
 
 				};
 
@@ -5322,6 +3858,67 @@ export default {
 		}
 
 
+		// =====================================================
+		// MODULAR CONFIG VERIFY, PAYMENTS & BASIC CMS ROUTES
+		// =====================================================
+
+		if (
+			url.pathname === "/api/config/verify" &&
+			request.method === "POST"
+		) {
+			const verifyBody: any =
+				await request.json().catch(() => ({}));
+			if (verifyBody.pw !== CONFIG_PASSWORD) {
+				return json(
+					{
+						success: false,
+						valid: false,
+						error: "Wrong password"
+					},
+					403
+				);
+			}
+			return json({
+				success: true,
+				valid: true,
+				theme: await readTheme(env)
+			});
+		}
+
+		const paymentRouteResponse =
+			await handlePaymentRoutes(
+				request,
+				url,
+				env,
+				CONFIG_PASSWORD,
+				creditSessionUser
+			);
+		if (paymentRouteResponse) {
+			return paymentRouteResponse;
+		}
+
+		const cmsApiResponse =
+			await handleCmsApiRoutes(
+				request,
+				url,
+				env,
+				CONFIG_PASSWORD
+			);
+		if (cmsApiResponse) {
+			return cmsApiResponse;
+		}
+
+		const cmsPublicResponse =
+			await handleCmsPublicPageRoute(
+				request,
+				url,
+				env,
+				await readTheme(env)
+			);
+		if (cmsPublicResponse) {
+			return cmsPublicResponse;
+		}
+
 		return new Response(
 			"Not Found",
 			{
@@ -6491,10 +5088,19 @@ async function appPageResponse(
 	mode: string
 ): Promise<Response> {
 
+	const [studioTheme, studioCmsPages] =
+		await Promise.all([
+			readTheme(env),
+			readCmsPages(env)
+		]);
+
 	let html =
-		applyTheme(
-			createHTML(),
-			await readTheme(env)
+		applyCmsLinksToStudioHtml(
+			applyTheme(
+				createHTML(),
+				studioTheme
+			),
+			studioCmsPages
 		);
 
 	html =

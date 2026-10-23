@@ -9919,7 +9919,7 @@ export const APP_JS = `
 			);
 
 		accountLink.href =
-			"#";
+			"/account";
 
 		accountLink.className =
 			"auth-footer-link";
@@ -9930,20 +9930,22 @@ export const APP_JS = `
 		accountLink.textContent =
 			"Account";
 
-		accountLink.addEventListener(
-			"click",
-			(e) => {
+		const upgradeLink =
+			document.createElement(
+				"a"
+			);
 
-				e.preventDefault();
+		upgradeLink.href =
+			"/upgrade";
 
-				toggleAccountBox(
-					username,
-					email ||
-						""
-				);
+		upgradeLink.className =
+			"auth-footer-link";
 
-			}
-		);
+		upgradeLink.id =
+			"upgrade-link";
+
+		upgradeLink.textContent =
+			"Upgrade";
 
 		const contactLink =
 			document.createElement(
@@ -9990,6 +9992,10 @@ export const APP_JS = `
 
 		row.appendChild(
 			accountLink
+		);
+
+		row.appendChild(
+			upgradeLink
 		);
 
 		row.appendChild(
@@ -12591,6 +12597,12 @@ export const APP_JS = `
 		open
 	) {
 
+		const project =
+			videoProjects[n - 1];
+
+		const hasScript =
+			!!(project && project.srt);
+
 		const box =
 			document.getElementById(
 				"va-script-box-" + n
@@ -12606,22 +12618,25 @@ export const APP_JS = `
 				"va-script-dl-" + n
 			);
 
+		const showBox =
+			hasScript && !!open;
+
 		if (box) {
 			box.style.display =
-				open ? "" : "none";
+				showBox ? "" : "none";
 		}
 
 		if (dl) {
 			dl.style.display =
-				open ? "" : "none";
+				hasScript ? "" : "none";
 		}
 
 		if (toggle) {
 			toggle.style.display =
-				open ? "" : "none";
+				hasScript ? "" : "none";
 
 			toggle.textContent =
-				(open
+				(showBox
 					? "\u25b2 "
 					: "\u25bc ") +
 				"Script (SRT)";
@@ -12934,8 +12949,18 @@ export const APP_JS = `
 
 		btn.disabled = true;
 
-		statusEl.textContent =
-			"Planning SEO keywords + writing your script (AI model)...";
+		if (statusEl) {
+			statusEl.textContent =
+				"Planning SEO keywords + writing your script (AI model)...";
+		}
+
+		const scriptStartedAt = Date.now();
+		console.info("[script-seo] request", {
+			videoIndex: n,
+			topic: topic,
+			minutes: minutes,
+			speed: speed
+		});
 
 		try {
 
@@ -12982,6 +13007,14 @@ export const APP_JS = `
 
 			project.srt = data.srt;
 
+			if (
+				project.subtitles &&
+				project.subtitles.length
+			) {
+				project.subtitles =
+					parseSrtCues(data.srt);
+			}
+
 			/*
 			 * Keep the verified SEO plan on
 			 * the project, and offer the AI
@@ -13020,7 +13053,9 @@ export const APP_JS = `
 					"va-script-box-" + n
 				);
 
-			box.textContent = data.srt;
+			if (box) {
+				box.textContent = data.srt;
+			}
 
 			/*
 			 * The script now exists:
@@ -13034,7 +13069,7 @@ export const APP_JS = `
 
 			const lineCount =
 				data.srt
-					.split("\\n")
+					.split(/\\r?\\n/)
 					.filter(
 						(line) =>
 							line.trim() !== ""
@@ -13061,26 +13096,46 @@ export const APP_JS = `
 					? data.headings.length
 					: 0;
 
-			statusEl.textContent =
-				"Script ready \u2014 " +
-				lineCount +
-				" lines (" +
-				speed +
-				" speech, " +
-				minutes +
-				" min) \u00b7 SEO: 1 long-tail (2\u00d7) + " +
-				shortCount +
-				" short keywords (2\u00d7 each) \u00b7 title + " +
-				headingCount +
-				" heading" +
-				(headingCount === 1 ? "" : "s");
+			console.info("[script-seo] ok", {
+				videoIndex: n,
+				ms: Date.now() - scriptStartedAt,
+				model: data.model || null,
+				title: project.seoTitle,
+				headings: project.seoHeadings,
+				keywords: data.keywords || null,
+				lineCount: lineCount
+			});
+
+			if (statusEl) {
+				statusEl.textContent =
+					"Script ready \u2014 " +
+					lineCount +
+					" lines (" +
+					speed +
+					" speech, " +
+					minutes +
+					" min) \u00b7 SEO: 1 long-tail (2\u00d7) + " +
+					shortCount +
+					" short keywords (2\u00d7 each) \u00b7 title + " +
+					headingCount +
+					" heading" +
+					(headingCount === 1 ? "" : "s");
+			}
 
 		}
 		catch (err) {
 
-			statusEl.textContent =
-				"Script failed: " +
-				(err.message || err);
+			console.warn("[script-seo] failed", {
+				videoIndex: n,
+				ms: Date.now() - scriptStartedAt,
+				error: (err && err.message) || String(err)
+			});
+
+			if (statusEl) {
+				statusEl.textContent =
+					"Script failed: " +
+					(err.message || err);
+			}
 
 		}
 		finally {
@@ -13214,10 +13269,29 @@ export const APP_JS = `
 				lines[i].trim();
 
 			if (!line) {
+				if (
+					current &&
+					current.endMs > current.startMs &&
+					current.text
+				) {
+					current = null;
+				}
 				continue;
 			}
 
-			if (/^\\d+$/.test(line)) {
+			let nextNonEmpty = "";
+			for (let j = i + 1; j < lines.length; j++) {
+				const cand = lines[j].trim();
+				if (cand) {
+					nextNonEmpty = cand;
+					break;
+				}
+			}
+
+			if (
+				/^\\d+$/.test(line) &&
+				nextNonEmpty.indexOf("-->") !== -1
+			) {
 
 				current = {
 					startMs: 0,
@@ -13318,7 +13392,19 @@ export const APP_JS = `
 				continue;
 			}
 
-			if (/^\\d+$/.test(line)) {
+			let nextSpeechLine = "";
+			for (let j = i + 1; j < lines.length; j++) {
+				const cand = lines[j].trim();
+				if (cand) {
+					nextSpeechLine = cand;
+					break;
+				}
+			}
+
+			if (
+				/^\\d+$/.test(line) &&
+				nextSpeechLine.indexOf("-->") !== -1
+			) {
 				continue;
 			}
 
