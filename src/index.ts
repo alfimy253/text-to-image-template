@@ -568,8 +568,9 @@ export default {
 		// GET  /api/worker/poll       worker claims a job
 		// POST /api/worker/deliver    worker uploads the MP4
 		// POST /api/worker/failed     worker reports failure
-		// POST /api/script            SEO EXPLAINER script (SRT)
-		//                             via an INSTRUCT model: plan
+		// POST /api/script            SEO EXPLAINER script
+		//                             (PLAIN narration text) via an
+		//                             INSTRUCT model: plan
 		//                             1 long-tail keyword (must be
 		//                             said AT LEAST ONCE), exactly
 		//                             4 short keywords (each must
@@ -598,8 +599,8 @@ export default {
 		const MAX_RENDER_JOBS =
 			10;
 
-		// INSTRUCT model for SRT
-		// script generation. The old
+		// INSTRUCT model for the
+		// narration script. The old
 		// FREE llama-3.1-8b-instruct
 		// was deprecated by
 		// Cloudflare on 2026-05-30;
@@ -891,9 +892,14 @@ export default {
 		}
 
 		/*
-			* SEO EXPLAINER script (SRT)
-			* generation. INSTRUCT model on
-			* Workers AI, in two stages
+			* SEO EXPLAINER script
+			* generation - the browser is
+			* handed PLAIN narration text,
+			* never a subtitle format, because
+			* the voiceover model would read
+			* cue numbers out loud. INSTRUCT
+			* model on Workers AI, in two
+			* stages
 			* (2026-10-24 minimum-frequency
 			* rule set - every earlier
 			* script rule was removed).
@@ -908,13 +914,14 @@ export default {
 			*     each) of which one includes
 			*     a short keyword (its own 3
 			*     attempts).
-			*  2. Script: EXPLAINER SRT built
-			*     around that plan. The rules
-			*     are REDUNDANT: stated in the
-			*     prompt AND re-checked here.
+			*  2. Script: EXPLAINER narration
+			*     built around that plan. The
+			*     rules are REDUNDANT: stated in
+			*     the prompt AND re-checked here.
 			*     The output is VALIDATED
-			*     server-side - clean SRT under
-			*     the selected minutes AND the
+			*     server-side against timed cues
+			*     under the selected minutes AND
+			*     the
 			*     long-tail keyword spoken AT
 			*     LEAST 1 time AND every one of
 			*     the 4 short keywords spoken
@@ -924,6 +931,13 @@ export default {
 			*     output is retried up to 3
 			*     times with the problem
 			*     spelled out).
+			*     The cues + timestamps are the
+			*     Worker's own proof of length
+			*     and keyword counts: they are
+			*     checked, then collapsed into
+			*     plain paragraphs, so no
+			*     subtitle format leaves this
+			*     file.
 		*/
 		/*
 		 * SEO PLAN (two selectable keyword sets) for the accordion

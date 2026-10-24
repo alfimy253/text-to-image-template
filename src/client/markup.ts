@@ -348,9 +348,12 @@ export const PAGE_MARKUP = `
 
 
 	<!-- ======================================================
-	     BULK GRID (view 1)
-	     A read-only index of the videos in this project.
-	     No bulk operations \u2014 the accordions stay the editor.
+	     QUICK BATCH TABLE (view 1)
+	     An editable table: one row is one video. Column 1 is the
+	     script, column 2 the video image style (the same ten
+	     options as the script modal), column 3 the minimum length
+	     in minutes, columns 4-5 Preview + Export. Rows are
+	     independent of the "Video N" accordions below.
 	     ====================================================== -->
 
 	<section id="view-table" class="view">
@@ -358,22 +361,37 @@ export const PAGE_MARKUP = `
 		<div class="studio-card table-card">
 
 			<div class="card-head">
-				<strong>Batch canvas</strong>
-				<span class="card-note" id="batch-note">Every video in this project</span>
+
+				<strong>Quick batch table</strong>
+				<span class="card-note" id="batch-note">One row \u2014 one video</span>
+				<button type="button" class="upload-btn small batch-add-row" id="batch-add-row" title="Add another row (10 rows at most)">\uff0b Add Row</button>
+				<button type="button" class="app-generate batch-generate" id="batch-generate" title="Generate every row that has a script: voiceover, AI images and the animation">\u2726 Generate</button>
+
 			</div>
+
+			<p class="va-note batch-hint">
+				Type or paste a script in the first box, pick the video image
+				style and the minimum minutes, then press
+				<strong>\u2726 Generate</strong> at the top right of the table.
+				Every row that has a script is spoken (MP3), illustrated with
+				AI images and animated; a row that is empty is skipped.
+				Until a row is finished its last two cells read
+				<strong>Preview Here</strong> and
+				<strong>Export Video</strong> \u2014 both unlock at the same
+				moment, and the export is built in this browser.
+			</p>
 
 			<div class="table-scroll">
 
-				<table class="batch-table">
+				<table class="batch-table batch-table-edit">
 
 					<thead>
 						<tr>
-							<th>\u2116</th>
-							<th>Video</th>
-							<th>Scenes</th>
-							<th>Audio</th>
-							<th>State</th>
-							<th></th>
+							<th class="batch-col-script">Script</th>
+							<th class="batch-col-style">Video style</th>
+							<th class="batch-col-min">Min</th>
+							<th class="batch-col-preview">Preview</th>
+							<th class="batch-col-export">Export</th>
 						</tr>
 					</thead>
 
@@ -384,8 +402,8 @@ export const PAGE_MARKUP = `
 			</div>
 
 			<div class="table-empty" id="batch-empty">
-				No videos yet \u2014 press \uff0b Add Video to start,
-				then open it here or in the Editor.
+				No rows yet \u2014 press \uff0b Add Row, paste a script,
+				pick a style and press \u2726 Generate.
 			</div>
 
 		</div>

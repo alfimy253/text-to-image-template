@@ -190,7 +190,13 @@ test("e2e worker carries a selected plan through script, prompts and one batched
 	assert.equal(scripted.status, 200);
 	const script = await scripted.json();
 	assert.equal(script.success, true);
-	assert.ok(script.srt);
+	/* The client gets plain narration text only: the voiceover model
+	 * reads a subtitle file out loud, so nothing but the SRT may ship. */
+	assert.ok(script.script);
+	assert.equal(script.format, "plain");
+	assert.equal(script.srt, undefined);
+	assert.doesNotMatch(script.script, /-->|\b\d{2}:\d{2}:\d{2}/);
+	assert.match(script.script, /Key light setup|key light/i);
 
 	/* One synchronous POST now carries the prompts in its body. */
 	const prompted = await call("/api/image-prompts", {
@@ -200,7 +206,7 @@ test("e2e worker carries a selected plan through script, prompts and one batched
 			topic: "Key light setup",
 			minutes: 1,
 			style: "Pop Comic",
-			script: script.srt,
+			script: script.script,
 			keywordSet: plan.sets[0]
 		})
 	});
@@ -277,7 +283,7 @@ function makeBatchHarness(w, calls, options = {}) {
 		if (path === "/api/session") return jsonResponse({ success: true, authenticated: true, user: { username: "Test", usertype: "free" } });
 		if (path === "/api/credits") return jsonResponse({ success: true, plan: { id: "free", label: "Free", limits: { images: 50 } }, remaining: { images: 10 } });
 		if (path === "/api/seo-plan") return jsonResponse({ success: true, sets: [setA, setB] });
-		if (path === "/api/script") return jsonResponse({ success: true, srt: makeSrt(), title: setA.title, headings: setA.headings, keywords: { longTail: setA.longTail, short: setA.short } });
+		if (path === "/api/script") return jsonResponse({ success: true, script: sentences.join(" "), format: "plain", title: setA.title, headings: setA.headings, keywords: { longTail: setA.longTail, short: setA.short }, words: sentences.join(" ").split(/\s+/).length, durationMs: sentences.length * 4000, minutes: 1 });
 		if (path === "/api/image-prompts" && method === "POST") {
 			const count = options.promptCount === undefined ? 10 : options.promptCount;
 			return jsonResponse({
@@ -340,7 +346,7 @@ test("client flow renders every prompted image through ONE batch request and nev
 	w.document.getElementById("va-script-topic-1").value = "Morning yoga";
 	await w.generateScript(1);
 	w.selectSeoKeywordSet(1, 0);
-	const style = w.document.getElementById("seo-wt-style-select");
+	const style = w.document.getElementById("seo-wt-style-select-1");
 	assert.equal(style.options.length, 10);
 	style.value = "Pop Comic";
 	style.dispatchEvent(new w.Event("change", { bubbles: true }));
@@ -612,7 +618,8 @@ test("image batch uses the 16:9 model size and the batch image limits are wired 
 
 test("client walkthrough exposes the fixed style dropdown and the polling-free batch flow", () => {
 	assert.doesNotThrow(() => new vm.Script(APP_JS));
-	assert.ok(APP_JS.includes('id="seo-wt-style-select"'));
+	/* One dropdown per video: the id carries the video number. */
+	assert.ok(APP_JS.includes('id="seo-wt-style-select-'));
 	assert.ok(!APP_JS.includes("seo-wt-style-input"));
 	for (const style of IMAGE_STYLES) assert.ok(APP_JS.includes('"' + style + '"'), style);
 
@@ -629,5 +636,5 @@ test("client walkthrough exposes the fixed style dropdown and the polling-free b
 	assert.ok(APP_JS.includes("addAiToVideo(n, file, blob, flowId, true)"));
 
 	assert.ok(APP_CSS.includes("background: #ffffff"));
-	assert.ok(APP_CSS.includes("#seo-wt-style-select"));
+	assert.ok(APP_CSS.includes('[id^="seo-wt-style-select"]'));
 });

@@ -2234,7 +2234,7 @@ export const APP_CSS = `
 		/*
 		 * The gallery is a scroll
 		 * area (same strategy as
-		 * the SRT script box):
+		 * the narration script box):
 		 * max 250px tall, with a
 		 * wide arrow toggle above.
 		 */
@@ -2316,9 +2316,11 @@ export const APP_CSS = `
 
 
 		/*
-		 * The generated SRT script:
-		 * a scroll area with a FIXED
-		 * 220px height (min = max).
+		 * The generated narration
+		 * script (plain text, never a
+		 * subtitle format): a scroll
+		 * area with a FIXED 220px
+		 * height (min = max).
 		 */
 
 		.va-script-box {
@@ -7525,8 +7527,7 @@ export const APP_CSS = `
 		}
 
 		#studio-app .view-switch-btn:hover,
-		#studio-app .app-generate:hover,
-		#studio-app .batch-open:hover {
+		#studio-app .app-generate:hover {
 			transform: none;
 		}
 
@@ -7722,67 +7723,10 @@ export const APP_CSS = `
 			background: var(--t-panel-3, rgba(255, 255, 255, 0.03));
 		}
 
-		#studio-app .batch-index {
-			color: var(--t-muted, #9ca3af);
-			font-variant-numeric: tabular-nums;
-		}
-
-		#studio-app .batch-title {
-			font-weight: 700;
-		}
-
-		#studio-app .batch-sub {
-			color: var(--t-muted, #9ca3af);
-			font-size: 0.7rem;
-			margin-top: 3px;
-		}
-
-		#studio-app .batch-badge {
-			display: inline-block;
-			padding: 4px 9px;
-			border-radius: 999px;
-			border: 1px solid var(--t-line, #2e3440);
-			background: var(--t-panel-2, #1b2130);
-			font-size: 0.68rem;
-			font-weight: 800;
-			text-transform: lowercase;
-		}
-
-		#studio-app .batch-badge[data-state="rendering"],
-		#studio-app .batch-badge[data-state="queued"] {
-			border-color: #b45309;
-			color: #b45309;
-			background: rgba(180, 83, 9, 0.1);
-		}
-
-		#studio-app .batch-badge[data-state="done"] {
-			border-color: #15803d;
-			color: #15803d;
-			background: rgba(21, 128, 61, 0.1);
-		}
-
-		#studio-app .batch-badge[data-state="error"],
-		#studio-app .batch-badge[data-state="skipped"] {
-			border-color: #b91c1c;
-			color: #b91c1c;
-			background: rgba(185, 28, 28, 0.1);
-		}
-
-		#studio-app .batch-open {
-			border: 1px solid var(--t-line, #2e3440);
-			background: transparent;
-			color: var(--t-ink, var(--text));
-			border-radius: 8px;
-			padding: 6px 10px;
-			font-size: 0.72rem;
-			font-weight: 700;
-			cursor: pointer;
-		}
-
-		#studio-app .batch-open:hover {
-			border-color: var(--accent);
-			color: var(--accent);
-		}
+		/* The read-only bulk grid (bug-fix-session-240) used to style .batch-index /
+		   .batch-title / .batch-sub / .batch-badge / .batch-open here. #view-table is now
+		   the editable quick-batch table (RULE 25), so those selectors - and the markup
+		   they matched - are gone; the rules below are the ones the emitted rows use. */
 
 		#studio-app .table-empty {
 			padding: 22px 16px;
@@ -7793,6 +7737,191 @@ export const APP_CSS = `
 
 		#studio-app .table-empty[hidden] {
 			display: none;
+		}
+
+		/* ---- quick batch table (MODULE 1c) ------------------ */
+
+		/* Generate lives at the TOP RIGHT of the table. */
+		#studio-app .batch-generate {
+			margin-left: auto;
+			flex: 0 0 auto;
+		}
+
+		#studio-app .batch-add-row {
+			margin-left: auto;
+			flex: 0 0 auto;
+		}
+
+		/* with both buttons the note must not push them apart */
+		#studio-app .table-card .card-head .card-note {
+			margin-left: 10px;
+		}
+
+		#studio-app .batch-hint {
+			padding: 10px 16px;
+			border-bottom: 1px solid var(--t-line, #2e3440);
+			font-size: 0.74rem;
+			line-height: 1.5;
+			color: var(--t-muted, #9ca3af);
+		}
+
+		#studio-app .batch-table-edit {
+			white-space: normal;
+		}
+
+		#studio-app .batch-table-edit .batch-col-script {
+			width: 46%;
+		}
+
+		#studio-app .batch-table-edit .batch-col-style {
+			width: 18%;
+		}
+
+		#studio-app .batch-table-edit .batch-col-min {
+			width: 8%;
+		}
+
+		#studio-app .batch-table-edit .batch-col-preview,
+		#studio-app .batch-table-edit .batch-col-export {
+			width: 14%;
+		}
+
+		#studio-app .batch-table-edit td.batch-cell {
+			vertical-align: top;
+			padding: 12px;
+			white-space: normal;
+		}
+
+		#studio-app .batch-row-head {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			margin-bottom: 6px;
+		}
+
+		#studio-app .batch-row-no {
+			font-size: 0.7rem;
+			font-weight: 700;
+			letter-spacing: 0.08em;
+			color: var(--t-muted, #9ca3af);
+		}
+
+		#studio-app .batch-row-del {
+			margin-left: auto;
+			border: 1px solid var(--t-line, #2e3440);
+			border-radius: 6px;
+			background: transparent;
+			color: var(--t-muted, #9ca3af);
+			cursor: pointer;
+			font-size: 0.72rem;
+			line-height: 1;
+			padding: 4px 6px;
+		}
+
+		#studio-app .batch-row-del:hover {
+			border-color: #ef4444;
+			color: #ef4444;
+		}
+
+		#studio-app .batch-script-input,
+		#studio-app .batch-style-select,
+		#studio-app .batch-minutes-input {
+			box-sizing: border-box;
+			width: 100%;
+			border: 1px solid var(--t-line, #2e3440);
+			border-radius: var(--t-radius-sm, 8px);
+			background: var(--t-input, #0d0f12);
+			color: var(--t-ink, var(--text));
+			font-family: inherit;
+			font-size: 0.82rem;
+			padding: 8px 10px;
+		}
+
+		#studio-app .batch-script-input {
+			min-height: 96px;
+			resize: vertical;
+			line-height: 1.5;
+		}
+
+		#studio-app .batch-minutes-input {
+			max-width: 74px;
+			text-align: center;
+		}
+
+		#studio-app .batch-row-sub {
+			margin-top: 4px;
+			font-size: 0.66rem;
+			color: var(--t-muted, #9ca3af);
+		}
+
+		#studio-app .batch-row-status {
+			margin-top: 8px;
+			font-size: 0.7rem;
+			line-height: 1.45;
+			color: var(--t-muted, #9ca3af);
+		}
+
+		#studio-app .batch-row-status[data-stage="images"],
+		#studio-app .batch-row-status[data-stage="voice"],
+		#studio-app .batch-row-status[data-stage="prompts"],
+		#studio-app .batch-row-status[data-stage="animate"],
+		#studio-app .batch-row-status[data-stage="timing"],
+		#studio-app .batch-row-status[data-stage="queued"] {
+			color: var(--accent, #7aac2b);
+		}
+
+		#studio-app .batch-row-status[data-stage="done"] {
+			color: #34d399;
+		}
+
+		#studio-app .batch-row-status[data-stage="error"] {
+			color: #f87171;
+		}
+
+		/*
+		 * Preview + Export live in their own cells and are NOT inputs:
+		 * while the row works the cell only holds plain text, and the
+		 * button appears the moment the row is finished - both at once.
+		 */
+		#studio-app .batch-pending {
+			display: inline-block;
+			padding: 9px 12px;
+			border: 1px dashed var(--t-line, #2e3440);
+			border-radius: var(--t-radius-sm, 8px);
+			color: var(--t-muted, #6b7280);
+			font-size: 0.74rem;
+			white-space: nowrap;
+		}
+
+		#studio-app .batch-live {
+			cursor: pointer;
+			white-space: nowrap;
+		}
+
+		#studio-app .batch-preview-box {
+			max-width: min(1080px, 94vw);
+		}
+
+		#studio-app .batch-preview-canvas {
+			display: block;
+			width: 100%;
+			height: auto;
+			border-radius: var(--t-radius-sm, 8px);
+			background: #000000;
+		}
+
+		#studio-app .batch-preview-bar {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			margin-top: 10px;
+		}
+
+		#studio-app .batch-preview-note {
+			display: block;
+			margin-top: 8px;
+			font-size: 0.72rem;
+			color: var(--t-muted, #9ca3af);
 		}
 
 		/* ---- editor ----------------------------------------- */
@@ -7954,11 +8083,6 @@ export const APP_CSS = `
 
 		html[data-theme] #studio-app .batch-table td {
 			border-bottom-color: var(--t-line);
-		}
-
-		html[data-theme] #studio-app .batch-badge {
-			background: var(--t-panel-2);
-			border-color: var(--t-line);
 		}
 
 		html[data-theme] #studio-app .view-switch {
@@ -8833,7 +8957,13 @@ export const APP_CSS = `
 			margin-top: 12px;
 		}
 
-		#seo-wt-style-select {
+		/*
+		 * Per-video ids ('seo-wt-style-select-3', 'seo-wt-selected-3',
+		 * 'seo-walkthrough-modal-2'...): every video owns its own
+		 * walkthrough, so the styling matches the id prefix instead of
+		 * one shared id.
+		 */
+		[id^="seo-wt-style-select"] {
 			box-sizing: border-box;
 			display: block;
 			width: 100%;
@@ -8849,7 +8979,7 @@ export const APP_CSS = `
 			cursor: pointer;
 		}
 
-		#seo-wt-selected {
+		[id^="seo-wt-selected"] {
 			margin-top: 8px;
 			padding: 12px;
 			border: 1px solid var(--t-line, #d1d5db);
@@ -8860,15 +8990,15 @@ export const APP_CSS = `
 			box-shadow: 0 5px 16px rgba(0, 0, 0, .12);
 		}
 
-		#seo-walkthrough-modal .seo-wt-card .va-seo-chip,
-		#seo-wt-selected .va-seo-chip {
+		[id^="seo-walkthrough-modal"] .seo-wt-card .va-seo-chip,
+		[id^="seo-wt-selected"] .va-seo-chip {
 			background: #f3f4f6;
 			color: #111827;
 			border-color: var(--t-line, #d1d5db);
 		}
 
-		#seo-walkthrough-modal .seo-wt-card .va-seo-label,
-		#seo-wt-selected .va-seo-label {
+		[id^="seo-walkthrough-modal"] .seo-wt-card .va-seo-label,
+		[id^="seo-wt-selected"] .va-seo-label {
 			color: #4b5563;
 		}
 

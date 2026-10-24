@@ -500,3 +500,101 @@ Full record: `bug-fix-session-206.md`; system rule: `system-rules.md` RULE 21.
   - KV eventual consistency can overshoot the guest limit by the number of in-flight requests.
 - **Privacy.** No raw address is persisted. The hash is salted (`yvs-guest:`) and truncated to
   40 hex characters; the operator view shows the network-masked address only.
+
+## Dangling-code audit — 2026-10-25 (Bug Fix Session #242, second pass)
+
+Method (repeatable, no browser needed): dump every shipped bundle out of its TypeScript template
+literal, then run `node --check` plus `tsc --noEmit --allowJs --checkJs` over the **bundle**, not the
+source. `TS2304 Cannot find name` is the interesting diagnostic — it is exactly what a truncated
+or mis-spliced generation leaves behind.
+
+```
+npx tsx /tmp/dump.mjs            # APP_JS -> /tmp/app.js (PAGE_HTML-independent)
+node --check /tmp/app.js
+npx tsc --noEmit --allowJs --checkJs --target es2022 --lib dom,dom.iterable,es2022 /tmp/app.js
+```
+
+Then the two structural greps: every `getElementById("x")` must have an `id="x"` emitter (markup,
+bundle string or `.id = "x"`), and every `closest("[data-x]")` / `querySelector("[data-x]")` must
+have a matching emitted attribute; on the CSS side, every emitted class should have a rule and every
+rule a class that is emitted.
+
+### 21 — S2 · the auth overlay's Escape handler threw on every keypress  *(fixed)*
+
+`bindAuth()` registered `document.addEventListener("keydown", (event) => { if (e.key === "Escape"
+…`. `e` is not a variable in that scope, so **any** key press while the overlay was mounted raised
+`ReferenceError: e is not defined` inside the listener (before `hideAuthOverlay()`, so Escape never
+closed it). Not a styling nit: the listener is on `document`.
+
+Fixed by naming the real parameter: `event.key === "Escape"`. `tsc` now reports no TS2304 in the
+studio bundle.
+
+### 22 — S2 · a project restore with no captions threw  *(fixed)*
+
+`applyProject()` (the ☁️ worker-mode payload restore) read
+
+```
+(p.captions ||
+ns ||
+	[]).forEach(…)
+```
+
+`ns` is another name that exists nowhere, and it is only evaluated when `p.captions` is falsy — so
+restoring a job whose payload had no captions crashed instead of falling back to `[]`. The stray
+token's indentation also disagreed with its neighbours, the signature of a bad splice rather than
+intent. Removed, leaving `p.captions || []`.
+
+### 23 — S3 · four listeners/functions wired to markup that no longer exists  *(fixed)*
+
+These are the pieces left dangling when `#view-table` became the editable quick-batch table:
+
+| Left behind | Why it was dead |
+| --- | --- |
+| the `[data-open]` click listener on `#batch-rows` | nothing emits `data-open` since the read-only grid's **Open ↗** button was replaced |
+| `focusVideoInEditor(n)` | that listener was its only caller, and a batch row has no accordion to focus |
+| the delegated `input` listener on `#video-accordions` calling `renderBatchTable()` on `#va-title-N` / `#va-ai-prompt-N` | it existed to mirror accordion state into the read-only index; the table shows its own rows, and `updateVideoStatus(n)` still refreshes the two counters |
+| `.batch-index` / `.batch-title` / `.batch-sub` / `.batch-badge[data-state=…]` / `.batch-open` CSS (+ the `[data-theme]` override) | the markup those rules matched is gone |
+
+`batchRowId()` and `hideSeoWalkthrough()` — added earlier in the same session and never called —
+went too: row ids come from `batchRowSeq`, and closing a walkthrough removes the node while
+`ensureSeoWalkthrough()` re-creates it, so a `display:none` helper had no role.
+
+Deleting the dead grid CSS also exposed the half-done part of that rename: `.batch-col-preview` and
+`.batch-col-export` had **no** width rule while the other three columns did. They now have one, so
+every `th.batch-col-*` the markup emits is styled, and every `.batch-*` selector in `styles.ts`
+greps back to emitted markup.
+
+### Documented, deliberately **not** changed
+
+These are real inconsistencies between the shipped app and its documentation/legacy surface. Each
+one is a guarded no-op today, so "fixing" them would change behaviour nobody asked for; the rule
+they break is recorded here instead.
+
+- **`#va-captions-N` does not exist.** Five lookups (`addCaptionRow`, `addVaCaptionRow`,
+  `swapVaCaptionsIn/Out`, the caption gatherer) still ask for that id; every one is guarded
+  (`if (!rows) return;`) because the accordion lost its caption rows section when the captions
+  moved to the main panel (RULE 22). Its comment says so: *"The accordion no longer has a caption
+  section: no rows to swap."* `addVaCaptionRow` and `toggleAccountBox` are reachable only from
+  `src/index.ts.original` — the unimported snapshot (finding #12) — so they are alive-in-file and
+  dead-in-app. Left as is; the pair belongs with #12/#13, not here.
+- **The Table tab is labelled "▦ Bulk grid" while the card head inside it reads "Quick batch
+  table".** Both strings are shipped and shipped-together; RULE 22 now records the mismatch
+  instead of pretending the tab was renamed.
+- **`npm run check` still fails with 36 `src/index.ts` type errors** (implicit-`any` parameters,
+  `env` bindings typed by `worker-configuration.d.ts`, `TS2345` on `ctx.waitUntil`). The count is
+  **identical before and after** this session (verified by re-running `tsc --noEmit`), and finding
+  #11 already explains why that gate can never pass as configured. The gates that matter —
+  `npm test` (64) and `wrangler deploy --dry-run` — are green.
+- **The 25-still cap is an accordion rule, not a table rule.** `IMAGE_BATCH_MAX_PROMPTS = 20`
+  bounds a row; `BATCH_ROW_LIMIT = 10` bounds the table. A tooltip that promised "25 stills" per
+  row would be wrong, and the hint inventory (RULE 18) no longer says that.
+- **Verified-clean, for the record:** no `TS2304`/`TS2552` in any shipped bundle (studio, composer,
+  ring carousel, scene editor, shape animations, settings page, payment uploader); every
+  `data-batch-*`, `data-layout`, `data-dismiss`, `data-step` and `data-stage` attribute that JS
+  reads is emitted by the same code that reads it (`data-dismiss` resolves through the
+  `typeof window[dismiss] === "function"` dispatcher, which is why functions like
+  `closeSeoWalkthroughTop` look "uncalled" to a naive grep); the render app's page wires all 12 of
+  its ids and styles every class it emits; `render-app/server.mjs` routes `GET`/`POST
+  /api/job/<id>`, `GET /media/<id>.mp3`, `/api/health` and static files, sets `job.file`/`job.url`
+  on completion and honours `signal` **inside** the chunk loop, which is what makes its Stop button
+  meaningful.

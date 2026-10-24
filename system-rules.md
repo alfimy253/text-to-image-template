@@ -327,9 +327,15 @@
 
 > **Canonical rule (2026-10-24):** the one long-tail keyword must appear **at least once**; each
 > of the four short keywords must appear **at least twice**. There is **no maximum** — extra
-> uses are always valid and are never retried. Counts are measured on the spoken SRT only.
+> uses are always valid and are never retried. Counts are measured on the spoken text only.
 > Enforced by `keywordUsageError()`/`keywordUsageAudit()` with `SEO_LONG_FREQ_MIN = 1` and
 > `SEO_SHORT_FREQ_MIN = 2`, covered by `tests/script-seo.test.mjs`.
+>
+> **Payload update (2026-10-25, Session #242):** the answer is a **plain narration script**, not an
+> SRT file. Cue timing remains the server's *internal* working format — it is what makes overlap,
+> duration and per-cue keyword auditing possible — but it is converted by `plainScriptFromCues()`
+> before the response, and no client, tooltip or stored project field mentions SRT any more. The
+> keyword rules, the validators and the retry counts are unchanged.
 
 - **Current contract (2026-10-24), enforced in `src/modules/script-seo.ts`:**
   1. Exactly **one nonempty long-tail keyword**, spoken **at least once** (1 or more uses).
@@ -396,7 +402,10 @@
     measured total and required minimum, e.g.
     `the short keyword "a" appears 1 time(s); it must appear at least 2 time(s)`.
 - Success:
-  `{success:true,srt,title,headings,keywords:{longTail:{keyword,count,min:1,max:null},short:[{keyword,count,min:2,max:null}]},model}`
+  `{success:true,script,format:"plain",title,headings,keywords:{longTail:{keyword,count,min:1,max:null},short:[{keyword,count,min:2,max:null}]},lines,words,durationMs,minutes,model}`
+  — there is **no `srt` key**; `script` is the validated cues as prose paragraphs (4 sentences per
+  paragraph, a blank line between them). A body that still posts `srt` is accepted and converted by
+  `plainScriptFromSrt()`, and `lines`/`words`/`durationMs` are recomputed from the plain text.
   (`max: null` = no upper bound; every count is measured, never substituted).
   Optional debug output carries the correlated request ID and planner/writer attempt traces.
   Every successful count is measured, never substituted with the required value.
@@ -412,26 +421,31 @@
     sends it back as `keywordSet`; the server re-validates it with `parseKeywordSet` and skips
     the planner, otherwise this bullet still applies. The UI still only *reports* the title,
     headings and counts the model produced and the server verified.
-  - On success `generateScript()` stores `project.srt`, `project.seoTitle` and
+  - On success `generateScript()` stores `project.script` (+ `project.scriptDurationMs`), `project.seoTitle` and
     `project.seoHeadings`; **if the video title input `#va-title-N` is still empty it is autofilled
     with `title.slice(0, 70)`** (the input's `maxlength` is 70, so the SEO title always fits); it
     fills `#va-script-box-N`, renders the SEO plan chips into `#va-script-keywords-N`
     (`renderSeoKeywords(n, data)` — a Title row, a Headings row, the long-tail chip and the 4 short
-    chips, each count shown as `N×`, every string passed through `escapeHTML()`), reveals the SRT
-    box + **⬇ Download .srt** and calls `syncVoiceoverButton(n)`, which reveals + enables
+    chips, each count shown as `N×`, every string passed through `escapeHTML()`), reveals the plain
+    script box (`#va-script-box-N` + `.va-script-text`, labelled "Script" and collapsible through
+    **"▼ Script"**) and calls `syncVoiceoverButton(n)`, which reveals + enables
     **🎙 Generate Voiceover** — the button ships hidden (`style="display:none"` + `disabled`) in the
     accordion markup and stays hidden for as long as the video has no generated script.
   - The status line reads
     `Script ready — N lines (<speed> speech, <minutes> min) · SEO: 1 long-tail (≥1×) + 4 short keywords (≥2× each) · title + K heading(s)`.
-  - Restriction: on failure the status line becomes `Script failed: <error>` and the previous chips
-    and SRT box stay on screen — nothing is cleared or replaced.
+  - Restriction: a failed request is retried client-side (`SCRIPT_RETRY_LIMIT = 2`, so **3 attempts**
+    in total, mid-flight status `Script failed (<reason>); retrying (N of 2)...`), and only then does
+    the status line become `Script failed after 3 attempts: <error>`; the previous chips and script
+    box stay on screen — nothing is cleared or replaced, and both buttons are re-enabled on every
+    path so a failure never needs a page reload.
 - **Future: scripts without SEO / non-explainer scripts (documented, NOT implemented).** The whole
   SEO layer is isolated so a future plain-script mode can bypass it without touching anything
   else: the rules live only in the `SEO_*` constants, `parseKeywordSet()`, the stage-2 SEO brief
   and `keywordUsageError()`. A non-SEO mode skips stage 1 (the planner), uses `basePrompt` without
   the SEO brief, skips `keywordUsageError()`, and returns the payload without
   `title`/`headings`/`keywords`; request validation, `validateSrt`, the retry loops, the credit
-  telemetry and the client SRT box all stay exactly as they are.
+  telemetry and the client script box all stay exactly as they are. (Since Session #242 the client
+  box already *is* plain text, so such a mode is a server-side change only.)
 
 ---
 
@@ -534,7 +548,8 @@
     at `y = height - height*4/7` (4/7 of the height up from the bottom).
   - A caption stays on screen until the next caption's timestamp; the **last** caption is cut
     off after `CAPTION_MAX_VISIBLE_MS = 10 000` ms.
-- Subtitles (the applied SRT script):
+- Subtitles (the cues derived from the plain script by `buildScriptCues(script, totalMs)` — a
+  sentence split, 84-character wrapping and a 1 200 ms floor per cue; no timestamp file is read):
   - 22 px Bookman, white text on a translucent black box (`rgba(0,0,0,0.55)`, padding 10 px ×
     6 px, box height = font size + 16), centred at `x = width/2`,
     `y = height - height/3` (1/3 up from the bottom) — deliberately **below** the caption band
@@ -806,7 +821,7 @@
 | Hint text (abridged) | Where it lives | Mirrors |
 | --- | --- | --- |
 | `SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords said at least 2× each · minimums only, extra uses are allowed · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` | video accordion, SEO section (`.va-note`, always visible) | `SEO_LONG_TAIL = 1`, `SEO_SHORT_TOTAL = 4`, `SEO_LONG_FREQ_MIN = 1`, `SEO_SHORT_FREQ_MIN = 2` (no `*_FREQ_MAX`; RULE 7) |
-| `AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the SRT script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
+| `AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the plain narration script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
 | `Long-tail keyword — must be said at least 1×` · `Short keyword — must be said at least 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading` · `Explainer title — includes at least one short keyword` · `Section heading — at least one heading includes a short keyword` | SEO plan chips, `renderSeoKeywords()` tooltips (the `N×` shown is the measured count, which may exceed the minimum) | `SEO_LONG_FREQ_MIN = 1`, `SEO_SHORT_FREQ_MIN = 2`, title/heading inclusion rules (RULE 7) |
 | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)` | video accordion, media section (`.va-note`) | `MAX_GIF_UPLOADS = 5`, `MAX_IMAGE_UPLOADS = 25`, `MAX_MP4_UPLOADS = 5`, `MP4_MAX_DURATION_S = 60` |
 | `2 images per submit · 480px landscape` | video accordion, AI images section (`.va-note`, doubles as the status line) | the route always asks SDXL for 2 images; **the 480 is not enforced anywhere** (bug-audit #16) |
@@ -816,7 +831,11 @@
 | `The slideshow repeats to cover the whole track.` | main panel audio note | slide timing: the asset list loops to cover the MP3 (RULE 9) |
 | `White 435 × 150 rectangle, square corners, flush with the bottom right corner and hanging 40px past the right edge.` | main panel sticker note | `STICKER_WIDTH = 435`, `STICKER_HEIGHT = 150`, sticker geometry (RULE 10) |
 | `MeloTTS (Cloudflare AI) speaks the script as an English MP3 (one fixed voice). The MP3 can be uploaded as this video's audio track.` | voiceover modal note | `/api/voiceover` with the locked English select (RULE 8) |
-| `Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles` | **🎙 Generate Voiceover** tooltip | the two modal actions (voiceover + subtitles toggle) |
+| `Speak the script to MP3 with MeloTTS (English) + apply it as subtitles` | **🎙 Generate Voiceover** tooltip | the two modal actions (voiceover + subtitles toggle) |
+| `One row — one video` (`#batch-note`, rewritten live as `N rows · M with a script`) · `Type or paste a script in the first box, pick the video image style and the minimum minutes, then press ✨ Generate at the top right of the table. … Until a row is finished its last two cells read **Preview Here** and **Export Video** — both unlock at the same moment, and the export is built in this browser.` | **Quick batch table** (`.card-note`, `.va-note.batch-hint`) | `BATCH_ROW_LIMIT = VIDEO_MAX_VIDEOS = 10`, minutes 1-6, `batchRowFinished()` (RULE 25) |
+| `Add another row (10 rows at most)` · `Generate every row that has a script: voiceover, AI images and the animation` | `#batch-add-row` / `#batch-generate` tooltips | the row cap and the sequential pipeline (RULE 25) |
+| `No rows yet — press ＋ Add Row, paste a script, pick a style and press ✨ Generate.` | `#batch-empty` | the table is seeded with one blank row **once**, so an emptied table stays empty (RULE 25) |
+| `Plain narration script - the words the voiceover reads. Timestamps are not needed.` | the accordion's **▼ Script** tooltip | the plain-script payload of `/api/script` (RULE 7) |
 | `Send all of this video's elements to the render API` | **☁️ API** tooltip | the `/api/render` payload (RULE 4) |
 | `Compose a portrait or landscape MP4 (max 25 seconds) from a design template …` | `Add video from template` tooltip | the composer caps 1-25 s (RULE 13) |
 | `+ Front layer` / `- Back Layer` · `Layer N of M` | text/graphic inspector | one-step saved paint order; disabled at boundaries (RULE 13) |
@@ -864,9 +883,10 @@
   `Video export failed: <error>`, `Video N: you can add at most 5 MP4 clips.`,
   `The composed file could not be read as an MP4 clip.`,
   `The composed file is <n>s long. Each MP4 clip must be at most 1:00.`
-- Restriction: **the AI script never alerts.** A failed script writes `Script failed: <error>` into
-  the section's `.va-note` status line, so the previous SRT, its chips and the download button stay
-  on screen (do not "fix" this into an alert — it is deliberate, so a retry can start immediately).
+- Restriction: **the AI script never alerts.** A failed script is retried and only then writes
+  `Script failed after 3 attempts: <error>` into the section's `.va-note` status line, so the
+  previous script and its SEO chips stay on screen (do not "fix" this into an alert — it is
+  deliberate, so a retry can start immediately).
 - Restriction: `alert()` is the **only** modal feedback and it blocks the UI thread; long-running
   flows therefore report progress through the per-video `#va-status-N` / `#va-script-status-N`
   status lines and only use an alert for the terminal failure.
@@ -876,12 +896,13 @@
 - `Click ＋ Add Video above, then press Generate.` (`.action-hint` in the preview card; the
   button it names is the **＋ Add Video** control in the page heading, and **Generate** exists
   twice by design — `#render-btn` in the action bar and `#top-generate` in the top bar).
-- `Every video in this project` → `N videos · read-only index` (`#batch-note`),
-  `N of 10 videos` (`#concept-count`), `idle` → `N in queue` (`#preview-state`) and
-  `No videos yet — press ＋ Add Video to start, then open it here or in the Editor.`
-  (`#batch-empty`, Bug Fix Session #240). The first three are written by `renderBatchTable()`,
-  so they always agree with `videoProjects`; the `10` in the count is a hand-copied duplicate of
-  `VIDEO_MAX_VIDEOS`, the same drift risk as the rest of this table.
+- `One row — one video` → `N rows · M with a script` (`#batch-note`),
+  `N of 10 videos` (`#concept-count`), `idle` → `table generating` (`#preview-state`) and
+  `No rows yet — press ＋ Add Row, paste a script, pick a style and press ✨ Generate.`
+  (`#batch-empty`). `#batch-note` and both button labels are written by `updateBatchToolbar()`, the
+  rows and the two editor counters by `renderBatchTable()`, so the two views cannot disagree; the
+  `10` in the count is a hand-copied duplicate of `VIDEO_MAX_VIDEOS` (= `BATCH_ROW_LIMIT`), the same
+  drift risk as the rest of this table.
 - `Pick a template — each preview is the real animation` (composer status),
   `Preview:` (main panel caption preview).
 - Placeholders: `Enter your video title...` (main panel + accordion), `Topic (uses the video title
@@ -1135,8 +1156,13 @@ addresses and gives visitors without an account a small, IP-metered allowance.
 - The studio page is a **shell** (top bar, page heading) around two sibling views inside
   `main.app-main`; exactly one carries `.active` and the layout block does the rest
   (`#studio-app .view { display: none }` / `.view.active { display: block }`):
-  - `#view-table` — the **Bulk grid**: a read-only index of `videoProjects`, one row per video
-    (number, title, prompt excerpt, scene counts, MP3 length, state, **Open ↗**).
+  - `#view-table` — the **Quick Batch table**. Until Session #242 this was a read-only index of
+    `videoProjects` (number, title, prompt excerpt, scene counts, MP3 length, state, **Open ↗**);
+    it is now an editable sheet of its own rows (Script / Style / Min / Preview / Export), described
+    in **RULE 25**. The read-only index and its **Open ↗** jump (`focusVideoInEditor(n)`,
+    `[data-open]`) were removed with it: a batch row has no accordion to jump to. The tab is still
+    labelled "▦ Bulk grid" in `#view-switch` while the card head reads "Quick batch table" — noted
+    in `bug-audit.md` rather than "fixed", because the shipped label is what users see today.
   - `#view-editor` — the **Editor**: `.studio-card.editor-build` (`#video-accordions`) beside
     `.studio-card.preview-card` (canvas, progress, status, action bar). It is the boot view.
     The `#studio-app .studio` grid — shared by **every theme** — gives the preview monitor
@@ -1148,18 +1174,24 @@ addresses and gives visitors without an account a small, IP-metered allowance.
 - The switch is `#view-switch` → `[data-layout="table"|"editor"]`, handled by
   `setStudioLayout()`. The choice is a **module variable**; RULE 15 forbids client storage, so a
   reload always starts in the Editor.
-- The grid is a **view, not a controller** (Bug Fix Session #240):
-  - `renderBatchTable()` rebuilds `#batch-rows` from the same `videoProjects` array the engine
-    uses; it never creates, copies, deletes or persists a project.
-  - **Open ↗** calls `focusVideoInEditor(n)`, which switches the view, expands `#va-body-N` /
-    `#va-arrow-N` with the same inline-`display` mechanism as `toggleVideoAccordion()` and scrolls
-    the accordion into view.
-  - A delegated `input` listener on `#video-accordions` re-renders the grid when `#va-title-N` or
-    `#va-ai-prompt-N` changes, and `updateVideoStatus(n)` re-renders it after a status change, so
-    the two views cannot show different states.
-  - Restriction: there are **no bulk operations** — no checkbox column, duplicate, delete, export,
-    search or queue badge. The uploaded reference had them; this app does not, and the grid
-    deliberately does not pretend to.
+- The grid is a **view, not a controller** (Bug Fix Session #240), and the batch table keeps that
+  shape: nothing in `#view-table` touches the render engine's globals directly; it either calls the
+  engine's own functions (`generateMP4`, `drawSubtitles`) or works on its own row objects.
+  - The old read-only index renderer is gone: `renderBatchTable()` now paints `#batch-rows` from the
+    table's own `batchRows` array and, at the end, still refreshes the editor counters
+    (`#concept-count` = `videoProjects.length`, `#preview-state` = `table generating` while a row
+    runs). The counters therefore agree with the accordions without the table ever writing to
+    `videoProjects`.
+  - ~~**Open ↗** calls `focusVideoInEditor(n)`~~ and ~~a delegated `input` listener on
+    `#video-accordions` re-renders the grid when `#va-title-N` / `#va-ai-prompt-N` changes~~: both
+    belonged to the read-only grid and were **deleted on 2026-10-25** (Session #242) once that
+    markup was replaced — nothing emitted `[data-open]` any more and an accordion title edit had
+    nothing to update in the table. `updateVideoStatus(n)` → `renderBatchTable()` is what keeps the
+    counters in sync.
+  - Restriction: the *grid* has **no bulk operations** — no checkbox column, duplicate, delete,
+    search or queue badge, and no bulk export. The batch **table** adds exactly two batch-shaped
+    controls, `#batch-add-row` and `#batch-generate`, and its Export is per row (RULE 25). The
+    uploaded reference had more; this app does not, and neither view pretends to.
 - Only **re-parenting** was allowed: `initVideoStudio()` hides `.audio-panel`, `.controls` and
   `#gallery`, moves `#render-btn` into `#action-bar`, and every handler looks nodes up by `id` or
   class — never by parent. The legacy panels live on in `.engine-panels`
@@ -1174,7 +1206,10 @@ addresses and gives visitors without an account a small, IP-metered allowance.
 - The fixed credits pill is parked under the sticky bar with
   `#studio-app:not([hidden]) ~ .credit-pill { top: 78px }` (66px under 560px); on the landing page
   it keeps its own corner.
-- Record: `bug-fix-session-240.md`.
+- Record: `bug-fix-session-240.md`, extended by `bug-fix-session-242.md` (the table became an
+  editor — RULE 25 — and the modal stack made the two views' overlays coexist). The dangling
+  leftovers of the old grid were removed in that session rather than kept "just in case"; the
+  register is in `bug-audit.md`.
 
 ---
 
@@ -1608,8 +1643,8 @@ cites `kv-scale-test.md` §8, the last section of that document.
   `#va-script-box-N`) and calls `POST /api/script` with `{topic, minutes, speed, keywordSet}`.
   A supplied `keywordSet` is re-validated by `parseKeywordSet` (invalid → `400`, no AI call,
   no usage count) and **skips the Stage-1 planner**; requests without it behave exactly as
-  RULE 7 describes. The existing SRT display, SEO chips, title autofill, Download .srt and
-  voiceover reveal are unchanged. Script failure ends the flow: upload + script buttons are
+  RULE 7 describes. The plain-script display, SEO chips, title autofill and voiceover reveal are
+  unchanged (since Session #242 there is no **Download .srt** control anywhere in the studio). Script failure ends the flow: upload + script buttons are
   re-enabled. Minutes come from the existing Minutes dropdown and **default to 1**.
 - **Step 3 — image prompts (synchronous, no job URL).** Once the script is shown,
   `POST /api/image-prompts {topic, minutes, style, script, keywordSet}` runs the prompt writer
@@ -1691,12 +1726,13 @@ cites `kv-scale-test.md` §8, the last section of that document.
   finalisation, and cap refusals are still counted as "done" (A-2, A-3).
 - Prompt-poll error/external-404 paths never DELETE the dynamic URL and leave the
   1 s gallery watcher running; finalisation never checks the DELETE status (A-4).
-- A failed script *regeneration* leaves the loading spinner in the SRT box instead
-  of restoring the previous script, contradicting RULE 7's failure-retention
-  behaviour; Download/Voiceover stay usable against the old SRT mid-request (A-5).
-- The walkthrough modal is one global DOM singleton (`#seo-walkthrough-modal`)
-  inside a system of up to 10 independent per-video accordions; overlapping plans
-  for two videos overwrite each other's modal (A-6).
+- **Resolved 2026-10-25 (A-5):** a failed script *regeneration* used to leave the loading spinner in
+  the script box instead of restoring the previous script. `runSeoScriptRequest()` now retries
+  (`SCRIPT_RETRY_LIMIT = 2`) and restores the box, the status line and both buttons on every path.
+- **Resolved 2026-10-25 (A-6):** the walkthrough modal is no longer a global singleton. The modal
+  stack (`MODAL_BASE_Z_INDEX = 1200`) gives every video its own `seo-walkthrough-modal-<n>` /
+  `voiceover-modal-<n>`, stacked 10 levels apart, with `Esc` closing only the topmost one and
+  `data-await-choice="1"` keeping a decision step from being dismissed by accident.
 - Topic/minutes/speed are snapshotted and cached sets are reopened without
   comparison, so edits made while the modal is closed are silently ignored (A-8).
 - `/api/seo-plan` and `/api/image-prompts` are anonymous and never record usage,
@@ -1808,3 +1844,106 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   failures and terminal errors all delete the prompt URL, clear timers/abort requests and
   re-enable uploads/script generation. Logs correlate job/video/position and latency without
   recording prompt contents.
+
+---
+
+## RULE 25 — The Quick Batch table is a second editor, not a second engine
+
+> **Added 2026-10-25 (Session #242).** `#view-table` takes a list of scripts and turns every row
+> into a finished video **through the same client code the Editor uses**. It owns its rows, its own
+> stage machine and its own gating rule; the only thing it shares with the accordions is the
+> render function itself.
+
+- **Ownership.** Rows live in `const batchRows = []` inside `APP_JS` (also handed out as
+  `window.__BATCH_ROWS` for tests and the console), **never** in `videoProjects`.
+  `BATCH_ROW_LIMIT = VIDEO_MAX_VIDEOS` (10) and the cap is enforced by
+  `addBatchRow()` returning `null` + `showRequiredModal([...])`, not by a silent no-op.
+  `bindBatchTable()` seeds **one** blank row once (`batchTableSeeded`), so deleting every row
+  leaves the table empty — `renderBatchTable()` must never re-seed.
+- Row shape: `{id, script, style, minutes, stage, detail, error, mp3, mp3Url, audio, prompts[],
+  images[], objectUrls[], slides[], subtitles[], animated, startedAt, finishedAt, controller}`.
+  `minutes` is clamped to 1…6 on input; `style` is one of the ten walkthrough styles
+  (**Cinematic Film** is the default); `stage` walks
+  `empty → ready → queued → voice → timing → prompts → images → animate → done`, or `error`.
+- **The gating rule.** `batchRowFinished(row)` — `row.mp3 && row.images.length && row.animated &&
+  row.slides.length` — is the *single* condition behind both action cells. Until it is true the
+  cells are text (`<span class="batch-pending">Preview Here</span>`, `Export Video`); afterwards
+  they are buttons, **both at once**. There is no preview-only or export-only state, and a row with
+  no script never gets a control at all (`generateBatchRows()` skips it).
+- **Pipeline** (`runBatchRow`, one row at a time behind `batchRunBusy`):
+  `POST /api/voiceover {text, lang:"en"}` → `decodeBatchAudio` → `buildScriptCues(script, ms)` →
+  `POST /api/image-prompts {topic, minutes, style, script}` → `POST /api/image-batch` (NDJSON) →
+  `buildBatchSlides` → `animated = true`. `BATCH_REQUEST_TIMEOUT_MS = 240000` bounds each request
+  and `BATCH_SLIDE_DECODE_MS = 10000` bounds each `img.decode()`.
+- **Isolation.** Any failure sets `stage = "error"` and `row.error` on that row only; the loop
+  continues with the next row. `stopBatchRows()` does not kill the run in flight — it aborts
+  through `row.controller` and the toolbar button reads **■ Stop after the current row**.
+- **Preview** is an injected `#batch-preview-modal` opened via `openModal` (so it stacks correctly
+  over a walkthrough, RULE 7): 1024 × 576 canvas + `requestAnimationFrame`, the exporter's own Ken
+  Burns zoom-in (1 → 1.08 across each slide, cover-fit, black letterbox), slides drawn from
+  `row.slides` with the list looping at `slideDurationSec(row.slides[0])` (9 s when the helper is
+  unavailable), `drawSubtitles(context, row.subtitles, timestampMs, width, height)` for the
+  subtitles, and a `play()` result that is not a promise is tolerated.
+- **Export** is not a second renderer. `exportBatchRow(id)` (guarded by `batchRenderBusy`)
+  snapshots `activeSlides`, `currentAudio`, the caption rows, `#title-input` and
+  `window.__workerMode`, points `renderContext` at
+  `{fileName: "YouTubeVibeStudio_Row<N>_<slug>.mp4", subtitles: row.subtitles, batchRow: true}`,
+  clears the title, `await generateMP4()`, downloads `window.__lastRenderBlob` and restores the
+  snapshot in `finally`. **The studio contains no `/api/render` client call in this path and the
+  export body contains no `fetch(`** — a test asserts both, because a row export must not turn
+  into a server job.
+- The CSS is named after the markup that is actually emitted — `batch-cell batch-cell-script` /
+  `-style` / `-min` / `-action` on the `<td>`s, `.batch-script-input`, `.batch-style-select`,
+  `.batch-minutes-input`, `.batch-row-head` / `-no` / `-sub` / `-status` (which also carries the
+  `data-stage` attribute behind the status colours), `.batch-row-del`, `.batch-pending`,
+  `.batch-live`, `.batch-preview-box|canvas|bar|note` — so every selector in `styles.ts` can be
+  grepped from `app-js.ts` and every emitted class has a rule. The rules the replaced read-only
+  grid left behind (`.batch-index`, `.batch-title`, `.batch-sub`, `.batch-badge[data-state=…]`,
+  `.batch-open`) were deleted together with the markup they matched, and `.batch-col-preview` /
+  `.batch-col-export` gained the width rules the other three columns already had.
+- Covered by `tests/quick-batch-table.test.mjs` (jsdom, one whole Generate run against mocked
+  `/api/voiceover`, `/api/image-prompts` and `/api/image-batch`).
+
+---
+
+## RULE 26 — `render-app/` is a separate, key-gated TTS helper; the Worker never calls it
+
+> **Added 2026-10-25 (Session #242).** A local Node service that turns a script of up to
+> **20,000 characters** into **one MP3** by driving a **free, no-login** online TTS site with
+> Playwright. `render-app-tts.zip` at the repository root is the same directory, for running it on
+> another machine.
+
+- **The Worker is unchanged.** No route in `src/index.ts` proxies to it, no client code posts to
+  it, and it has no KV binding. It exists for the case Cloudflare AI is not available; the
+  studio's `/api/voiceover` (RULE 8) stays the normal path.
+- **Hardcoded key.** Every request must carry `apiKey === "1290890909&aPiky2026"` or the answer is
+  `401`. This is not a user secret and grants nothing on the Worker — it exists so the helper never
+  becomes an open text-to-speech relay. The markup and the payload carry `name='apiKey'` /
+  `apiKey` deliberately.
+- **Exactly two voices.** `male` and `female`, one choice each, selected by matching the **host's
+  own** `<option>` labels:
+  `/\b(?<!fe)male\b|\bdave\b|\bdavid\b|\bgeorge\b|\bguy\b|\badam\b|\bryan\b/i` and
+  `/\bfemale\b|\bsusan\b|\bamy\b|\bemma\b|\bzira\b|\bjoan\b|\bkate\b/i`.
+  The negative lookbehind in the male rule is load-bearing: "female" ends in "male", so a bare
+  `/male/` would hand the male slot a female voice. A request for any other voice is `400`.
+- **Chunking and joining.** Sentences are packed into chunks of ≤ 280 characters (an over-long
+  sentence is cut on a word, then hard-sliced); each chunk is converted in a **fresh page** —
+  free hosts leave their form filled — and the returned MP3 frames are concatenated with the later
+  chunks' ID3 tags dropped, so the joined file still plays. Nothing is re-encoded.
+- **Jobs, not bytes.** `POST /api/tts` answers `202 {jobId, chunks, …}`; the page polls
+  `GET /api/job/<id>` (`{stage, done, total, percent, message, url, bytes, ms, error}`) and
+  downloads `GET /media/<id>.mp3`. A 20k script is minutes of audio, so a single blocking response
+  is not an option. Jobs live in memory only; the only files written are the MP3s in
+  `render-app/output/`, which is git-ignored. `POST /api/job/<id>` aborts a run **between chunks**
+  (the page's Stop button does exactly that); a conversion already handed to the host is allowed to
+  finish, which is the only honest behaviour against a third-party site.
+- **Providers are data, not code.** `HOSTS` in `lib/tts-engine.mjs` maps a provider id to
+  `{url, textarea[], voiceSelect[], submit[], download[]}`; each selector list is tried in order,
+  so a renamed control on the host is a one-line edit and a new free site is a new key.
+  `ttsmp3` is the default, `text-to-speech` the fallback, and `mock` writes a silent MP3 through
+  the same pipeline so the app is verifiable offline (`TTS_PROVIDER=mock`, `npm run offline`).
+- **Verification.** `cd render-app && npm run check` → 31 checks (contract, key, cap, voices,
+  chunk packing, MP3 join, HTTP round trip incl. 401/400). `tests/render-app-tts.test.mjs` keeps the
+  same invariants pinned from the repo suite. The live browser path must be run by the operator:
+  this sandbox has no Chromium and no route to the free hosts.
+- See `render-app/README.md` for setup and `bug-fix-session-242.md` for the decision record.
