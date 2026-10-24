@@ -1,19 +1,32 @@
 /*
  * Modular SEO Explainer Script Engine (`src/modules/script-seo.ts`)
  *
- * Implements `POST /api/script` (RULE 7 — 2026-10-23 explainer SEO rule set)
- * with full mathematical consistency checks, Unicode/symbol-safe keyword
- * boundary matching, non-corrupting SRT cue parsing, stateful cue-level retry
- * feedback, and comprehensive `[script]` structured observability logs.
+ * Implements `POST /api/script` (RULE 7 — explainer SEO rule set) with full
+ * mathematical consistency checks, Unicode/symbol-safe keyword boundary
+ * matching, non-corrupting SRT cue parsing, stateful cue-level retry feedback,
+ * and comprehensive `[script]` structured observability logs.
+ *
+ * KEYWORD FREQUENCY RULE (2026-10-24, canonical): the long-tail keyword must
+ * appear AT LEAST ONCE in the spoken SRT and each of the four short keywords
+ * must appear AT LEAST TWICE. There is no maximum — extra uses are valid and
+ * are never a retry reason. See `system-rules.md` RULE 7.
  */
 
 export const SEO_LONG_TAIL = 1;
 export const SEO_SHORT_TOTAL = 4;
 export const SEO_SHORT_WORDS_MAX = 3;
-export const SEO_LONG_FREQ_MIN = 2;
-export const SEO_LONG_FREQ_MAX = 2;
+/*
+ * KEYWORD FREQUENCY RULE (2026-10-24, canonical — see `system-rules.md` RULE 7):
+ * a minimum, never an exact count and never a maximum.
+ *   - The single long-tail keyword must be said AT LEAST ONCE.
+ *   - Each of the four short keywords must be said AT LEAST TWICE.
+ * Saying a keyword more often than its minimum is always valid: over-use is
+ * never a rejection reason, so there is deliberately no `*_FREQ_MAX` constant.
+ * Every count is measured on the spoken SRT dialogue only (cue numbers,
+ * timestamps, title and headings are excluded).
+ */
+export const SEO_LONG_FREQ_MIN = 1;
 export const SEO_SHORT_FREQ_MIN = 2;
-export const SEO_SHORT_FREQ_MAX = 2;
 export const SEO_HEADINGS_MIN = 1;
 export const SEO_HEADINGS_MAX = 12;
 export const SEO_HEADING_WORDS_MAX = 12;
@@ -61,7 +74,8 @@ export interface KeywordAuditEntry {
 	keyword: string;
 	count: number;
 	min: number;
-	max: number;
+	/* `null` = no upper bound: extra uses are always allowed. */
+	max: number | null;
 	delta: number;
 	cueIndices: number[];
 	ok: boolean;
@@ -724,6 +738,11 @@ export function parseKeywordSet(
 
 /*
  * Canonical first-violation error string matching RULE 7 contract verbatim.
+ *
+ * Keyword frequency is a MINIMUM-ONLY rule: the long-tail keyword must be
+ * said at least once and each short keyword at least twice. A keyword that is
+ * said more often than its minimum is never an error, so this function only
+ * ever reports deficits.
  */
 export function keywordUsageError(
 	spokenText: string,
@@ -736,20 +755,9 @@ export function keywordUsageError(
 			keywordSet.longTail +
 			'" appears ' +
 			longCount +
-			" time(s); it must appear exactly " +
+			" time(s); it must appear at least " +
 			SEO_LONG_FREQ_MIN +
-			" times"
-		);
-	}
-	if (longCount > SEO_LONG_FREQ_MAX) {
-		return (
-			'the long-tail keyword "' +
-			keywordSet.longTail +
-			'" appears ' +
-			longCount +
-			" times; it must appear exactly " +
-			SEO_LONG_FREQ_MAX +
-			" times"
+			" time(s)"
 		);
 	}
 	for (const shortKeyword of keywordSet.shorts) {
@@ -760,20 +768,9 @@ export function keywordUsageError(
 				shortKeyword +
 				'" appears ' +
 				count +
-				" time(s); it must appear exactly " +
+				" time(s); it must appear at least " +
 				SEO_SHORT_FREQ_MIN +
-				" times"
-			);
-		}
-		if (count > SEO_SHORT_FREQ_MAX) {
-			return (
-				'the short keyword "' +
-				shortKeyword +
-				'" appears ' +
-				count +
-				" times; it must appear exactly " +
-				SEO_SHORT_FREQ_MAX +
-				" times"
+				" time(s)"
 			);
 		}
 	}
@@ -796,7 +793,7 @@ export function keywordUsageAudit(
 		role: "longTail" | "short",
 		kw: string,
 		min: number,
-		max: number
+		max: number | null
 	): KeywordAuditEntry {
 		const count = keywordCount(spokenText, kw);
 		const cueIndices: number[] = [];
@@ -805,7 +802,8 @@ export function keywordUsageAudit(
 				cueIndices.push(cue.index);
 			}
 		}
-		const delta = count < min ? count - min : count > max ? count - max : 0;
+		const delta =
+			count < min ? count - min : max !== null && count > max ? count - max : 0;
 		return {
 			role,
 			keyword: kw,
@@ -819,25 +817,19 @@ export function keywordUsageAudit(
 	}
 
 	const entries: KeywordAuditEntry[] = [
-		buildEntry(
-			"longTail",
-			keywordSet.longTail,
-			SEO_LONG_FREQ_MIN,
-			SEO_LONG_FREQ_MAX
-		)
+		buildEntry("longTail", keywordSet.longTail, SEO_LONG_FREQ_MIN, null)
 	];
 	for (const sk of keywordSet.shorts) {
-		entries.push(
-			buildEntry("short", sk, SEO_SHORT_FREQ_MIN, SEO_SHORT_FREQ_MAX)
-		);
+		entries.push(buildEntry("short", sk, SEO_SHORT_FREQ_MIN, null));
 	}
 	return entries;
 }
 
 /*
- * Spell out shared counts for the writer AND its retries. For example,
- * "yoga" inside "morning yoga poses" needs no extra standalone insertion.
- * Matching uses the same Unicode/hyphen rules as final SRT enforcement.
+ * Spell out the minimum-frequency and shared-count rules for the writer AND
+ * its retries. For example, "yoga" inside "morning yoga poses" needs no extra
+ * standalone insertion once the long-tail has been said. Matching uses the
+ * same Unicode/hyphen rules as final SRT enforcement.
  */
 export function keywordOverlapInstructions(
 	keywordSet: { longTail: string; shorts: string[] }
@@ -846,20 +838,33 @@ export function keywordOverlapInstructions(
 		(short) => keywordCount(keywordSet.longTail, short) > 0
 	);
 	let instructions =
-		"- OVERLAP COUNTING: A short keyword inside the spoken long-tail counts toward BOTH totals, including across subtitle line/cue breaks. Never add extra standalone uses when that short already totals two.\n";
+		"- MINIMUM FREQUENCY: the long-tail keyword must be said at least " +
+		SEO_LONG_FREQ_MIN +
+		" time(s) and each short keyword at least " +
+		SEO_SHORT_FREQ_MIN +
+		" times. Extra uses are allowed; only falling below a minimum is rejected.\n" +
+		"- OVERLAP COUNTING: a short keyword inside the spoken long-tail counts toward BOTH totals, including across subtitle line/cue breaks. Do not add extra standalone uses when that short already totals its minimum.\n";
 	for (const short of nested) {
 		const shared = keywordCount(keywordSet.longTail, short) * SEO_LONG_FREQ_MIN;
 		instructions +=
-			'- "' + short + '" is inside "' + keywordSet.longTail +
-			'": the two long-tail uses already contribute ' + shared +
-			' short-keyword uses. It needs ' + Math.max(0, SEO_SHORT_FREQ_MIN - shared) +
-			" additional standalone uses.\n";
+			'- "' +
+			short +
+			'" is inside "' +
+			keywordSet.longTail +
+			'": saying the long-tail its minimum number of times already contributes ' +
+			shared +
+			" short-keyword use(s). It needs " +
+			Math.max(0, SEO_SHORT_FREQ_MIN - shared) +
+			" additional standalone use(s).\n";
 	}
 	for (const short of keywordSet.shorts) {
 		if (keywordCount(short, keywordSet.longTail) > 0 && nested.indexOf(short) === -1) {
 			instructions +=
-				'- The long-tail "' + keywordSet.longTail + '" is inside the short keyword "' + short +
-				'": its two short-keyword uses already count toward the long-tail total. Do not add extra standalone long-tail uses.\n';
+				'- The long-tail "' +
+				keywordSet.longTail +
+				'" is inside the short keyword "' +
+				short +
+				'": its short-keyword uses already count toward the long-tail minimum. Do not add extra standalone long-tail uses.\n';
 		}
 	}
 	return instructions;
@@ -880,50 +885,47 @@ function buildPinpointRetryInstructions(
 			const cueHint = item.cueIndices.length
 				? " (currently in cue #" + item.cueIndices.join(", #") + ")"
 				: " (currently in 0 cues)";
+			/* Minimum-only rule: a count above `min` is always acceptable. */
 			if (item.ok) {
 				return (
 					'- KEEP "' +
 					item.keyword +
 					'" at ' +
 					item.count +
-					"/2" +
+					" use(s) (minimum " +
+					item.min +
+					")" +
 					cueHint +
-					" — do NOT add or remove it."
+					" — it already meets its minimum, do NOT remove it."
 				);
 			}
-			if (item.delta < 0) {
-				const need = Math.abs(item.delta);
-				return (
-					'- ADD "' +
-					item.keyword +
-					'" ' +
-					need +
-					" more time(s) so its total becomes 2/2 (was " +
-					item.count +
-					"/2" +
-					cueHint +
-					")."
-				);
-			}
-			const extra = item.delta;
+			const need = Math.abs(item.delta);
 			return (
-				'- REMOVE/REPHRASE "' +
+				'- ADD "' +
 				item.keyword +
 				'" ' +
-				extra +
-				" time(s) using a synonym so its total becomes 2/2 (was " +
+				need +
+				" more time(s) so its total reaches at least " +
+				item.min +
+				" (it currently has " +
 				item.count +
-				"/2" +
+				" use(s), minimum " +
+				item.min +
+				")" +
 				cueHint +
-				")."
+				"."
 			);
 		});
 
 		feedback +=
 			"\n\nExact keyword audit of your previous SRT:\n" +
 			lines.join("\n") +
-			"\nShared occurrences count for both short and long-tail roles. Preserve correct long-tail uses; if a nested short is overused, remove its EXTRA standalone uses, not the required long-tail phrases.\n" +
-			"\nRevise your previous SRT below so EVERY keyword is 2/2 while keeping valid SRT timestamps and outputting ONLY the corrected SRT:\n" +
+			"\nEach keyword has a MINIMUM only (long-tail at least " +
+			SEO_LONG_FREQ_MIN +
+			", short at least " +
+			SEO_SHORT_FREQ_MIN +
+			"); saying one more often is allowed. Shared occurrences count for both short and long-tail roles. Preserve correct long-tail uses; when a short is below its minimum, add it without deleting the required long-tail phrases.\n" +
+			"\nRevise your previous SRT below so EVERY keyword reaches its minimum while keeping valid SRT timestamps and outputting ONLY the corrected SRT:\n" +
 			previousCheck.srt;
 	}
 
@@ -1063,7 +1065,14 @@ export async function handleSeoScriptGeneration(
 			" unique short-tail keywords (1-" +
 			SEO_SHORT_WORDS_MAX +
 			" words each, lower case, closely related to the topic).\n" +
-			"SHORT/LONG-TAIL OVERLAP IS ALLOWED: A short keyword may occur inside the long-tail keyword, or even be the same phrase. Each spoken occurrence counts toward BOTH roles. If a short is inside the long-tail, saying the long-tail twice already satisfies that short's two uses; do not add two standalone uses. Choose four distinct short keywords that do not contain one another. Avoid repeating any short more than once within the long-tail, because the spoken total for every keyword must remain exactly two.\n" +
+			"KEYWORD FREQUENCY IS A MINIMUM, NOT AN EXACT COUNT: the long-tail keyword must be said at least " +
+			SEO_LONG_FREQ_MIN +
+			" time and every short keyword at least " +
+			SEO_SHORT_FREQ_MIN +
+			" times; the script may say them more often than that.\n" +
+			"SHORT/LONG-TAIL OVERLAP IS ALLOWED: A short keyword may occur inside the long-tail keyword, or even be the same phrase. Each spoken occurrence counts toward BOTH roles, so a short that appears inside the long-tail needs fewer standalone uses (for example, a one-word short nested once in the long-tail needs one more use to reach " +
+			SEO_SHORT_FREQ_MIN +
+			"). Choose four distinct short keywords that do not contain one another.\n" +
 			"3) The explainer video TITLE (at most " +
 			SEO_TITLE_MAX +
 			" characters): it MUST include at least one of the " +
@@ -1217,26 +1226,26 @@ export async function handleSeoScriptGeneration(
 
 		const userPrompt =
 			basePrompt +
-			"SEO rules - mandatory and REDUNDANTLY re-checked by the server on your SRT dialogue words, so any count other than 2 is rejected:\n" +
+			"SEO rules - mandatory and REDUNDANTLY re-checked by the server on your SRT dialogue words. Each keyword has a MINIMUM only; saying one more often than its minimum is never rejected:\n" +
 			'- Say the long-tail keyword "' +
 			keywordSet.longTail +
-			'" EXACTLY ' +
+			'" AT LEAST ' +
 			SEO_LONG_FREQ_MIN +
-			" times total (not " +
-			(SEO_LONG_FREQ_MIN - 1) +
-			" and not " +
-			(SEO_LONG_FREQ_MAX + 1) +
-			").\n" +
+			" time (" +
+			SEO_LONG_FREQ_MIN +
+			" or more).\n" +
 			"- Say EACH of these " +
 			SEO_SHORT_TOTAL +
-			" short-tail keywords EXACTLY " +
+			" short-tail keywords AT LEAST " +
 			SEO_SHORT_FREQ_MIN +
-			" times each (not 1 and not 3): " +
+			" times each (" +
+			SEO_SHORT_FREQ_MIN +
+			" or more): " +
 			keywordSet.shorts.map((s) => '"' + s + '"').join(", ") +
 			".\n" +
 			keywordOverlapInstructions(keywordSet) +
 			"- Weave every keyword naturally into spoken sentences (never read them as a list).\n" +
-			"- Follow this explainer section flow in order (for topic structure ONLY — do NOT speak or print the title/headings verbatim, because they contain short keywords and repeating them would push your keyword count over 2): " +
+			"- Follow this explainer section flow in order (for topic structure ONLY — do NOT speak or print the title/headings verbatim; they are not spoken SRT and their words do not count as keyword uses): " +
 			keywordSet.headings
 				.map((h, idx) => "Section " + (idx + 1) + ": " + h)
 				.join(" -> ") +
@@ -1293,13 +1302,13 @@ export async function handleSeoScriptGeneration(
 						keyword: keywordSet.longTail,
 						count: keywordCount(spokenText, keywordSet.longTail),
 						min: SEO_LONG_FREQ_MIN,
-						max: SEO_LONG_FREQ_MAX
+						max: null
 					},
 					short: keywordSet.shorts.map((kw) => ({
 						keyword: kw,
 						count: keywordCount(spokenText, kw),
 						min: SEO_SHORT_FREQ_MIN,
-						max: SEO_SHORT_FREQ_MAX
+						max: null
 					}))
 				};
 

@@ -2092,8 +2092,12 @@ export const APP_CSS = `
 			/*
 			 * The SEO keywords the worker
 			 * counted in the spoken script:
-			 * two long-tail keywords and the
-			 * short ones with their 2-5x hits.
+			 * the one long-tail keyword and
+			 * the four short keywords, each
+			 * with its measured hits (the
+			 * minimum is 1x long-tail and
+			 * 2x per short; higher counts are
+			 * valid).
 			 */
 
 		.va-seo-keywords {

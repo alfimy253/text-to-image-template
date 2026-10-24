@@ -21,8 +21,16 @@
 > **Bug Fix Session #211 (2026-10-23):** the two runtime defects that pass found — a guest refund
 > erasing the IP row's identity (§3.3) and `GET /api/config/workers` throwing without a KV
 > binding (§6.1) — were fixed in `src/index.ts`. The full record is `bug-fix-session-211.md`.
-> **2026-10-23 explainer SEO rule set (RULE 7 rewritten):** the AI script rules are now — exactly
-> **1 long-tail keyword said exactly 2×**, exactly **4 short keywords said exactly 2× each**, an AI
+> **2026-10-24 keyword-frequency rule (RULE 7 updated):** SEO keyword frequency is now a
+> **minimum, never an exact count and never a maximum**: the **1 long-tail keyword must appear
+> at least once** and **each of the 4 short keywords must appear at least twice**. Extra uses are
+> allowed and are never retried or rejected; the `*_FREQ_MAX` constants were deleted. This
+> supersedes the earlier "said exactly 2×" wording everywhere in the repo
+> (`src/modules/script-seo.ts`, `src/client/app-js.ts`, `tests/script-seo.test.mjs`,
+> `README.md`, `userflow.md`, `new_requirements.md`, `bug-audit.md`).
+>
+> **2026-10-23 explainer SEO rule set (RULE 7 rewritten):** the AI script rules are — exactly
+> **1 long-tail keyword**, exactly **4 short keywords**, an AI
 > **title (≤70 chars) that includes one of the short keywords**, and **at least 1 section heading**
 > (every default AI script is an **explainer** video) **of which one — the same short keyword as the
 > title's or another — includes a short keyword**. All documentation of the AI script written before
@@ -315,23 +323,38 @@
 
 ---
 
-## RULE 7 — Explainer SEO scripts allow short/long-tail overlap and impose no long-tail length rule
+## RULE 7 — SEO keyword frequency is minimum-only; short/long-tail overlap is allowed and there is no long-tail length rule
 
-- **Current contract (2026-10-23), enforced in `src/modules/script-seo.ts`:**
-  1. Exactly **one nonempty long-tail keyword**, spoken **exactly twice**. There is **no minimum
-     or maximum word count or character length** for that keyword. A one-word or >6-word
-     long-tail phrase is valid; title/topic/heading limits are separate rules.
-  2. Exactly **four unique short keywords**, each **1–3 words** and spoken **exactly twice**.
-     The existing restriction against containment among the four shorts remains; it no longer
-     applies between short and long-tail roles.
-  3. AI title: **≤70 characters**, including at least one short keyword.
-  4. **1–12 headings**, each **≤12 words**, at least one including a short keyword. The same
+> **Canonical rule (2026-10-24):** the one long-tail keyword must appear **at least once**; each
+> of the four short keywords must appear **at least twice**. There is **no maximum** — extra
+> uses are always valid and are never retried. Counts are measured on the spoken SRT only.
+> Enforced by `keywordUsageError()`/`keywordUsageAudit()` with `SEO_LONG_FREQ_MIN = 1` and
+> `SEO_SHORT_FREQ_MIN = 2`, covered by `tests/script-seo.test.mjs`.
+
+- **Current contract (2026-10-24), enforced in `src/modules/script-seo.ts`:**
+  1. Exactly **one nonempty long-tail keyword**, spoken **at least once** (1 or more uses).
+     There is **no maximum use count** and **no minimum or maximum word count or character
+     length** for that keyword. A one-word or >6-word long-tail phrase is valid;
+     title/topic/heading limits are separate rules.
+  2. Exactly **four unique short keywords**, each **1–3 words** and spoken **at least twice**
+     (2 or more uses each). There is **no maximum use count**. The existing restriction against
+     containment among the four shorts remains; it no longer applies between short and long-tail
+     roles.
+  3. **Minimum-only enforcement:** extra uses are always valid. `keywordUsageError()` and the
+     keyword audit only report a keyword that falls *below* its minimum, so a third or fourth use
+     of a short keyword is accepted rather than retried. Each keyword in the response carries its
+     `min` and `max: null` (unbounded). The canonical constants are `SEO_LONG_FREQ_MIN = 1` and
+     `SEO_SHORT_FREQ_MIN = 2`; there is deliberately **no** `SEO_LONG_FREQ_MAX` or
+     `SEO_SHORT_FREQ_MAX`.
+  4. AI title: **≤70 characters**, including at least one short keyword.
+  5. **1–12 headings**, each **≤12 words**, at least one including a short keyword. The same
      short may appear in the title and a heading; those metadata strings are not spoken SRT.
 - **Overlap is explicitly allowed, not a validation failure.** If `yoga` is a short and
-  `morning yoga poses` is the long-tail, saying the latter twice satisfies **both** totals.
-  Do not add two standalone `yoga` uses. Identical phrases may serve both roles; a one-word
-  long-tail contained in a longer short also shares its occurrences. Every measured total
-  must still be two; an extra third use is rejected.
+  `morning yoga poses` is the long-tail, every long-tail use also counts as a `yoga` use: one
+  long-tail use already supplies one of the two `yoga` uses, so one standalone `yoga` use
+  reaches the minimum. Identical phrases may serve both roles; a one-word long-tail contained in
+  a longer short also shares its occurrences. Every measured total must reach its minimum
+  (long-tail **≥1**, each short **≥2**); extra uses are allowed.
 - Request: `POST /api/script {topic, minutes, speed}`.
   - Topic defaults to `my video`, normalizes whitespace/control characters and caps at 160
     characters; that is **not** a long-tail keyword length restriction.
@@ -345,17 +368,19 @@
      not a keyword word/character rule. `parseKeywordSet()` accepts string/object/array
      long-tail shapes, deduplicates shorts and checks the title/heading contract.
      - No mutually-exclusive short/long-tail requirement and no 2–6-word gate remain.
-     - The prompt explicitly allows shared phrases and asks the planner not to repeat a short
-       multiple times within the long-tail, which would conflict with the existing 2× totals.
+     - The prompt states the minimum frequency (long-tail ≥1, short ≥2, extra uses allowed),
+       allows shared phrases, and explains that a short nested in the long-tail needs fewer
+       standalone uses.
      - Three rejected plans → `500 "SEO keywords invalid (<reason>) - try again"`; no writer call.
   2. **Writer:** natural spoken explainer SRT only; tokens scale from 2048 to 4096 with duration,
      temperature 0.65 first, 0.4 on retries. `keywordOverlapInstructions()` computes concrete
-     shared-use guidance, including **zero additional standalone uses** for a short already
-     supplied twice by the two long-tail occurrences. Title/headings steer structure but are
+     minimum-frequency and shared-use guidance, including how many additional standalone uses a
+     short nested in the long-tail still needs given the long-tail minimum. Title/headings steer structure but are
      not read verbatim. The subtitle line-length target is prompt guidance, not a validator cap.
      - Server re-checks SRT and **measured** keyword totals after each response. Retry coaching
-       includes the preceding valid SRT, each keyword's count/cues and exact add/remove delta;
-       extra standalone short uses should be removed without deleting correct long-tail phrases.
+       includes the preceding valid SRT, each keyword's count/cues and the exact number of uses
+       still missing; a keyword at or above its minimum is explicitly marked KEEP. Over-use is
+       never a failure, so no removal coaching exists.
      - Three rejected scripts → `500 "Script output invalid (<reason>) - try again"`.
 - **Matching and SRT invariants:** `keywordCount()` uses Unicode letter/number boundaries,
   escaped literal symbols, typography normalization and equivalent whitespace/hyphen runs.
@@ -365,11 +390,14 @@
     preserves numeric dialogue, canonicalizes cue indexes and validates comma-millisecond
     timestamps. Cue start < end, cues never overlap, and total duration is **10 seconds to
     selected minutes × 60 seconds + 1.5 seconds**. These rules have not been relaxed.
-  - Keyword audits require the long-tail count and every short count to be **exactly two**;
-    title/headings, cue numbers and timestamps are not included. First-violation errors still
-    name the role, phrase, measured total and required total.
+  - Keyword audits compare the long-tail count against **≥1** and every short count against
+    **≥2**; there is no upper bound, so `ok` means "minimum reached". Title/headings, cue
+    numbers and timestamps are not included. First-violation errors still name the role, phrase,
+    measured total and required minimum, e.g.
+    `the short keyword "a" appears 1 time(s); it must appear at least 2 time(s)`.
 - Success:
-  `{success:true,srt,title,headings,keywords:{longTail:{keyword,count,min:2,max:2},short:[{keyword,count,min:2,max:2}]},model}`.
+  `{success:true,srt,title,headings,keywords:{longTail:{keyword,count,min:1,max:null},short:[{keyword,count,min:2,max:null}]},model}`
+  (`max: null` = no upper bound; every count is measured, never substituted).
   Optional debug output carries the correlated request ID and planner/writer attempt traces.
   Every successful count is measured, never substituted with the required value.
   Each successful request uses at least two model calls, at most six with retries; live model
@@ -377,7 +405,7 @@
 - Client side (`src/client/app-js.ts`, video accordion):
   - The SEO block is the **first** `.va-section` of `.va-left`, titled
     **"Generate SEO Script With AI"**, with the always-visible hint line
-    `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule`
+    `SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords said at least 2× each · minimums only, extra uses are allowed · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule`
     and a matching button tooltip. See RULE 18 for the hint inventory.
   - The client still sends only `{topic, minutes, speed}`: the user never picks keywords, title or
     headings — the UI only reports the ones the model produced and the server verified.
@@ -391,7 +419,7 @@
     **🎙 Generate Voiceover** — the button ships hidden (`style="display:none"` + `disabled`) in the
     accordion markup and stays hidden for as long as the video has no generated script.
   - The status line reads
-    `Script ready — N lines (<speed> speech, <minutes> min) · SEO: 1 long-tail (2×) + 4 short keywords (2× each) · title + K heading(s)`.
+    `Script ready — N lines (<speed> speech, <minutes> min) · SEO: 1 long-tail (≥1×) + 4 short keywords (≥2× each) · title + K heading(s)`.
   - Restriction: on failure the status line becomes `Script failed: <error>` and the previous chips
     and SRT box stay on screen — nothing is cleared or replaced.
 - **Future: scripts without SEO / non-explainer scripts (documented, NOT implemented).** The whole
@@ -769,9 +797,9 @@
 
 | Hint text (abridged) | Where it lives | Mirrors |
 | --- | --- | --- |
-| `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` | video accordion, SEO section (`.va-note`, always visible) | `SEO_LONG_TAIL = 1`, `SEO_SHORT_TOTAL = 4`, `SEO_LONG_FREQ_MIN/MAX = SEO_SHORT_FREQ_MIN/MAX = 2` (RULE 7) |
-| `AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
-| `Long-tail keyword — must be said exactly 2×` · `Short keyword — must be said exactly 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading` · `Explainer title — includes at least one short keyword` · `Section heading — at least one heading includes a short keyword` | SEO plan chips, `renderSeoKeywords()` tooltips | `SEO_LONG_FREQ_MIN/MAX = 2`, `SEO_SHORT_FREQ_MIN/MAX = 2`, title/heading inclusion rules (RULE 7) |
+| `SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords said at least 2× each · minimums only, extra uses are allowed · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` | video accordion, SEO section (`.va-note`, always visible) | `SEO_LONG_TAIL = 1`, `SEO_SHORT_TOTAL = 4`, `SEO_LONG_FREQ_MIN = 1`, `SEO_SHORT_FREQ_MIN = 2` (no `*_FREQ_MAX`; RULE 7) |
+| `AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the SRT script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
+| `Long-tail keyword — must be said at least 1×` · `Short keyword — must be said at least 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading` · `Explainer title — includes at least one short keyword` · `Section heading — at least one heading includes a short keyword` | SEO plan chips, `renderSeoKeywords()` tooltips (the `N×` shown is the measured count, which may exceed the minimum) | `SEO_LONG_FREQ_MIN = 1`, `SEO_SHORT_FREQ_MIN = 2`, title/heading inclusion rules (RULE 7) |
 | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)` | video accordion, media section (`.va-note`) | `MAX_GIF_UPLOADS = 5`, `MAX_IMAGE_UPLOADS = 25`, `MAX_MP4_UPLOADS = 5`, `MP4_MAX_DURATION_S = 60` |
 | `2 images per submit · 480px landscape` | video accordion, AI images section (`.va-note`, doubles as the status line) | the route always asks SDXL for 2 images; **the 480 is not enforced anywhere** (bug-audit #16) |
 | `Add a video (up to 10)` | `+ Add Video` button tooltip | `VIDEO_MAX_VIDEOS = 10` |

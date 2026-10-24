@@ -25,7 +25,8 @@ function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 		};
 	}
 
-	// Stage 2: Explainer SRT Writer (satisfies validateSrt + 2x frequency per keyword)
+	// Stage 2: Explainer SRT Writer (satisfies validateSrt + the minimum frequency
+	// rule: long-tail keyword at least once, every short keyword at least twice)
 	const cues = [
 		[
 			"00:00:00,000 --> 00:00:04,000",

@@ -678,14 +678,15 @@ export default {
 		// POST /api/worker/deliver    worker uploads the MP4
 		// POST /api/worker/failed     worker reports failure
 		// POST /api/script            SEO EXPLAINER script (SRT)
-		//                             via an INSTRUCT model:
-		//                             1 long-tail keyword (said
-		//                             exactly 2x), exactly 4 short
-		//                             keywords (each said exactly
-		//                             2x), a title (<=70 chars) and
-		//                             >=1 heading are planned first,
-		//                             then the script must use them
-		//                             (2026-10-23 rule set)
+		//                             via an INSTRUCT model: plan
+		//                             1 long-tail keyword (must be
+		//                             said AT LEAST ONCE), exactly
+		//                             4 short keywords (each must
+		//                             be said AT LEAST TWICE; extra
+		//                             uses allowed), a title
+		//                             (<=70 chars) and >=1 heading,
+		//                             then write the script around
+		//                             them (minimum-only rule)
 		// POST /api/voiceover         MeloTTS voice -> MP3
 		// GET/POST /api/config/workers  up to 3 worker URLs
 		// GET/POST /api/config/theme  studio theme (default /
@@ -1002,9 +1003,9 @@ export default {
 			* SEO EXPLAINER script (SRT)
 			* generation. INSTRUCT model on
 			* Workers AI, in two stages
-			* (2026-10-23 rule set - every
-			* earlier script rule was
-			* removed).
+			* (2026-10-24 minimum-frequency
+			* rule set - every earlier
+			* script rule was removed).
 			*
 			*  1. Keywords: exactly 1
 			*     long-tail keyword (no length
@@ -1023,12 +1024,14 @@ export default {
 			*     The output is VALIDATED
 			*     server-side - clean SRT under
 			*     the selected minutes AND the
-			*     long-tail keyword spoken
-			*     EXACTLY 2 times AND every one
-			*     of the 4 short keywords
-			*     spoken EXACTLY 2 times
-			*     (invalid output is retried up
-			*     to 3 times with the problem
+			*     long-tail keyword spoken AT
+			*     LEAST 1 time AND every one of
+			*     the 4 short keywords spoken
+			*     AT LEAST 2 times. Frequency
+			*     is minimum-only: extra uses
+			*     are never rejected (invalid
+			*     output is retried up to 3
+			*     times with the problem
 			*     spelled out).
 		*/
 		if (

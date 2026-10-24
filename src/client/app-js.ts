@@ -6441,13 +6441,13 @@ export const APP_JS = `
 			'<div class="va-left">' +
 				'<div class="va-section">' +
 				'<div class="va-section-title">Generate SEO Script With AI</div>' +
-				'<span class="va-note">SEO rule (explainer): 1 long-tail keyword said exactly 2\u00d7 \u00b7 exactly 4 short keywords said exactly 2\u00d7 each \u00b7 one short keyword is in the title \u00b7 one is in a heading \u00b7 short/long-tail overlap is allowed and shared uses count for both \u00b7 no long-tail length rule</span>' +
+				'<span class="va-note">SEO rule (explainer): 1 long-tail keyword said at least 1\u00d7 \u00b7 exactly 4 short keywords said at least 2\u00d7 each \u00b7 minimums only, extra uses are allowed \u00b7 one short keyword is in the title \u00b7 one is in a heading \u00b7 short/long-tail overlap is allowed and shared uses count for both \u00b7 no long-tail length rule</span>' +
 				'<input type="text" id="va-script-topic-' + n + '" maxlength="120" placeholder="Topic (uses the video title if empty)">' +
 				'<div class="va-row">' +
 				'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
 				'<label class="quality-select">Speech <select id="va-script-speed-' + n + '"><option value="super fast">Super fast</option><option value="fast">Fast</option><option value="medium" selected>Medium</option><option value="slow">Slow</option></select></label>' +
 				'</div>' +
-				'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px" title="AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.">\u2728 Generate SEO Script</button>' +
+				'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px" title="AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the SRT script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.">\u2728 Generate SEO Script</button>' +
 				'<span class="va-note" id="va-script-status-' + n + '"></span>' +
 				'<div class="va-seo-keywords" id="va-script-keywords-' + n + '" style="display:none"></div>' +
 				'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">\u25bc Script (SRT)</button>' +
@@ -12741,8 +12741,11 @@ export const APP_JS = `
 	 * keyword and the exactly 4 short
 	 * keywords - each with how often it
 	 * actually appears in the spoken
-	 * script. The explainer rule pins
-	 * every keyword to exactly 2x.
+	 * script. Frequency is a MINIMUM
+	 * only: the long-tail keyword must
+	 * be said at least once and every
+	 * short keyword at least twice, and
+	 * extra uses are never rejected.
 	 * The counts come from the worker,
 	 * which counts them after stripping
 	 * cue numbers and timestamps.
@@ -12844,7 +12847,7 @@ export const APP_JS = `
 			(item) => {
 
 				html +=
-					'<span class="va-seo-chip long" title="Long-tail keyword \u2014 must be said exactly ' +
+					'<span class="va-seo-chip long" title="Long-tail keyword \u2014 must be said at least ' +
 					item.min +
 					'\u00d7">' +
 					escapeHTML(item.keyword) +
@@ -12863,7 +12866,7 @@ export const APP_JS = `
 			(item) => {
 
 				html +=
-					'<span class="va-seo-chip short" title="Short keyword \u2014 must be said exactly ' +
+					'<span class="va-seo-chip short" title="Short keyword \u2014 must be said at least ' +
 					item.min +
 					'\u00d7; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading">' +
 					escapeHTML(item.keyword) +
@@ -13077,12 +13080,11 @@ export const APP_JS = `
 					.length;
 
 			/*
-			 * The SEO counts are pinned by
-			 * the explainer rule (1 long-tail
-			 * said exactly 2x, exactly 4
-			 * short keywords said exactly
-			 * 2x each) - show what the
-			 * worker verified, plus the
+			 * The SEO counts are minimums
+			 * (1 long-tail at least 1x,
+			 * exactly 4 short keywords at
+			 * least 2x each) - show what
+			 * the worker verified, plus the
 			 * title/headings the AI planned.
 			 */
 			const shortCount =
@@ -13114,9 +13116,9 @@ export const APP_JS = `
 					speed +
 					" speech, " +
 					minutes +
-					" min) \u00b7 SEO: 1 long-tail (2\u00d7) + " +
+					" min) \u00b7 SEO: 1 long-tail (\u22651\u00d7) + " +
 					shortCount +
-					" short keywords (2\u00d7 each) \u00b7 title + " +
+					" short keywords (\u22652\u00d7 each) \u00b7 title + " +
 					headingCount +
 					" heading" +
 					(headingCount === 1 ? "" : "s");

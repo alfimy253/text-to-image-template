@@ -337,10 +337,11 @@ accordion = header + body
    header : 🎬 Video N · status pill · [☁️ API] · summary · ▼ collapse
    body   : ONE COLUMN — every .va-section stacks full width (3px bottom margin each)
             ├ Generate SEO Script With AI  ← FIRST block, with the always-visible hint line
-            │           "SEO rule (explainer): 1 long-tail keyword said exactly 2× ·
-            │            exactly 4 short keywords said exactly 2× each · one short
-            │            keyword is in the title · one is in a heading · overlap allowed,
-            │            shared uses count for both · no long-tail length rule"
+            │           "SEO rule (explainer): 1 long-tail keyword said at least 1× ·
+            │            exactly 4 short keywords said at least 2× each · minimums only,
+            │            extra uses are allowed · one short keyword is in the title ·
+            │            one is in a heading · overlap allowed, shared uses count for
+            │            both · no long-tail length rule"
             │           topic, minutes 1-6, speech speed, ✨ Generate SEO Script,
             │           SEO plan chips (title + headings + long-tail + 4 shorts,
             │            each keyword with its measured ×),
@@ -451,9 +452,10 @@ same rule; the SEO plan chips only appear *after* a successful run. The rule set
 **2026-10-23 explainer SEO rule set** — every documentation of the older script rules was deleted.
 
 ```
-[hint] "SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords
-        said exactly 2× each · one short keyword is in the title · one is in a heading ·
-        short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule"
+[hint] "SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords
+        said at least 2× each · minimums only, extra uses are allowed · one short keyword is in
+        the title · one is in a heading · short/long-tail overlap is allowed and shared uses
+        count for both · no long-tail length rule"
 topic   = script-topic input  OR (if empty) the video's title  OR "my video"
 minutes = 1..6 (default 1)
 speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
@@ -474,19 +476,18 @@ speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
   │
   ├─ STAGE 2  SRT writer (same model, 2048–4096 tokens by duration, temp 0.65 / 0.4 retry) — an EXPLAINER script
   │      prompt = basePrompt ("professional video script writer for EXPLAINER videos … ONLY
-  │      valid SRT") + a hard-coded SEO brief that REDUNDANTLY restates every rule: the exact
-  │      title and the exact headings (fixed, in section order, never altered or spelled out),
-  │      the long-tail said EXACTLY 2× ("not 1 time and not 3 times"), each of the 4 shorts
-  │      said EXACTLY 2× + "Work every keyword into natural spoken sentences - never read
-  │      them out as a list"
-  │      shared-count brief: saying a long-tail twice already supplies two occurrences of a
-  │      nested short; do NOT insert two extra standalone uses (reverse containment counts too)
+  │      valid SRT") + a hard-coded SEO brief that REDUNDANTLY restates every rule: the
+  │      explainer title and the headings (structure only, never altered or spoken), the
+  │      long-tail said AT LEAST 1×, each of the 4 shorts said AT LEAST 2× + "Work every
+  │      keyword into natural spoken sentences - never read them out as a list"
+  │      shared-count brief: a long-tail use also supplies the nested short's uses, so a
+  │      nested short needs fewer standalone uses (reverse containment counts too)
   │      validateSrt: SRT shape, no overlap, 10 s … minutes*60 s + 1.5 s
   │      (the ≤42-char cue target is prompt text only — the validator does not enforce it)
   │      then keyword counts on the SPOKEN text only (cue numbers/timestamps stripped):
-  │        long-tail exactly 2× · each of the 4 shorts exactly 2× (under AND over both fail)
-  │      any violation → retry up to 3× with the exact reason + per-keyword/cue counts;
-  │      remove extra standalone short uses, not already-correct long-tail phrases
+  │        long-tail ≥1 · each of the 4 shorts ≥2 (MINIMUMS ONLY — extra uses are valid)
+  │      any deficit → retry up to 3× with the exact reason + per-keyword/cue counts and the
+  │      exact number of uses still missing; keywords already at their minimum are marked KEEP
   │      3 failures → 500 "Script output invalid (<reason>) - try again"
   │
   ├─ success → project.srt + project.seoTitle + project.seoHeadings stored
@@ -500,8 +501,8 @@ speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
   │              Short     [coffee brewing 2×] [home barista 2×] [espresso setup 2×] [morning routine 2×]
   │            SRT box + ⬇ Download .srt become visible; 🎙 Generate Voiceover revealed + enabled
   │            (syncVoiceoverButton(): the button ships hidden and only appears once project.srt exists)
-  │            status line: "Script ready — N lines (medium speech, 1 min) · SEO: 1 long-tail (2×) +
-  │                          4 short keywords (2× each) · title + 2 headings"
+  │            status line: "Script ready — N lines (medium speech, 1 min) · SEO: 1 long-tail (≥1×) +
+  │                          4 short keywords (≥2× each) · title + 2 headings"
   │
   └─ failure → status line "Script failed: <error>"  (no alert)
                the previous SRT, chips and download button stay on screen
@@ -509,8 +510,8 @@ speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
 
 Hints in this flow (inventory: `system-rules.md` RULE 18): the section hint line, the
 **✨ Generate SEO Script** tooltip, the chip tooltips
-(`Long-tail keyword — must be said exactly 2×` /
-`Short keyword — must be said exactly 2×; one short keyword is in the title and one in a heading` /
+(`Long-tail keyword — must be said at least 1×` /
+`Short keyword — must be said at least 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading` /
 `Explainer title — includes at least one short keyword` /
 `Section heading — at least one heading includes a short keyword`), the
 `Topic (uses the video title if empty)` placeholder and the `Script ready … · SEO: …` status line.
@@ -725,8 +726,8 @@ Four full-page tabs
 | Empty prompt | `/image/gen` | `400 "Missing prompt"` |
 | Model error | `/image/:i`, `/image/gen` | `500` with the model's message |
 | Keyword plan not valid JSON / not exactly 1 long-tail + 4 shorts / title or heading rule violated | stage-1 planner | up to 3 attempts, then `500 "SEO keywords invalid (<reason>) - try again"` — the SRT writer is never called |
-| Short keyword said fewer or more than exactly 2× | server `keywordUsageError()` on the spoken text | counts as invalid → retried with the exact reason; after 3 attempts `500 "Script output invalid (<reason>) - try again"` |
-| Long-tail keyword said fewer or more than exactly 2× | server `keywordUsageError()` | same as above (exactly 2× — under and over both fail) |
+| Short keyword said fewer than twice (minimum 2 uses) | server `keywordUsageError()` on the spoken text | counts as invalid → retried with the exact reason; after 3 attempts `500 "Script output invalid (<reason>) - try again"`. **More** than twice is valid. |
+| Long-tail keyword never said (minimum 1 use) | server `keywordUsageError()` | same as above. **Two or more** uses are valid — there is no maximum. |
 | Script output not parseable SRT | server `validateSrt()` | up to 3 attempts, then `500 "Script output invalid (<reason>) - try again"` |
 | Script shorter than 10 s or longer than minutes+1.5 s | server `validateSrt()` | counts as invalid → retried |
 | MeloTTS `AiError 3043` | `/api/voiceover` | 3 retries/chunk → free fallback engine → else `500 "TTS failed (chunk i of n): …"` |
@@ -789,8 +790,8 @@ Four full-page tabs
 ## 10. End-to-end happy path (one paragraph)
 
 Sign in → `+ Add Video` → drop 3 images, an MP3 and a title → in the first block,
-**Generate SEO Script With AI** (2 min, fast): the AI plans 1 long-tail keyword (said exactly
-2×), exactly 4 short keywords (each said exactly 2×) plus the explainer title and headings, and
+**Generate SEO Script With AI** (2 min, fast): the AI plans 1 long-tail keyword (said at least
+once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, and
 writes the SRT around them; the chips under the button show the whole SEO plan with each
 keyword's measured count, and an empty video title is autofilled from the AI title → apply subtitles → optionally generate a voiceover and upload it as the audio track →
 press **🎬 Generate Videos** → the browser decodes everything, encodes audio then video,
@@ -929,7 +930,9 @@ chrome are not ported. Both Download MP4 and direct Add to Video N use the share
 ## Current requirement revision — SEO overlap and template controls (2026-10-23)
 
 - **SEO:** short/long-tail phrases may overlap; shared occurrences count for both, without any
-  long-tail word/character length rule. One long-tail and four shorts must still each total 2×.
+  long-tail word/character length rule. Frequency is a **minimum only**: the one long-tail must
+  appear at least once and each of the four shorts at least twice. Extra uses are allowed and
+  never rejected (no `*_FREQ_MAX`).
 - **Ring:** upload 5–7 images together in the bottom accordion; invalid batches preserve prior
   images, and both render actions require a valid set.
 - **Configuration:** the "15 editable designs" accordion is removed from every template; use
