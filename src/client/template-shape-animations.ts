@@ -1,7 +1,7 @@
 /*
  * Shape & Motion objects adapted from the uploaded MotionGenie gallery.
- * This module runs inside TEMPLATE_COMPOSER_JS's IIFE, after the Reel scene
- * editor, so the objects share its controls and the composer's MP4 exporter.
+ * These are graphic elements in every Reel scene's Graphics dropdown, not a
+ * separate gallery or editor. They share element transforms and MP4 rendering.
  * Confetti and every other particle effect are deliberately excluded.
  */
 export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
@@ -23,31 +23,16 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 			{ n: 59, name: "Neon Laser Beam", kind: "laser", color: "#22d3ee", accent: "#6366f1", background: "#000000", size: 42 },
 			{ n: 60, name: "Shimmer Spinner Ring", kind: "spinner", color: "#6366f1", accent: "#a855f7", background: "#0d111a", size: 42 }
 		];
-		SHAPE_ANIMATIONS.forEach(function (scene) { scene.shapeAnimation = true; });
-
-		let shapeMode = false;
-		let shapeIndex = 0;
-		let shapeStates = [];
-		let shapeGalleryCanvases = [];
-		let shapeEditorReady = false;
-
-		function shapeDefaultState(index) {
-			const scene = SHAPE_ANIMATIONS[index];
-			return {
-				color: scene.color,
-				accent: scene.accent,
-				background: scene.background,
-				size: scene.size,
-				speed: 1,
-				x: 50,
-				y: 50
-			};
-		}
-
-		function shapeState(index) {
-			if (!shapeStates[index]) shapeStates[index] = shapeDefaultState(index);
-			return shapeStates[index];
-		}
+		// Register all 13 objects with the scene editor's graphics vocabulary.
+		// Names stay stable; no gallery tab/cards or standalone shape mode exist.
+		SHAPE_ANIMATIONS.forEach(function (definition) {
+			const kind = "motion:" + definition.kind;
+			REEL_GRAPHIC_OBJECTS[kind] = Object.assign({}, definition, {
+				draw: function (context, time, size, color, accent) {
+					shapeDrawObject(context, definition.kind, time, size, color, accent);
+				}
+			});
+		});
 
 		function shapeRoundedRect(context, x, y, width, height, radius) {
 			const r = Math.max(0, Math.min(radius, Math.abs(width) / 2, Math.abs(height) / 2));
@@ -65,6 +50,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 		}
 
 		function shapeDrawCube(context, time, size, color, accent) {
+			const inheritedAlpha = context.globalAlpha;
 			const vertices = [
 				[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
 				[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
@@ -108,10 +94,10 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 					else context.lineTo(point.x, point.y);
 				});
 				context.closePath();
-				context.globalAlpha = 0.3 + (item.depth + 2) * 0.1;
+				context.globalAlpha = inheritedAlpha * (0.3 + (item.depth + 2) * 0.1);
 				context.fillStyle = item.index % 2 ? accent : color;
 				context.fill();
-				context.globalAlpha = 0.95;
+				context.globalAlpha = inheritedAlpha * (0.95);
 				context.strokeStyle = item.index % 2 ? color : accent;
 				context.stroke();
 			});
@@ -119,6 +105,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 		}
 
 		function shapeDrawObject(context, kind, time, size, color, accent) {
+			const inheritedAlpha = context.globalAlpha;
 			context.save();
 			context.strokeStyle = color;
 			context.fillStyle = color;
@@ -150,7 +137,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 				for (let i = 0; i < 3; i++) {
 					const phase = (time * 0.58 + i / 3) % 1;
 					context.save();
-					context.globalAlpha = (1 - phase) * 0.72;
+					context.globalAlpha = inheritedAlpha * ((1 - phase) * 0.72);
 					context.strokeStyle = i % 2 ? accent : color;
 					context.lineWidth = Math.max(1.5, size * 0.025 * (1 - phase * 0.45));
 					context.beginPath();
@@ -173,25 +160,25 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 				context.shadowBlur = size * 0.15;
 				context.shadowOffsetY = size * 0.08;
 				shapeRoundedRect(context, -width / 2, -height / 2, width, height, size * 0.09);
-				context.globalAlpha = 0.15;
+				context.globalAlpha = inheritedAlpha * (0.15);
 				context.fillStyle = "#ffffff";
 				context.fill();
 				context.shadowColor = "transparent";
-				context.globalAlpha = 0.85;
+				context.globalAlpha = inheritedAlpha * (0.85);
 				context.strokeStyle = color;
 				context.lineWidth = Math.max(1.5, size * 0.018);
 				context.stroke();
-				context.globalAlpha = 0.9;
+				context.globalAlpha = inheritedAlpha * (0.9);
 				context.fillStyle = accent;
 				shapeRoundedRect(context, -width * 0.34, -height * 0.1, width * 0.42, height * 0.09, height * 0.04);
 				context.fill();
-				context.globalAlpha = 0.45;
+				context.globalAlpha = inheritedAlpha * (0.45);
 				shapeRoundedRect(context, -width * 0.34, height * 0.09, width * 0.68, height * 0.055, height * 0.025);
 				context.fill();
 			}
 			else if (kind === "orbit") {
 				context.save();
-				context.globalAlpha = 0.35;
+				context.globalAlpha = inheritedAlpha * (0.35);
 				context.lineWidth = Math.max(1.5, size * 0.018);
 				context.beginPath();
 				context.arc(0, 0, size * 0.43, 0, Math.PI * 2);
@@ -218,7 +205,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 					const x = (i / (points - 1) - 0.5) * size * 1.15;
 					const wave = Math.sin(time * 2.2 + i * 0.72) * size * 0.22;
 					context.save();
-					context.globalAlpha = 0.42;
+					context.globalAlpha = inheritedAlpha * (0.42);
 					context.strokeStyle = i % 2 ? accent : color;
 					context.lineWidth = Math.max(1, size * 0.014);
 					context.beginPath();
@@ -242,7 +229,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 					const side = size * (0.08 + phase * 0.92);
 					context.save();
 					context.rotate(time * 0.13 + i * 0.11);
-					context.globalAlpha = Math.sin(phase * Math.PI) * 0.78;
+					context.globalAlpha = inheritedAlpha * (Math.sin(phase * Math.PI) * 0.78);
 					context.strokeStyle = i % 3 === 0 ? accent : color;
 					context.lineWidth = Math.max(1.2, size * 0.018);
 					context.strokeRect(-side / 2, -side / 2, side, side);
@@ -261,7 +248,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 					context.save();
 					context.rotate(i * Math.PI / 4);
 					context.fillStyle = i % 2 ? accent : color;
-					context.globalAlpha = 0.72;
+					context.globalAlpha = inheritedAlpha * (0.72);
 					context.beginPath();
 					context.moveTo(0, -size * 0.1);
 					context.lineTo(size * 0.075, -size * 0.31);
@@ -281,7 +268,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 				const lift = 4 * phase * (1 - phase);
 				const y = size * 0.34 - lift * size * 0.7;
 				context.save();
-				context.globalAlpha = 0.28 - lift * 0.15;
+				context.globalAlpha = inheritedAlpha * (0.28 - lift * 0.15);
 				context.fillStyle = "#000000";
 				context.beginPath();
 				context.ellipse(0, size * 0.46, size * (0.25 - lift * 0.07), size * 0.055, 0, 0, Math.PI * 2);
@@ -330,7 +317,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 				context.closePath();
 				context.fill();
 				context.save();
-				context.globalAlpha = 0.48;
+				context.globalAlpha = inheritedAlpha * (0.48);
 				context.strokeStyle = "#ffffff";
 				context.lineWidth = Math.max(1, size * 0.012);
 				context.beginPath();
@@ -343,7 +330,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 			}
 			else if (kind === "laser") {
 				const pulse = 0.72 + (Math.sin(time * 4.2) + 1) * 0.14;
-				context.globalAlpha = pulse;
+				context.globalAlpha = inheritedAlpha * (pulse);
 				context.shadowColor = color;
 				context.shadowBlur = size * 0.16;
 				context.strokeStyle = color;
@@ -366,7 +353,7 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 			}
 			else if (kind === "spinner") {
 				context.save();
-				context.globalAlpha = 0.2;
+				context.globalAlpha = inheritedAlpha * (0.2);
 				context.lineWidth = Math.max(3, size * 0.075);
 				context.beginPath();
 				context.arc(0, 0, size * 0.36, 0, Math.PI * 2);
@@ -388,264 +375,4 @@ export const TEMPLATE_SHAPE_ANIMATIONS_JS = `
 			context.restore();
 		}
 
-		function shapeDrawScene(context, width, height, time, scene, state) {
-			context.setTransform(1, 0, 0, 1, 0, 0);
-			context.globalAlpha = 1;
-			context.globalCompositeOperation = "source-over";
-			if ("filter" in context) context.filter = "none";
-			context.clearRect(0, 0, width, height);
-			context.fillStyle = state.background || scene.background;
-			context.fillRect(0, 0, width, height);
-			const glow = context.createRadialGradient(width * state.x / 100, height * state.y / 100, 0, width * state.x / 100, height * state.y / 100, Math.min(width, height) * 0.58);
-			glow.addColorStop(0, state.color);
-			glow.addColorStop(1, "rgba(0,0,0,0)");
-			context.save();
-			context.globalAlpha = 0.1;
-			context.fillStyle = glow;
-			context.fillRect(0, 0, width, height);
-			context.restore();
-			const size = Math.min(width, height) * Number(state.size) / 100;
-			context.save();
-			context.translate(width * Number(state.x) / 100, height * Number(state.y) / 100);
-			shapeDrawObject(context, scene.kind, Math.max(0, time) * Number(state.speed || 1), size, state.color, state.accent);
-			context.restore();
-		}
-
-		function shapeRedraw() {
-			if (!shapeMode || !ctx || !editorView || editorView.style.display === "none") return;
-			drawScene(ctx, TPL_W, TPL_H, previewT % Math.max(1, duration), SHAPE_ANIMATIONS[shapeIndex], shapeState(shapeIndex));
-		}
-
-		function shapeRenderControls() {
-			const inspector = document.getElementById("tm-shape-inspector");
-			if (!inspector) return;
-			const state = shapeState(shapeIndex);
-			inspector.innerHTML = "";
-			reelAddSelect(inspector, "Object", SHAPE_ANIMATIONS.map(function (scene, index) {
-				return [scene.n + " · " + scene.name, String(index)];
-			}), String(shapeIndex), function (value) { shapeOpenEditor(Number(value)); });
-			reelAddColor(inspector, "Main colour", state.color, function (value) { state.color = value; shapeRedraw(); });
-			reelAddColor(inspector, "Accent colour", state.accent, function (value) { state.accent = value; shapeRedraw(); });
-			reelAddColor(inspector, "Background", state.background, function (value) { state.background = value; shapeRedraw(); });
-			reelAddRange(inspector, "Size", state.size, 12, 70, 1, function (value) { state.size = value; shapeRedraw(); }, "%");
-			reelAddRange(inspector, "Speed", state.speed, 0.25, 2.5, 0.05, function (value) { state.speed = value; shapeRedraw(); }, "×");
-			reelAddRange(inspector, "X %", state.x, 0, 100, 1, function (value) { state.x = value; shapeRedraw(); }, "%");
-			reelAddRange(inspector, "Y %", state.y, 0, 100, 1, function (value) { state.y = value; shapeRedraw(); }, "%");
-			const reset = reelButton("Reset object", "tm-scene-secondary", function () {
-				shapeStates[shapeIndex] = shapeDefaultState(shapeIndex);
-				shapeRenderControls();
-				shapeRedraw();
-			});
-			inspector.appendChild(reset);
-		}
-
-		function shapeExitMode() {
-			shapeMode = false;
-			const controls = document.getElementById("tm-shape-controls");
-			if (controls) controls.style.display = "none";
-			const stage = document.getElementById("tm-stage");
-			if (stage) stage.classList.remove("tm-shape-stage");
-		}
-
-		function shapeOpenEditor(index) {
-			if (reelSceneMode) reelExitSceneMode();
-			shapeMode = true;
-			shapeIndex = Math.max(0, Math.min(SHAPE_ANIMATIONS.length - 1, Number(index) || 0));
-			reelGalleryCategory = "shapes";
-			const scene = SHAPE_ANIMATIONS[shapeIndex];
-			const name = document.getElementById("tm-name");
-			if (name) name.textContent = scene.n + " · " + scene.name;
-			reelSetEditorControls(false);
-			if (durationEl) durationEl.value = String(duration);
-			previewT = 0;
-			paused = false;
-			if (playBtn) playBtn.textContent = "⏸ Pause";
-			shapeRenderControls();
-			showView();
-			if (statusEl) statusEl.textContent = "Editing " + scene.name + " · adjust the animated object, then export or add it to Video " + modalVideo;
-			drawScene(ctx, TPL_W, TPL_H, 0, scene, shapeState(shapeIndex));
-			ensureTicking();
-		}
-
-		function shapeBuildGallery() {
-			const grid = document.getElementById("tm-shape-grid");
-			if (!grid) return;
-			grid.innerHTML = "";
-			shapeGalleryCanvases = [];
-			SHAPE_ANIMATIONS.forEach(function (scene, index) {
-				const card = document.createElement("button");
-				card.type = "button";
-				card.className = "tm-gcard tm-shape-card";
-				card.setAttribute("data-shape", String(index));
-				card.setAttribute("aria-label", "Edit " + scene.name);
-				const frame = document.createElement("span");
-				frame.className = "tm-gframe tm-scene-gframe";
-				const preview = document.createElement("canvas");
-				preview.className = "tm-gcanvas tm-scene-gcanvas";
-				preview.width = 360;
-				preview.height = 203;
-				frame.appendChild(preview);
-				const name = document.createElement("span");
-				name.className = "tm-gname";
-				name.textContent = scene.n + " · " + scene.name;
-				const tag = document.createElement("span");
-				tag.className = "tm-gtag";
-				tag.textContent = "Shape animation · click to edit";
-				card.appendChild(frame);
-				card.appendChild(name);
-				card.appendChild(tag);
-				card.addEventListener("click", function () { shapeOpenEditor(index); });
-				grid.appendChild(card);
-				const previewContext = preview.getContext("2d");
-				const state = shapeDefaultState(index);
-				shapeGalleryCanvases.push({ canvas: preview, ctx: previewContext, scene: scene, state: state });
-				if (previewContext) shapeDrawScene(previewContext, preview.width, preview.height, 0, scene, state);
-			});
-		}
-
-		const shapeBaseDrawScene = drawScene;
-		drawScene = function (context, width, height, time, scene, state) {
-			if (scene && scene.shapeAnimation) {
-				shapeDrawScene(context, width, height, time, scene, state);
-				return;
-			}
-			return shapeBaseDrawScene(context, width, height, time, scene, state);
-		};
-
-		const shapeBaseCurrent = current;
-		current = function () {
-			return shapeMode ? shapeState(shapeIndex) : shapeBaseCurrent();
-		};
-		const shapeBaseCurrentVarDef = currentVarDef;
-		currentVarDef = function () {
-			return shapeMode ? SHAPE_ANIMATIONS[shapeIndex] : shapeBaseCurrentVarDef();
-		};
-
-		const shapeBaseTick = tick;
-		tick = function (now) {
-			shapeBaseTick(now);
-			if (!modal || modal.style.display === "none" || !galleryView || galleryView.style.display === "none" || reelGalleryCategory !== "shapes") return;
-			for (const preview of shapeGalleryCanvases) {
-				if (preview && preview.ctx) shapeDrawScene(preview.ctx, preview.canvas.width, preview.canvas.height, previewT % 12, preview.scene, preview.state);
-			}
-		};
-
-		const shapeBaseSetGalleryCategory = reelSetGalleryCategory;
-		reelSetGalleryCategory = function (category) {
-			const shapeGrid = document.getElementById("tm-shape-grid");
-			const shapeTab = document.getElementById("tm-tab-shapes");
-			if (category === "shapes") {
-				reelGalleryCategory = "shapes";
-				const sceneGrid = document.getElementById("tm-scene-grid");
-				if (sceneGrid) sceneGrid.style.display = "none";
-				if (shapeGrid) shapeGrid.style.display = "";
-				const sceneTab = document.getElementById("tm-tab-scenes");
-				if (sceneTab) {
-					sceneTab.classList.remove("active");
-					sceneTab.setAttribute("aria-pressed", "false");
-				}
-				if (shapeTab) {
-					shapeTab.classList.add("active");
-					shapeTab.setAttribute("aria-pressed", "true");
-				}
-				return;
-			}
-			if (shapeGrid) shapeGrid.style.display = "none";
-			if (shapeTab) {
-				shapeTab.classList.remove("active");
-				shapeTab.setAttribute("aria-pressed", "false");
-			}
-			return shapeBaseSetGalleryCategory(category);
-		};
-
-		const shapeBaseSetEditorControls = reelSetEditorControls;
-		reelSetEditorControls = function (sceneMode) {
-			const shapeControls = document.getElementById("tm-shape-controls");
-			const stage = document.getElementById("tm-stage");
-			if (shapeMode) {
-				shapeBaseSetEditorControls(false);
-				const motion = document.getElementById("tm-motion-controls");
-				const scenes = document.getElementById("tm-scene-controls");
-				if (motion) motion.style.display = "none";
-				if (scenes) scenes.style.display = "none";
-				if (shapeControls) shapeControls.style.display = "";
-				if (stage) {
-					stage.classList.remove("tm-reel-stage");
-					stage.classList.add("tm-shape-stage");
-				}
-				const description = document.getElementById("tpl-sub");
-				if (description) description.textContent = "Edit a looping shape animation from the uploaded MotionGenie gallery. Change its colours, size, speed and position, then export it as an MP4 or add it to this video’s gallery. Particle effects are not included.";
-				const tip = document.querySelector("#tpl-modal .tpl-tips");
-				if (tip) tip.textContent = "The shape preview and MP4 export use the same canvas renderer. The clip is silent — upload an MP3 in the accordion to add sound.";
-				return;
-			}
-			if (shapeControls) shapeControls.style.display = "none";
-			if (stage) stage.classList.remove("tm-shape-stage");
-			return shapeBaseSetEditorControls(sceneMode);
-		};
-
-		const shapeBaseOpenEditor = openEditor;
-		openEditor = function (index) {
-			shapeExitMode();
-			return shapeBaseOpenEditor(index);
-		};
-		const shapeBaseOpenSceneEditor = reelOpenSceneEditor;
-		reelOpenSceneEditor = function (index) {
-			shapeExitMode();
-			return shapeBaseOpenSceneEditor(index);
-		};
-		const shapeBaseShowGallery = showGallery;
-		showGallery = function () {
-			const returningFromShapes = shapeMode;
-			if (returningFromShapes) shapeExitMode();
-			const result = shapeBaseShowGallery();
-			if (returningFromShapes) reelGalleryCategory = "shapes";
-			reelSetGalleryCategory(reelGalleryCategory);
-			return result;
-		};
-
-		const shapeBaseBuildModal = buildModal;
-		buildModal = function (videoNumber) {
-			shapeBaseBuildModal(videoNumber);
-			if (shapeEditorReady) return;
-			shapeEditorReady = true;
-			const gallery = document.getElementById("tm-gallery");
-			const tabs = document.querySelector("#tm-gallery .tm-gallery-tabs");
-			const side = document.querySelector("#tm-editor .tm-side");
-			if (!gallery || !tabs || !side) return;
-			const shapeTab = document.createElement("button");
-			shapeTab.type = "button";
-			shapeTab.id = "tm-tab-shapes";
-			shapeTab.className = "tm-gallery-tab";
-			shapeTab.setAttribute("aria-pressed", "false");
-			shapeTab.textContent = "Shape animations · 13";
-			shapeTab.addEventListener("click", function () { reelSetGalleryCategory("shapes"); });
-			tabs.appendChild(shapeTab);
-			const shapeGrid = document.createElement("div");
-			shapeGrid.id = "tm-shape-grid";
-			shapeGrid.className = "tm-gallery-grid tm-shape-gallery-grid";
-			shapeGrid.style.display = "none";
-			gallery.appendChild(shapeGrid);
-			const shapeControls = document.createElement("div");
-			shapeControls.id = "tm-shape-controls";
-			shapeControls.className = "tm-scene-controls tm-shape-controls";
-			shapeControls.style.display = "none";
-			shapeControls.innerHTML = '<div class="tm-scene-panel"><div class="tm-scene-kicker">SHAPES & MOTION</div><div class="tm-sec-title">Animated object</div><p class="tm-scene-hint">Thirteen canvas-rendered objects from the uploaded gallery. Particle effects are not included.</p><div id="tm-shape-inspector" class="tm-scene-inspector tm-shape-inspector"></div></div>';
-			side.appendChild(shapeControls);
-			shapeBuildGallery();
-			reelSetGalleryCategory(reelGalleryCategory);
-		};
-
-		const shapeBaseOpenTemplateModal = window.openTemplateModal;
-		window.openTemplateModal = function (videoNumber) {
-			shapeExitMode();
-			const result = shapeBaseOpenTemplateModal(videoNumber);
-			reelSetGalleryCategory(reelGalleryCategory);
-			return result;
-		};
-		const shapeBaseCloseTemplateModal = window.closeTemplateModal;
-		window.closeTemplateModal = function () {
-			shapeExitMode();
-			return shapeBaseCloseTemplateModal();
-		};
 `;

@@ -16,6 +16,11 @@
 > This revision documents the day-rotating settings
 > route, its Asia/Taipei date boundary, the two studio views (§11) and the seven skins.
 >
+> **Current revision (2026-10-23):** §4.1C and §4.2 reflect short/long-tail overlap without a
+> long-tail length rule, one template gallery, animated Graphics elements, real layer/rotation
+> controls and required 5–7-image ring uploads. Earlier UI-update notes are historical where
+> explicitly marked. Requirements and acceptance criteria: `new_requirements.md` §6.
+>
 > Companion document: **`system-rules.md`** — the high-level system rules with the
 > indented technical detail, invariants and restrictions behind every flow below.
 
@@ -334,7 +339,8 @@ accordion = header + body
             ├ Generate SEO Script With AI  ← FIRST block, with the always-visible hint line
             │           "SEO rule (explainer): 1 long-tail keyword said exactly 2× ·
             │            exactly 4 short keywords said exactly 2× each · one short
-            │            keyword is in the title · one is in a heading"
+            │            keyword is in the title · one is in a heading · overlap allowed,
+            │            shared uses count for both · no long-tail length rule"
             │           topic, minutes 1-6, speech speed, ✨ Generate SEO Script,
             │           SEO plan chips (title + headings + long-tail + 4 shorts,
             │            each keyword with its measured ×),
@@ -391,53 +397,50 @@ type prompt → [✨ Generate 2 Images]
 **C. Template composer (`Add video from template` link → #tpl-modal)**
 
 ```
-GALLERY view — two tabs with live animated preview grids; Interactive is the default:
-  Interactive scenes (15):
-    14 Reel Editor designs — Kinetic Typography · Duotone · Neon · Glitch Art · Vox Magazine
-    15 3D Ring Carousel — only the eight-card ring from the uploaded editorial demo
-  Shape animations (adapted from the uploaded MotionGenie HTML; 13 objects):
-    47 Morphing SVG Blob · 48 Rotating 3D Box · 49 Pulsing Ripple Ring ·
-    50 Floating Glass Card · 51 Orbiting Satellite · 52 DNA Helix Pulse ·
-    53 Infinite Tunnel Zoom · 54 Kaleidoscope Spinner · 56 Elastic Bounce Ball ·
-    57 Audio Equalizer Bars · 58 Diamond Crystal Spin · 59 Neon Laser Beam ·
-    60 Shimmer Spinner Ring
-    (55 Confetti Burst Canvas and all particle effects are deliberately excluded)
-  Motion templates have no tab or cards.
-click a card → EDITOR view for that scene/object
-EDITOR view
-  toolbar: [← Templates] · scene/object name · Format (Portrait 9:16 1080×1920 |
-           Landscape 16:9 1920×1080) · Length (1–25 s, default 6, clamped) ·
-           [⏸ Pause]/[▶ Play] · [↺ Restart]
-  left    : live canvas preview (the SAME drawScene() that renders the export)
-            + Interactive-scene element tags below the preview + timeline loop bar
-  Reel scene editor: click Background, Eyebrow, Headline, Sub text or Graphic in the
-            canvas (or use the element tags below the preview); the inspector changes to
-            matching controls. Text: content, font, colour, size, animation, enter
-              transition/speed, alignment, X/Y position and delete/restore. Graphic: sticker
-              shape, colour, size, animation and position. Background: bundled or uploaded
-              image, scene style, animated effect, speed and transition. Drag selected canvas
-              objects. [＋ Text] adds text; with a graphic selected it becomes [＋ Graphic]
-              and creates a new tagged graphic. Compact colour boxes open 12 solid swatches,
-              a custom colour and one row of four gradients (Sunset, Ocean, Lime, Violet);
-              gradients are painted by the canvas renderer and included in export.
-            Each Reel scene keeps its own editing state while the modal stays open.
-  3D Ring Carousel editor: one selection tag below the preview; visibility, rotation speed
-            (0–3×), ring radius (55–145%), card size (50–150%), 3D tilt (-30°–30°), X/Y and reset.
-            Eight editorial images are CORS-loaded from the uploaded demo's URLs; failed images
-            (or an 8-second stall) use deterministic illustrated card fallbacks. Perspective/depth sorting and time-based
-            auto-rotation are canvas-rendered, not CSS-only. The flip book, sound, ambient
-            particles and magazine page chrome are not included.
-  Shape animation editor: choose any of the 13 objects again, edit main/accent/background
-            colours, size (12–70%), speed (0.25–2.5×) and X/Y position, or reset the object.
-            Its preview uses the same deterministic canvas renderer as MP4 export; each object
-            keeps its own editing state while the modal stays open.
-[⬇ Download MP4] → WebCodecs H.264 avc1.4d002a @ 6 Mbps, 30 fps, mp4-muxer in memory
-        → renders and downloads the MP4; this footer button is the only download action
-[➕ Add to Video N] → performs the same MP4 render with downloading disabled, then adds
-        the new MP4 directly to THIS accordion's gallery as a normal MP4 asset (counts
-        against the 5-MP4 cap; ≤25 s so always under the 60 s cap)
-the modal is built once and reused: per-scene/per-object editing state survives closing;
-the link can retarget the same modal at another Video N (title + Add button update)
+GALLERY — Interactive scenes · 15 (one live-preview grid):
+  14 Reel designs: Kinetic Typography · Duotone · Neon · Glitch Art · Vox Magazine
+  15 3D Ring Carousel (3D Ring Video Template)
+  No Motion or Graphics/Shape-animation tab/cards; no editable-designs config accordion.
+click a card → EDITOR
+  toolbar: [← Templates] · scene name · Format (9:16 1080×1920 | 16:9 1920×1080) ·
+           Length (1–25 s, default 6) · [⏸ Pause]/[▶ Play] · [↺ Restart]
+  preview: live canvas, element tags underneath, loop progress bar
+
+Reel scene: select text/graphic by tag or canvas click; drag to move
+  text   → content, font, colour, size, alignment, animation, transition/speed, X/Y
+  graphic→ Graphics dropdown (9 original shapes + 13 animated objects), main/accent colour,
+           size, animation, transition/speed, X/Y, visibility, add/clone and delete/restore
+  both   → Rotate degrees [0…360°, 1° step] + live degree readout
+           [+ Front layer] / [- Back Layer] move ONE layer step, disable at boundaries
+           background stays behind; tags, frontmost selection and MP4 use the same order
+           paused preview redraws on rotation/layer edits; rotated hit targets follow objects
+  [＋ Text] becomes [＋ Graphic] for a graphic and clones its settings into a new top layer
+  colours: 12 solids + custom colour + four gradients; animated geometry has main/accent colours
+  background retains mood/uploaded photo, style, effect, speed and transition controls
+
+Graphics dropdown's 13 animated entries (not separate templates):
+  Morphing SVG Blob · Rotating 3D Box · Pulsing Ripple Ring · Floating Glass Card ·
+  Orbiting Satellite · DNA Helix Pulse · Infinite Tunnel Zoom · Kaleidoscope Spinner ·
+  Elastic Bounce Ball · Audio Equalizer Bars · Diamond Crystal Spin · Neon Laser Beam ·
+  Shimmer Spinner Ring. Confetti/particle effects remain excluded.
+
+3D Ring Video Template:
+  one carousel tag; visibility, spin speed (0–3×), radius (55–145%), card size (50–150%),
+  3D tilt (-30°…30°), whole-ring rotation (0–360°), X/Y, [Reset carousel]
+  BOTTOM accordion: Ring images [count / 7 (min 5)]
+     Choose ring images → select 5–7 image files together (replaces complete set)
+       4/8 files, non-images or failed decode → inline error, previous valid set kept
+       success → thumbnails/count update; preview uses exactly those cards
+       remove from 7→6→5; removal disabled at five; reset preserves images
+     Download/Add disabled until 5–7 images decode, and during upload/export
+     stale decodes cannot overwrite a newer selection or expose this accordion elsewhere
+     bundled sample cards are preview-only; no remote image host or eight-card rule
+
+[⬇ Download MP4] → shared canvas → WebCodecs H.264 @ 6 Mbps, 30 fps → mp4-muxer → download
+[➕ Add to Video N] → same render, no download → probe MP4 → target accordion gallery
+                     counts toward five-MP4 cap; clip max 25 s; silent
+The modal is reused. Per-scene edits and ring images survive closing/retargeting, in browser
+memory only; page reload resets them. Ring uploads are separate from the two background photos.
 ```
 
 ### 4.2 Generate SEO Script With AI
@@ -449,36 +452,41 @@ same rule; the SEO plan chips only appear *after* a successful run. The rule set
 
 ```
 [hint] "SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords
-        said exactly 2× each · one short keyword is in the title · one is in a heading"
+        said exactly 2× each · one short keyword is in the title · one is in a heading ·
+        short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule"
 topic   = script-topic input  OR (if empty) the video's title  OR "my video"
 minutes = 1..6 (default 1)
 speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
   │
   ▼ POST /api/script {topic,minutes,speed}      ← still the only fields the client sends
   │
-  ├─ STAGE 1  keyword planner (llama-3.1-8b-instruct-fp8, max_tokens 512, temp 0.6)
+  ├─ STAGE 1  keyword planner (llama-3.1-8b-instruct-fp8, max_tokens 1024, temp 0.55 (0.4 retry))
   │      asks for one JSON object:
   │        {"title":"…","headings":["…","…"],"longTail":"one long tail keyword",
   │         "short":["s1","s2","s3","s4"]}
-  │      verified: exactly 1 long-tail (≤6 words) · exactly 4 unique shorts (≤3 words each) ·
+  │      verified: exactly 1 nonempty long-tail (NO word/character length rule) · exactly 4 unique shorts (≤3 words each) ·
   │      title ≤70 chars including at least one short keyword · ≥1 heading (≤12 words each)
   │      of which at least one includes a short keyword (the same one as the title's or another)
+  │      short/long-tail overlap explicitly ALLOWED, including an identical phrase in both roles
   │      invalid → retry up to 3× with " Your previous attempt was rejected: <reason> …"
   │      3 failures → 500 "SEO keywords invalid (<reason>) - try again"
   │                  (status line shows "Script failed: SEO keywords invalid (…) - try again")
   │
-  ├─ STAGE 2  SRT writer (same model, max_tokens 2048, temp 0.7) — an EXPLAINER script
+  ├─ STAGE 2  SRT writer (same model, 2048–4096 tokens by duration, temp 0.65 / 0.4 retry) — an EXPLAINER script
   │      prompt = basePrompt ("professional video script writer for EXPLAINER videos … ONLY
   │      valid SRT") + a hard-coded SEO brief that REDUNDANTLY restates every rule: the exact
   │      title and the exact headings (fixed, in section order, never altered or spelled out),
   │      the long-tail said EXACTLY 2× ("not 1 time and not 3 times"), each of the 4 shorts
   │      said EXACTLY 2× + "Work every keyword into natural spoken sentences - never read
   │      them out as a list"
+  │      shared-count brief: saying a long-tail twice already supplies two occurrences of a
+  │      nested short; do NOT insert two extra standalone uses (reverse containment counts too)
   │      validateSrt: SRT shape, no overlap, 10 s … minutes*60 s + 1.5 s
   │      (the ≤42-char cue target is prompt text only — the validator does not enforce it)
   │      then keyword counts on the SPOKEN text only (cue numbers/timestamps stripped):
   │        long-tail exactly 2× · each of the 4 shorts exactly 2× (under AND over both fail)
-  │      any violation → retry up to 3× with the exact reason attached
+  │      any violation → retry up to 3× with the exact reason + per-keyword/cue counts;
+  │      remove extra standalone short uses, not already-correct long-tail phrases
   │      3 failures → 500 "Script output invalid (<reason>) - try again"
   │
   ├─ success → project.srt + project.seoTitle + project.seoHeadings stored
@@ -769,7 +777,7 @@ Four full-page tabs
 | Render API + worker | MODULE 7 (`collectVideoPayload()`, `apiRenderVideo()`, `renderVideoLocally()`, `workerRunJob()`) |
 | Script / subtitles / voiceover | MODULE 8-9 (`renderSeoKeywords()`, `generateScript()`, `openVoiceoverModal()`, `generateVoiceover()`, `toggleSubtitles()`) — the accordion markup puts the SEO section first in `.va-left` (`videoAccordionHTML()`) |
 | Render engine | `generateMP4()`; audio helper `encodeAudioTrack()`; GIF frame decoder `buildGifSlideFrames()` |
-| Template composer | `src/client/template-composer-js.ts` (`drawScene()`, `exportMP4()`, `addTemplateToVideo()`, `openTemplateModal()`), `src/client/template-scene-editor.ts` (Interactive gallery/editor), `src/client/template-ring-carousel.ts` (scene 15 renderer, image loading and controls), `src/client/reel-scene-assets.ts` (bundled backdrops), `src/client/template-shape-animations.ts` (13 non-particle shape objects, gallery and inspector) |
+| Template composer | `src/client/template-composer-js.ts` (`drawScene()`, `exportMP4()`, `addTemplateToVideo()`, `openTemplateModal()`), `src/client/template-scene-editor.ts` (Interactive gallery/editor), `src/client/template-ring-carousel.ts` (scene 15 renderer, image loading and controls), `src/client/reel-scene-assets.ts` (bundled backdrops), `src/client/template-shape-animations.ts` (13 non-particle animated Graphics element renderers) |
 | CMS | `src/modules/cms.ts` (validation, KV record, APIs, public page/navigation injection), CMS section of `src/client/config-page-js.ts` (draft editor/live preview) |
 | Payments | `src/modules/payments.ts` (upload/storage/owner/admin/approval routes), `src/client/payment-upload-js.ts` (signed-in uploader/history), payment sections of `src/client/config-page-js.ts` |
 | Account / upgrade dashboard | `src/modules/user-pages.ts` (session-aware HTML and plan-aware actions), `src/modules/theme-shell.ts` (shared navigation), `src/index.ts` (`/api/credits` and session reread) |
@@ -855,6 +863,8 @@ strip, details grid and play button. None of them have an engine here. See
 
 ## UI update — Aerial / Stellar / template modal (2026-10-15)
 
+> Historical template-gallery composition; the current gallery/editor flow is §4.1C above.
+
 Appearance now labels the former Strata option **Aerial** (the persisted/API value is still
 `strata` for backwards compatibility). Its bundled mountain background, blue sky, diagonal
 overlay and white typography adapt the HTML5 UP Aerial design to the scrolling studio.
@@ -875,6 +885,9 @@ downloading and inserts the result into the accordion gallery. Reopening/retarge
 existing gallery-insertion flow are preserved.
 
 ## UI update — Shape animations + accordion controls (2026-10-23)
+
+> Historical: the separate Shape gallery below has been removed. All 13 objects now live in
+> the Graphics dropdown (§4.1C); the larger accordion-button styling remains current.
 
 The uploaded MotionGenie gallery adds a third **Shape animations** tab to the template modal.
 Its 13 canvas-rendered Shapes & Motion objects retain their original reference numbers (47–54
@@ -899,6 +912,9 @@ manual export.
 
 ## UI update — 3D Ring Carousel + Motion gallery removal (2026-10-24)
 
+> Historical: the two-tab/eight-card behavior below has been superseded by §4.1C. There is
+> now one scene gallery and the ring requires 5–7 uploaded images.
+
 This supersedes the gallery composition in the earlier UI-update notes. The template modal now
 opens on **Interactive scenes** and has only two tabs: **Interactive scenes · 15** and **Shape
 animations · 13**. The Motion tab and all Motion cards are removed from the DOM.
@@ -908,3 +924,22 @@ Its canvas renderer uses eight CORS-loaded editorial images with deterministic f
 perspective/depth sorting and time-based rotation. Controls cover visibility, speed, radius, card
 size, tilt, X/Y and reset. The demo's flip book, Web Audio, ambient particles, fonts and magazine
 chrome are not ported. Both Download MP4 and direct Add to Video N use the shared exporter.
+
+
+## Current requirement revision — SEO overlap and template controls (2026-10-23)
+
+- **SEO:** short/long-tail phrases may overlap; shared occurrences count for both, without any
+  long-tail word/character length rule. One long-tail and four shorts must still each total 2×.
+- **Ring:** upload 5–7 images together in the bottom accordion; invalid batches preserve prior
+  images, and both render actions require a valid set.
+- **Configuration:** the "15 editable designs" accordion is removed from every template; use
+  **← Templates**. The new ring-image accordion is intentionally retained.
+- **Elements:** **+ Front layer** / **- Back Layer** move text/graphics one layer step;
+  **Rotate degrees** applies real 0–360° canvas rotation in preview/export and hit-testing.
+- **Graphics:** all 13 animated objects are in Graphics, alongside the original nine shapes;
+  the separate graphics gallery tab, cards and standalone editor are removed.
+- Tests: `npm test`; production bundling: `npx wrangler deploy --dry-run`. Local browser smoke
+  checks exercised real H.264 download and direct Add to Video insertion. The SEO fixture is
+  mock AI; live model availability and the pre-existing legacy TypeScript errors are separate.
+
+See `new_requirements.md` §6 for acceptance criteria, source-file mappings and verification scope.

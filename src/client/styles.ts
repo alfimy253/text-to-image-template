@@ -6552,10 +6552,9 @@ export const APP_CSS = `
 
 
 		/* =====================================================
-		 * TEMPLATE COMPOSER — Interactive + Shape galleries/editor
-		 * (tm-* classes). Two live canvas-preview galleries feed
-		 * mode-specific inspectors for Reel scenes, the 3D Ring
-		 * Carousel and non-particle Shape objects. #tpl-modal
+		 * TEMPLATE COMPOSER — Interactive gallery and element editor
+		 * (tm-* classes). Animated graphics live in the Graphics
+		 * dropdown; the 3D Ring has its own image-upload accordion. #tpl-modal
 		 * inherits the active studio theme through --t-* tokens.
 		 * ===================================================== */
 
@@ -8190,8 +8189,7 @@ export const APP_CSS = `
 			font-family: 'Archivo', Arial, sans-serif;
 		}
 
-		#tpl-modal .tm-scene-panel,
-		#tpl-modal .tm-scene-switcher {
+		#tpl-modal .tm-scene-panel {
 			padding: 14px;
 			border: 1px solid rgba(255,255,255,.1);
 			border-radius: 12px;
@@ -8546,66 +8544,115 @@ export const APP_CSS = `
 			object-fit: cover;
 		}
 
-		#tpl-modal .tm-scene-switcher {
-			margin-top: 10px;
-			padding: 0;
+		#tpl-modal .tm-scene-layer-controls {
+			grid-column: 1 / -1;
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 8px;
+		}
+
+		#tpl-modal .tm-scene-layer-button {
+			padding: 9px 12px;
+			min-height: 36px;
+			border: 1px solid rgba(122,172,43,.6);
+			border-radius: 7px;
+			background: rgba(122,172,43,.12);
+			color: #c8f36f;
+			font-size: 11px;
+			font-weight: 700;
+			cursor: pointer;
+		}
+
+		#tpl-modal .tm-scene-layer-button:hover:not(:disabled) {
+			background: rgba(122,172,43,.25);
+		}
+
+		#tpl-modal .tm-scene-layer-button:disabled,
+		#tpl-modal .tm-ring-remove:disabled {
+			opacity: .4;
+			cursor: not-allowed;
+		}
+
+		#tpl-modal .tm-scene-layer-position {
+			color: #a3a3b2;
+			font-size: 10px;
+		}
+
+		#tpl-modal .tm-ring-upload {
+			margin-top: 12px;
+			border: 1px solid rgba(122,172,43,.4);
+			border-radius: 12px;
+			background: rgba(122,172,43,.045);
 			overflow: hidden;
 		}
 
-		#tpl-modal .tm-scene-switcher summary {
-			padding: 11px 13px;
-			color: #c4a87c;
-			font: 700 10px 'JetBrains Mono', monospace;
-			letter-spacing: .12em;
-			text-transform: uppercase;
-			cursor: pointer;
-			list-style: none;
-		}
-
-		#tpl-modal .tm-scene-switcher summary::-webkit-details-marker { display: none; }
-		#tpl-modal .tm-scene-switcher summary::before { content: "▸ "; color: #7aac2b; }
-		#tpl-modal .tm-scene-switcher[open] summary::before { content: "▾ "; }
-
-		#tpl-modal .tm-scene-list {
-			display: grid;
-			grid-template-columns: repeat(2, minmax(0,1fr));
-			gap: 5px;
-			padding: 0 10px 10px;
-		}
-
-		#tpl-modal .tm-scene-list-button {
-			min-width: 0;
-			border: 1px solid rgba(255,255,255,.1);
-			border-radius: 6px;
-			background: #16161c;
-			color: #bcbcc5;
-			padding: 7px;
-			font-size: 9px;
-			text-align: left;
-			cursor: pointer;
-		}
-
-		#tpl-modal .tm-scene-list-button.active,
-		#tpl-modal .tm-scene-list-button:hover {
-			border-color: #7aac2b;
+		#tpl-modal .tm-ring-upload summary {
+			padding: 14px;
 			color: #c8f36f;
+			font: 700 11px 'JetBrains Mono', monospace;
+			cursor: pointer;
+		}
+
+		#tpl-modal .tm-ring-upload-body { padding: 0 14px 14px; }
+
+		#tpl-modal .tm-ring-status {
+			font-size: 11px;
+			line-height: 1.5;
+			color: #c4c4cf;
+		}
+
+		#tpl-modal .tm-ring-thumbs {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+			gap: 9px;
+		}
+
+		#tpl-modal .tm-ring-thumb {
+			position: relative;
+			min-width: 0;
+			padding: 5px;
+			border: 1px solid rgba(255,255,255,.14);
+			border-radius: 8px;
+			background: #17171d;
+		}
+
+		#tpl-modal .tm-ring-thumb img {
+			display: block;
+			width: 100%;
+			aspect-ratio: 3 / 4;
+			object-fit: cover;
+			border-radius: 4px;
+		}
+
+		#tpl-modal .tm-ring-thumb span {
+			display: block;
+			margin-top: 5px;
+			color: #c4c4cf;
+			font-size: 10px;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		#tpl-modal .tm-ring-remove {
+			position: absolute;
+			top: 8px;
+			right: 8px;
+			width: 25px;
+			height: 25px;
+			padding: 0;
+			border: 1px solid rgba(255,255,255,.3);
+			border-radius: 50%;
+			background: rgba(10,10,14,.85);
+			color: #fff;
+			font-size: 18px;
+			cursor: pointer;
 		}
 
 		@media (max-width: 700px) {
 			#tpl-modal .tm-scene-inspector { grid-template-columns: 1fr 1fr; }
 			#tpl-modal .tm-scene-panel { padding: 10px; }
-			#tpl-modal .tm-scene-list { grid-template-columns: 1fr; }
-		}
-
-		/* Shape animations use the same live canvas gallery and inspector. */
-		#tpl-modal .tm-shape-stage {
-			position: relative;
-			border: 1px solid rgba(99,102,241,.6);
-		}
-
-		#tpl-modal .tm-shape-inspector .tm-scene-secondary {
-			align-self: end;
-			min-height: 36px;
 		}
 
 		/* =====================================================

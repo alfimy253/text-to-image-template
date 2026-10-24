@@ -6441,13 +6441,13 @@ export const APP_JS = `
 			'<div class="va-left">' +
 				'<div class="va-section">' +
 				'<div class="va-section-title">Generate SEO Script With AI</div>' +
-				'<span class="va-note">SEO rule (explainer): 1 long-tail keyword said exactly 2\u00d7 \u00b7 exactly 4 short keywords said exactly 2\u00d7 each \u00b7 one short keyword is in the title \u00b7 one is in a heading</span>' +
+				'<span class="va-note">SEO rule (explainer): 1 long-tail keyword said exactly 2\u00d7 \u00b7 exactly 4 short keywords said exactly 2\u00d7 each \u00b7 one short keyword is in the title \u00b7 one is in a heading \u00b7 short/long-tail overlap is allowed and shared uses count for both \u00b7 no long-tail length rule</span>' +
 				'<input type="text" id="va-script-topic-' + n + '" maxlength="120" placeholder="Topic (uses the video title if empty)">' +
 				'<div class="va-row">' +
 				'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
 				'<label class="quality-select">Speech <select id="va-script-speed-' + n + '"><option value="super fast">Super fast</option><option value="fast">Fast</option><option value="medium" selected>Medium</option><option value="slow">Slow</option></select></label>' +
 				'</div>' +
-				'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px" title="AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them">\u2728 Generate SEO Script</button>' +
+				'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px" title="AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.">\u2728 Generate SEO Script</button>' +
 				'<span class="va-note" id="va-script-status-' + n + '"></span>' +
 				'<div class="va-seo-keywords" id="va-script-keywords-' + n + '" style="display:none"></div>' +
 				'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">\u25bc Script (SRT)</button>' +
@@ -12865,7 +12865,7 @@ export const APP_JS = `
 				html +=
 					'<span class="va-seo-chip short" title="Short keyword \u2014 must be said exactly ' +
 					item.min +
-					'\u00d7; one short keyword is in the title and one in a heading">' +
+					'\u00d7; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading">' +
 					escapeHTML(item.keyword) +
 					" <b>" +
 					item.count +

@@ -1007,8 +1007,8 @@ export default {
 			* removed).
 			*
 			*  1. Keywords: exactly 1
-			*     long-tail keyword (<=6
-			*     words), exactly 4 short
+			*     long-tail keyword (no length
+			*     rule), exactly 4 short
 			*     keywords (<=3 words each),
 			*     a title (<=70 chars) that
 			*     includes one short keyword

@@ -30,6 +30,11 @@
 > 2-5 shorts in total, long tail said ≥1×, shorts said 2-5×) no longer exists in any file. A future
 > non-SEO / non-explainer script mode is documented in RULE 7 (not implemented).
 >
+> **Current SEO/template revision (2026-10-23):** short/long-tail overlap is allowed with shared
+> counts; long-tail keywords have no word/character length rule. RULE 13 now has one scene gallery,
+> animated objects in Graphics, working layer/rotation controls and required 5–7 ring uploads.
+> Full requirements and acceptance criteria: `new_requirements.md` §6.
+>
 > Companion documents: `userflow.md` (the actor-level flows these rules produce),
 > `README.md` (the user-facing summary), `bug-audit.md`, `kv-scale-test.md`,
 > `bug-fix-session-206.md` and `bug-fix-session-211.md` (evidence).
@@ -310,110 +315,69 @@
 
 ---
 
-## RULE 7 — The AI script is an EXPLAINER SEO script: 1 long-tail keyword (exactly 2×) + exactly 4 short keywords (exactly 2× each) + an AI title and headings gate the SRT writer
+## RULE 7 — Explainer SEO scripts allow short/long-tail overlap and impose no long-tail length rule
 
-> **Rule set of 2026-10-23.** This rule replaces every earlier SEO keyword plan; all documentation
-> of the older script rules (2 long-tail keywords, 1-3 shorts under each, 2-5 shorts in total,
-> long tail said ≥1×, shorts said 2-5×) was deleted on 2026-10-23 and nothing below predates it.
-
-- **The explainer SEO rules (the complete contract, enforced server-side):**
-  1. Exactly **1 long-tail keyword** (`SEO_LONG_TAIL = 1`), at most **6 words**
-     (`SEO_LONG_WORDS_MAX`), and its spoken frequency is **min = max = exactly 2**
-     (`SEO_LONG_FREQ_MIN = SEO_LONG_FREQ_MAX = 2`) — not 1 time, not 3 times.
-  2. Exactly **4 short keywords** (`SEO_SHORT_TOTAL = 4`), each at most **3 words**
-     (`SEO_SHORT_WORDS_MAX`), and **each one is said exactly 2 times**
-     (`SEO_SHORT_FREQ_MIN = SEO_SHORT_FREQ_MAX = 2`).
-  3. **One of the 4 short keywords must be included in the video title** — the AI-planned title is
-     at most **70 characters** (`SEO_TITLE_MAX`, matching the title input's `maxlength`).
-  4. **Another short keyword — or the same one — must be included in a heading.** Because the
-     default AI script always creates an **explainer video**, there is **at least 1 heading**
-     (`SEO_HEADINGS_MIN = 1`), each at most **12 words** (`SEO_HEADING_WORDS_MAX`); the headings
-     follow the explainer's section order.
-- Request contract (`POST /api/script` with `{topic, minutes, speed}`) is unchanged by the SEO work.
-  - `topic` defaults to `"my video"`, trimmed and cut to 160 chars server-side (the dialog's
-    `maxlength` is 120).
-  - `minutes` defaults to 1; anything not an integer in **1..6** → `400 "Minutes must be 1-6"`.
-  - `speed` must be one of `super fast | fast | medium | slow` → else `400`.
-    - Word targets per minute: 210 / 170 / 140 / 110 (used only to steer the prompt).
-  - `env.AI` missing → `503 "AI binding not configured"`.
-- **Two AI stages per request**, both on `SCRIPT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"`
-  (`SEO_*` constants, `parseKeywordSet()`, `keywordUsageError()` and the two stage builders
-  in `src/index.ts`). The rules are **redundant by design**: they are stated to the model in the
-  stage-2 prompt *and* independently re-checked by the server after every generation.
-  1. **Keyword planner** — `max_tokens: 512`, `temperature: 0.6`, **3 attempts**, JSON only:
-     `{"title":"…","headings":["…","…"],"longTail":"one long tail keyword","short":["s1","s2","s3","s4"]}`.
-     - `longTail` is lenient about shape: a bare string, `["one entry"]` or `{keyword:"…"}` all
-       read as the one long-tail keyword (an old-shape answer is not punished with a retry).
-     - the 4 shorts dedupe-collapse first, then must be **exactly 4**; an empty short, a short
-       longer than 3 words, an empty/over-long long tail, a missing/over-long title, a title that
-       carries no short keyword, a missing/empty/over-long heading list or headings of which none
-       carries a short keyword are all rejected (inclusion is tested with `keywordCount()` —
-       `\b`-anchored, case-insensitive).
-     - Restriction: nothing requires a keyword to be a literal substring of the topic — the
-       planner is only *asked* for keywords "closely related to the topic", so that is a prompt
-       rule, not an enforced one.
-     - 3 rejected plans → `500 {success:false, error:"SEO keywords invalid (<reason>) - try again"}`
-       and **the writer is never called**: a hopeless topic costs only the cheap stage.
-       - Reason strings are stable contract text: `no JSON object in the keyword output`,
-         `the keyword reply was not valid JSON`, `the JSON needs a "longTail" keyword`,
-         `the long-tail keyword "x" is longer than 6 words`, `the JSON needs a "short" array`,
-         `a short keyword is empty`, `the short keyword "x" is longer than 3 words`,
-         `there must be exactly 4 short keywords, not N`, `the JSON needs a "title" string`,
-         `the title is longer than 70 characters`,
-         `the title must include at least one of the short keywords`,
-         `the JSON needs a "headings" array with at least 1 heading`, `a heading is empty`,
-         `the heading "x" is longer than 12 words`,
-         `at least one heading must include a short keyword`.
-  2. **SRT writer** — `max_tokens: 2048`, `temperature: 0.7`, **3 attempts**; the prompt is
-     `basePrompt` ("You are a professional video script writer for **EXPLAINER** videos - every
-     default script explains its topic section by section, in natural spoken English. Answer with
-     ONLY valid SRT subtitle text, nothing else.") plus a hard-coded **SEO brief that redundantly
-     restates every rule**: the exact title text and the exact headings (fixed, in section order,
-     never altered or spelled out aloud), the long-tail keyword said **exactly 2× — "not 1 time
-     and not 3 times"**, each of the 4 short keywords said **exactly 2×**, all worked into natural
-     spoken sentences and never read out as a list.
-     - The old `@cf/meta/llama-3.1-8b-instruct` was deprecated (comment dated 2026-05-30), so
-       don't "restore" the free model name.
-     - Response parsing accepts three shapes: `result[0].message.content`, `result.response`,
-       or a bare string (helper `aiText`).
-- SRT validation (`validateSrt`) — every rule is a hard gate and the SEO work did not touch it:
-  - Control characters are stripped; a fenced code block (a line of three backticks) is unwrapped.
-  - Everything before the first numeric cue line is discarded; no cue found → invalid.
-  - Every timestamp must match `H{1,2}:MM:SS,mmm` on both sides of `-->`.
-  - `startMs < endMs` and no cue may overlap the previous cue's end.
-  - At least one cue with text and a positive duration must survive.
-  - Total duration must be `>= 10 000 ms` and `<= minutes*60 000 + 1 500 ms` (1.5 s tolerance).
-    - Restriction: both bounds are rejections, not trims — "too short" is as invalid as "too long".
-- **Keyword frequencies are enforced after generation, on the spoken words only**
-  (`srtSpokenText()` drops cue numbers and timestamp lines; `keywordCount()` lower-cases, treats a
-  run of whitespace as one space and anchors both ends with `\b`):
-  - the **long-tail** keyword must appear **exactly 2** times — below *and* above are failures;
-  - **each of the 4 short** keywords must appear **exactly 2** times — below *and* above are
-    failures;
-  - the first violation in rule order (long tail first, then the shorts in list order) becomes the
-    retry reason handed to the model:
-    `the long-tail keyword "x" appears 1 time(s); it must appear exactly 2 times`,
-    `the long-tail keyword "x" appears 3 times; it must appear exactly 2 times`,
-    `the short keyword "x" appears 1 time(s); it must appear exactly 2 times`,
-    `the short keyword "x" appears 3 times; it must appear exactly 2 times`.
-  - Restriction: `\b` anchoring means a glued word never counts (`budgetgear` ≠ `budget gear`) and
-    the keyword `ai` is not matched inside `said`. A short keyword that also occurs inside the
-    long-tail phrase counts there too — the writer prompt keeps them separable in practice.
-- Retry policy: **3 attempts per stage**; every writer retry re-sends the same keyword set with
-  `" Your previous attempt was rejected: <exact reason> Try again and fix that exact problem."`
-  - After 3 writer failures → `500 {success:false, error:"Script output invalid (<reason>) - try again"}`.
-- Success payload:
-  `{success:true, srt, title, headings, keywords:{longTail:{keyword,count,min:2,max:2}, short:[{keyword,count,min:2,max:2}]}, model}`.
-  - `title` and `headings` are the planner's verified strings; `longTail` is now a **single
-    object** (the old payload listed an array of 2 long tails with nested shorts).
-  - Restriction: `count` is the **measured** frequency in the returned script — the UI displays it,
-    and a keyword can only be listed with `count = 2`, because the same numbers gate the response.
-  - Restriction: **each request costs at least 2 Workers AI calls** (up to 6 with retries)
-    against the 10 000 neurons/day free allocation.
+- **Current contract (2026-10-23), enforced in `src/modules/script-seo.ts`:**
+  1. Exactly **one nonempty long-tail keyword**, spoken **exactly twice**. There is **no minimum
+     or maximum word count or character length** for that keyword. A one-word or >6-word
+     long-tail phrase is valid; title/topic/heading limits are separate rules.
+  2. Exactly **four unique short keywords**, each **1–3 words** and spoken **exactly twice**.
+     The existing restriction against containment among the four shorts remains; it no longer
+     applies between short and long-tail roles.
+  3. AI title: **≤70 characters**, including at least one short keyword.
+  4. **1–12 headings**, each **≤12 words**, at least one including a short keyword. The same
+     short may appear in the title and a heading; those metadata strings are not spoken SRT.
+- **Overlap is explicitly allowed, not a validation failure.** If `yoga` is a short and
+  `morning yoga poses` is the long-tail, saying the latter twice satisfies **both** totals.
+  Do not add two standalone `yoga` uses. Identical phrases may serve both roles; a one-word
+  long-tail contained in a longer short also shares its occurrences. Every measured total
+  must still be two; an extra third use is rejected.
+- Request: `POST /api/script {topic, minutes, speed}`.
+  - Topic defaults to `my video`, normalizes whitespace/control characters and caps at 160
+    characters; that is **not** a long-tail keyword length restriction.
+  - Minutes: integer **1–6**, default 1; invalid → `400 "Minutes must be 1-6"`.
+  - Speed: `super fast | fast | medium | slow`, targeting 210/170/140/110 words per minute;
+    invalid → `400`; missing AI binding → `503 "AI binding not configured"`.
+  - Usage tracking happens after request validation; scripts remain unlimited on all plans.
+- **Two AI stages** on `@cf/meta/llama-3.1-8b-instruct-fp8`, **three attempts per stage**:
+  1. **Planner:** JSON `{title, headings, longTail, short:[s1,s2,s3,s4]}`; 1024 output tokens,
+     temperature 0.55 first, 0.4 on retries. Output token budgeting is a model call setting,
+     not a keyword word/character rule. `parseKeywordSet()` accepts string/object/array
+     long-tail shapes, deduplicates shorts and checks the title/heading contract.
+     - No mutually-exclusive short/long-tail requirement and no 2–6-word gate remain.
+     - The prompt explicitly allows shared phrases and asks the planner not to repeat a short
+       multiple times within the long-tail, which would conflict with the existing 2× totals.
+     - Three rejected plans → `500 "SEO keywords invalid (<reason>) - try again"`; no writer call.
+  2. **Writer:** natural spoken explainer SRT only; tokens scale from 2048 to 4096 with duration,
+     temperature 0.65 first, 0.4 on retries. `keywordOverlapInstructions()` computes concrete
+     shared-use guidance, including **zero additional standalone uses** for a short already
+     supplied twice by the two long-tail occurrences. Title/headings steer structure but are
+     not read verbatim. The subtitle line-length target is prompt guidance, not a validator cap.
+     - Server re-checks SRT and **measured** keyword totals after each response. Retry coaching
+       includes the preceding valid SRT, each keyword's count/cues and exact add/remove delta;
+       extra standalone short uses should be removed without deleting correct long-tail phrases.
+     - Three rejected scripts → `500 "Script output invalid (<reason>) - try again"`.
+- **Matching and SRT invariants:** `keywordCount()` uses Unicode letter/number boundaries,
+  escaped literal symbols, typography normalization and equivalent whitespace/hyphen runs.
+  `café`, `c++`, `c#` and `.net` are supported; glued substrings such as `ai` in `said` do not
+  count. `srtSpokenText()` joins spoken lines/cues, so long phrases may span subtitle breaks.
+  - `validateSrt()` strips fences/control characters and leading/trailing model commentary,
+    preserves numeric dialogue, canonicalizes cue indexes and validates comma-millisecond
+    timestamps. Cue start < end, cues never overlap, and total duration is **10 seconds to
+    selected minutes × 60 seconds + 1.5 seconds**. These rules have not been relaxed.
+  - Keyword audits require the long-tail count and every short count to be **exactly two**;
+    title/headings, cue numbers and timestamps are not included. First-violation errors still
+    name the role, phrase, measured total and required total.
+- Success:
+  `{success:true,srt,title,headings,keywords:{longTail:{keyword,count,min:2,max:2},short:[{keyword,count,min:2,max:2}]},model}`.
+  Optional debug output carries the correlated request ID and planner/writer attempt traces.
+  Every successful count is measured, never substituted with the required value.
+  Each successful request uses at least two model calls, at most six with retries; live model
+  failures remain possible and are reported as errors, not silently replaced with unverified SRT.
 - Client side (`src/client/app-js.ts`, video accordion):
   - The SEO block is the **first** `.va-section` of `.va-left`, titled
     **"Generate SEO Script With AI"**, with the always-visible hint line
-    `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading`
+    `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule`
     and a matching button tooltip. See RULE 18 for the hint inventory.
   - The client still sends only `{topic, minutes, speed}`: the user never picks keywords, title or
     headings — the UI only reports the ones the model produced and the server verified.
@@ -604,60 +568,67 @@
 
 ---
 
-## RULE 13 — The template composer exposes two canvas-rendered galleries
+## RULE 13 — One scene gallery, shared Graphics elements, and a 5–7-image ring upload editor
 
-- Composer code executes in an IIFE so helpers cannot collide with studio globals; only
-  `window.openTemplateModal` and `window.closeTemplateModal` are exported. The shared composer is
-  `src/client/template-composer-js.ts`; Interactive scenes come from
-  `src/client/template-scene-editor.ts`, the ring from `src/client/template-ring-carousel.ts`,
-  bundled Reel backdrops from `src/client/reel-scene-assets.ts`, and Shape objects from
-  `src/client/template-shape-animations.ts`.
-- The modal has a **gallery** and an **editor**:
-  - **Gallery — exactly two tabs**, with **Interactive scenes selected every time the modal opens**:
-    - **Interactive scenes · 15**: the 14 Reel Editor designs (Kinetic Typography, Duotone,
-      Neon, Glitch Art and Vox Magazine) plus scene 15, **3D Ring Carousel**.
-    - **Shape animations · 13**: original MotionGenie objects 47–54 and 56–60. Object 55,
-      Confetti Burst Canvas, and every particle effect are deliberately excluded.
-    - The Motion tab and its cards are removed from the DOM when the Interactive module builds;
-      the detached preview list is cleared. Legacy drawing helpers in the composer are not a
-      user-facing template gallery.
-    - Both galleries preview through the same `drawScene()` path used by MP4 export.
-  - **Reel scene editor** — element tags are in the left preview column immediately below the
-    canvas. Clicking a tag or canvas object selects Background, Eyebrow, Headline, Sub text,
-    Graphic or an added element and swaps the inspector to its controls. Text, font, colour,
-    size, animation, transition, speed, alignment and X/Y position are editable; selected objects
-    can be dragged and deleted elements can be restored. **＋ Text** becomes **＋ Graphic** for a
-    selected graphic and clones its visual settings into a new tagged element. Compact colour
-    boxes contain 12 solid swatches, a custom colour and one row of four gradients (Sunset,
-    Ocean, Lime, Violet); gradient tokens become real canvas gradients in preview and export.
-  - **3D Ring Carousel editor** — one carousel tag, visibility, rotation speed (0–3×), radius
-    (55–145%), card size (50–150%), 3D tilt (-30°–30°), X/Y and reset. The ring has eight cards,
-    a default 380-unit radius, 240×344 base cards, 1200-unit perspective and -6° tilt; rotation
-    is time-based (21°/second at 1×) and cards are depth-sorted before drawing.
-    - Only the ring from the uploaded `editorial_magazine_experience.html` is ported. Its 3D
-      flip book, Web Audio, ambient particles, sound controls, external UI libraries/fonts and
-      magazine page chrome are outside this scene.
-    - The eight editorial URLs load with `crossOrigin="anonymous"`; loading settles on load,
-      error or an 8-second fallback timeout. Failed/unloaded images use deterministic illustrated
-      fallbacks, so a remote failure never rejects or indefinitely stalls export. CORS-enabled
-      images keep the export canvas origin-clean.
-  - **Shape animation editor** — object, main/accent/background colour, size (12–70% of the
-    shorter canvas side), speed (0.25–2.5×), X/Y and reset. Every object is deterministic canvas
-    geometry, not a DOM/CSS-only animation or particle system.
-  - Format stays portrait 9:16 (1080×1920) or landscape 16:9 (1920×1080); length is **1–25 s**
-    (`TPL_MAX_DURATION = 25`, default 6, clamped).
-- Both footer actions render the SAME canvas engine as the preview — WebCodecs `VideoEncoder`
-  `avc1.4d002a`, `TPL_FPS = 30`, `TPL_VIDEO_BITRATE = 6 000 000`, muxed with `mp4-muxer`, no
-  FFmpeg and **no screen capture**. **Download MP4** is the only download action; there is no
-  persistent re-download link. Missing `VideoEncoder` or `Mp4Muxer` alerts and aborts.
-- **Add to Video N** calls the same renderer with `{download:false}`, skips the anchor click,
-  probes and appends the new MP4 directly to the target accordion as a normal asset. It needs no
-  earlier manual export, never downloads and obeys the 5-clip cap.
-- The modal is built once and reused: closing hides it, so per-scene/per-object state survives;
-  the accordion link retargets it at another Video N. The clip is silent; add audio in the
-  accordion's normal audio control.
-
----
+- The composer remains an isolated IIFE; only `window.openTemplateModal` and
+  `window.closeTemplateModal` are public. The same deterministic canvas engine powers preview
+  and MP4 export. See `new_requirements.md` §6 for individual requirements and acceptance tests.
+- **Gallery:** one **Interactive scenes · 15** grid, with the 14 Reel designs plus scene 15,
+  **3D Ring Carousel**. No Motion or Graphics/Shape-animation tab, cards, grid or standalone
+  shape editor remains in the DOM. There is no "Scenes · 15 editable designs" accordion or
+  `tm-scene-list` in any template configuration; **← Templates** returns to the gallery.
+- **Text and graphic elements (the 14 Reel templates):**
+  - Tags below the preview select elements; canvas click selects the frontmost visible object,
+    and dragging moves it. Text, font, colour, alignment, size, speed, animation, transition,
+    visibility/deletion/restoration and X/Y remain editable. **＋ Text** changes to **＋ Graphic**
+    when a graphic is selected and adds an offset clone of its graphic settings.
+  - **+ Front layer** / **- Back Layer** move one element **one step** forward/backward.
+    Buttons disable at the ends; deleted objects are skipped. `reelElementKeys()` supplies
+    the same saved order to the tag list, renderer and hit-testing; new objects append on top.
+    Background is not a reorderable element and always stays behind them. The gear's hole
+    uses even-odd fill rather than erasing lower layers.
+  - **Rotate degrees:** **0–360°, 1° steps**, saved per element, with a live readout. Static
+    rotation combines with entry/loop animations and redraws even while paused. Hit rectangles
+    are transformed with the canvas matrix; inverse-transform hit tests follow rotated objects.
+    Exactly the same rotation/order is used for MP4 frames, not a CSS-only effect.
+  - Compact colour boxes retain 12 solids, custom colour and four gradients. Animated geometry
+    uses solid main/accent colours from that palette (gradient tokens resolve to a solid stop
+    for the geometry's own multi-colour fills).
+- **Graphics dropdown:** 22 choices — the nine original stickers/shapes plus all 13 non-particle
+  MotionGenie objects (47–54 and 56–60): Morphing SVG Blob, Rotating 3D Box, Pulsing Ripple Ring,
+  Floating Glass Card, Orbiting Satellite, DNA Helix Pulse, Infinite Tunnel Zoom, Kaleidoscope
+  Spinner, Elastic Bounce Ball, Audio Equalizer Bars, Diamond Crystal Spin, Neon Laser Beam,
+  Shimmer Spinner Ring. Confetti Burst Canvas and all particle effects remain excluded.
+  - `REEL_GRAPHIC_OBJECTS` registers these as `motion:<kind>` scene graphics. They have
+    main/accent colours, size (20–480 base pixels, default 240 on selection), speed, X/Y,
+    rotation, layer order, visibility, add/clone and delete controls; no separate background
+    picker or independent export engine is created. Original shapes keep a 20–160 size range.
+- **3D Ring Video Template (gallery name: 3D Ring Carousel):**
+  - One carousel object with visibility, automatic rotation speed (0–3×), radius (55–145%),
+    card size (50–150%), 3D tilt (-30°–30°), whole-ring rotation (0–360°), X/Y and reset.
+    Cards remain perspective/depth sorted (380-unit base radius, 240×344 base cards,
+    1200-unit perspective, -6° tilt, 21°/second spin at 1×).
+  - A **Ring images** accordion is the **last control section**, shown only on this template.
+    Choose **5–7 image files together** to replace the complete set. Both count boundaries
+    and successful decoding are required. Reject invalid counts, non-images and corrupt batches
+    inline; keep the previous set intact. There is no silent truncation or partial replacement.
+  - Display thumbnails, names and count. Removal works only above five; reset keeps images.
+    Replacement/removal revokes unused object URLs; superseded decodes cannot overwrite newer
+    files. A decode finishing after a template switch cannot show ring controls on that template.
+  - Preview and export use the actual uploaded count/images. Download/Add stay disabled until
+    5–7 images are decoded, and during upload/export. Upload changes are blocked during render.
+    Six bundled mood images provide preview-only samples; there are no remote ring-photo URLs.
+    Uploads are browser-session-only, separate from the normal two background photos.
+  - Only the reference's ring is ported; flip book, audio, ambient particles, page chrome and
+    external UI dependencies are not. Its cards are one carousel, not independent text layers.
+- **Export:** portrait 1080×1920 or landscape 1920×1080; **1–25 seconds**, default 6.
+  WebCodecs H.264 `avc1.4d002a`, 30 fps, 6 Mbps and in-memory `mp4-muxer`, no capture/FFmpeg.
+  Download MP4 is the only download action. Add to Video renders the same frames without an
+  anchor download, probes the MP4 and inserts it into the target accordion (normal five-clip cap).
+  Closing/reopening reuses scene state in memory; reload discards it. Clips are silent.
+- Modules: `template-composer-js.ts` (modal/export), `template-scene-editor.ts` (elements/order/
+  transforms/Graphics registry), `template-ring-carousel.ts` (ring/uploads),
+  `template-shape-animations.ts` (13 object renderers), `reel-scene-assets.ts` (bundled samples).
 
 ---
 
@@ -773,7 +744,8 @@
   `class="…note…"` / `class="…hint…"` / `class="…tip…"` in the three template literals that become
   the page — `src/client/app-js.ts` (`APP_JS`), `src/client/markup.ts` (`PAGE_MARKUP`) and
   `src/client/template-composer-js.ts` (`TEMPLATE_COMPOSER_JS`).
-- Counts, re-measured on the two served pages on 2026-10-23 (after Bug Fix Session #240):
+- Historical counts, measured on the two served pages on 2026-10-23 after Bug Fix Session #240
+  **before** the current dynamic template controls (those additions are documented in RULE 13):
   **22 tooltips · 7 placeholders · 35 `alert()` call sites** (33 in the studio script: 27
   `app-js.ts` + 6 `template-composer-js.ts`; 2 in the settings script) **· 17 note/hint/tip class
   usages** in the page markup (13 of them predate Bug Fix Session #206) plus **7 notes/status
@@ -797,9 +769,9 @@
 
 | Hint text (abridged) | Where it lives | Mirrors |
 | --- | --- | --- |
-| `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading` | video accordion, SEO section (`.va-note`, always visible) | `SEO_LONG_TAIL = 1`, `SEO_SHORT_TOTAL = 4`, `SEO_LONG_FREQ_MIN/MAX = SEO_SHORT_FREQ_MIN/MAX = 2` (RULE 7) |
-| `AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
-| `Long-tail keyword — must be said exactly 2×` · `Short keyword — must be said exactly 2×; one short keyword is in the title and one in a heading` · `Explainer title — includes at least one short keyword` · `Section heading — at least one heading includes a short keyword` | SEO plan chips, `renderSeoKeywords()` tooltips | `SEO_LONG_FREQ_MIN/MAX = 2`, `SEO_SHORT_FREQ_MIN/MAX = 2`, title/heading inclusion rules (RULE 7) |
+| `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` | video accordion, SEO section (`.va-note`, always visible) | `SEO_LONG_TAIL = 1`, `SEO_SHORT_TOTAL = 4`, `SEO_LONG_FREQ_MIN/MAX = SEO_SHORT_FREQ_MIN/MAX = 2` (RULE 7) |
+| `AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
+| `Long-tail keyword — must be said exactly 2×` · `Short keyword — must be said exactly 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading` · `Explainer title — includes at least one short keyword` · `Section heading — at least one heading includes a short keyword` | SEO plan chips, `renderSeoKeywords()` tooltips | `SEO_LONG_FREQ_MIN/MAX = 2`, `SEO_SHORT_FREQ_MIN/MAX = 2`, title/heading inclusion rules (RULE 7) |
 | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)` | video accordion, media section (`.va-note`) | `MAX_GIF_UPLOADS = 5`, `MAX_IMAGE_UPLOADS = 25`, `MAX_MP4_UPLOADS = 5`, `MP4_MAX_DURATION_S = 60` |
 | `2 images per submit · 480px landscape` | video accordion, AI images section (`.va-note`, doubles as the status line) | the route always asks SDXL for 2 images; **the 480 is not enforced anywhere** (bug-audit #16) |
 | `Add a video (up to 10)` | `+ Add Video` button tooltip | `VIDEO_MAX_VIDEOS = 10` |
@@ -811,6 +783,9 @@
 | `Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles` | **🎙 Generate Voiceover** tooltip | the two modal actions (voiceover + subtitles toggle) |
 | `Send all of this video's elements to the render API` | **☁️ API** tooltip | the `/api/render` payload (RULE 4) |
 | `Compose a portrait or landscape MP4 (max 25 seconds) from a design template …` | `Add video from template` tooltip | the composer caps 1-25 s (RULE 13) |
+| `+ Front layer` / `- Back Layer` · `Layer N of M` | text/graphic inspector | one-step saved paint order; disabled at boundaries (RULE 13) |
+| `Rotate degrees` + live `N°` readout | text/graphic and ring inspectors | 0–360°, 1° steps; real canvas rotation (RULE 13) |
+| `Ring images · N / 7 (min 5)` / `Choose 5–7 images together …` | bottom ring-image accordion and inline upload status | 5–7 decodable images, atomic replacement, same cards in preview/export (RULE 13) |
 | `Tip: each template is a looping motion design … The clip is silent …` (motion editor) / `Scene text, stickers and animated backgrounds are rendered into the exported clip …` (Reel scene editor) | composer panel (`.tpl-tips`, changes with editor mode) | the active editor controls + the silent-clip rule (RULE 13) |
 | `Theme for the studio page — every visitor sees it. Aerial and Stellar follow the HTML5UP designs of the same name; Night Lab, Warm Paper, Swiss and Neo Brutalist are the studio's own skins.` | settings page, Appearance group (`.cfg-note`) | RULE 19 (seven skins, global setting) |
 | `Built-in dark studio (default)` · `Blue sky, mountains, white accents` · `Violet gradient, frosted panels` · `Charcoal lab, lime accent` · `Warm light paper, coral accent` · `Clean white, electric blue` · `Cream, hard black lines, lime` | theme cards (`.cfg-theme-sub`) | what each skin in `CONFIG_THEMES` looks like |
@@ -977,8 +952,8 @@
 - `html[data-theme="neo"] #video-accordions .video-accordion button` sets `border-radius: 0`,
   including API, disclosure, card-remove and caption-remove controls. Other themes keep their
   existing radius tokens.
-- The composer gains the 13-object, non-particle Shape animations gallery described in RULE 13;
-  it adds no new export path, server route, persisted state or particle engine.
+- The 13 non-particle animated objects are now scene elements in the **Graphics** dropdown
+  (RULE 13), not a separate gallery. They add no server route, persisted state or particle engine.
 
 ---
 

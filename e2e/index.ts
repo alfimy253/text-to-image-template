@@ -14,7 +14,7 @@ function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 					"Choosing Your Key Light Position",
 					"Dialing In Color Balance Fast"
 				],
-				longTail: "home video studio setup",
+				longTail: "home video studio setup with a key light for beginners",
 				short: [
 					"key light",
 					"soft shadow",
@@ -29,15 +29,15 @@ function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 	const cues = [
 		[
 			"00:00:00,000 --> 00:00:04,000",
-			"Building a home video studio setup is easier than you think."
+			"A home video studio setup with a key light for beginners is easy."
 		],
 		[
 			"00:00:04,000 --> 00:00:08,000",
-			"Place your key light slightly above eye level first."
+			"Place the lamp slightly above eye level first."
 		],
 		[
 			"00:00:08,000 --> 00:00:12,000",
-			"Angle that key light forty five degrees for depth."
+			"Angle the lamp forty five degrees for depth."
 		],
 		[
 			"00:00:12,000 --> 00:00:16,000",
@@ -65,7 +65,7 @@ function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 		],
 		[
 			"00:00:36,000 --> 00:00:40,000",
-			"Now your home video studio setup is ready to record."
+			"Your home video studio setup with a key light for beginners is ready."
 		]
 	];
 
