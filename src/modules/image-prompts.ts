@@ -1,38 +1,27 @@
 /*
- * AI image-prompt jobs (`src/modules/image-prompts.ts`)
+ * AI image-prompt generation (`src/modules/image-prompts.ts`)
  *
- * Implements the dynamic image-prompt URL used by the video accordion's
- * SEO walkthrough:
+ *   POST /api/image-prompts
+ *     {topic, minutes, style, script|scriptIdea, keywordSet}
+ *     -> 200 {success, prompts: string[], count, expectedCount, style, minutes}
  *
- *   POST   /api/image-prompts        create a job -> {id, url, prompts: []}
- *   GET    /api/image-prompts/<id>   poll -> {status, prompts: []} while the
- *                                    LLM is still working, then the full set
- *   DELETE /api/image-prompts/<id>   destroy the URL once every generated
- *                                    image has landed in the gallery
+ * The route is SYNCHRONOUS: the instruct model runs inside the request and the
+ * finished, styled prompt list is the response body. There is no job id, no
+ * background `waitUntil` work, no KV job record and no poll URL, so the
+ * browser can never be left waiting on a job that was already destroyed by
+ * the runtime.
  *
- * Creation returns immediately with an empty prompt list. The actual LLM
- * call runs in the background (`ctx.waitUntil` when the worker runtime
- * provides it, otherwise a fire-and-forget promise inside the isolate) and
- * writes the finished prompts back to the same job record, so a poll that
- * arrives early simply sees `prompts: []` / `status: "pending"`.
+ * Prompt counts by script length (chosen by the client before the walkthrough,
+ * defaults to 1 minute):
+ *   1 minute -> 10 prompts, 2-3 minutes -> 14 prompts, 4-6 minutes -> 20 prompts
  *
- * Job records live in KV (`image-prompts:<id>`, 1 h TTL) when the
- * KV_BINDING namespace is bound, matching every other job/blob store in
- * this worker. Without KV (local tests / e2e fixture, which call
- * `worker.fetch(request, env)` with no binding) an in-isolate Map is used
- * so the same routes keep working; records there live only as long as the
- * isolate does, which is all a single polling browser session needs.
- *
- * Prompt counts by script length (the script length is chosen by the
- * client before the topic is submitted; it defaults to 1 minute):
- *   1 minute -> 10 prompts, 2-3 minutes -> 14 prompts,
- *   4-6 minutes -> 20 prompts.
+ * The model is asked for exactly that many broad, representative scenes. The
+ * count is a target, not a contract: if the model answers short, the missing
+ * scenes are requested again; if it still answers short, the prompts it did
+ * produce are used (a 12-of-14 batch is far better than "not working").
  */
 
-import { aiText } from "./script-seo";
-
-export const IMAGE_PROMPTS_KV_PREFIX = "image-prompts:";
-export const IMAGE_PROMPT_JOB_TTL_SECONDS = 3600;
+import { IMAGE_PROMPT_TIMEOUT_MS } from "./image-batch";
 
 export const IMAGE_STYLES = [
 	"Cinematic Film",
@@ -63,7 +52,7 @@ export const IMAGE_STYLE_GUIDANCE: Record<ImageStyle, string> = {
 	"Pop Comic": "pop-comic illustration, bold ink contours, vibrant halftone accents, punchy saturated colors and dynamic action; no lettering or speech bubbles"
 };
 
-export interface ImagePromptJobInput {
+export interface ImagePromptInput {
 	topic: string;
 	minutes: number;
 	style: string;
@@ -72,25 +61,8 @@ export interface ImagePromptJobInput {
 	keywordSet?: { longTail?: string; short?: string[]; title?: string } | null;
 }
 
-export interface ImagePromptJob {
-	id: string;
-	status: "pending" | "ready" | "error";
-	prompts: string[];
-	expectedCount: number;
-	topic: string;
-	minutes: number;
-	style: string;
-	createdAt: number;
-	error?: string;
-}
-
 type AiEnv = {
 	AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> };
-	KV_BINDING?: {
-		get: (key: string) => Promise<string | null>;
-		put: (key: string, value: string, options?: Record<string, unknown>) => Promise<void>;
-		delete: (key: string) => Promise<void>;
-	};
 };
 
 export function imagePromptCountForMinutes(minutes: number): number {
@@ -152,8 +124,10 @@ export function summarizeScriptIdea(script: string, topic = "my video"): string 
  * two representative sentences from the SRT, not the full transcript, to
  * keep Workers AI input tokens and per-request work bounded.
  */
-export function buildImagePromptInstruction(input: ImagePromptJobInput): string {
-	const count = imagePromptCountForMinutes(input.minutes);
+export function buildImagePromptInstruction(
+	input: ImagePromptInput,
+	count = imagePromptCountForMinutes(input.minutes)
+): string {
 	const style = normalizeImageStyle(input.style) || DEFAULT_IMAGE_STYLE;
 	const styleGuide = IMAGE_STYLE_GUIDANCE[style];
 	const topic = String(input.topic || "my video").replace(/\s+/g, " ").trim().slice(0, 160) || "my video";
@@ -246,95 +220,96 @@ export function parseImagePrompts(text: string, expectedCount: number): string[]
 	return prompts;
 }
 
+/* `env.AI.run()` text models answer `{response}`; tolerate a plain string. */
+function aiText(result: unknown): string {
+	if (!result) return "";
+	if (typeof result === "string") return result;
+	const value = result as { response?: unknown };
+	if (typeof value.response === "string") return value.response;
+	return "";
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			reject(new Error(label + " timed out after " + Math.round(ms / 1000) + " s"));
+		}, ms);
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error) => {
+				clearTimeout(timer);
+				reject(error);
+			}
+		);
+	});
+}
+
+function errorMessage(error: unknown): string {
+	if (error instanceof Error && error.message) return error.message;
+	return String(error || "Image prompt generation failed");
+}
+
 /*
- * Runs the instruct model until it returns exactly `expectedCount` usable
- * prompts (max 3 attempts; a short reply is retried with the deficit
- * spelled out, an over-long reply is truncated by parseImagePrompts).
+ * Runs the instruct model until the target count is reached or the model has
+ * nothing more to add. Each retry only asks for the scenes that are still
+ * missing, so a short first answer does not restart the whole batch.
  */
 export async function generateImagePrompts(
 	env: AiEnv,
 	model: string,
-	input: ImagePromptJobInput
+	input: ImagePromptInput
 ): Promise<string[]> {
 	const expectedCount = imagePromptCountForMinutes(input.minutes);
-	const basePrompt = buildImagePromptInstruction(input);
-	let lastCount = 0;
-	for (let attempt = 1; attempt <= 3; attempt++) {
-		const prompt =
-			basePrompt +
-			(attempt > 1
-				? " Your previous attempt returned " + lastCount + " usable image prompt(s); return exactly " + expectedCount + " prompts this time."
-				: "");
-		const result = await env.AI!.run(model, {
-			prompt,
-			max_tokens: Math.min(3072, Math.max(1024, expectedCount * 100)),
-			temperature: attempt === 1 ? 0.65 : 0.45
-		});
-		const prompts = parseImagePrompts(aiText(result), expectedCount);
-		lastCount = prompts.length;
-		if (prompts.length >= expectedCount) {
-			return applyImageStyleToPrompts(prompts.slice(0, expectedCount), input.style);
+	const collected: string[] = [];
+	let lastError = "";
+
+	for (let attempt = 1; attempt <= 3 && collected.length < expectedCount; attempt++) {
+		const missing = expectedCount - collected.length;
+		let prompt = buildImagePromptInstruction(input, missing);
+		if (collected.length) {
+			prompt +=
+				" The sequence already has these prompts, do not repeat them: " +
+				collected.slice(-4).join(" | ") +
+				" Continue the sequence with exactly " + missing + " new prompts.";
 		}
-		if (attempt === 3 && prompts.length > 0) {
-			throw new Error(
-				"Image prompts incomplete (" + prompts.length + " of " + expectedCount + ") - try again"
-			);
-		}
-	}
-	throw new Error("Image prompts could not be generated - try again");
-}
-
-/* --- job store (KV when bound, in-isolate Map otherwise) ---------------- */
-
-const memoryJobs = new Map<string, ImagePromptJob>();
-
-async function putJob(env: AiEnv, job: ImagePromptJob): Promise<void> {
-	if (env && env.KV_BINDING) {
-		await env.KV_BINDING.put(IMAGE_PROMPTS_KV_PREFIX + job.id, JSON.stringify(job), {
-			expirationTtl: IMAGE_PROMPT_JOB_TTL_SECONDS
-		});
-		return;
-	}
-	memoryJobs.set(job.id, job);
-}
-
-async function readJob(env: AiEnv, id: string): Promise<ImagePromptJob | null> {
-	if (env && env.KV_BINDING) {
-		const raw = await env.KV_BINDING.get(IMAGE_PROMPTS_KV_PREFIX + id);
-		if (!raw) return null;
 		try {
-			return JSON.parse(raw) as ImagePromptJob;
-		} catch {
-			return null;
+			const result = await withTimeout(
+				env.AI!.run(model, {
+					prompt,
+					max_tokens: Math.min(3072, Math.max(512, missing * 90)),
+					temperature: attempt === 1 ? 0.65 : 0.45
+				}),
+				IMAGE_PROMPT_TIMEOUT_MS,
+				"Image prompt generation"
+			);
+			const parsed = parseImagePrompts(aiText(result), missing);
+			for (const entry of parsed) {
+				if (collected.indexOf(entry) === -1) collected.push(entry);
+			}
+		} catch (error) {
+			lastError = errorMessage(error);
 		}
 	}
-	return memoryJobs.get(id) || null;
-}
 
-async function deleteJob(env: AiEnv, id: string): Promise<void> {
-	if (env && env.KV_BINDING) {
-		await env.KV_BINDING.delete(IMAGE_PROMPTS_KV_PREFIX + id);
-		return;
+	if (!collected.length) {
+		throw new Error(
+			"Image prompts could not be generated" + (lastError ? " (" + lastError + ")" : "")
+		);
 	}
-	memoryJobs.delete(id);
+	return applyImageStyleToPrompts(collected.slice(0, expectedCount), input.style);
 }
 
-function jobJson(data: unknown, status = 200): Response {
+function json(data: unknown, status = 200): Response {
 	return new Response(JSON.stringify(data), {
 		status,
 		headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 	});
 }
 
-function makeJobId(): string {
-	if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-		return crypto.randomUUID();
-	}
-	const bytes = crypto.getRandomValues(new Uint8Array(16));
-	return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function sanitizeJobInput(body: Record<string, unknown>): ImagePromptJobInput | { error: string } {
+function sanitizeInput(body: Record<string, unknown>): ImagePromptInput | { error: string } {
 	const topic = String(body.topic ?? "")
 		.replace(/[\u0000-\u001F]+/g, " ")
 		.replace(/\s+/g, " ")
@@ -363,112 +338,80 @@ function sanitizeJobInput(body: Record<string, unknown>): ImagePromptJobInput | 
 	const scriptIdea = summarizeScriptIdea(rawIdea, topic);
 	const keywordSet =
 		body.keywordSet && typeof body.keywordSet === "object" && !Array.isArray(body.keywordSet)
-			? (body.keywordSet as ImagePromptJobInput["keywordSet"])
+			? (body.keywordSet as ImagePromptInput["keywordSet"])
 			: null;
 	return { topic, minutes, style, scriptIdea, keywordSet };
 }
 
 /*
- * POST /api/image-prompts — validates, stores a `pending` job with an
- * empty prompt array, schedules the LLM work in the background and
- * answers 202 with the dynamic poll URL right away.
+ * POST /api/image-prompts — validates, asks the instruct model for the scene
+ * prompts and answers with the finished list. One request, one response.
  */
-export async function handleCreateImagePromptJob(
+export async function handleGenerateImagePrompts(
 	request: Request,
 	env: AiEnv,
-	ctx: { waitUntil?: (promise: Promise<unknown>) => void } | undefined,
 	model: string
 ): Promise<Response> {
 	const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
 	if (!env || !env.AI) {
-		return jobJson({ success: false, error: "AI binding not configured", prompts: [] }, 503);
+		return json({ success: false, error: "AI binding not configured", prompts: [] }, 503);
 	}
-	const input = sanitizeJobInput(body);
+	const input = sanitizeInput(body);
 	if ("error" in input) {
-		return jobJson({ success: false, error: input.error, prompts: [] }, 400);
+		return json({ success: false, error: input.error, prompts: [] }, 400);
 	}
-	const job: ImagePromptJob = {
-		id: makeJobId(),
-		status: "pending",
-		prompts: [],
-		expectedCount: imagePromptCountForMinutes(input.minutes),
-		topic: input.topic,
-		minutes: input.minutes,
-		style: input.style,
-		createdAt: Date.now()
-	};
-	await putJob(env, job);
-	const workStartedAt = Date.now();
+
+	const startedAt = Date.now();
+	const expectedCount = imagePromptCountForMinutes(input.minutes);
 	console.info("[image-prompts] started", {
-		id: job.id,
 		model,
 		minutes: input.minutes,
-		expectedCount: job.expectedCount,
+		expectedCount,
 		style: input.style,
 		topicChars: input.topic.length,
 		scriptIdeaChars: (input.scriptIdea || "").length
 	});
-	const work = (async () => {
-		try {
-			const prompts = await generateImagePrompts(env, model, input);
-			await putJob(env, { ...job, status: "ready", prompts });
-			console.info("[image-prompts] ready", {
-				id: job.id,
-				count: prompts.length,
-				ms: Date.now() - workStartedAt
-			});
-		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err || "Image prompt generation failed");
-			await putJob(env, { ...job, status: "error", prompts: [], error: message }).catch(() => {});
-			console.error("[image-prompts] failed", {
-				id: job.id,
-				ms: Date.now() - workStartedAt,
-				error: message
-			});
-		}
-	})();
-	if (ctx && typeof ctx.waitUntil === "function") {
-		ctx.waitUntil(work);
-	}
-	/* No execution context (tests, e2e): the promise keeps running in the
-	 * isolate and the client's 30 s poll sees the finished record. */
-	return jobJson(
-		{
+
+	try {
+		const prompts = await generateImagePrompts(env, model, input);
+		console.info("[image-prompts] ready", {
+			count: prompts.length,
+			expectedCount,
+			ms: Date.now() - startedAt
+		});
+		return json({
 			success: true,
-			id: job.id,
-			url: "/api/image-prompts/" + job.id,
-			status: job.status,
-			prompts: [] as string[],
-			expectedCount: job.expectedCount,
-			style: job.style,
-			minutes: job.minutes
-		},
-		202
-	);
-}
-
-/* GET /api/image-prompts/<id> — the poll target. Pending jobs answer an
- * empty prompt array; destroyed/unknown ids answer 404. */
-export async function handleGetImagePromptJob(env: AiEnv, id: string): Promise<Response> {
-	const job = await readJob(env, id);
-	if (!job) {
-		return jobJson({ success: false, error: "Image prompt URL not found or already destroyed", prompts: [] }, 404);
+			prompts,
+			count: prompts.length,
+			expectedCount,
+			style: input.style,
+			minutes: input.minutes,
+			model,
+			ms: Date.now() - startedAt
+		});
+	} catch (error) {
+		const message = errorMessage(error);
+		console.error("[image-prompts] failed", {
+			ms: Date.now() - startedAt,
+			error: message
+		});
+		return json({ success: false, error: message, prompts: [] }, 502);
 	}
-	return jobJson({
-		success: true,
-		id: job.id,
-		status: job.status,
-		prompts: job.status === "ready" ? job.prompts : [],
-		expectedCount: job.expectedCount,
-		style: job.style,
-		minutes: job.minutes,
-		...(job.status === "error" ? { error: job.error || "Image prompt generation failed" } : {})
-	});
 }
 
-/* DELETE /api/image-prompts/<id> — destroys the dynamic URL. Idempotent:
- * deleting an already-destroyed URL still succeeds. */
-export async function handleDestroyImagePromptJob(env: AiEnv, id: string): Promise<Response> {
-	await deleteJob(env, id);
-	return jobJson({ success: true, id, destroyed: true, prompts: [] });
+/*
+ * The dynamic poll URL is gone. Any stale browser tab that still holds one
+ * gets a clear answer instead of a confusing 405.
+ */
+export function handleRemovedImagePromptJobRoute(id: string): Response {
+	return json(
+		{
+			success: false,
+			error:
+				"The image-prompt poll URL has been removed. POST /api/image-prompts now returns the prompts directly.",
+			prompts: [],
+			id
+		},
+		410
+	);
 }

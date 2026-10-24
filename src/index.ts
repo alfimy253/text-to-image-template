@@ -30,10 +30,10 @@ import {
 } from "./modules/user-pages";
 import { handleSeoScriptGeneration, handleSeoPlanGeneration } from "./modules/script-seo";
 import {
-	handleCreateImagePromptJob,
-	handleDestroyImagePromptJob,
-	handleGetImagePromptJob
+	handleGenerateImagePrompts,
+	handleRemovedImagePromptJobRoute
 } from "./modules/image-prompts";
+import { handleImageBatch, runImageModel } from "./modules/image-batch";
 
 /*
  * =============================================================
@@ -367,10 +367,13 @@ export default {
 
 
 		// =====================================================
-		// AI IMAGE GENERATION - custom prompt
-		// (per-accordion AI panel, right 40%)
+		// AI IMAGE GENERATION - single image (accordion AI panel)
 		// GET /image/gen?prompt=...&variant=1|2
-		// (displayed as 480px landscape on the client)
+		//
+		// One HTTP response is one image, so one credit. The
+		// counter is taken before the model runs and refunded if
+		// the model fails, so a failed call never costs the user
+		// an image. The batch route below shares the same gate.
 		// =====================================================
 
 		if (
@@ -395,207 +398,102 @@ export default {
 				);
 			}
 
-			/*
-			 * Daily image credits. This is the only metered
-			 * generation route: the two fixed demo prompts on
-			 * /image/:i are samples and stay unmetered.
-			 *
-			 * One HTTP response is one image, so one credit.
-			 * The counter is taken before the model runs and
-			 * refunded if the model fails, so a failed call
-			 * never costs the user an image.
-			 *
-			 * When the KV binding is missing the app runs in
-			 * its open-access mode and generation stays free.
-			 */
-			let creditUser: any =
-				null;
+			const credits =
+				await imageCreditHooks(
+					request,
+					env
+				);
 
-			let creditGuest: any =
-				null;
+			if (credits.blocked) {
 
-			let creditGate: any =
-				null;
-
-			if (
-				env &&
-				env.KV_BINDING
-			) {
-
-				try {
-
-					creditUser =
-						await creditSessionUser(
-							request,
-							env
-						);
-
-					if (creditUser) {
-
-						creditGate =
-							await creditConsume(
-								env,
-								creditUser.username,
-								creditUser.usertype,
-								"images"
-							);
-
-					}
-					else if (
-						hasFreemiumCookie(
-							request
-						)
-					) {
-
-						/*
-						 * No account, but this browser
-						 * came through /free: spend from
-						 * the IP-keyed guest allowance.
-						 */
-						creditGuest =
-							await guestCreditIdentity(
-								request
-							);
-
-						creditGate =
-							await guestCreditConsume(
-								env,
-								creditGuest,
-								"images"
-							);
-
-					}
-					else {
-
-						return json(
-							{
-								success: false,
-								authenticated: false,
-								error:
-									"Sign in to generate AI images \u2014 every free account gets 50 images per day. No account? Open /free for 10 images per day."
-							},
-							401
-						);
-
-					}
-
-				}
-				catch (creditError) {
-
-					/*
-					 * A credits outage must not take image
-					 * generation down with it.
-					 */
-					creditUser = null;
-					creditGuest = null;
-					creditGate = null;
-
-				}
+				return credits.blocked;
 
 			}
 
+			const gate =
+				credits.open
+					? null
+					: await credits.consume(1);
+
 			if (
-				creditGate &&
-				!creditGate.allowed
+				gate &&
+				!gate.allowed
 			) {
 
 				return json(
 					{
 						success: false,
 						error:
-							"Daily image credits used up (" +
-							creditGate.plan.limits.images +
-							" images/day on the " +
-							creditGate.plan.label +
-							" plan). Credits renew at midnight (UTC+8)." +
-							(creditGuest
-								? " Create a free account for 50 images per day."
-								: ""),
+							creditExhaustedMessage(
+								credits.plan,
+								credits.scope === "ip"
+							),
 						credits:
-							creditGate.summary
+							gate.summary
 					},
 					429
 				);
 
 			}
 
-			/*
-			 * The X-Credit-* response headers let the studio
-			 * update its credits pill without a second fetch.
-			 */
 			const imageHeaders: any = {
-				"Content-Type":
-					"image/png",
+
 				"Cache-Control":
 					"no-store",
+
 				"X-Image-Variant":
 					variant
 			};
 
-			if (
-				creditGate &&
-				creditGate.allowed
-			) {
+			if (gate && gate.allowed) {
 
-				imageHeaders["X-Credit-Plan"] =
-					creditGate.plan.id;
-
-				imageHeaders["X-Credit-Images-Limit"] =
-					String(
-						creditGate.plan.limits.images
-					);
-
-				imageHeaders["X-Credit-Images-Remaining"] =
-					String(
-						creditGate.summary.remaining.images
-					);
-
-				imageHeaders["X-Credit-Day"] =
-					creditGate.summary.day;
-
-				imageHeaders["X-Credit-Reset"] =
-					creditGate.summary.resetsAt;
-
-				imageHeaders["X-Credit-Scope"] =
-					creditGuest
-						? "ip"
-						: "account";
+				Object.assign(
+					imageHeaders,
+					creditResponseHeaders(
+						gate.summary,
+						credits
+					)
+				);
 
 			}
 
-			const imageStartedAt = Date.now();
+			const imageStartedAt =
+				Date.now();
+
 			console.info("[image-gen] request", {
 				variant,
 				promptChars: prompt.length,
-				plan: creditGate && creditGate.plan ? creditGate.plan.id : "open"
+				plan: gate && gate.summary ? gate.summary.usertype : "open"
 			});
 
 			try {
 
-				const result =
-					await env.AI.run(
-						MODEL,
-						{
-							prompt:
-								prompt +
-								", 16:9 landscape, a completely text-free image"
-							,
-							negative_prompt:
-								"text, words, letters, writing, script, kanji, Chinese characters, Japanese characters, hiragana, katakana, CJK characters, subtitles, captions, signs, billboards, logos, watermarks, typography, numbers"
-						}
+				const image =
+					await runImageModel(
+						env,
+						prompt +
+							", 16:9 landscape, a completely text-free image"
 					);
 
 				console.info("[image-gen] success", {
 					variant,
 					promptChars: prompt.length,
+					bytes: image.bytes.length,
 					ms: Date.now() - imageStartedAt
 				});
+
 				return new Response(
-					result,
+					image.bytes,
 					{
 						status: 200,
 						headers:
-							imageHeaders
+							Object.assign(
+								{
+									"Content-Type":
+										image.mime
+								},
+								imageHeaders
+							)
 					}
 				);
 
@@ -606,51 +504,20 @@ export default {
 					variant,
 					promptChars: prompt.length,
 					ms: Date.now() - imageStartedAt,
-					error: error instanceof Error ? error.message : String(error)
+					error:
+						error instanceof Error
+							? error.message
+							: String(error)
 				});
 
 				/*
 				 * The model failed: give the credit back.
 				 */
-				if (
-					creditGate &&
-					creditGate.allowed &&
-					creditUser
-				) {
+				if (gate && gate.allowed) {
 
 					try {
 
-						await creditRefund(
-							env,
-							creditUser.username,
-							"images"
-						);
-
-					}
-					catch (refundError) {
-
-						/* best effort */
-
-					}
-
-				}
-				else if (
-					creditGate &&
-					creditGate.allowed &&
-					creditGuest
-				) {
-
-					try {
-
-						await creditRefundKey(
-							env,
-							creditGuest.key,
-							"images",
-							1,
-							guestCreditMeta(
-								creditGuest
-							)
-						);
+						await credits.refund(1);
 
 					}
 					catch (refundError) {
@@ -1080,25 +947,71 @@ export default {
 		}
 
 		/*
-		 * AI IMAGE-PROMPT JOBS (dynamic poll URL):
-		 *   POST   /api/image-prompts       create -> 202 {id, url, prompts: []}
-		 *   GET    /api/image-prompts/<id>  poll (empty array until ready)
-		 *   DELETE /api/image-prompts/<id>  destroy the URL
+		 * AI IMAGE PROMPTS + AI IMAGES (one request each, no polling):
+		 *   POST /api/image-prompts  -> {prompts: [...]} in the body
+		 *   POST /api/image-batch    -> application/x-ndjson stream of
+		 *                               {type:"image"} events, one per
+		 *                               rendered scene (see
+		 *                               src/modules/image-batch.ts)
 		 * The prompt count follows the script length (1 min -> 10,
-		 * 2-3 min -> 14, 4-5 min -> 20) and every prompt carries the
-		 * user-chosen video image style. Creation returns at once; the
-		 * instruct-model call finishes in the background (waitUntil).
+		 * 2-3 min -> 14, 4-6 min -> 20) and every prompt carries the
+		 * user-chosen video image style. The instruct model runs inside
+		 * the POST, so the browser never polls a background job; the old
+		 * /api/image-prompts/<id> job URL now answers 410 Gone.
 		 */
 		if (
 			request.method === "POST" &&
 			url.pathname === "/api/image-prompts"
 		) {
 
-			return handleCreateImagePromptJob(
+			return handleGenerateImagePrompts(
 				request,
 				env,
-				ctx,
 				SCRIPT_MODEL
+			);
+
+		}
+
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/image-batch"
+		) {
+
+			const imageCredits =
+				await imageCreditHooks(
+					request,
+					env
+				);
+
+			if (imageCredits.blocked) {
+
+				return imageCredits.blocked;
+
+			}
+
+			/*
+			 * Without a KV binding the app runs unmetered (open
+			 * access); otherwise every requested image costs one
+			 * credit up front and failures are refunded.
+			 */
+			return handleImageBatch(
+				request,
+				env,
+				imageCredits.open
+					? {
+						consume: async (amount: number) => ({
+							allowed: true,
+							granted: amount,
+							summary: null
+						}),
+						refund: async () => null
+					}
+					: {
+						consume: (amount: number) =>
+							imageCredits.consume(amount),
+						refund: (amount: number) =>
+							imageCredits.refund(amount)
+					}
 			);
 
 		}
@@ -1109,24 +1022,12 @@ export default {
 			);
 
 		if (
-			request.method === "GET" &&
-			imagePromptJobMatch
+			imagePromptJobMatch &&
+			(request.method === "GET" ||
+				request.method === "DELETE")
 		) {
 
-			return handleGetImagePromptJob(
-				env,
-				imagePromptJobMatch[1]
-			);
-
-		}
-
-		if (
-			request.method === "DELETE" &&
-			imagePromptJobMatch
-		) {
-
-			return handleDestroyImagePromptJob(
-				env,
+			return handleRemovedImagePromptJobRoute(
 				imagePromptJobMatch[1]
 			);
 
@@ -5135,6 +5036,322 @@ async function guestCreditConsume(
 			identity
 		)
 	);
+
+}
+
+
+/* ---- Image credit gate ---------------------------------------- *
+ *
+ * Shared by GET /image/gen (one image) and POST /api/image-batch
+ * (many images) so the two routes can never drift:
+ *
+ *   no KV binding   -> open access, unmetered (local/e2e mode)
+ *   signed in       -> the account's daily image allowance
+ *   yvs_free=1      -> the IP-keyed guest allowance (10/day)
+ *   anything else   -> 401 naming /free
+ *
+ * consume(amount) reserves up to `amount` images and reports how
+ * many were actually granted (a batch can start with fewer when the
+ * allowance runs out mid-way); refund(amount) returns credits for
+ * images that never rendered.
+ */
+
+function creditExhaustedMessage(
+	plan: any,
+	guest: boolean
+): string {
+
+	const limit =
+		plan && plan.limits
+			? plan.limits.images
+			: 0;
+
+	const label =
+		plan && plan.label
+			? plan.label
+			: "free";
+
+	return (
+		"Daily image credits used up (" +
+		limit +
+		" images/day on the " +
+		label +
+		" plan). Credits renew at midnight (UTC+8)." +
+		(guest
+			? " Create a free account for 50 images per day."
+			: "")
+	);
+
+}
+
+
+/*
+ * X-Credit-* headers let the studio refresh its credits pill
+ * without a second fetch.
+ */
+function creditResponseHeaders(
+	summary: any,
+	credits: any
+): any {
+
+	const headers: any =
+		{};
+
+	if (summary) {
+
+		if (summary.plan) {
+
+			headers["X-Credit-Plan"] =
+				summary.plan.id;
+
+			headers["X-Credit-Images-Limit"] =
+				String(
+					summary.plan.limits.images
+				);
+
+		}
+
+		if (summary.remaining) {
+
+			headers["X-Credit-Images-Remaining"] =
+				String(
+					summary.remaining.images
+				);
+
+		}
+
+		if (summary.day) {
+
+			headers["X-Credit-Day"] =
+				summary.day;
+
+		}
+
+		if (summary.resetsAt) {
+
+			headers["X-Credit-Reset"] =
+				summary.resetsAt;
+
+		}
+
+	}
+
+	if (credits && credits.scope) {
+
+		headers["X-Credit-Scope"] =
+			credits.scope;
+
+	}
+
+	return headers;
+
+}
+
+
+async function imageCreditHooks(
+	request: any,
+	env: any
+): Promise<any> {
+
+	if (
+		!env ||
+		!env.KV_BINDING
+	) {
+
+		return { open: true };
+
+	}
+
+	let user: any =
+		null;
+
+	let guest: any =
+		null;
+
+	try {
+
+		user =
+			await creditSessionUser(
+				request,
+				env
+			);
+
+		if (!user) {
+
+			if (
+				!hasFreemiumCookie(
+					request
+				)
+			) {
+
+				return {
+					blocked:
+						json(
+							{
+								success: false,
+								authenticated: false,
+								error:
+									"Sign in to generate AI images \u2014 every free account gets 50 images per day. No account? Open /free for 10 images per day."
+							},
+							401
+						)
+				};
+
+			}
+
+			guest =
+				await guestCreditIdentity(
+					request
+				);
+
+		}
+
+	}
+	catch (creditError) {
+
+		/*
+		 * A credits outage must not take image generation down
+		 * with it (same fail-open rule as before).
+		 */
+		return { open: true };
+
+	}
+
+	const plan =
+		user
+			? creditPlanFor(user.usertype)
+			: GUEST_PLAN;
+
+	const key =
+		user
+			? CREDIT_KEY_PREFIX +
+				String(user.username || "")
+					.toLowerCase()
+			: guest.key;
+
+	const meta =
+		user
+			? null
+			: guestCreditMeta(guest);
+
+	const scope =
+		user
+			? "account"
+			: "ip";
+
+	const consume = async (
+		amount: number
+	): Promise<any> => {
+
+		const wanted =
+			Math.max(1, Math.floor(Number(amount) || 1));
+
+		const first =
+			await creditConsumeKey(
+				env,
+				key,
+				plan,
+				"images",
+				wanted,
+				meta
+			);
+
+		if (first.allowed) {
+
+			return {
+				allowed: true,
+				granted: wanted,
+				summary: first.summary
+			};
+
+		}
+
+		/* Partially affordable: spend whatever is left. */
+		const remaining =
+			first.summary &&
+			first.summary.remaining &&
+			first.summary.remaining.images !== null
+				? Number(
+						first.summary.remaining.images
+					)
+				: 0;
+
+		if (remaining > 0) {
+
+			const second =
+				await creditConsumeKey(
+					env,
+					key,
+					plan,
+					"images",
+					remaining,
+					meta
+				);
+
+			if (second.allowed) {
+
+				return {
+					allowed: true,
+					granted: remaining,
+					summary: second.summary
+				};
+
+			}
+
+			return {
+				allowed: false,
+				granted: 0,
+				summary: second.summary
+			};
+
+		}
+
+		return {
+			allowed: false,
+			granted: 0,
+			summary: first.summary
+		};
+
+	};
+
+	const refund = async (
+		amount: number
+	): Promise<any> => {
+
+		const count =
+			Math.max(0, Math.floor(Number(amount) || 0));
+
+		if (count <= 0) {
+
+			return null;
+
+		}
+
+		await creditRefundKey(
+			env,
+			key,
+			"images",
+			count,
+			meta
+		);
+
+		return creditSummaryFor(
+			plan,
+			await creditReadKey(
+				env,
+				key
+			)
+		);
+
+	};
+
+	return {
+		open: false,
+		scope,
+		plan,
+		consume,
+		refund
+	};
 
 }
 

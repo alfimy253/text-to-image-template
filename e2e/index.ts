@@ -1,6 +1,7 @@
 import worker from "../src/index";
 
-const pngSignature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+/* A minimal but valid-length PNG signature (the routes check the magic bytes). */
+const pngSignature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
 
 function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 	const prompt = String(input?.prompt || "");

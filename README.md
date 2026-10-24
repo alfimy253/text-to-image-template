@@ -30,13 +30,16 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   two validated keyword sets; the user selects one and chooses from exactly ten image styles:
   **Cinematic Film, Editorial Magazine, Kinetic Typography, Neon Night, Minimalist, Retro Poster,
   Documentary, Split Composition, Dream Glow** or **Pop Comic**. The script is written from the
-  selected set, then a dynamic prompt-job URL is created and polled immediately, then every
-  **30 s**. The prompt LLM sees a compact, two-sentence script idea and returns broad, concise
-  scenes consistently styled from the chosen option (**10** prompts for 1 minute, **14** for
-  2–3 minutes, **20** for 4–6 minutes). The browser generates the first image when ready, then
-  schedules the next image **20 s after each previous attempt settles**, inserts results into
-  that video's gallery, respects its **25-still cap**, and cleans up/re-enables upload controls
-  even after partial failures. See `system-rules.md` RULE 24.
+  selected set, then **one** `POST /api/image-prompts` returns the finished scene prompts in its
+  response body — no job URL and no polling. The prompt LLM sees a compact, two-sentence script
+  idea and returns broad, concise scenes consistently styled from the chosen option (**10**
+  prompts for 1 minute, **14** for 2–3 minutes, **20** for 4–6 minutes); a short answer is topped
+  up instead of rejected. The browser then sends **one** `POST /api/image-batch`, which renders
+  every image **in parallel at 16:9 (1024×576)** and streams each finished image back as an
+  NDJSON event, so the gallery fills up "all at once" instead of one image every 20 seconds. The
+  batch respects the video's **25-still cap** (only the free slots are requested), refunds failed
+  scenes, and always re-enables the upload/script controls. See `system-rules.md` RULE 24 and
+  `bug-fix-session-241.md`.
 - **Template scene controls.** Graphic configuration has no Shapes & stickers heading/grid;
   **Delete element** sits beside **＋ Text / ＋ Graphic**, and the layer buttons match the neutral
   top-right **Pause** style without moving.
@@ -236,7 +239,8 @@ skin covers the whole site.
 | `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` for a cold anonymous request when KV is bound, `429` at the limit, `X-Credit-*` headers on success |
 | `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated SRT (with keyword counts); accepts a user-selected `keywordSet` from `/api/seo-plan`, which is re-validated and skips the planner |
 | `POST /api/seo-plan` | Two different validated SEO keyword sets (title + headings + 1 long-tail + 4 shorts each) for a topic, for the walkthrough's Select step |
-| `POST /api/image-prompts` · `GET`/`DELETE /api/image-prompts/:id` | Create a dynamic image-prompt URL (202, empty `prompts` until the background LLM finishes; count 10/14/20 by script length 1 / 2–3 / 4–6 min, in the chosen image style) / poll it / destroy it |
+| `POST /api/image-prompts` | Synchronous scene prompts: `200 {prompts, count, expectedCount, style, minutes}` (count 10/14/20 by script length 1 / 2–3 / 4–6 min, in the chosen image style; short answers are topped up); `400` invalid input, `502` model failure, `503` no AI binding. The old `GET`/`DELETE /api/image-prompts/:id` job URL answers `410` |
+| `POST /api/image-batch` | One request, every image: `{prompts: string[]}` (≤20) → `application/x-ndjson` with `start`/`tick`/`image`/`done` events. Renders in parallel at 1024×576, 1 image credit per prompt up front (account or `/free` guest allowance) refunded for failures; `401` anonymous, `429` no credits, `400` invalid prompts |
 | `POST /api/voiceover` · `GET /tts` | MeloTTS voiceover / fallback TTS proxy |
 | `GET /api/session` · `POST /api/signup` · `POST /api/login` · `POST /api/logout` | Accounts (session/signup/login include `usertype`, `plan` and `credits`) |
 | `GET /api/credits` | Today's plan, used counters, remaining allowances and `resetsAt` — for the signed-in user, or the IP-keyed guest plan after `/free` |
@@ -290,8 +294,9 @@ skin covers the whole site.
 - `src/index.ts` holds the route table and delegates the modular CMS/payment/account surfaces to
   `src/modules/{cms,payments,user-pages}.ts`; `src/page.ts` assembles and caches the studio page.
   The SEO planner/writer lives in `src/modules/script-seo.ts` (plus the two-set
-  `/api/seo-plan` handler and the `keywordSet` fast path), and the pollable image-prompt jobs
-  live in `src/modules/image-prompts.ts`.
+  `/api/seo-plan` handler and the `keywordSet` fast path), the synchronous prompt writer lives in
+  `src/modules/image-prompts.ts`, and the streamed batch renderer (16:9 model call, parallel
+  lanes, NDJSON events, credit refunds) lives in `src/modules/image-batch.ts`.
   Template code is split across `template-composer-js.ts`, `template-scene-editor.ts`,
   `template-ring-carousel.ts` and `template-shape-animations.ts`.
 - The client files are template literals whose escapes are load-bearing — do not reformat them.

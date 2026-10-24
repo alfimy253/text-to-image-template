@@ -1611,34 +1611,43 @@ cites `kv-scale-test.md` §8, the last section of that document.
   RULE 7 describes. The existing SRT display, SEO chips, title autofill, Download .srt and
   voiceover reveal are unchanged. Script failure ends the flow: upload + script buttons are
   re-enabled. Minutes come from the existing Minutes dropdown and **default to 1**.
-- **Step 3 — image prompts (dynamic URL).** Once the script is shown, the client creates an
-  image-prompt job: `POST /api/image-prompts {topic, minutes, style, script, keywordSet}` →
-  `202 {id, url: "/api/image-prompts/<id>", prompts: [], expectedCount}`. Creation returns at
-  once; the instruct model (`buildImagePromptInstruction` in `src/modules/image-prompts.ts`)
-  finishes in the background via `ctx.waitUntil` when available and writes the job record (KV
-  `image-prompts:<id>`, 1 h TTL; in-isolate Map when KV is unbound). Instead of sending the full
-  SRT to the prompt writer, the worker compacts it to at most the opening and closing spoken
-  sentences (≤480 characters), and asks for concise, broad scenes portraying the central idea,
-  not a literal cue-by-cue retelling. The count follows the script length:
-  **1 min → 10, 2–3 min → 14, 4–6 min → 20**. Every prompt is a single text-free scene and is
-  suffixed with the selected style's consistent visual direction. The browser polls immediately
-  after creation, then every 30 s (`IMAGE_PROMPT_POLL_MS`); pending jobs answer `prompts: []`,
-  ready jobs the full set, and destroyed/unknown ids `404`. Poll requests time out after 60 s;
-  transient errors retry a bounded number of times, while terminal job errors finalize/DELETE.
-- **Step 4 — queued image generation + teardown.** When prompts arrive, the browser generates
-  the first AI image immediately and schedules each subsequent request 20 s after the previous
-  attempt settles (`AI_IMAGE_QUEUE_MS`) through `/image/gen` (`AI_ENDPOINT`). Each successful
-  image is inserted into the target video's gallery through `addAiToVideo`, tagged with its job
-  id, and counted against the existing 25-still cap; the queue stops on exhausted credits or a
-  hard gallery limit. A single transient image request may retry; each request times out after
-  90 s. A 1 s gallery watcher (`GALLERY_WATCH_MS`, exposed as `window.__SEO_FLOW_TIMING`) counts
-  only cards tagged to this prompt job in `#va-gallery-N`, not unrelated cards or a baseline
-  child-count delta. The flow finalizes when the available slot target is reached or the queue
-  has attempted all usable prompts, including partial-success and all-failed cases. Finalization
-  aborts outstanding requests, clears all timers, retries **`DELETE /api/image-prompts/<id>`**
-  once if needed, and re-enables **Upload Image, GIF or MP4** and the script button. Status reports
-  actual tagged images in that gallery and the failure/limit reason; `[image-gen]` logs record
-  request/success/failure timing and prompt length without logging prompt contents.
+- **Step 3 — image prompts (synchronous, no job URL).** Once the script is shown,
+  `POST /api/image-prompts {topic, minutes, style, script, keywordSet}` runs the prompt writer
+  **inside the request** and answers `200 {success, prompts, count, expectedCount, style,
+  minutes, model, ms}`. There is no job id, no `waitUntil` background work, no KV job record and
+  no poll URL (see *RULE 24 — BATCH IMAGE PIPELINE* below for why the old job was removed); the
+  retired `GET`/`DELETE /api/image-prompts/<id>` URL answers `410` with a migration hint. The
+  route validates `topic`/`minutes`/`style` first (unknown style → `400`, no AI call). Instead of
+  sending the full SRT to the prompt writer, the worker compacts it to at most the opening and
+  closing spoken sentences (≤480 characters) and asks for concise, broad scenes portraying the
+  central idea, not a literal cue-by-cue retelling. The target count follows the script length:
+  **1 min → 10, 2–3 min → 14, 4–6 min → 20**. The count is a **target, not a contract**: a short
+  answer is topped up with a second call that asks only for the missing scenes, and if the model
+  still answers short the prompts it produced are used (a 7-of-10 batch is returned instead of an
+  error). Every prompt is a single text-free scene suffixed with the selected style's consistent
+  visual direction. `env.AI` missing → `503`; the model call is bounded by
+  `IMAGE_PROMPT_TIMEOUT_MS` (90 s) and a failure → `502 {success:false, error}`.
+- **Step 4 — one batch request renders every image.** The browser sends the usable prompts
+  (capped by the video's remaining still slots) to **`POST /api/image-batch`** as
+  `{prompts: string[]}` (≤20). The worker reserves one image credit per prompt up front (account
+  allowance, or the `/free` IP allowance; anonymous → `401`, none left → `429`; a partial
+  allowance renders only the granted images), then renders them **in parallel**
+  (`IMAGE_BATCH_CONCURRENCY = 4`) with `@cf/stabilityai/stable-diffusion-xl-base-1.0` at
+  **1024×576 (16:9)**, `num_steps: 20`, the shared text-free negative prompt and a random seed;
+  each image gets 2 attempts with a 500 ms backoff and a 75 s per-attempt ceiling. The response is
+  an **`application/x-ndjson` stream**: `start` (count, size, model, credits), `tick` every 10 s,
+  one `image {index, ok, mime, data(base64)}` per scene as it finishes (or `{ok:false, error}`),
+  and a final `done {requested, count, generated, failed, skipped, ms, credits}`. Every granted
+  scene that never reaches the browser — failed, or unrendered because the client disconnected —
+  is refunded in one credit write before `done`. The client reads the stream with
+  `response.body.getReader()`, inserts each image into that video's gallery through
+  `addAiToVideo` (tagged `imgflow-<video>-<stamp>` and counted against the 25-still cap) and
+  keeps the flow alive with an idle watchdog (`IMAGE_BATCH_IDLE_TIMEOUT_MS`, 120 s without a
+  byte aborts). **There are no interval timers, no gallery watcher and no DELETE**: the stream's
+  `done` event is the completion signal, and the flow finalizes once, reporting the number of
+  tagged images added, failures and any stop reason, then re-enables **Upload Image, GIF or MP4**
+  and the script button. `[image-batch]` logs record request/count/concurrency/timing and never
+  log prompt contents.
 
 ---
 
@@ -1712,6 +1721,59 @@ cites `kv-scale-test.md` §8, the last section of that document.
   as detailed in the corrections above and in B-4/B-5/B-7 of the session record.
 
 ---
+
+## RULE 24 — BATCH IMAGE PIPELINE (2026-10-24, supersedes the queue in Step 4 above)
+
+> The polling/job architecture documented in the RULE 24 addendum is **removed**. This section is
+> canonical for image generation; `bug-fix-session-241.md` records the diagnosis and evidence.
+
+**Why the old pipeline could not work reliably**
+
+1. `POST /api/image-prompts` answered `202` and ran the prompt LLM in `ctx.waitUntil`. Cloudflare
+   cancels unsettled `waitUntil` promises **30 seconds after the response is sent**
+   ([Context (ctx) docs](https://developers.cloudflare.com/workers/runtime-apis/context/)). The
+   job asked a 8B instruct model for up to 20 × ~30-word prompts (`max_tokens` up to 3 072) and
+   retried up to 3 times, i.e. 60–180 s of work on a ≤30 s budget. When the isolate was killed
+   the KV record stayed `pending` forever — and the client had **no deadline for a pending job**,
+   only `IMAGE_PROMPT_POLL_MAX_FAILURES` for failed polls — so the browser polled every 30 s
+   indefinitely while the upload button stayed disabled. That is the "AI images never appear"
+   symptom.
+2. The prompt count was validated **strictly**. A model that answered 9 of 10 prompts threw
+   `Image prompts incomplete (9 of 10) - try again` after 3 attempts and the whole flow ended
+   before a single image was rendered.
+3. Images were generated **serially**, one every 20 s *after the previous attempt settled*, with
+   90 s timeouts and one retry. Ten images therefore took 4–8 minutes, and nothing was shown
+   until each request finished.
+4. `/image/gen` never sent `width`/`height`, so SDXL returned its default square image for a
+   landscape gallery, and the route had no retry of its own.
+
+**The contract now**
+
+| Route | Behaviour |
+| --- | --- |
+| `POST /api/image-prompts` | Synchronous. `200 {prompts, count, expectedCount, style, minutes, model, ms}`; `400` invalid input; `502` model failure; `503` no `AI` binding. Short answers are topped up, never fatal. |
+| `POST /api/image-batch` | `200 application/x-ndjson`; `400` invalid/too many prompts; `401` anonymous when KV is bound; `429` no credits (JSON, with `credits`); `503` no `AI` binding. Events: `start`, `tick`, `image`, `done` (plus `error` on an unexpected stream failure). |
+| `GET`/`DELETE /api/image-prompts/<id>` | `410 Gone` — the poll URL no longer exists. |
+| `GET /image/gen?prompt=&variant=` | Unchanged contract for the manual AI panel (1 image, 1 credit, `X-Credit-*`); now shares the 16:9 model call and the credit gate with the batch route. |
+
+**Client rules**
+
+- `startImagePromptFlow(n)` is two awaited requests: prompts, then the batch. No `setInterval`,
+  no `setTimeout` queue, no `DELETE`, no gallery watcher.
+- The batch stream is consumed line-by-line; each `image` event becomes a `Blob`/`File` and is
+  inserted immediately, so the gallery fills progressively.
+- Exactly one finalize per flow (`_imageFlowFinalizing` guard): abort controllers are cancelled,
+  `Upload Image, GIF or MP4` and **✨ Generate SEO Script** are re-enabled, and the status line
+  reports `<n> image(s) added`, failures, or the stop reason.
+- The 25-still cap is applied *before* the request: only `min(prompts, free slots)` prompts are
+  sent, so credits are never spent on images that cannot be inserted.
+
+**Remaining known limits**
+
+- A single batch is capped at 20 prompts and 4 parallel renders; a very slow upstream makes the
+  batch take longer, but the browser keeps receiving `tick` events and the 120 s idle watchdog
+  only fires when the stream goes completely silent.
+- Motion graphics/animations are unaffected; only AI image generation changed.
 
 ## RULE 24 FOLLOW-UP — style dropdown, template controls and image-flow reliability (2026-10-24)
 

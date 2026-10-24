@@ -8899,127 +8899,53 @@ export const APP_JS = `
 			"";
 
 		/*
-		 * Set when the worker answers 401 (not signed
-		 * in) or 429 (credits exhausted): the next
-		 * variant would fail the same way.
+		 * Both variants are requested at the same time, so a click
+		 * produces the pair together instead of one after the other.
+		 * (A 401/429 fails both, which the summary below reports once.)
 		 */
-		let stopGenerating =
-			false;
-
-		for (
-			let variant = 1;
-			variant <=
-				AI_IMAGES_PER_PROMPT;
-			variant++
-		) {
-
-			try {
-
-				const response =
-					await fetch(
-						AI_ENDPOINT(
-							prompt,
-							variant
-						)
-					);
-
-				if (
-					!response.ok
-				) {
-
-					/*
-					 * The worker returns
-					 * {success:false,
-					 * error:"..."} \u2014 show
-					 * the real reason.
-					 */
-					let message =
-						"Image generation failed";
-
-					try {
-
-						const errJson =
-							await response.json();
-
-						if (
-							errJson &&
-							errJson.error
-						) {
-
-							message =
-								errJson.error;
-
-						}
-
-						/*
-						 * 429 carries the authoritative
-						 * counters, so the pill can
-						 * drop to zero immediately.
-						 */
-						if (
-							errJson &&
-							errJson.credits
-						) {
-
-							applyCredits(
-								errJson.credits
-							);
-
-						}
-
-					}
-					catch (jsonError) {
-
-						/* keep default */
-
-					}
-
-					if (
-						response.status ===
-							401 ||
-						response.status ===
-							429
-					) {
-
-						stopGenerating =
-							true;
-
-					}
-
-					throw new Error(
-						message
-					);
-
-				}
-
-				const blob =
-					await response.blob();
-
-				addAiResultCard(
-					n,
-					prompt,
-					variant,
-					blob
-				);
-
-			}
-			catch (aiError) {
-				failures++;
-				lastError =
-					aiError instanceof Error
-						? aiError.message
-						: String(aiError);
-				console.error(
-					aiError
-				);
-			}
-
-			if (stopGenerating) {
-				break;
-			}
-
+		const variants = [];
+		for (let variant = 1; variant <= AI_IMAGES_PER_PROMPT; variant++) {
+			variants.push(variant);
 		}
 
+		const outcomes = await Promise.all(variants.map(async function (variant) {
+			try {
+				const response = await fetch(AI_ENDPOINT(prompt, variant));
+				if (!response.ok) {
+					/* The worker returns {success:false, error:"..."}. */
+					let message = "Image generation failed";
+					try {
+						const errJson = await response.json();
+						if (errJson && errJson.error) message = errJson.error;
+						/* 429 carries the authoritative counters. */
+						if (errJson && errJson.credits) applyCredits(errJson.credits);
+					}
+					catch (jsonError) {
+						/* keep default */
+					}
+					const httpError = new Error(message);
+					httpError.status = response.status;
+					throw httpError;
+				}
+				const blob = await response.blob();
+				addAiResultCard(n, prompt, variant, blob);
+				return { ok: true };
+			}
+			catch (aiError) {
+				console.error(aiError);
+				return {
+					ok: false,
+					status: aiError && aiError.status ? aiError.status : 0,
+					message: aiError instanceof Error ? aiError.message : String(aiError)
+				};
+			}
+		}));
+
+		outcomes.forEach(function (outcome) {
+			if (outcome.ok) return;
+			failures++;
+			lastError = outcome.message;
+		});
 		if (btn) {
 			btn.disabled =
 				false;
@@ -12920,7 +12846,7 @@ export const APP_JS = `
 
 
 	// =========================================================
-	// MODULE 8b: seo-walkthrough + image-prompt polling
+	// MODULE 8b: seo-walkthrough + one-shot AI image generation
 	//
 	// Generate SEO Script now runs a walkthrough:
 	//   1. The "Upload Image, GIF or MP4" button is disabled and
@@ -12934,30 +12860,19 @@ export const APP_JS = `
 	//      the script section shows a loading animation and
 	//      POST /api/script writes the SRT from the selected set
 	//      (runSeoScriptRequest keeps the existing SRT display).
-	//   3. Once the script is shown, a dynamic image-prompt URL
-	//      is created (POST /api/image-prompts). The browser
-	//      polls it every 30 seconds; while the LLM is still
-	//      writing the prompts the URL answers an empty array.
-	//      The prompts carry the chosen image style and their
-	//      count follows the script length (1 min -> 10,
-	//      2-3 min -> 14, 4-6 min -> 20).
-	//   4. When the prompts arrive, one AI image is generated
-	//      every 20 seconds with the existing image generation
-	//      route and added straight to this video's gallery.
-	//      A watcher polls the gallery count; once the last
-	//      image is in the gallery it calls DELETE on the
-	//      dynamic URL (destroying it) and re-enables the
-	//      "Upload Image, GIF or MP4" button.
+	//   3. Once the script is shown, POST /api/image-prompts runs
+	//      the prompt LLM INSIDE the request and answers with the
+	//      finished prompt list (style suffix included). There is
+	//      no job id, no poll URL and no timer: one request, one
+	//      response.
+	//   4. Every prompted image is then rendered by a SINGLE POST to
+	//      /api/image-batch. The worker renders them in parallel and
+	//      streams one NDJSON event per finished image, so the
+	//      gallery fills up as they arrive instead of one image
+	//      every 20 seconds. The stream's "done" event ends the
+	//      flow: counters are reported and the "Upload Image, GIF
+	//      or MP4" button is re-enabled.
 	// =========================================================
-
-	const IMAGE_PROMPT_POLL_MS =
-		30000;
-
-	const AI_IMAGE_QUEUE_MS =
-		20000;
-
-	const GALLERY_WATCH_MS =
-		1000;
 
 	const SEO_IMAGE_STYLES = [
 		"Cinematic Film",
@@ -12975,23 +12890,19 @@ export const APP_JS = `
 	const DEFAULT_SEO_IMAGE_STYLE =
 		"Cinematic Film";
 
-	const IMAGE_PROMPT_POLL_MAX_FAILURES =
-		3;
-
+	/* The whole prompt LLM call happens inside this one request. */
 	const IMAGE_PROMPT_REQUEST_TIMEOUT_MS =
-		60000;
+		180000;
 
-	const AI_IMAGE_REQUEST_TIMEOUT_MS =
-		90000;
+	/* A batch stream that sends nothing for this long is treated as dead. */
+	const IMAGE_BATCH_IDLE_TIMEOUT_MS =
+		120000;
 
-	/* Exposed so tests / debugging can see the live cadence. */
+	/* Exposed so tests / debugging can see the live timing. */
 	if (typeof window !== "undefined") {
 		window.__SEO_FLOW_TIMING = {
-			imagePromptPollMs: IMAGE_PROMPT_POLL_MS,
-			aiImageQueueMs: AI_IMAGE_QUEUE_MS,
-			galleryWatchMs: GALLERY_WATCH_MS,
 			imagePromptRequestTimeoutMs: IMAGE_PROMPT_REQUEST_TIMEOUT_MS,
-			aiImageRequestTimeoutMs: AI_IMAGE_REQUEST_TIMEOUT_MS
+			imageBatchIdleTimeoutMs: IMAGE_BATCH_IDLE_TIMEOUT_MS
 		};
 	}
 
@@ -13015,10 +12926,6 @@ export const APP_JS = `
 
 	async function seoResponseJson(response) {
 		return response.json().catch(function () { return {}; });
-	}
-
-	function seoDelay(ms) {
-		return new Promise(function (resolve) { setTimeout(resolve, ms); });
 	}
 
 	function seoImageStyleOptionsHTML(selectedStyle) {
@@ -13721,42 +13628,83 @@ export const APP_JS = `
 
 	}
 
+	/* Base64 -> Blob for one streamed batch image (no data: URL round-trip). */
+	function base64ImageBlob(
+		base64,
+		mime
+	) {
+		const binary =
+			atob(String(base64 || ""));
+		const bytes =
+			new Uint8Array(binary.length);
+		for (let i = 0; i < binary.length; i++) {
+			bytes[i] = binary.charCodeAt(i);
+		}
+		return new Blob(
+			[bytes],
+			{ type: mime || "image/png" }
+		);
+	}
+
+	/*
+	 * Step 3 + 4 of the walkthrough.
+	 *
+	 * One POST writes the scene prompts, one POST renders every image.
+	 * No interval timers, no gallery watcher, no job URL to create or
+	 * destroy: the batch stream is both the progress and the completion
+	 * signal, so there is nothing to clean up afterwards.
+	 */
 	async function startImagePromptFlow(
 		n
 	) {
 
-		const project = videoProjects[n - 1];
+		const project =
+			videoProjects[n - 1];
 		if (!project) return;
 
-		const statusEl = document.getElementById("va-ai-status-" + n);
-		const gallery = document.getElementById("va-gallery-" + n);
-		const stills = videoCounts(project).stills;
-		const availableImages = Math.max(0, MAX_IMAGE_UPLOADS - stills);
+		const statusEl =
+			document.getElementById(
+				"va-ai-status-" + n
+			);
+		const availableImages =
+			Math.max(
+				0,
+				MAX_IMAGE_UPLOADS -
+					videoCounts(project).stills
+			);
+		const style =
+			project.videoImageStyle ||
+			DEFAULT_SEO_IMAGE_STYLE;
 
-		project.aiGalleryBaseline = gallery ? gallery.children.length : 0;
+		/* A second run for this video cancels the previous one's stream. */
+		if (project._imageBatchController) {
+			try { project._imageBatchController.abort(); } catch (abortError) { }
+			project._imageBatchController = null;
+		}
+
 		project.imagePrompts = null;
-		project.imagePromptUrl = null;
-		project.imagePromptJobId = null;
-		project.imagePromptExpected = 0;
 		project.imagePromptTarget = 0;
+		project.imagePromptFlowId = null;
 		project.aiImagesDone = 0;
 		project._aiImageFailures = 0;
-		project._aiImageIndex = 0;
-		project._aiImageQueueFinished = false;
-		project._aiImageStopReason = "";
-		project._imagePromptPollInFlight = false;
-		project._imagePromptPollFailures = 0;
-		project._imagePromptStartedAt = Date.now();
+		project._aiImageSkipped = 0;
+		project._imageFlowStopReason = "";
+		project._imageFlowStartedAt = Date.now();
 
 		if (availableImages <= 0) {
-			await finalizeImagePromptFlow(n, "This video already has the maximum of " + MAX_IMAGE_UPLOADS + " still images, so no more AI images can be added.");
+			await finalizeImagePromptFlow(
+				n,
+				"This video already has the maximum of " + MAX_IMAGE_UPLOADS + " still images, so no more AI images can be added."
+			);
 			return;
 		}
 
 		if (statusEl) {
-			statusEl.textContent = "Starting the image-prompt job from your selected script and " + (project.videoImageStyle || DEFAULT_SEO_IMAGE_STYLE) + " style…";
+			statusEl.textContent =
+				"Writing your " + style + " scene prompts from the script…";
 		}
 
+		let prompts = [];
 		try {
 			const response = await seoFetchWithTimeout(
 				"/api/image-prompts",
@@ -13766,7 +13714,7 @@ export const APP_JS = `
 					body: JSON.stringify({
 						topic: project._seoTopic || "my video",
 						minutes: project._seoMinutes || 1,
-						style: project.videoImageStyle || DEFAULT_SEO_IMAGE_STYLE,
+						style: style,
 						script: project.srt || "",
 						keywordSet: project.selectedSeoSet || null
 					})
@@ -13776,441 +13724,323 @@ export const APP_JS = `
 				"_imagePromptCreateController"
 			);
 			const data = await seoResponseJson(response);
-			if (!response.ok || !data.success || !data.url) {
+			if (!response.ok || !data.success) {
 				throw new Error((data && data.error) || ("Image-prompt request failed (HTTP " + response.status + ")"));
 			}
-			const pollUrl = String(data.url);
-			const pollJobId = pollUrl.slice("/api/image-prompts/".length);
-			if (pollUrl.indexOf("/api/image-prompts/") !== 0 || !pollJobId || /[^A-Za-z0-9-]/.test(pollJobId)) {
-				throw new Error("Image-prompt service returned an invalid polling URL");
+			prompts = Array.isArray(data.prompts)
+				? data.prompts.filter(function (prompt) {
+					return typeof prompt === "string" && prompt.trim().length > 0;
+				})
+				: [];
+			if (!prompts.length) {
+				throw new Error("The image-prompt model returned no scene prompts");
 			}
-			const responseJobId = String(data.id || pollJobId);
-			if (responseJobId !== pollJobId) {
-				throw new Error("Image-prompt service returned a job ID that does not match its polling URL");
-			}
-			const expectedCount = Number(data.expectedCount);
-			if (!Number.isInteger(expectedCount) || expectedCount < 1 || expectedCount > 20) {
-				throw new Error("Image-prompt service returned an invalid expected image count");
-			}
-
-			project.imagePromptUrl = pollUrl;
-			project.imagePromptJobId = responseJobId;
-			project.imagePromptExpected = expectedCount;
-			project._imagePromptStartedAt = Date.now();
-			console.info("[seo-image-flow] prompt job created", {
-				videoIndex: n,
-				jobId: project.imagePromptJobId,
-				expectedPrompts: expectedCount,
-				style: project.videoImageStyle || DEFAULT_SEO_IMAGE_STYLE
-			});
-
-			if (statusEl) {
-				statusEl.textContent = "Image-prompt job is active (" + expectedCount + " scenes). Checking immediately, then every 30 seconds while the model builds prompts from the short script idea…";
-			}
-
-			project._imagePromptPoller = setInterval(function () {
-				pollImagePromptOnce(n);
-			}, IMAGE_PROMPT_POLL_MS);
-			project._galleryWatcher = setInterval(function () {
-				watchGalleryCompletion(n);
-			}, GALLERY_WATCH_MS);
-
-			/* Do not make the user wait for the first 30-second interval. */
-			await pollImagePromptOnce(n);
 		}
-		catch (flowError) {
-			const message = flowError && flowError.message ? flowError.message : String(flowError);
-			console.warn("[seo-image-flow] prompt job creation failed", {
+		catch (promptError) {
+			const message = promptError && promptError.message ? promptError.message : String(promptError);
+			console.warn("[seo-image-flow] prompt generation failed", {
 				videoIndex: n,
-				ms: Date.now() - project._imagePromptStartedAt,
+				ms: Date.now() - project._imageFlowStartedAt,
 				error: message
 			});
-			await finalizeImagePromptFlow(n, "Image prompts could not be started: " + message);
-		}
-	}
-
-	async function pollImagePromptOnce(
-		n
-	) {
-		const project = videoProjects[n - 1];
-		if (!project || !project.imagePromptUrl || project._imagePromptPollInFlight || !project._imageFlowActive) return;
-		project._imagePromptPollInFlight = true;
-		const statusEl = document.getElementById("va-ai-status-" + n);
-
-		try {
-			const response = await seoFetchWithTimeout(
-				project.imagePromptUrl,
-				{ headers: { "Accept": "application/json" } },
-				IMAGE_PROMPT_REQUEST_TIMEOUT_MS,
-				project,
-				"_imagePromptPollController"
-			);
-			if (response.status === 404) {
-				await finalizeImagePromptFlow(n, "The image-prompt job was not found or expired before it became ready.");
-				return;
-			}
-
-			const data = await seoResponseJson(response);
-			if (!response.ok) {
-				const requestError = new Error((data && data.error) || ("Image-prompt poll failed (HTTP " + response.status + ")"));
-				requestError.status = response.status;
-				throw requestError;
-			}
-			if (data && data.status === "error") {
-				const jobError = new Error(data.error || "The image-prompt model could not complete this job");
-				jobError.terminal = true;
-				throw jobError;
-			}
-
-			if (data && data.status === "pending") {
-				project._imagePromptPollFailures = 0;
-				const elapsedSeconds = Math.max(0, Math.floor((Date.now() - (project._imagePromptStartedAt || Date.now())) / 1000));
-				if (statusEl) {
-					statusEl.textContent = "The prompt model is still working on " + project.imagePromptExpected + " short scene prompts (" + elapsedSeconds + " seconds elapsed). Images begin as soon as the prompts are ready.";
-				}
-				return;
-			}
-
-			const prompts = data && Array.isArray(data.prompts) ? data.prompts : [];
-			if (data.status !== "ready" || !prompts.length) {
-				const invalidJob = new Error("The image-prompt job returned no ready prompts");
-				invalidJob.terminal = true;
-				throw invalidJob;
-			}
-			if (project.imagePromptExpected && prompts.length !== project.imagePromptExpected) {
-				const countError = new Error("The prompt job returned " + prompts.length + " of " + project.imagePromptExpected + " expected prompts");
-				countError.terminal = true;
-				throw countError;
-			}
-
-			project._imagePromptPollFailures = 0;
-			project.imagePrompts = prompts;
-			if (project._imagePromptPoller) {
-				clearInterval(project._imagePromptPoller);
-				project._imagePromptPoller = null;
-			}
-			console.info("[seo-image-flow] prompts ready", {
-				videoIndex: n,
-				jobId: project.imagePromptJobId,
-				count: prompts.length,
-				ms: Date.now() - project._imagePromptStartedAt
-			});
-			if (statusEl) {
-				statusEl.textContent = prompts.length + " styled image prompts are ready; starting the image-generation queue now…";
-			}
-			scheduleAiImageQueue(n);
-		}
-		catch (pollError) {
-			const message = pollError && pollError.message ? pollError.message : String(pollError);
-			const status = Number(pollError && pollError.status) || 0;
-			const retryable = !pollError.terminal && (status === 0 || status === 429 || status >= 500);
-			project._imagePromptPollFailures = (project._imagePromptPollFailures || 0) + 1;
-			console.warn("[seo-image-flow] prompt poll failed", {
-				videoIndex: n,
-				jobId: project.imagePromptJobId,
-				attempt: project._imagePromptPollFailures,
-				status: status || null,
-				error: message
-			});
-
-			if (retryable && project._imagePromptPollFailures < IMAGE_PROMPT_POLL_MAX_FAILURES) {
-				if (statusEl) {
-					statusEl.textContent = "Temporary prompt-service error: " + message + ". Retrying in up to 30 seconds…";
-				}
-				return;
-			}
-			await finalizeImagePromptFlow(n, "Image prompts failed: " + message);
-		}
-		finally {
-			project._imagePromptPollInFlight = false;
-		}
-	}
-
-	function scheduleAiImageQueue(
-		n
-	) {
-		const project = videoProjects[n - 1];
-		if (!project || !Array.isArray(project.imagePrompts)) return;
-
-		project._aiImageIndex = 0;
-		project._aiImageFailures = 0;
-		project._aiImageQueueFinished = false;
-		project._aiImageStopReason = "";
-		const stills = videoCounts(project).stills;
-		const available = Math.max(0, MAX_IMAGE_UPLOADS - stills);
-		const target = Math.min(project.imagePrompts.length, available);
-		project.imagePromptTarget = target;
-
-		if (target <= 0) {
-			project._aiImageQueueFinished = true;
-			finalizeImagePromptFlow(n, "The video has reached the " + MAX_IMAGE_UPLOADS + "-image limit, so there is no room for AI images.");
+			await finalizeImagePromptFlow(n, "Image prompts could not be generated: " + message);
 			return;
 		}
 
-		const statusEl = document.getElementById("va-ai-status-" + n);
-		if (statusEl) {
-			statusEl.textContent = "Generating " + target + " of " + project.imagePrompts.length + " prompted images, one at a time with a 20-second spacing…" +
-				(target < project.imagePrompts.length ? " The remaining prompts exceed this video's " + MAX_IMAGE_UPLOADS + "-image limit." : "");
-		}
-		console.info("[seo-image-flow] image queue started", {
+		if (!project._imageFlowActive) return;
+
+		const target = Math.min(prompts.length, availableImages);
+		project.imagePrompts = prompts;
+		project.imagePromptTarget = target;
+		/* Tags the cards this flow adds so the summary can count them. */
+		project.imagePromptFlowId = "imgflow-" + n + "-" + Date.now().toString(36);
+
+		console.info("[seo-image-flow] prompts ready", {
 			videoIndex: n,
-			jobId: project.imagePromptJobId,
-			promptCount: project.imagePrompts.length,
+			count: prompts.length,
 			imageTarget: target,
-			galleryStills: stills
+			ms: Date.now() - project._imageFlowStartedAt
 		});
 
-		const step = async function () {
-			if (!project._imageFlowActive || !project.imagePromptUrl || project._aiImageQueueFinished) return;
-			if (project._aiImageIndex >= target) {
-				project._aiImageQueueFinished = true;
-				watchGalleryCompletion(n);
+		await runImageBatch(
+			n,
+			prompts.slice(0, target),
+			project.imagePromptFlowId
+		);
+
+		await finalizeImagePromptFlow(n, project._imageFlowStopReason || "");
+	}
+
+	/*
+	 * Renders every prompt in ONE request and consumes the NDJSON stream:
+	 *   start / tick / image{ok,data} / image{ok:false,error} / done / error
+	 * Each successful image is inserted into this video's gallery as soon as
+	 * it arrives, so a 10-image batch is on screen in one pass instead of
+	 * trickling in every 20 seconds.
+	 */
+	async function runImageBatch(
+		n,
+		prompts,
+		flowId
+	) {
+
+		const project =
+			videoProjects[n - 1];
+		if (!project || !project._imageFlowActive || !prompts.length) return;
+
+		const statusEl =
+			document.getElementById(
+				"va-ai-status-" + n
+			);
+		const total = prompts.length;
+		let added = 0;
+		let failed = 0;
+		let skipped = 0;
+		let batchDone = false;
+
+		if (statusEl) {
+			statusEl.textContent =
+				"Rendering all " + total + " AI images at once…";
+		}
+
+		const controller =
+			typeof AbortController !== "undefined"
+				? new AbortController()
+				: null;
+		project._imageBatchController = controller;
+
+		let idleTimer = null;
+		const armIdleTimer = function () {
+			if (!controller) return;
+			if (idleTimer) clearTimeout(idleTimer);
+			idleTimer = setTimeout(function () {
+				if (!project._imageFlowStopReason) {
+					project._imageFlowStopReason = "The image batch stopped responding for " + Math.round(IMAGE_BATCH_IDLE_TIMEOUT_MS / 1000) + " seconds.";
+				}
+				try { controller.abort(); } catch (abortError) { }
+			}, IMAGE_BATCH_IDLE_TIMEOUT_MS);
+		};
+
+		const progressText = function () {
+			return "Rendering " + total + " AI image" + (total === 1 ? "" : "s") + " in parallel — " +
+				added + " added" +
+				(failed ? ", " + failed + " failed" : "") +
+				(skipped ? ", " + skipped + " skipped" : "") + "…";
+		};
+
+		const handleEvent = function (event) {
+			if (!event || typeof event !== "object") return;
+			if (event.credits) applyCredits(event.credits);
+
+			if (event.type === "start") {
+				if (statusEl) {
+					statusEl.textContent =
+						"Rendering " + event.count + " AI images in parallel" +
+						(event.width && event.height ? " (" + event.width + "×" + event.height + ")" : "") + "…";
+				}
 				return;
 			}
 
-			const index = project._aiImageIndex++;
-			const result = await generateQueuedAiImage(n, project.imagePrompts[index], index + 1);
-			if (!project._imageFlowActive || !project.imagePromptUrl) return;
-
-			if (result && result.stop) {
-				project._aiImageStopReason = result.error || "Image generation stopped";
-				project._aiImageQueueFinished = true;
-				await finalizeImagePromptFlow(n, project._aiImageStopReason);
+			if (event.type === "tick") {
+				if (statusEl && !batchDone) statusEl.textContent = progressText();
 				return;
 			}
 
-			if (project._aiImageIndex < target) {
-				project._aiImageTimer = setTimeout(step, AI_IMAGE_QUEUE_MS);
+			if (event.type === "image") {
+				if (!event.ok) {
+					failed++;
+					console.warn("[seo-image-flow] image failed", {
+						videoIndex: n,
+						index: event.index,
+						error: event.error || "unknown image error"
+					});
+				}
+				else if (event.data && project._imageFlowActive) {
+					try {
+						const blob = base64ImageBlob(event.data, event.mime);
+						const file = new File(
+							[blob],
+							"ai-video" + n + "-seo-" + (Number(event.index) + 1) + "-" + Date.now() + ".png",
+							{ type: blob.type || "image/png" }
+						);
+						const inserted = addAiToVideo(n, file, blob, flowId, true);
+						if (inserted) {
+							added++;
+						}
+						else {
+							skipped++;
+							project._imageFlowStopReason =
+								"The video gallery reached its " + MAX_IMAGE_UPLOADS + "-image limit.";
+							if (controller) {
+								try { controller.abort(); } catch (abortError) { }
+							}
+						}
+					}
+					catch (insertError) {
+						failed++;
+						console.error("[seo-image-flow] gallery insertion failed", {
+							videoIndex: n,
+							index: event.index,
+							error: insertError && insertError.message ? insertError.message : String(insertError)
+						});
+					}
+				}
+				if (statusEl && !batchDone) statusEl.textContent = progressText();
+				return;
 			}
-			else {
-				project._aiImageQueueFinished = true;
-				watchGalleryCompletion(n);
+
+			if (event.type === "error") {
+				project._imageFlowStopReason =
+					"Image batch failed: " + (event.error || "unknown error");
+				return;
+			}
+
+			if (event.type === "done") {
+				batchDone = true;
 			}
 		};
 
-		step();
-	}
+		try {
+			armIdleTimer();
+			const response = await fetch(
+				"/api/image-batch",
+				Object.assign(
+					{
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"Accept": "application/x-ndjson"
+						},
+						body: JSON.stringify({ prompts: prompts })
+					},
+					controller ? { signal: controller.signal } : {}
+				)
+			);
 
-	async function generateQueuedAiImage(
-		n,
-		prompt,
-		position
-	) {
-		const project = videoProjects[n - 1];
-		const statusEl = document.getElementById("va-ai-status-" + n);
-		const total = project && project.imagePrompts ? (project.imagePromptTarget || project.imagePrompts.length) : 0;
-		if (!project || !project._imageFlowActive) return { ok: false, stop: true, error: "Image flow is no longer active" };
-
-		if (creditState && creditState.remaining && creditState.remaining.images !== null && creditState.remaining.images <= 0) {
-			return { ok: false, stop: true, error: "Daily AI image credits are exhausted. Credits renew at midnight (UTC+8)." };
-		}
-		if (videoCounts(project).stills >= MAX_IMAGE_UPLOADS) {
-			return { ok: false, stop: true, error: "The video has reached the " + MAX_IMAGE_UPLOADS + "-image gallery limit." };
-		}
-
-		if (statusEl) {
-			statusEl.textContent = "Generating AI image " + position + " of " + total + "…";
-		}
-
-		for (let attempt = 1; attempt <= 2; attempt++) {
-			const requestStartedAt = Date.now();
-			try {
-				console.info("[seo-image-flow] image request", {
-					videoIndex: n,
-					jobId: project.imagePromptJobId,
-					position: position,
-					attempt: attempt,
-					promptChars: String(prompt || "").length
-				});
-				const response = await seoFetchWithTimeout(
-					AI_ENDPOINT(prompt, position),
-					{},
-					AI_IMAGE_REQUEST_TIMEOUT_MS,
-					project,
-					"_aiImageAbortController"
-				);
-
-				if (!response.ok) {
-					const errJson = await seoResponseJson(response);
-					const message = (errJson && errJson.error) || ("Image generation failed (HTTP " + response.status + ")");
-					if (errJson && errJson.credits) applyCredits(errJson.credits);
-					if (response.status === 401 || response.status === 429) {
-						project._aiImageFailures = (project._aiImageFailures || 0) + 1;
-						return { ok: false, stop: true, error: message };
-					}
-					if (response.status >= 500 && attempt < 2) {
-						if (statusEl) statusEl.textContent = "Image " + position + " returned HTTP " + response.status + "; retrying once…";
-						await seoDelay(1000);
-						continue;
-					}
-					const httpError = new Error(message);
-					httpError.status = response.status;
-					throw httpError;
-				}
-
-				const contentType = String(response.headers && response.headers.get("Content-Type") || "").toLowerCase();
-				if (contentType && contentType.indexOf("image/") !== 0) {
-					throw new Error("Image endpoint returned a non-image response (" + contentType + ")");
-				}
-				const blob = await response.blob();
-				if (!blob || !blob.size) throw new Error("Image endpoint returned an empty image");
-				if (!project._imageFlowActive) return { ok: false, stop: true, error: "Image flow was stopped" };
-
-				const file = new File(
-					[blob],
-					"ai-video" + n + "-seo-" + position + "-" + Date.now() + ".png",
-					{ type: blob.type || "image/png" }
-				);
-				let added = false;
-				try {
-					added = addAiToVideo(n, file, blob, project.imagePromptJobId, true);
-				}
-				catch (galleryError) {
-					const insertionMessage = galleryError && galleryError.message ? galleryError.message : String(galleryError);
-					console.error("[seo-image-flow] gallery insertion failed", {
-						videoIndex: n,
-						jobId: project.imagePromptJobId,
-						position: position,
-					error: insertionMessage
-					});
-					return { ok: false, stop: true, error: "Image generation succeeded but gallery insertion failed: " + insertionMessage };
-				}
-				if (!added) {
-					return { ok: false, stop: true, error: "The generated image could not be added because the video gallery is full." };
-				}
-
-				project.aiImagesDone = (project.aiImagesDone || 0) + 1;
-				refreshCredits();
-				console.info("[seo-image-flow] image added to gallery", {
-					videoIndex: n,
-					jobId: project.imagePromptJobId,
-					position: position,
-					ms: Date.now() - requestStartedAt,
-					bytes: blob.size
-				});
-				return { ok: true, stop: false };
+			if (!response.ok) {
+				const errJson = await seoResponseJson(response);
+				if (errJson && errJson.credits) applyCredits(errJson.credits);
+				throw new Error((errJson && errJson.error) || ("Image batch failed (HTTP " + response.status + ")"));
 			}
-			catch (imageError) {
-				const message = imageError && imageError.message ? imageError.message : String(imageError);
-				if (!project._imageFlowActive) return { ok: false, stop: true, error: "Image flow was stopped" };
-				if (imageError && imageError.name === "AbortError") {
-					project._aiImageFailures = (project._aiImageFailures || 0) + 1;
-					return { ok: false, stop: true, error: "Image generation timed out after " + Math.round(AI_IMAGE_REQUEST_TIMEOUT_MS / 1000) + " seconds. " + message };
+
+			const reader = response.body && typeof response.body.getReader === "function"
+				? response.body.getReader()
+				: null;
+
+			if (!reader) {
+				throw new Error("This browser cannot read the image batch stream");
+			}
+
+			const decoder = new TextDecoder();
+			let buffer = "";
+			for (;;) {
+				const chunk = await reader.read();
+				if (chunk.done) break;
+				armIdleTimer();
+				buffer += decoder.decode(chunk.value, { stream: true });
+				let newlineIndex = buffer.indexOf("\\n");
+				while (newlineIndex >= 0) {
+					const line = buffer.slice(0, newlineIndex).trim();
+					buffer = buffer.slice(newlineIndex + 1);
+					if (line) {
+						try { handleEvent(JSON.parse(line)); } catch (parseError) { }
+					}
+					newlineIndex = buffer.indexOf("\\n");
 				}
-				if (!imageError.status && attempt < 2) {
-					if (statusEl) statusEl.textContent = "Temporary connection error for image " + position + "; retrying once…";
-					await seoDelay(1000);
-					continue;
-				}
-				project._aiImageFailures = (project._aiImageFailures || 0) + 1;
-				console.warn("[seo-image-flow] image failed", {
-					videoIndex: n,
-					jobId: project.imagePromptJobId,
-					position: position,
-					attempt: attempt,
-					error: message
-				});
-				if (statusEl) {
-					statusEl.textContent = "Image " + position + " of " + total + " failed: " + message + " — continuing with the next prompt…";
-				}
-				return { ok: false, stop: false, error: message };
+			}
+			const tail = (buffer + decoder.decode()).trim();
+			if (tail) {
+				try { handleEvent(JSON.parse(tail)); } catch (parseError) { }
 			}
 		}
-		project._aiImageFailures = (project._aiImageFailures || 0) + 1;
-		return { ok: false, stop: false, error: "Image generation failed after retry" };
-	}
-
-	function watchGalleryCompletion(
-		n
-	) {
-		const project = videoProjects[n - 1];
-		if (!project || !project.imagePromptUrl || project._imageFlowFinalizing) return;
-		const gallery = document.getElementById("va-gallery-" + n);
-		const flowId = project.imagePromptJobId;
-		const target = Number(project.imagePromptTarget) || 0;
-		const inGallery = project.assets.filter(function (asset) {
-			return flowId && asset && asset.imagePromptFlowId === flowId && asset.card && (!gallery || asset.card.parentNode === gallery);
-		}).length;
-
-		if ((target > 0 && inGallery >= target) || project._aiImageQueueFinished) {
-			finalizeImagePromptFlow(n);
+		catch (batchError) {
+			const message = batchError && batchError.message ? batchError.message : String(batchError);
+			const aborted = batchError && batchError.name === "AbortError";
+			console.warn("[seo-image-flow] image batch interrupted", {
+				videoIndex: n,
+				added: added,
+				failed: failed,
+				aborted: aborted,
+				error: message
+			});
+			if (aborted && !project._imageFlowStopReason) {
+				project._imageFlowStopReason =
+					"The image batch was interrupted after " + added + " of " + total + " images.";
+			}
+			else if (!aborted) {
+				project._imageFlowStopReason =
+					"Image generation failed: " + message;
+			}
+		}
+		finally {
+			if (idleTimer) clearTimeout(idleTimer);
+			project._imageBatchController = null;
+			project.aiImagesDone = added;
+			project._aiImageFailures = failed;
+			project._aiImageSkipped = skipped;
+			refreshCredits();
+			console.info("[seo-image-flow] image batch finished", {
+				videoIndex: n,
+				requested: total,
+				added: added,
+				failed: failed,
+				skipped: skipped,
+				ms: Date.now() - (project._imageFlowStartedAt || Date.now())
+			});
 		}
 	}
 
+	/*
+	 * Ends the flow: aborts anything still in flight, restores the upload
+	 * and script buttons and reports what landed in the gallery.
+	 */
 	async function finalizeImagePromptFlow(
 		n,
 		finalReason
 	) {
-		const project = videoProjects[n - 1];
+
+		const project =
+			videoProjects[n - 1];
 		if (!project || project._imageFlowFinalizing) return;
+
 		project._imageFlowFinalizing = true;
 		project._imageFlowActive = false;
-		project._aiImageQueueFinished = true;
 
-		if (project._imagePromptPoller) {
-			clearInterval(project._imagePromptPoller);
-			project._imagePromptPoller = null;
+		if (project._imageBatchController) {
+			try { project._imageBatchController.abort(); } catch (abortError) { }
+			project._imageBatchController = null;
 		}
-		if (project._galleryWatcher) {
-			clearInterval(project._galleryWatcher);
-			project._galleryWatcher = null;
-		}
-		if (project._aiImageTimer !== null && project._aiImageTimer !== undefined) {
-			clearTimeout(project._aiImageTimer);
-			project._aiImageTimer = null;
-		}
-		[project._imagePromptCreateController, project._imagePromptPollController, project._aiImageAbortController].forEach(function (controller) {
-			if (controller && typeof controller.abort === "function") {
-				try { controller.abort(); } catch (abortError) { }
-			}
-		});
-
-		const url = project.imagePromptUrl;
-		project.imagePromptUrl = null;
-		let destroySucceeded = !url;
-		if (url) {
-			for (let attempt = 1; attempt <= 2; attempt++) {
-				try {
-					const response = await seoFetchWithTimeout(
-						url,
-						{ method: "DELETE", headers: { "Accept": "application/json" } },
-						15000,
-						project,
-						"_imagePromptDeleteController"
-					);
-					if (!response.ok) throw new Error("DELETE returned HTTP " + response.status);
-					await seoResponseJson(response);
-					destroySucceeded = true;
-					break;
-				}
-				catch (destroyError) {
-					if (attempt === 2) {
-						console.warn("[seo-image-flow] prompt URL destroy failed", {
-							videoIndex: n,
-						jobId: project.imagePromptJobId,
-						error: destroyError && destroyError.message ? destroyError.message : String(destroyError)
-						});
-					}
-					else await seoDelay(500);
-				}
-			}
+		if (project._imagePromptCreateController) {
+			try { project._imagePromptCreateController.abort(); } catch (abortError) { }
+			project._imagePromptCreateController = null;
 		}
 
-		const gallery = document.getElementById("va-gallery-" + n);
-		const flowId = project.imagePromptJobId;
-		const actualCount = project.assets.filter(function (asset) {
-			return flowId && asset && asset.imagePromptFlowId === flowId && asset.card && (!gallery || asset.card.parentNode === gallery);
-		}).length;
-		const promptCount = Number(project.imagePromptExpected) || 0;
-		const imageTarget = Number(project.imagePromptTarget) || 0;
-		const failures = Number(project._aiImageFailures) || 0;
+		const gallery =
+			document.getElementById(
+				"va-gallery-" + n
+			);
+		const flowId =
+			project.imagePromptFlowId;
+		const actualCount =
+			project.assets.filter(function (asset) {
+				return flowId && asset && asset.imagePromptFlowId === flowId && asset.card && (!gallery || asset.card.parentNode === gallery);
+			}).length;
+		const promptCount =
+			Array.isArray(project.imagePrompts)
+				? project.imagePrompts.length
+				: (Number(project.imagePromptTarget) || 0);
+		const imageTarget =
+			Number(project.imagePromptTarget) || 0;
+		const failures =
+			Number(project._aiImageFailures) || 0;
 
 		project.imagePrompts = null;
-		project._imagePromptPollInFlight = false;
-		project._imageFlowActive = false;
 		project._imageFlowFinalizing = false;
 		setVaUploadEnabled(n, true);
-		const scriptButton = document.getElementById("va-script-btn-" + n);
+		const scriptButton =
+			document.getElementById(
+				"va-script-btn-" + n
+			);
 		if (scriptButton) scriptButton.disabled = false;
 
 		let statusMessage;
@@ -14227,16 +14057,19 @@ export const APP_JS = `
 			statusMessage = "AI images done — " + actualCount + " image(s) in the gallery.";
 		}
 		statusMessage += " Upload Image, GIF or MP4 is enabled again.";
-		const statusEl = document.getElementById("va-ai-status-" + n);
+		const statusEl =
+			document.getElementById(
+				"va-ai-status-" + n
+			);
 		if (statusEl) statusEl.textContent = statusMessage;
 		console.info("[seo-image-flow] flow finalized", {
 			videoIndex: n,
-			jobId: flowId,
+			flowId: flowId,
 			imagesInGallery: actualCount,
 			promptsExpected: promptCount,
 			imagesTarget: imageTarget,
 			failures: failures,
-			promptUrlDestroyed: destroySucceeded
+			ms: Date.now() - (project._imageFlowStartedAt || Date.now())
 		});
 	}
 
