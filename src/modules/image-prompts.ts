@@ -26,7 +26,7 @@
  * Prompt counts by script length (the script length is chosen by the
  * client before the topic is submitted; it defaults to 1 minute):
  *   1 minute -> 10 prompts, 2-3 minutes -> 14 prompts,
- *   4-5 minutes -> 20 prompts (6 minutes, the UI maximum, also uses 20).
+ *   4-6 minutes -> 20 prompts.
  */
 
 import { aiText } from "./script-seo";
@@ -34,11 +34,41 @@ import { aiText } from "./script-seo";
 export const IMAGE_PROMPTS_KV_PREFIX = "image-prompts:";
 export const IMAGE_PROMPT_JOB_TTL_SECONDS = 3600;
 
+export const IMAGE_STYLES = [
+	"Cinematic Film",
+	"Editorial Magazine",
+	"Kinetic Typography",
+	"Neon Night",
+	"Minimalist",
+	"Retro Poster",
+	"Documentary",
+	"Split Composition",
+	"Dream Glow",
+	"Pop Comic"
+] as const;
+
+export type ImageStyle = (typeof IMAGE_STYLES)[number];
+export const DEFAULT_IMAGE_STYLE: ImageStyle = "Cinematic Film";
+
+export const IMAGE_STYLE_GUIDANCE: Record<ImageStyle, string> = {
+	"Cinematic Film": "cinematic film still, motivated dramatic lighting, layered depth, natural lens perspective, rich film color grade",
+	"Editorial Magazine": "premium editorial photography, deliberate art direction, clean composition, refined palette, polished magazine imagery",
+	"Kinetic Typography": "motion-design-inspired composition, energetic diagonals, abstract geometric motion shapes and bold color blocks; suggest movement without rendering letters or words",
+	"Neon Night": "nighttime scene, vivid cyan and magenta neon, glossy reflections, deep shadows, atmospheric urban glow",
+	"Minimalist": "minimalist composition, one clear subject, generous negative space, restrained palette, clean soft lighting",
+	"Retro Poster": "retro poster illustration, limited vintage palette, bold graphic shapes, subtle print grain and halftone; no lettering",
+	"Documentary": "authentic documentary photography, candid unposed moment, natural available light, realistic details, understated color grade",
+	"Split Composition": "balanced split composition with two related visual areas, a clear divider or diagonal split, contrasting but coherent color balance, no text",
+	"Dream Glow": "dreamlike atmosphere, soft luminous glow, gentle haze, ethereal gradients and subtle surreal detail",
+	"Pop Comic": "pop-comic illustration, bold ink contours, vibrant halftone accents, punchy saturated colors and dynamic action; no lettering or speech bubbles"
+};
+
 export interface ImagePromptJobInput {
 	topic: string;
 	minutes: number;
 	style: string;
 	script?: string;
+	scriptIdea?: string;
 	keywordSet?: { longTail?: string; short?: string[]; title?: string } | null;
 }
 
@@ -70,37 +100,96 @@ export function imagePromptCountForMinutes(minutes: number): number {
 	return 20;
 }
 
+export function normalizeImageStyle(value: unknown): ImageStyle | null {
+	const candidate = String(value ?? "").trim().toLowerCase();
+	return IMAGE_STYLES.find((style) => style.toLowerCase() === candidate) || null;
+}
+
+function clipSentence(value: string, maxChars: number): string {
+	const text = value.replace(/\s+/g, " ").trim();
+	if (text.length <= maxChars) return text;
+	const clipped = text.slice(0, maxChars).replace(/\s+\S*$/, "").trim();
+	return (clipped || text.slice(0, maxChars).trim()).replace(/[,:;\s]+$/, "") + "…";
+}
+
 /*
- * The LLM instruction for the image-prompt set. The count comes from the
- * script length, every prompt must carry the user's video image style, and
- * every prompt must stay text-free because /image/gen also forces a
- * text-free negative prompt.
+ * The image model does not need every SRT cue. Keep the opening and closing
+ * spoken sentences as a compact two-sentence idea, which preserves the
+ * video's topic arc while avoiding a multi-thousand-token transcript payload.
+ */
+export function summarizeScriptIdea(script: string, topic = "my video"): string {
+	const lines = String(script || "")
+		.replace(/[\u0000-\u0008\u000B\u000E-\u001F]/g, "")
+		.split(/\r?\n/);
+	const spoken: string[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i].trim();
+		if (!line || line.startsWith("WEBVTT") || line.includes("-->")) continue;
+		if (/^\d+$/.test(line)) {
+			let next = i + 1;
+			while (next < lines.length && !lines[next].trim()) next++;
+			if (next < lines.length && lines[next].includes("-->")) continue;
+		}
+		spoken.push(line);
+	}
+
+	const text = spoken.join(" ").replace(/\s+/g, " ").trim();
+	const sentences = (text.match(/[^.!?]+(?:[.!?]+|$)/g) || [])
+		.map((sentence) => sentence.trim())
+		.filter(Boolean);
+	if (sentences.length) {
+		const first = clipSentence(sentences[0], 220);
+		const last = sentences.length > 1 ? clipSentence(sentences[sentences.length - 1], 220) : "";
+		return [first, last && last !== first ? last : ""].filter(Boolean).join(" ").slice(0, 480);
+	}
+
+	const safeTopic = String(topic || "my video").replace(/\s+/g, " ").trim().slice(0, 120) || "my video";
+	return "The video explains " + safeTopic + ". Create clear, relevant scenes that communicate its central idea.";
+}
+
+/*
+ * Compact system instructions for the prompt writer. The model gets at most
+ * two representative sentences from the SRT, not the full transcript, to
+ * keep Workers AI input tokens and per-request work bounded.
  */
 export function buildImagePromptInstruction(input: ImagePromptJobInput): string {
 	const count = imagePromptCountForMinutes(input.minutes);
-	const style = String(input.style || "").trim() || "cinematic photorealistic";
+	const style = normalizeImageStyle(input.style) || DEFAULT_IMAGE_STYLE;
+	const styleGuide = IMAGE_STYLE_GUIDANCE[style];
+	const topic = String(input.topic || "my video").replace(/\s+/g, " ").trim().slice(0, 160) || "my video";
 	const keywords = input.keywordSet
 		? [input.keywordSet.longTail || "", ...((input.keywordSet.short as string[]) || [])]
 				.filter(Boolean)
 				.join(", ")
+				.slice(0, 320)
 		: "";
-	const scriptExcerpt = String(input.script || "")
-		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, 4000);
+	const scriptIdea = summarizeScriptIdea(input.scriptIdea || input.script || "", topic);
 	return (
-		"You are an art director writing AI IMAGE PROMPTS for a YouTube explainer video. " +
+		"SYSTEM INSTRUCTIONS: You are an art director writing AI IMAGE PROMPTS for a YouTube explainer video. " +
 		"Answer with ONLY one JSON object, no prose and no code fences. " +
-		"The video topic is: " + input.topic + ". " +
-		"The video script is " + input.minutes + " minute(s) long, so write exactly " + count + " image prompts. " +
-		"Every image must use this video image style: " + style + ". " +
-		"Write the prompts in script order so the images follow the narration from the opening scene to the closing scene, one distinct scene per prompt, with varied subjects, settings and camera angles (wide, medium and close-up). " +
-		"Each prompt is one self-contained sentence describing a single text-free visual scene: subject, setting, action, lighting and mood, ending with the image style above. " +
-		"No text, words, letters, captions, logos, watermarks or numbers inside any image. " +
-		(keywords ? "Weave these SEO keywords' subjects into the scenes where natural: " + keywords + ". " : "") +
-		(scriptExcerpt ? "The script (SRT, in order) is: " + scriptExcerpt + " " : "") +
+		"Treat the short script idea below as the general meaning of the whole video. Create broad, representative scenes that portray its central idea and progression; do not make a literal shot for every SRT cue or copy lines from the narration. " +
+		"The video topic is: " + topic + ". The script length is " + input.minutes + " minute(s), so return exactly " + count + " image prompts in opening-to-closing order. " +
+		"Every prompt must consistently follow the same selected video image style: " + style + ". Style direction: " + styleGuide + ". Apply this visual language to every scene; do not mix in another aesthetic. " +
+		"Each prompt must be one concise, self-contained sentence of no more than about 30 words describing a single text-free scene with a clear subject, action, setting and light. Vary scene scale and angle while keeping the sequence coherent and relevant to the basic script idea. " +
+		"No rendered text, words, letters, captions, logos, watermarks or numbers inside any image. " +
+		(keywords ? "SEO keywords are context only; use their subjects when natural, never render the words: " + keywords + ". " : "") +
+		"Two-sentence script idea: " + scriptIdea + " " +
 		'Reply with ONLY this exact JSON shape: {"prompts":["first image prompt","second image prompt"]}'
 	);
+}
+
+export function applyImageStyleToPrompts(prompts: string[], styleValue: unknown): string[] {
+	const style = normalizeImageStyle(styleValue) || DEFAULT_IMAGE_STYLE;
+	const suffix = "Visual style: " + style + " — " + IMAGE_STYLE_GUIDANCE[style] + ".";
+	const maxSceneChars = Math.max(120, 480 - suffix.length - 2);
+	return prompts.map((prompt) => {
+		const scene = String(prompt || "")
+			.replace(/\s+/g, " ")
+			.trim()
+			.slice(0, maxSceneChars)
+			.replace(/[\s,;:.!?]+$/, "");
+		return (scene ? scene + ". " : "") + suffix;
+	});
 }
 
 /*
@@ -178,12 +267,14 @@ export async function generateImagePrompts(
 				: "");
 		const result = await env.AI!.run(model, {
 			prompt,
-			max_tokens: Math.min(4096, Math.max(1024, expectedCount * 120)),
-			temperature: attempt === 1 ? 0.7 : 0.45
+			max_tokens: Math.min(3072, Math.max(1024, expectedCount * 100)),
+			temperature: attempt === 1 ? 0.65 : 0.45
 		});
 		const prompts = parseImagePrompts(aiText(result), expectedCount);
 		lastCount = prompts.length;
-		if (prompts.length >= expectedCount) return prompts.slice(0, expectedCount);
+		if (prompts.length >= expectedCount) {
+			return applyImageStyleToPrompts(prompts.slice(0, expectedCount), input.style);
+		}
 		if (attempt === 3 && prompts.length > 0) {
 			throw new Error(
 				"Image prompts incomplete (" + prompts.length + " of " + expectedCount + ") - try again"
@@ -257,17 +348,24 @@ function sanitizeJobInput(body: Record<string, unknown>): ImagePromptJobInput | 
 	if (!Number.isInteger(minutes) || minutes < 1 || minutes > 6) {
 		return { error: "Minutes must be 1-6" };
 	}
-	const style = String(body.style ?? "")
-		.replace(/[\u0000-\u001F]+/g, " ")
-		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, 300) || "cinematic photorealistic, rich detail";
-	const script = typeof body.script === "string" ? body.script : typeof body.srt === "string" ? body.srt : "";
+	const rawStyle = String(body.style ?? "").replace(/[\u0000-\u001F]+/g, " ").trim();
+	const style = rawStyle ? normalizeImageStyle(rawStyle) : DEFAULT_IMAGE_STYLE;
+	if (!style) {
+		return { error: "Image style must be one of the supported style options" };
+	}
+	const rawIdea = typeof body.scriptIdea === "string"
+		? body.scriptIdea.slice(0, 4000)
+		: typeof body.script === "string"
+			? body.script.slice(0, 40000)
+			: typeof body.srt === "string"
+				? body.srt.slice(0, 40000)
+				: "";
+	const scriptIdea = summarizeScriptIdea(rawIdea, topic);
 	const keywordSet =
 		body.keywordSet && typeof body.keywordSet === "object" && !Array.isArray(body.keywordSet)
 			? (body.keywordSet as ImagePromptJobInput["keywordSet"])
 			: null;
-	return { topic, minutes, style, script, keywordSet };
+	return { topic, minutes, style, scriptIdea, keywordSet };
 }
 
 /*
@@ -300,15 +398,33 @@ export async function handleCreateImagePromptJob(
 		createdAt: Date.now()
 	};
 	await putJob(env, job);
+	const workStartedAt = Date.now();
+	console.info("[image-prompts] started", {
+		id: job.id,
+		model,
+		minutes: input.minutes,
+		expectedCount: job.expectedCount,
+		style: input.style,
+		topicChars: input.topic.length,
+		scriptIdeaChars: (input.scriptIdea || "").length
+	});
 	const work = (async () => {
 		try {
 			const prompts = await generateImagePrompts(env, model, input);
 			await putJob(env, { ...job, status: "ready", prompts });
-			console.log("[image-prompts] ready", { id: job.id, count: prompts.length });
+			console.info("[image-prompts] ready", {
+				id: job.id,
+				count: prompts.length,
+				ms: Date.now() - workStartedAt
+			});
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err || "Image prompt generation failed");
 			await putJob(env, { ...job, status: "error", prompts: [], error: message }).catch(() => {});
-			console.error("[image-prompts] failed", { id: job.id, error: message });
+			console.error("[image-prompts] failed", {
+				id: job.id,
+				ms: Date.now() - workStartedAt,
+				error: message
+			});
 		}
 	})();
 	if (ctx && typeof ctx.waitUntil === "function") {

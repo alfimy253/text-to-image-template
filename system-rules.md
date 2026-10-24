@@ -612,9 +612,14 @@
   - Tags below the preview select elements; canvas click selects the frontmost visible object,
     and dragging moves it. Text, font, colour, alignment, size, speed, animation, transition,
     visibility/deletion/restoration and X/Y remain editable. **＋ Text** changes to **＋ Graphic**
-    when a graphic is selected and adds an offset clone of its graphic settings.
+    when a graphic is selected and adds an offset clone of its graphic settings. The active
+    **Delete element** button shares the panel header row with that add control; it is hidden for
+    background/no selection. The former **Shapes & stickers** heading and sticker-box grid are
+    absent from this scene editor.
   - **+ Front layer** / **- Back Layer** move one element **one step** forward/backward.
-    Buttons disable at the ends; deleted objects are skipped. `reelElementKeys()` supplies
+    Their placement stays fixed and both use the same neutral `.tm-tool` button treatment as the
+    top-right **Pause** control. Buttons disable at the ends; deleted objects are skipped.
+    `reelElementKeys()` supplies
     the same saved order to the tag list, renderer and hit-testing; new objects append on top.
     Background is not a reorderable element and always stays behind them. The gear's hole
     uses even-odd fill rather than erasing lower layers.
@@ -1585,19 +1590,22 @@ cites `kv-scale-test.md` §8, the last section of that document.
 - **Step 1 — SEO plan (`POST /api/seo-plan {topic}`).** Clicking **✨ Generate SEO Script**
   immediately disables that video's **Upload Image, GIF or MP4** button
   (`#va-upload-btn-N`, also honoured by `clickVaFiles`) and opens the walkthrough modal
-  (`#seo-walkthrough-modal`) at the *SEO plan* step. The server plans **two different** validated
-  keyword sets (each: 1 long-tail, exactly 4 shorts, a title and headings, all per RULE 7) —
-  the second planner call is instructed to differ and an identical reply is rejected/retried by
-  `planOneSeoKeywordSet`/`keywordSetsEqual` in `src/modules/script-seo.ts`. The modal may be
+  (`#seo-walkthrough-modal`) at the *SEO plan* step. The server plans **two validated** keyword
+  sets (each: 1 long-tail, exactly 4 shorts, a title and headings, all per RULE 7); the second
+  planner call is instructed to differ, and an identical long-tail + ordered-short combination
+  is rejected/retried by `planOneSeoKeywordSet`/`keywordSetsEqual` in `src/modules/script-seo.ts`.
+  The modal may be
   closed while the plan is being generated; the fetch continues in the background and the modal
   **re-opens automatically** when the two sets arrive. On plan failure the modal closes, the
   status line shows the error and the upload + script buttons are re-enabled.
-- **Step 2 — selection + video image style.** Each set is a card with its title, headings,
+- **Step 2 — selection + video image style.** Each set is a white, theme-accented card with its title, headings,
   long-tail and short chips and a **Select this set** button. Selecting a set advances the modal
-  to the *Video image style* step (a labelled text input, label above the input; empty input
-  falls back to `cinematic photorealistic, rich detail`). **Generate Script & Images** closes
-  the modal, shows the **loading animation on the script section** (`.va-script-loading` spinner
-  in `#va-script-box-N`) and calls `POST /api/script` with `{topic, minutes, speed, keywordSet}`.
+  to the *Video image style* step, where a labelled dropdown offers exactly **Cinematic Film**,
+  **Editorial Magazine**, **Kinetic Typography**, **Neon Night**, **Minimalist**, **Retro Poster**,
+  **Documentary**, **Split Composition**, **Dream Glow** and **Pop Comic**. The selected value is
+  retained when the modal is closed and reopened. **Generate Script & Images** closes the modal,
+  shows the **loading animation on the script section** (`.va-script-loading` spinner in
+  `#va-script-box-N`) and calls `POST /api/script` with `{topic, minutes, speed, keywordSet}`.
   A supplied `keywordSet` is re-validated by `parseKeywordSet` (invalid → `400`, no AI call,
   no usage count) and **skips the Stage-1 planner**; requests without it behave exactly as
   RULE 7 describes. The existing SRT display, SEO chips, title autofill, Download .srt and
@@ -1607,32 +1615,40 @@ cites `kv-scale-test.md` §8, the last section of that document.
   image-prompt job: `POST /api/image-prompts {topic, minutes, style, script, keywordSet}` →
   `202 {id, url: "/api/image-prompts/<id>", prompts: [], expectedCount}`. Creation returns at
   once; the instruct model (`buildImagePromptInstruction` in `src/modules/image-prompts.ts`)
-  finishes in the background via `ctx.waitUntil` and writes the job record (KV
-  `image-prompts:<id>`, 1 h TTL; in-isolate Map when KV is unbound). The count follows the
-  script length: **1 min → 10, 2–3 min → 14, 4–5 min → 20** (6 min also 20). Every prompt is a
-  single text-free scene in the chosen style, in script order. The browser **polls the dynamic
-  URL every 30 s** (`IMAGE_PROMPT_POLL_MS`); pending jobs answer `prompts: []`, ready jobs the
-  full set, destroyed/unknown ids `404`.
-- **Step 4 — queued image generation + teardown.** When the prompts arrive, the browser
-  generates **one AI image every 20 s** (`AI_IMAGE_QUEUE_MS`) through the existing
-  `/image/gen` route (`AI_ENDPOINT`) and adds each image straight into that video's gallery via
-  the existing `addAiToVideo` path (daily image credits apply as before). A watcher polls the
-  gallery count every 1 s (`GALLERY_WATCH_MS`, exposed as `window.__SEO_FLOW_TIMING`); once the
-  last expected image is in `#va-gallery-N`, the client calls
-  **`DELETE /api/image-prompts/<id>`** (destroying the dynamic URL — later polls get `404`),
-  stops all timers and **re-enables Upload Image, GIF or MP4** and the script button. If some
-  images fail, the flow still finalises after the last prompt was attempted so the URL is
-  never leaked and the upload button never stays disabled.
+  finishes in the background via `ctx.waitUntil` when available and writes the job record (KV
+  `image-prompts:<id>`, 1 h TTL; in-isolate Map when KV is unbound). Instead of sending the full
+  SRT to the prompt writer, the worker compacts it to at most the opening and closing spoken
+  sentences (≤480 characters), and asks for concise, broad scenes portraying the central idea,
+  not a literal cue-by-cue retelling. The count follows the script length:
+  **1 min → 10, 2–3 min → 14, 4–6 min → 20**. Every prompt is a single text-free scene and is
+  suffixed with the selected style's consistent visual direction. The browser polls immediately
+  after creation, then every 30 s (`IMAGE_PROMPT_POLL_MS`); pending jobs answer `prompts: []`,
+  ready jobs the full set, and destroyed/unknown ids `404`. Poll requests time out after 60 s;
+  transient errors retry a bounded number of times, while terminal job errors finalize/DELETE.
+- **Step 4 — queued image generation + teardown.** When prompts arrive, the browser generates
+  the first AI image immediately and schedules each subsequent request 20 s after the previous
+  attempt settles (`AI_IMAGE_QUEUE_MS`) through `/image/gen` (`AI_ENDPOINT`). Each successful
+  image is inserted into the target video's gallery through `addAiToVideo`, tagged with its job
+  id, and counted against the existing 25-still cap; the queue stops on exhausted credits or a
+  hard gallery limit. A single transient image request may retry; each request times out after
+  90 s. A 1 s gallery watcher (`GALLERY_WATCH_MS`, exposed as `window.__SEO_FLOW_TIMING`) counts
+  only cards tagged to this prompt job in `#va-gallery-N`, not unrelated cards or a baseline
+  child-count delta. The flow finalizes when the available slot target is reached or the queue
+  has attempted all usable prompts, including partial-success and all-failed cases. Finalization
+  aborts outstanding requests, clears all timers, retries **`DELETE /api/image-prompts/<id>`**
+  once if needed, and re-enables **Upload Image, GIF or MP4** and the script button. Status reports
+  actual tagged images in that gallery and the failure/limit reason; `[image-gen]` logs record
+  request/success/failure timing and prompt length without logging prompt contents.
 
 ---
 
 ## RULE 24 AUDIT ADDENDUM — corrections and inconsistency register (double-check)
 
-> This addendum is part of the double-check of the SEO walkthrough session. The full
-> requirement-by-requirement record (SR-1 … SR-21), the implementation map and the
-> verification evidence live in `seo-walkthrough-session-requirements.md`. Where RULE 24
-> above and this addendum disagree, **this addendum describes the code as it actually
-> behaves**; nothing here changes RULE 7's keyword contract.
+> This is the original double-check snapshot of the SEO walkthrough; its open-item list is
+> historical after the follow-up fixes recorded at the end of this file. The full
+> requirement-by-requirement record and updated verification evidence live in
+> `seo-walkthrough-session-requirements.md`. The new follow-up section is canonical for the
+> image flow; nothing here changes RULE 7's keyword contract.
 
 **Corrections to RULE 24's wording**
 
@@ -1694,3 +1710,39 @@ cites `kv-scale-test.md` §8, the last section of that document.
 - The session's own summary texts (`README.md`, RULE 24, `userflow.md` Flow 6)
   overstate "two different sets", "every form element" and the teardown guarantee
   as detailed in the corrections above and in B-4/B-5/B-7 of the session record.
+
+---
+
+## RULE 24 FOLLOW-UP — style dropdown, template controls and image-flow reliability (2026-10-24)
+
+This follow-up supersedes the original snapshot above for the changed controls and image-flow
+failure paths. The following earlier audit items are resolved in code: A-1 (cached plan/style
+modal can be reopened), A-2/A-3 (flow-tagged gallery completion, cap-aware targets, and an explicit
+`addAiToVideo` success result), A-4 (terminal and external failures finalize and DELETE), and A-7
+(credit exhaustion and `401`/`429` stop the queue). A-14's style input/catalog mismatch is also
+resolved: the client and worker share the ten canonical style labels, the worker rejects unknown
+styles, and each returned prompt receives the selected style direction. A-5 (failed SRT
+regeneration), A-6 (global modal with overlapping video plans), A-8 (stale topic/length snapshot),
+A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbing) and A-15
+(job-store lifetime) remain outside this follow-up.
+
+- **Template scene editor.** The Shapes & stickers heading and sticker-box grid are removed from
+  the graphic-configuration inspector. **Delete element** sits next to **＋ Text / ＋ Graphic**
+  and appears only for a selected non-background element. Layer controls retain their position
+  and use `.tm-tool`, matching the top-right **Pause** button. SEO keyword-set cards are white
+  (including the selected-set card), with readable dark content, theme border/accent and a
+  separately themed style dropdown.
+- **Prompt generation.** The style selector contains exactly the ten values listed in RULE 24.
+  `summarizeScriptIdea()` forwards at most the opening and closing spoken sentence (≤480 chars),
+  and `buildImagePromptInstruction()` requests concise, general representative scenes that
+  convey the central idea rather than retelling each SRT cue. Count validation remains exact;
+  the selected style is appended consistently to every prompt.
+- **End-to-end flow.** Prompt-job creation validates the dynamic same-origin URL, returned job id
+  and expected count. The client polls immediately then every 30 seconds with bounded transient
+  retries/timeouts; image requests use `/image/gen`, one initial request then 20-second
+  settle-based spacing, bounded retry/timeouts and the existing daily-credit gate. Generated
+  cards are tagged to the job and inserted into the selected video's own gallery. Only tagged
+  cards count toward completion; the 25-still cap limits the target, and partial successes,
+  failures and terminal errors all delete the prompt URL, clear timers/abort requests and
+  re-enable uploads/script generation. Logs correlate job/video/position and latency without
+  recording prompt contents.

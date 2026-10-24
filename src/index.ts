@@ -563,6 +563,13 @@ export default {
 
 			}
 
+			const imageStartedAt = Date.now();
+			console.info("[image-gen] request", {
+				variant,
+				promptChars: prompt.length,
+				plan: creditGate && creditGate.plan ? creditGate.plan.id : "open"
+			});
+
 			try {
 
 				const result =
@@ -578,6 +585,11 @@ export default {
 						}
 					);
 
+				console.info("[image-gen] success", {
+					variant,
+					promptChars: prompt.length,
+					ms: Date.now() - imageStartedAt
+				});
 				return new Response(
 					result,
 					{
@@ -589,6 +601,13 @@ export default {
 
 			}
 			catch (error) {
+
+				console.error("[image-gen] failed", {
+					variant,
+					promptChars: prompt.length,
+					ms: Date.now() - imageStartedAt,
+					error: error instanceof Error ? error.message : String(error)
+				});
 
 				/*
 				 * The model failed: give the credit back.

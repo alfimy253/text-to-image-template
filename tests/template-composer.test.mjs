@@ -15,7 +15,31 @@ test("gallery contains 15 scenes and no graphics/shape template tab or cards", (
 	assert.equal(h.document.querySelectorAll(".tm-gallery-tab").length, 1);
 	assert.equal(h.document.querySelector("#tm-tab-shapes, #tm-shape-grid, .tm-shape-card"), null);
 	assert.equal(h.document.querySelector(".tm-scene-switcher, #tm-scene-list"), null);
-	assert.doesNotMatch(h.document.querySelector("#tm-scene-controls").textContent, /editable designs/);
+	assert.equal(h.document.querySelector(".tm-scene-sticker-grid, .tm-scene-sticker"), null);
+	assert.doesNotMatch(h.document.querySelector("#tm-scene-controls").textContent, /editable designs|Shapes & stickers/);
+});
+
+test("delete action sits beside + Text/+ Graphic and deletes/restores the selected element", (t) => {
+	const h = harness(t);
+	const add = h.document.querySelector("#tm-scene-add-text");
+	const remove = h.document.querySelector("#tm-scene-delete");
+	assert.ok(add);
+	assert.ok(remove);
+	assert.equal(add.parentElement, remove.parentElement);
+	assert.equal(remove.previousElementSibling, add);
+	assert.equal(remove.hidden, false);
+	assert.equal(remove.disabled, false);
+	remove.click();
+	assert.equal(h.api.state().elements.headline.deleted, true);
+	assert.equal(h.api.state().elements.headline.visible, false);
+	assert.equal(remove.hidden, true);
+	h.api.select("headline");
+	assert.equal(h.document.querySelector("#tm-scene-inspector button").textContent, "Restore element");
+	h.button("Restore element").click();
+	assert.equal(h.api.state().elements.headline.deleted, false);
+	assert.equal(remove.hidden, false);
+	h.api.select("bg");
+	assert.equal(remove.hidden, true);
 });
 
 test("all 13 animated objects are in Graphics, alongside the original nine shapes", (t) => {
@@ -39,6 +63,8 @@ test("animated graphics remain selectable, editable and rendered inside every Re
 		assert.equal(h.field("Graphics").querySelectorAll("option").length, 22);
 		assert.ok(h.button("+ Front layer"));
 		assert.ok(h.button("- Back Layer"));
+		assert.ok(h.button("+ Front layer").classList.contains("tm-tool"));
+		assert.ok(h.button("- Back Layer").classList.contains("tm-tool"));
 		assert.ok(h.field("Rotate degrees"));
 	}
 	for (const kind of Object.keys(h.api.graphics)) {
