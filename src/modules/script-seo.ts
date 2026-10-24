@@ -870,6 +870,185 @@ export function keywordOverlapInstructions(
 	return instructions;
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * SEO PLAN (two selectable keyword sets) — used by the video accordion's
+ * "Generate SEO Script" walkthrough.
+ *
+ * The walkthrough first asks the planner for TWO DIFFERENT keyword sets for
+ * the same topic (one long-tail + exactly four short keywords, a title and
+ * headings each), the user selects one of them, and only then is the SRT
+ * writer called with that selected set. `handleSeoScriptGeneration` below
+ * therefore accepts an optional, previously-planned `keywordSet` in its
+ * request body and, when one is supplied (and re-validated with the exact
+ * same `parseKeywordSet` rules), skips its own Stage-1 planner.
+ * ---------------------------------------------------------------------------
+ */
+
+export interface SeoPlanSetClient {
+	title: string;
+	headings: string[];
+	longTail: string;
+	/* Planner JSON shape: the four short-tail keywords. */
+	short: string[];
+}
+
+export function plannedSetToClient(set: PlannedKeywordSet): SeoPlanSetClient {
+	return {
+		title: set.title,
+		headings: set.headings.slice(),
+		longTail: set.longTail,
+		short: set.shorts.slice()
+	};
+}
+
+export function keywordSetsEqual(
+	a: PlannedKeywordSet,
+	b: PlannedKeywordSet
+): boolean {
+	return (
+		a.longTail === b.longTail &&
+		a.shorts.join("\n") === b.shorts.join("\n")
+	);
+}
+
+export function buildSeoPlannerPrompt(
+	topic: string,
+	avoid?: PlannedKeywordSet | null
+): string {
+	let prompt =
+		"You are an SEO strategist for YouTube explainer videos. Answer with ONLY one JSON object, no prose and no code fences. " +
+		"The video topic is: " +
+		topic +
+		". Plan:\n" +
+		"1) Exactly " +
+		SEO_LONG_TAIL +
+		" long-tail keyword (lower case, a specific search phrase about the topic; NO minimum or maximum word count or character length).\n" +
+		"2) Exactly " +
+		SEO_SHORT_TOTAL +
+		" unique short-tail keywords (1-" +
+		SEO_SHORT_WORDS_MAX +
+		" words each, lower case, closely related to the topic).\n" +
+		"KEYWORD FREQUENCY IS A MINIMUM, NOT AN EXACT COUNT: the long-tail keyword must be said at least " +
+		SEO_LONG_FREQ_MIN +
+		" time and every short keyword at least " +
+		SEO_SHORT_FREQ_MIN +
+		" times; the script may say them more often than that.\n" +
+		"SHORT/LONG-TAIL OVERLAP IS ALLOWED: A short keyword may occur inside the long-tail keyword, or even be the same phrase. Each spoken occurrence counts toward BOTH roles, so a short that appears inside the long-tail needs fewer standalone uses (for example, a one-word short nested once in the long-tail needs one more use to reach " +
+		SEO_SHORT_FREQ_MIN +
+		"). Choose four distinct short keywords that do not contain one another.\n" +
+		"3) The explainer video TITLE (at most " +
+		SEO_TITLE_MAX +
+		" characters): it MUST include at least one of the " +
+		SEO_SHORT_TOTAL +
+		" short-tail keywords verbatim.\n" +
+		"4) At least " +
+		SEO_HEADINGS_MIN +
+		" section HEADING(S) (2-4 headings recommended, at most " +
+		SEO_HEADING_WORDS_MAX +
+		" words each) for this explainer video; at least one heading MUST include one of the short-tail keywords verbatim (using the same short keyword as the title is allowed).\n" +
+		'Reply with ONLY this exact JSON shape: {"title":"the video title","headings":["first section heading","second section heading"],"longTail":"the one long tail keyword","short":["short one","short two","short three","short four"]}';
+	if (avoid) {
+		prompt +=
+			"\nIMPORTANT: produce a DIFFERENT keyword set from this already-planned set — do NOT reuse its long-tail keyword \"" +
+			avoid.longTail +
+			'" and do NOT reuse its short keywords (' +
+			avoid.shorts.map((s) => '"' + s + '"').join(", ") +
+			"). Choose a fresh long-tail keyword and fresh short keywords that still target the same topic.";
+	}
+	return prompt;
+}
+
+/*
+ * One validated keyword set from the planner (max 3 attempts, same retry
+ * contract as the script route's Stage 1). When `avoid` is given the prompt
+ * instructs the model to produce a different set, and a reply that is still
+ * identical to `avoid` is rejected and retried.
+ */
+export async function planOneSeoKeywordSet(
+	env: { AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> } },
+	scriptModel: string,
+	topic: string,
+	avoid?: PlannedKeywordSet | null
+): Promise<PlannedKeywordSet> {
+	const basePrompt = buildSeoPlannerPrompt(topic, avoid);
+	let keywordError = "";
+	let prevRaw = "";
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		const prompt =
+			basePrompt +
+			(attempt > 1
+				? " Your previous attempt was rejected: " +
+					keywordError +
+					(prevRaw
+						? " Your previous JSON was: " + prevRaw.slice(0, 420) + "."
+						: "") +
+					" Try again and fix that exact problem."
+				: "");
+		const result = await env.AI!.run(scriptModel, {
+			prompt,
+			max_tokens: 1024,
+			temperature: attempt === 1 ? 0.55 : 0.4
+		});
+		const rawText = aiText(result);
+		const check = parseKeywordSet(rawText);
+		if (check.ok && avoid && keywordSetsEqual(check.data, avoid)) {
+			keywordError =
+				"the keyword set is identical to the other set - choose a different long-tail keyword and different short keywords";
+			prevRaw = rawText.replace(/\s+/g, " ").trim();
+			continue;
+		}
+		if (check.ok) {
+			return check.data;
+		}
+		keywordError = check.error;
+		prevRaw = rawText.replace(/\s+/g, " ").trim();
+	}
+	throw new Error("SEO keywords invalid (" + keywordError + ") - try again");
+}
+
+/*
+ * POST /api/seo-plan {topic} -> {success, topic, sets:[setA, setB], model}
+ * Each set is {title, headings, longTail, short:[4 shorts]} and has passed
+ * the same `parseKeywordSet` validation the script route enforces. The two
+ * sets are guaranteed different (different long-tail and short keywords).
+ */
+export async function handleSeoPlanGeneration(
+	request: Request,
+	env: { AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> } },
+	scriptModel: string
+): Promise<Response> {
+	const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+	const rawTopic = String(body.topic ?? "")
+		.replace(/[\u0000-\u001F]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 160);
+	const topic = rawTopic || "my video";
+	if (!env || !env.AI) {
+		return scriptJson({ success: false, error: "AI binding not configured" }, 503);
+	}
+	try {
+		const first = await planOneSeoKeywordSet(env, scriptModel, topic);
+		const second = await planOneSeoKeywordSet(env, scriptModel, topic, first);
+		console.log("[seo-plan] ok", {
+			topic: topic.slice(0, 80),
+			first: first.longTail,
+			second: second.longTail
+		});
+		return scriptJson({
+			success: true,
+			topic,
+			sets: [plannedSetToClient(first), plannedSetToClient(second)],
+			model: scriptModel
+		});
+	} catch (err: unknown) {
+		const message = err instanceof Error ? err.message : String(err || "SEO plan failed");
+		console.error("[seo-plan] failed", { topic: topic.slice(0, 80), error: message });
+		return scriptJson({ success: false, error: message || "SEO plan failed" }, 500);
+	}
+}
+
 function buildPinpointRetryInstructions(
 	lastError: string,
 	previousCheck: SrtValidationResult | null,
@@ -1012,6 +1191,30 @@ export async function handleSeoScriptGeneration(
 		);
 	}
 
+	/*
+	 * Optional user-selected keyword set (from POST /api/seo-plan, chosen in
+	 * the walkthrough). When supplied it is re-validated with the exact same
+	 * rules as a freshly planned set and Stage 1 is skipped; an invalid
+	 * supplied set is a 400 and never reaches the writer or usage tracking.
+	 */
+	let suppliedKeywordSet: PlannedKeywordSet | null = null;
+	if (body.keywordSet !== undefined && body.keywordSet !== null) {
+		if (typeof body.keywordSet !== "object" || Array.isArray(body.keywordSet)) {
+			return scriptJson(
+				{ success: false, error: "Selected SEO keyword set invalid (keywordSet must be an object)" },
+				400
+			);
+		}
+		const suppliedCheck = parseKeywordSet(JSON.stringify(body.keywordSet));
+		if (!suppliedCheck.ok) {
+			return scriptJson(
+				{ success: false, error: "Selected SEO keyword set invalid (" + suppliedCheck.error + ")" },
+				400
+			);
+		}
+		suppliedKeywordSet = suppliedCheck.data;
+	}
+
 	if (onValidated) {
 		try {
 			await onValidated();
@@ -1052,44 +1255,16 @@ export async function handleSeoScriptGeneration(
 		/*
 		 * Stage 1: SEO Keyword, Title & Section Heading Planner (max 3 attempts)
 		 */
-		const keywordPrompt =
-			"You are an SEO strategist for YouTube explainer videos. Answer with ONLY one JSON object, no prose and no code fences. " +
-			"The video topic is: " +
-			topic +
-			". Plan:\n" +
-			"1) Exactly " +
-			SEO_LONG_TAIL +
-			" long-tail keyword (lower case, a specific search phrase about the topic; NO minimum or maximum word count or character length).\n" +
-			"2) Exactly " +
-			SEO_SHORT_TOTAL +
-			" unique short-tail keywords (1-" +
-			SEO_SHORT_WORDS_MAX +
-			" words each, lower case, closely related to the topic).\n" +
-			"KEYWORD FREQUENCY IS A MINIMUM, NOT AN EXACT COUNT: the long-tail keyword must be said at least " +
-			SEO_LONG_FREQ_MIN +
-			" time and every short keyword at least " +
-			SEO_SHORT_FREQ_MIN +
-			" times; the script may say them more often than that.\n" +
-			"SHORT/LONG-TAIL OVERLAP IS ALLOWED: A short keyword may occur inside the long-tail keyword, or even be the same phrase. Each spoken occurrence counts toward BOTH roles, so a short that appears inside the long-tail needs fewer standalone uses (for example, a one-word short nested once in the long-tail needs one more use to reach " +
-			SEO_SHORT_FREQ_MIN +
-			"). Choose four distinct short keywords that do not contain one another.\n" +
-			"3) The explainer video TITLE (at most " +
-			SEO_TITLE_MAX +
-			" characters): it MUST include at least one of the " +
-			SEO_SHORT_TOTAL +
-			" short-tail keywords verbatim.\n" +
-			"4) At least " +
-			SEO_HEADINGS_MIN +
-			" section HEADING(S) (2-4 headings recommended, at most " +
-			SEO_HEADING_WORDS_MAX +
-			" words each) for this explainer video; at least one heading MUST include one of the short-tail keywords verbatim (using the same short keyword as the title is allowed).\n" +
-			'Reply with ONLY this exact JSON shape: {"title":"the video title","headings":["first section heading","second section heading"],"longTail":"the one long tail keyword","short":["short one","short two","short three","short four"]}';
-
-		let keywordSet: PlannedKeywordSet | null = null;
+		const keywordPrompt = buildSeoPlannerPrompt(topic);
+		let keywordSet: PlannedKeywordSet | null = suppliedKeywordSet;
 		let keywordError = "";
+		if (keywordSet) {
+			plannerTrace.push({ attempt: 0, ok: true, ms: 0, source: "client-selected" });
+			console.log("[script] keywords supplied", { reqId, title: keywordSet.title, longTail: keywordSet.longTail, shorts: keywordSet.shorts });
+		}
 		let prevPlannerRaw = "";
 
-		for (let attempt = 1; attempt <= 3; attempt++) {
+		for (let attempt = 1; !keywordSet && attempt <= 3; attempt++) {
 			const attemptT0 = Date.now();
 			const plannerTemp = attempt === 1 ? 0.55 : 0.4;
 			const prompt =

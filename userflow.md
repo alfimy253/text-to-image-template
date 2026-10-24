@@ -946,3 +946,105 @@ chrome are not ported. Both Download MP4 and direct Add to Video N use the share
   mock AI; live model availability and the pre-existing legacy TypeScript errors are separate.
 
 See `new_requirements.md` §6 for acceptance criteria, source-file mappings and verification scope.
+
+## 12. Flow 6 — Generate SEO Script walkthrough (this revision)
+
+1. In a Video N accordion the user writes a topic (or leaves it to fall back to the video
+   title), picks Minutes (default **1**) and Speech, then presses **✨ Generate SEO Script**.
+   That video's **Upload Image, GIF or MP4** button disables immediately and the walkthrough
+   modal opens at *1 · SEO plan* while `POST /api/seo-plan` plans **two different** SEO keyword
+   sets (long-tail + short-tail keywords, title and headings for each).
+2. The user may close the modal while the plan is generated — the request keeps running in the
+   background, and when the two sets arrive the modal **re-opens by itself** at
+   *2 · Choose a keyword set*, showing both sets as cards.
+3. The user clicks **Select this set** on the set that targets their topic. The modal advances
+   to *3 · Video image style*; the user types the style for the AI-generated images and presses
+   **Generate Script & Images**.
+4. The modal closes and the script section shows a loading animation while
+   `POST /api/script` writes the SRT from the selected set (the planner is skipped; the set is
+   re-validated server-side). The finished script appears in the script box exactly as before,
+   with the SEO plan chips, Download .srt and Generate Voiceover.
+5. With the script shown, the browser creates a dynamic image-prompt URL
+   (`POST /api/image-prompts`) and **polls it every 30 seconds**. Until the AI finishes writing
+   the prompts (count by script length: **10** for 1 minute, **14** for 2–3 minutes, **20** for
+   4–5 minutes, all in the chosen image style) the URL answers an empty array.
+6. When the prompts arrive, the browser generates **one image every 20 seconds** through the
+   normal AI image route and drops each finished image into that video's gallery. A watcher
+   keeps polling the gallery count; once the last image is in the gallery it **destroys the
+   dynamic URL** (`DELETE /api/image-prompts/<id>`) and **re-enables Upload Image, GIF or MP4**,
+   so the user can add their own media again.
+
+The accordion form controls follow one standard throughout: every form element uses the
+Upload MP3 Audio button's corner radius and padding with a 3px bottom margin (text inputs and
+textareas: 4px top / 5px bottom), dropdown labels always sit above their dropdown, and there
+is no Captions section in the accordion.
+
+## 13. Audit addendum — SEO walkthrough double-check (corrections to §4, §4.2, §10 and Flow 6)
+
+> Added by the double-check of the SEO walkthrough session. The canonical record —
+> every session requirement (SR-1 … SR-21), the implementation map, verification
+> evidence and the full inconsistency registers — is
+> `seo-walkthrough-session-requirements.md`. Flow 6 (§12) is the current flow;
+> this addendum lists where the rest of this document (and Flow 6 itself) still
+> disagrees with the code.
+
+**Corrections to earlier sections of this document**
+
+- §4's accordion diagram still shows "Captions (bottom) — up to 10 rows …". That
+  section was removed from the accordion (SR-4); captions survive only as the
+  hidden global engine rows and as API-supplied worker-job payloads.
+- §4.2's "POST /api/script {topic,minutes,speed} ← still the only fields the
+  client sends" and §10's one-click happy path describe direct API use, not the
+  studio: the client now runs Flow 6 (`/api/seo-plan` → select a set → image
+  style → `/api/script` with `keywordSet`).
+- §2's surface map and §9's code map omit `POST /api/seo-plan`,
+  `POST /api/image-prompts` and `GET`/`DELETE /api/image-prompts/:id`, and file
+  the flow under MODULE 8 only; the walkthrough is MODULE 8b plus
+  `src/modules/image-prompts.ts`.
+- Flow 6's "two different SEO keyword sets" overstates the code: only an
+  identical long-tail + ordered-shorts combination is rejected for the second
+  set (the e2e fixture's second set shares all four shorts). Flow 6 also omits
+  the 6-minute mapping (20 prompts), which only RULE 24 and the session record
+  document.
+
+**Bottom list 1 — inconsistencies between the new session code and other code**
+
+1. Closing the modal at the keyword-set or style step strands the video: upload
+   and Generate SEO Script are both disabled, so nothing can reopen the modal.
+2. Gallery-count completion (DOM children vs. baseline + expected) conflicts
+   with the 25-still cap, card removal and unrelated gallery additions;
+   `addAiToVideo` returns no success signal, so refused images are counted as
+   done and finalisation can be unreachable, premature, or raced by an
+   in-flight request.
+3. Prompt-poll error/404 paths do not destroy the dynamic URL and leave the
+   gallery watcher running; DELETE's response status is never checked.
+4. A failed script regeneration leaves the spinner in the SRT box instead of
+   the previous script (§4.2's "previous SRT stays on screen" no longer holds
+   for the box), while Download/Voiceover remain usable mid-request.
+5. The single global walkthrough modal contradicts the per-video independence
+   of the accordions: overlapping flows for two videos overwrite one modal.
+6. The image queue bypasses `submitAiImages`' credit pre-check and 401/429
+   stop; topic/minutes/speed snapshots and cached sets ignore later edits;
+   the new API routes record no usage, unlike `/api/script`.
+
+**Bottom list 2 — inconsistencies between documentation and code**
+
+1. This document (§4, §5, §6), `README.md` (accordion description, caption
+   limits) and `system-rules.md` RULE 9/10 still document per-accordion
+   captions that the code no longer offers.
+2. This document §4.2/§10, and RULE 7's client bullet in `system-rules.md`,
+   describe the one-click `{topic, minutes, speed}` script flow; the studio
+   client now uses the walkthrough and sends `keywordSet` (B-2).
+3. This document §2/§9 and RULE 1's route list in `system-rules.md` omit the
+   three new routes; RULE 18's hint inventory and the Generate SEO Script
+   tooltip/hint do not describe the walkthrough they now start (B-3, B-8).
+4. The session's own summaries (`README.md`, RULE 24, Flow 6 above) overstate
+   "two different sets", "every form element / labels above dropdowns" (bare
+   Sticker/Quality selects have no `<label>`), and the guarantee that the
+   prompt URL is always destroyed and the upload button always re-enabled
+   (B-4, B-5, B-7).
+5. The dynamic URL's creation timing in Flow 6 (after the script) differs
+   from the original requirement's "once the user selected the SEO keyword
+   set" without Flow 6 flagging the deviation (B-6); DELETE is idempotent
+   `200` even for unknown ids, and a failed prompt job polls as
+   `200 {success:true, status:"error"}` rather than `success:false` (B-11).

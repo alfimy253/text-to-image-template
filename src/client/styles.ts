@@ -8693,4 +8693,191 @@ export const APP_CSS = `
 			}
 		}
 
+		/* =====================================================
+		 * VIDEO ACCORDION FORM STANDARD (this revision)
+		 * Every form element inside a Video N accordion shares
+		 * the Upload MP3 Audio button's proportions: the same
+		 * corner radius (8px) and padding (12px 24px), with a
+		 * 3px bottom margin. Text inputs and textareas keep
+		 * their own rhythm instead: 4px top / 5px bottom.
+		 * Dropdown labels always sit ABOVE their dropdown,
+		 * never beside it.
+		 * ===================================================== */
+		#video-accordions .video-accordion input[type="text"],
+		#video-accordions .video-accordion input[type="number"],
+		#video-accordions .video-accordion select,
+		#video-accordions .video-accordion textarea {
+			box-sizing: border-box;
+			width: 100%;
+			border-radius: 8px;
+			padding: 12px 24px;
+			margin-bottom: 3px;
+		}
+
+		#video-accordions .video-accordion input[type="text"],
+		#video-accordions .video-accordion textarea {
+			margin-top: 4px;
+			margin-bottom: 5px;
+		}
+
+		/* Dropdown labels above the dropdown (Minutes / Speech,
+		 * Font / Colour): the label becomes a column, its text
+		 * on its own line and the select full width below it. */
+		#video-accordions .video-accordion label.quality-select {
+			display: flex;
+			flex-direction: column;
+			align-items: stretch;
+			gap: 4px;
+			margin-bottom: 3px;
+		}
+
+		#video-accordions .video-accordion label.quality-select > select {
+			width: 100%;
+		}
+
+		/* Themed skins: match the themed Upload MP3 button's
+		 * corner radius token; Neo Brutalist stays square,
+		 * exactly like its accordion buttons. */
+		html[data-theme] #video-accordions .video-accordion input[type="text"],
+		html[data-theme] #video-accordions .video-accordion input[type="number"],
+		html[data-theme] #video-accordions .video-accordion select,
+		html[data-theme] #video-accordions .video-accordion textarea {
+			border-radius: var(--t-radius-sm);
+		}
+
+		html[data-theme="neo"] #video-accordions .video-accordion input[type="text"],
+		html[data-theme="neo"] #video-accordions .video-accordion input[type="number"],
+		html[data-theme="neo"] #video-accordions .video-accordion select,
+		html[data-theme="neo"] #video-accordions .video-accordion textarea {
+			border-radius: 0;
+		}
+
+		/* Script loading animation (shown on the script section
+		 * while the AI script / image prompts are awaited). */
+		@keyframes va-spin {
+			to { transform: rotate(360deg); }
+		}
+
+		@keyframes va-loading-pulse {
+			0%, 100% { opacity: 1; }
+			50% { opacity: 0.55; }
+		}
+
+		.va-script-box.va-script-loading {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			animation: va-loading-pulse 1.2s ease-in-out infinite;
+		}
+
+		.va-spinner {
+			flex: 0 0 auto;
+			width: 18px;
+			height: 18px;
+			border-radius: 50%;
+			border: 3px solid #374151;
+			border-top-color: #22d3ee;
+			animation: va-spin 0.8s linear infinite;
+		}
+
+		/* =====================================================
+		 * SEO WALKTHROUGH MODAL (plan -> select a keyword set
+		 * -> video image style). The overlay reuses
+		 * .modal-overlay; the box is wider than the default so
+		 * the two keyword sets can sit side by side.
+		 * ===================================================== */
+		.seo-wt-box {
+			max-width: 760px;
+			max-height: 90vh;
+			overflow-y: auto;
+		}
+
+		.seo-wt-steps {
+			display: flex;
+			gap: 8px;
+			flex-wrap: wrap;
+			margin-bottom: 14px;
+		}
+
+		.seo-wt-step {
+			font-size: 0.75rem;
+			padding: 4px 10px;
+			border-radius: 999px;
+			border: 1px solid #374151;
+			color: #9ca3af;
+		}
+
+		.seo-wt-step.active {
+			color: #0b0e14;
+			background: #22d3ee;
+			border-color: #22d3ee;
+			font-weight: 700;
+		}
+
+		.seo-wt-loading {
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			padding: 18px 0;
+		}
+
+		.seo-wt-sets {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+			gap: 12px;
+			margin-top: 10px;
+		}
+
+		.seo-wt-card {
+			border: 1px solid #374151;
+			border-radius: 8px;
+			padding: 12px;
+			background: #0b0e14;
+		}
+
+		.seo-wt-card-title {
+			font-weight: 700;
+			margin-bottom: 8px;
+		}
+
+		.seo-wt-card .upload-btn {
+			width: 100%;
+			justify-content: center;
+			margin-top: 10px;
+		}
+
+		.seo-wt-style-label {
+			display: block;
+			font-size: 0.85rem;
+			color: #d1d5db;
+			margin-top: 12px;
+		}
+
+		#seo-wt-style-input {
+			box-sizing: border-box;
+			width: 100%;
+			border-radius: 8px;
+			padding: 12px 24px;
+			margin-top: 4px;
+			margin-bottom: 5px;
+			background: #14171c;
+			color: var(--text);
+			border: 1px solid #374151;
+			font-size: 1rem;
+		}
+
+		.seo-wt-actions {
+			display: flex;
+			gap: 10px;
+			flex-wrap: wrap;
+			margin-top: 14px;
+		}
+
+		.seo-wt-error {
+			color: #f87171;
+			font-size: 0.85rem;
+			margin-top: 10px;
+		}
+
+
 `;

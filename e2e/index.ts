@@ -5,8 +5,40 @@ const pngSignature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 	const prompt = String(input?.prompt || "");
 
-	// Stage 1: SEO Keyword, Title & Heading Planner
+	// Image-prompt jobs: exactly N prompts in the requested style.
+	if (prompt.includes("AI IMAGE PROMPTS")) {
+		const count = Number((prompt.match(/exactly (\d+) image prompts/) || [])[1] || 10);
+		const style = (prompt.match(/video image style: ([^.]+)\./) || [])[1] || "cinematic";
+		return {
+			response: JSON.stringify({
+				prompts: Array.from({ length: count }, (_, i) => `Scene ${i + 1} of the explainer video, ${style}`)
+			})
+		};
+	}
+
+	// Stage 1: SEO Keyword, Title & Heading Planner. The two-set SEO plan
+	// asks for a DIFFERENT second set, answered with the alternate fixture
+	// (same shorts so the Stage-2 fixture script still validates, but a
+	// different long-tail keyword and title).
 	if (prompt.includes("SEO strategist") || prompt.includes('"longTail"')) {
+		if (prompt.includes("DIFFERENT keyword set")) {
+			return {
+				response: JSON.stringify({
+					title: "Key Light Setup Guide for Beginners",
+					headings: [
+						"Choosing Your Key Light Position",
+						"Dialing In Color Balance Fast"
+					],
+					longTail: "budget home video studio setup with a key light for beginners",
+					short: [
+						"key light",
+						"soft shadow",
+						"color balance",
+						"clean backdrop"
+					]
+				})
+			};
+		}
 		return {
 			response: JSON.stringify({
 				title: "Smart Key Light Setup Guide for Creators",
@@ -30,7 +62,7 @@ function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 	const cues = [
 		[
 			"00:00:00,000 --> 00:00:04,000",
-			"A home video studio setup with a key light for beginners is easy."
+			"A home video studio setup with a key light for beginners is easy, and a budget home video studio setup with a key light for beginners works too."
 		],
 		[
 			"00:00:04,000 --> 00:00:08,000",

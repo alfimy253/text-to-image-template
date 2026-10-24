@@ -6373,6 +6373,15 @@ export const APP_JS = `
 
 	function clickVaFiles(n) {
 
+		const uploadBtn =
+			document.getElementById(
+				"va-upload-btn-" + n
+			);
+
+		if (uploadBtn && uploadBtn.disabled) {
+			return;
+		}
+
 		const input =
 			document.getElementById(
 				"va-file-" + n
@@ -6459,7 +6468,7 @@ export const APP_JS = `
 				'</div>' +
 				'<div class="va-section">' +
 				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
-				'<button type="button" class="upload-btn" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
+				'<button type="button" class="upload-btn" id="va-upload-btn-' + n + '" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
 				'<span class="va-note">Max 5 GIF \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
 				'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
@@ -6484,11 +6493,6 @@ export const APP_JS = `
 				'<label class="quality-select">Font <select id="va-font-' + n + '">' + FONT_OPTIONS + '</select></label>' +
 				'<label class="quality-select">Colour <select id="va-color-' + n + '">' + COLOR_OPTIONS + '</select></label>' +
 				'</div>' +
-				'</div>' +
-				'<div class="va-section">' +
-				'<div class="va-section-title">Captions (bottom)</div>' +
-				'<div id="va-captions-' + n + '"></div>' +
-				'<button type="button" class="upload-btn" onclick="addVaCaptionRow(' + n + ')">+ Add Caption</button>' +
 				'</div>' +
 				'<div class="va-section">' +
 				'<div class="va-section-title">Sticker (bottom right)</div>' +
@@ -8345,6 +8349,11 @@ export const APP_JS = `
 				"va-captions-" + n
 			);
 
+		/* The accordion no longer has a caption section: no rows to swap. */
+		if (!slotRows) {
+			return;
+		}
+
 		while (
 			slotRows.children.length
 		) {
@@ -8365,6 +8374,10 @@ export const APP_JS = `
 			document.getElementById(
 				"va-captions-" + n
 			);
+
+		if (!slotRows) {
+			return;
+		}
 
 		while (
 			captionRowsEl.children.length
@@ -12888,8 +12901,1378 @@ export const APP_JS = `
 
 	}
 
+
+	// =========================================================
+	// MODULE 8b: seo-walkthrough + image-prompt polling
+	//
+	// Generate SEO Script now runs a walkthrough:
+	//   1. The "Upload Image, GIF or MP4" button is disabled and
+	//      a modal asks the AI (POST /api/seo-plan) for TWO
+	//      different SEO keyword sets for the topic. The modal
+	//      can be closed while the plan is generated; the work
+	//      keeps running in the background and the modal
+	//      re-opens by itself when the two sets arrive.
+	//   2. The user clicks Select on one set, then enters the
+	//      video image style. With both chosen the modal closes,
+	//      the script section shows a loading animation and
+	//      POST /api/script writes the SRT from the selected set
+	//      (runSeoScriptRequest keeps the existing SRT display).
+	//   3. Once the script is shown, a dynamic image-prompt URL
+	//      is created (POST /api/image-prompts). The browser
+	//      polls it every 30 seconds; while the LLM is still
+	//      writing the prompts the URL answers an empty array.
+	//      The prompts carry the chosen image style and their
+	//      count follows the script length (1 min -> 10,
+	//      2-3 min -> 14, 4-5 min -> 20).
+	//   4. When the prompts arrive, one AI image is generated
+	//      every 20 seconds with the existing image generation
+	//      route and added straight to this video's gallery.
+	//      A watcher polls the gallery count; once the last
+	//      image is in the gallery it calls DELETE on the
+	//      dynamic URL (destroying it) and re-enables the
+	//      "Upload Image, GIF or MP4" button.
+	// =========================================================
+
+	const IMAGE_PROMPT_POLL_MS =
+		30000;
+
+	const AI_IMAGE_QUEUE_MS =
+		20000;
+
+	const GALLERY_WATCH_MS =
+		1000;
+
+	/* Exposed so tests / debugging can see the live cadence. */
+	if (typeof window !== "undefined") {
+		window.__SEO_FLOW_TIMING = {
+			imagePromptPollMs: IMAGE_PROMPT_POLL_MS,
+			aiImageQueueMs: AI_IMAGE_QUEUE_MS,
+			galleryWatchMs: GALLERY_WATCH_MS
+		};
+	}
+
+	function setVaUploadEnabled(
+		n,
+		enabled
+	) {
+
+		const btn =
+			document.getElementById(
+				"va-upload-btn-" + n
+			);
+
+		if (btn) {
+			btn.disabled =
+				!enabled;
+		}
+
+	}
+
+	function setScriptLoading(
+		n,
+		on
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		const box =
+			document.getElementById(
+				"va-script-box-" + n
+			);
+
+		if (!box) {
+			return;
+		}
+
+		if (on) {
+
+			box.classList.add(
+				"va-script-loading"
+			);
+
+			box.style.display =
+				"";
+
+			box.innerHTML =
+				'<span class="va-spinner" aria-hidden="true"></span><span>Writing your SEO script\\u2026</span>';
+
+		}
+		else {
+
+			box.classList.remove(
+				"va-script-loading"
+			);
+
+			if (
+				!(project && project.srt)
+			) {
+
+				box.style.display =
+					"none";
+
+				box.textContent =
+					"";
+
+			}
+
+		}
+
+	}
+
+	function ensureSeoWalkthrough(
+		n
+	) {
+
+		closeSeoWalkthrough();
+
+		const modal =
+			document.createElement(
+				"div"
+			);
+
+		modal.id =
+			"seo-walkthrough-modal";
+
+		modal.className =
+			"modal-overlay";
+
+		modal.innerHTML =
+			'<div class="modal-box seo-wt-box">' +
+			'<div class="modal-title">\\u2728 Generate SEO Script \\u2014 Video ' + n + '</div>' +
+			'<div class="seo-wt-steps">' +
+			'<span class="seo-wt-step" data-step="plan">1 \\u00b7 SEO plan</span>' +
+			'<span class="seo-wt-step" data-step="sets">2 \\u00b7 Choose a keyword set</span>' +
+			'<span class="seo-wt-step" data-step="style">3 \\u00b7 Video image style</span>' +
+			'</div>' +
+			'<div id="seo-wt-loading">' +
+			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>AI is planning two SEO keyword sets for <b id="seo-wt-topic"></b>\\u2026</span></div>' +
+			'<span class="va-note">You can close this walkthrough \\u2014 the SEO plan keeps generating in the background and this modal will re-open when the two sets are ready. The Upload Image, GIF or MP4 button stays disabled until the generated images are in the gallery.</span>' +
+			'</div>' +
+			'<div id="seo-wt-sets" style="display:none">' +
+			'<div class="va-note">Pick the keyword set that best targets your script topic. The script will say its long-tail keyword at least once and each short keyword at least twice.</div>' +
+			'<div class="seo-wt-sets" id="seo-wt-sets-list"></div>' +
+			'</div>' +
+			'<div id="seo-wt-style" style="display:none">' +
+			'<div id="seo-wt-selected"></div>' +
+			'<label class="seo-wt-style-label" for="seo-wt-style-input">Video image style (used for every AI-generated image)</label>' +
+			'<input type="text" id="seo-wt-style-input" maxlength="200" placeholder="e.g. cinematic photorealistic, warm light, shallow depth of field">' +
+			'<span class="va-note">The AI will write the image prompts in this style. The number of images follows your script length: 10 for 1 minute, 14 for 2\\u20133 minutes, 20 for 4\\u20135 minutes.</span>' +
+			'<div class="seo-wt-actions">' +
+			'<button type="button" class="upload-btn" onclick="confirmSeoStyleAndGenerate(' + n + ')">\\u2728 Generate Script &amp; Images</button>' +
+			'<button type="button" class="upload-btn" onclick="showSeoWalkthroughStep(\\'sets\\')">\\u2190 Back to keyword sets</button>' +
+			'</div>' +
+			'</div>' +
+			'<div class="seo-wt-error" id="seo-wt-error"></div>' +
+			'<div class="seo-wt-actions">' +
+			'<button type="button" class="upload-btn" onclick="closeSeoWalkthrough()">\\u2715 Close</button>' +
+			'</div>' +
+			'</div>';
+
+		document.body.appendChild(
+			modal
+		);
+
+		return modal;
+
+	}
+
+	function closeSeoWalkthrough() {
+
+		const modal =
+			document.getElementById(
+				"seo-walkthrough-modal"
+			);
+
+		if (modal) {
+			modal.remove();
+		}
+
+	}
+
+	function hideSeoWalkthrough() {
+
+		/* Close without cancelling: background work keeps running. */
+		const modal =
+			document.getElementById(
+				"seo-walkthrough-modal"
+			);
+
+		if (modal) {
+			modal.style.display =
+				"none";
+		}
+
+	}
+
+	function showSeoWalkthrough() {
+
+		const modal =
+			document.getElementById(
+				"seo-walkthrough-modal"
+			);
+
+		if (modal) {
+			modal.style.display =
+				"flex";
+		}
+
+	}
+
+	function showSeoWalkthroughStep(
+		step
+	) {
+
+		const panels = {
+			plan: "seo-wt-loading",
+			sets: "seo-wt-sets",
+			style: "seo-wt-style"
+		};
+
+		for (
+			const key of Object.keys(panels)
+		) {
+
+			const panel =
+				document.getElementById(
+					panels[key]
+				);
+
+			if (panel) {
+				panel.style.display =
+					key === step
+						? ""
+						: "none";
+			}
+
+		}
+
+		document.querySelectorAll(
+			".seo-wt-step"
+		).forEach(
+			(chip) => {
+
+				chip.classList.toggle(
+					"active",
+					chip.getAttribute("data-step") === step
+				);
+
+			}
+		);
+
+	}
+
+	function seoSetChipsHTML(
+		set
+	) {
+
+		let html =
+			'<div class="va-seo-row"><span class="va-seo-label">Title</span><span class="va-seo-chip">' +
+			escapeHTML(set.title || "") +
+			"</span></div>";
+
+		if (
+			Array.isArray(set.headings) &&
+			set.headings.length
+		) {
+
+			html +=
+				'<div class="va-seo-row"><span class="va-seo-label">Headings</span>';
+
+			set.headings.forEach(
+				(heading) => {
+
+					html +=
+						'<span class="va-seo-chip">' +
+						escapeHTML(heading) +
+						"</span>";
+
+				}
+			);
+
+			html +=
+				"</div>";
+
+		}
+
+		html +=
+			'<div class="va-seo-row"><span class="va-seo-label">Long-tail</span><span class="va-seo-chip long">' +
+			escapeHTML(set.longTail || "") +
+			'</span></div><div class="va-seo-row"><span class="va-seo-label">Short</span>';
+
+		(Array.isArray(set.short) ? set.short : []).forEach(
+			(shortKw) => {
+
+				html +=
+					'<span class="va-seo-chip short">' +
+					escapeHTML(shortKw) +
+					"</span>";
+
+			}
+		);
+
+		html +=
+			"</div>";
+
+		return html;
+
+	}
+
+	function renderSeoPlanSets(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		const list =
+			document.getElementById(
+				"seo-wt-sets-list"
+			);
+
+		if (!project || !list) {
+			return;
+		}
+
+		list.innerHTML =
+			"";
+
+		(project.seoSets || []).forEach(
+			(set, idx) => {
+
+				const card =
+					document.createElement(
+						"div"
+					);
+
+				card.className =
+					"seo-wt-card";
+
+				card.innerHTML =
+					'<div class="seo-wt-card-title">Keyword set ' + (idx + 1) + "</div>" +
+					seoSetChipsHTML(set) +
+					'<button type="button" class="upload-btn" onclick="selectSeoKeywordSet(' + n + ", " + idx + ')">Select this set</button>';
+
+				list.appendChild(
+					card
+				);
+
+			}
+		);
+
+	}
+
 	async function generateScript(
 		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		if (
+			project._seoPlanBusy ||
+			project._imageFlowActive
+		) {
+			showSeoWalkthrough();
+			return;
+		}
+
+		/* A set was already chosen: reopen at the style step. */
+		if (project.selectedSeoSet) {
+
+			ensureSeoWalkthrough(n);
+
+			const selectedSlot =
+				document.getElementById(
+					"seo-wt-selected"
+				);
+
+			if (selectedSlot) {
+				selectedSlot.innerHTML =
+					'<div class="seo-wt-card-title">Selected keyword set</div>' +
+					seoSetChipsHTML(
+						project.selectedSeoSet
+					);
+			}
+
+			showSeoWalkthroughStep("style");
+			return;
+
+		}
+
+		/* Sets from an earlier click are still waiting for a choice. */
+		if (
+			Array.isArray(project.seoSets) &&
+			project.seoSets.length === 2 &&
+			!project.selectedSeoSet
+		) {
+
+			ensureSeoWalkthrough(n);
+			renderSeoPlanSets(n);
+			showSeoWalkthroughStep("sets");
+			return;
+
+		}
+
+		const topicEl =
+			document.getElementById(
+				"va-script-topic-" + n
+			);
+
+		const titleEl =
+			document.getElementById(
+				"va-title-" + n
+			);
+
+		const minutesEl =
+			document.getElementById(
+				"va-script-minutes-" + n
+			);
+
+		const speedEl =
+			document.getElementById(
+				"va-script-speed-" + n
+			);
+
+		const btn =
+			document.getElementById(
+				"va-script-btn-" + n
+			);
+
+		const statusEl =
+			document.getElementById(
+				"va-script-status-" + n
+			);
+
+		const topic =
+			(topicEl && topicEl.value.trim()) ||
+			(titleEl && titleEl.value.trim()) ||
+			"my video";
+
+		const minutes =
+			Number(
+				minutesEl
+					? minutesEl.value
+					: 1
+			);
+
+		const speed =
+			speedEl
+				? speedEl.value
+				: "medium";
+
+		project._seoTopic =
+			topic;
+
+		project._seoMinutes =
+			Number.isInteger(minutes) && minutes >= 1 && minutes <= 6
+				? minutes
+				: 1;
+
+		project._seoSpeed =
+			speed;
+
+		project.selectedSeoSet =
+			null;
+
+		project.seoSets =
+			null;
+
+		/* 1. Disable Upload Image, GIF or MP4 for the whole flow. */
+		setVaUploadEnabled(
+			n,
+			false
+		);
+
+		if (btn) {
+			btn.disabled = true;
+		}
+
+		project._seoPlanBusy =
+			true;
+
+		/* 2. Show the walkthrough while the SEO plan is fetched. */
+		const modal =
+			ensureSeoWalkthrough(n);
+
+		const topicSlot =
+			modal.querySelector(
+				"#seo-wt-topic"
+			);
+
+		if (topicSlot) {
+			topicSlot.textContent =
+				topic;
+		}
+
+		showSeoWalkthroughStep("plan");
+
+		if (statusEl) {
+			statusEl.textContent =
+				"Planning two SEO keyword sets (AI model)\\u2026";
+		}
+
+		try {
+
+			const response =
+				await fetch(
+					"/api/seo-plan",
+					{
+						method: "POST",
+						headers: {
+							"Content-Type":
+								"application/json"
+						},
+						body:
+							JSON.stringify(
+								{
+									topic: topic
+								}
+							)
+					}
+				);
+
+			const data =
+				await response
+					.json()
+					.catch(
+						() => ({})
+					);
+
+			if (
+				!response.ok ||
+				!data.success ||
+				!Array.isArray(data.sets) ||
+				data.sets.length !== 2
+			) {
+
+				throw new Error(
+					(data && data.error) ||
+					("HTTP " + response.status)
+				);
+
+			}
+
+			project.seoSets =
+				data.sets;
+
+			/* 3. Sets arrived: (re-)open the modal even if the
+			 * user closed it while generation was running. */
+			if (
+				!document.getElementById("seo-walkthrough-modal")
+			) {
+				ensureSeoWalkthrough(n);
+			}
+
+			renderSeoPlanSets(n);
+			showSeoWalkthroughStep("sets");
+			showSeoWalkthrough();
+
+			if (statusEl) {
+				statusEl.textContent =
+					"Two SEO keyword sets are ready \\u2014 pick one in the walkthrough.";
+			}
+
+		}
+		catch (planError) {
+
+			console.warn("[seo-plan] failed", {
+				videoIndex: n,
+				error:
+					(planError && planError.message) ||
+					String(planError)
+			});
+
+			project.seoSets =
+				null;
+
+			closeSeoWalkthrough();
+
+			setVaUploadEnabled(
+				n,
+				true
+			);
+
+			if (btn) {
+				btn.disabled = false;
+			}
+
+			if (statusEl) {
+				statusEl.textContent =
+					"SEO plan failed: " +
+					(planError.message || planError);
+			}
+
+		}
+		finally {
+
+			project._seoPlanBusy =
+				false;
+
+		}
+
+	}
+
+	function selectSeoKeywordSet(
+		n,
+		idx
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (
+			!project ||
+			!Array.isArray(project.seoSets) ||
+			!project.seoSets[idx]
+		) {
+			return;
+		}
+
+		project.selectedSeoSet =
+			project.seoSets[idx];
+
+		const selected =
+			document.getElementById(
+				"seo-wt-selected"
+			);
+
+		if (selected) {
+
+			selected.innerHTML =
+				'<div class="seo-wt-card-title">Selected keyword set</div>' +
+				seoSetChipsHTML(
+					project.selectedSeoSet
+				);
+
+		}
+
+		showSeoWalkthroughStep("style");
+
+		const styleInput =
+			document.getElementById(
+				"seo-wt-style-input"
+			);
+
+		if (styleInput) {
+			styleInput.focus();
+		}
+
+	}
+
+	async function confirmSeoStyleAndGenerate(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project || !project.selectedSeoSet) {
+			return;
+		}
+
+		const styleInput =
+			document.getElementById(
+				"seo-wt-style-input"
+			);
+
+		project.videoImageStyle =
+			(styleInput && styleInput.value.trim()) ||
+			"cinematic photorealistic, rich detail";
+
+		closeSeoWalkthrough();
+
+		/* The script section shows its loading animation while
+		 * runSeoScriptRequest awaits the AI script. */
+		project._imageFlowActive =
+			true;
+
+		const ok =
+			await runSeoScriptRequest(
+				n,
+				project._seoTopic || "my video",
+				project._seoMinutes || 1,
+				project._seoSpeed || "medium"
+			);
+
+		if (!ok) {
+
+			project._imageFlowActive =
+				false;
+
+			setVaUploadEnabled(
+				n,
+				true
+			);
+
+			const btn =
+				document.getElementById(
+					"va-script-btn-" + n
+				);
+
+			if (btn) {
+				btn.disabled = false;
+			}
+
+			return;
+
+		}
+
+		/* The script is shown: start the image-prompt job. */
+		startImagePromptFlow(n);
+
+	}
+
+	async function startImagePromptFlow(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		const statusEl =
+			document.getElementById(
+				"va-ai-status-" + n
+			);
+
+		const gallery =
+			document.getElementById(
+				"va-gallery-" + n
+			);
+
+		project.aiGalleryBaseline =
+			gallery
+				? gallery.children.length
+				: 0;
+
+		project.imagePrompts =
+			null;
+
+		project.aiImagesDone =
+			0;
+
+		try {
+
+			const response =
+				await fetch(
+					"/api/image-prompts",
+					{
+						method: "POST",
+						headers: {
+							"Content-Type":
+								"application/json"
+						},
+						body:
+							JSON.stringify(
+								{
+									topic:
+										project._seoTopic || "my video",
+									minutes:
+										project._seoMinutes || 1,
+									style:
+										project.videoImageStyle || "",
+									script:
+										project.srt || "",
+									keywordSet:
+										project.selectedSeoSet || null
+								}
+							)
+					}
+				);
+
+			const data =
+				await response
+					.json()
+					.catch(
+						() => ({})
+					);
+
+			if (
+				!response.ok ||
+				!data.success ||
+				!data.url
+			) {
+
+				throw new Error(
+					(data && data.error) ||
+					("HTTP " + response.status)
+				);
+
+			}
+
+			project.imagePromptUrl =
+				data.url;
+
+			project.imagePromptExpected =
+				data.expectedCount || 0;
+
+			if (statusEl) {
+				statusEl.textContent =
+					"Image prompts requested (" +
+					project.imagePromptExpected +
+					" expected) \\u2014 checking the prompt URL every 30 seconds\\u2026";
+			}
+
+			/* Poll the dynamic URL every 30 s for the prompts. */
+			project._imagePromptPoller =
+				setInterval(
+					() =>
+						pollImagePromptOnce(n),
+					IMAGE_PROMPT_POLL_MS
+				);
+
+			/* Poll the gallery UI until the last image lands. */
+			project._galleryWatcher =
+				setInterval(
+					() =>
+						watchGalleryCompletion(n),
+					GALLERY_WATCH_MS
+				);
+
+		}
+		catch (flowError) {
+
+			console.warn("[image-prompts] create failed", {
+				videoIndex: n,
+				error:
+					(flowError && flowError.message) ||
+					String(flowError)
+			});
+
+			project._imageFlowActive =
+				false;
+
+			setVaUploadEnabled(
+				n,
+				true
+			);
+
+			const btn =
+				document.getElementById(
+					"va-script-btn-" + n
+				);
+
+			if (btn) {
+				btn.disabled = false;
+			}
+
+			if (statusEl) {
+				statusEl.textContent =
+					"Image prompts failed: " +
+					(flowError.message || flowError);
+			}
+
+		}
+
+	}
+
+	async function pollImagePromptOnce(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project || !project.imagePromptUrl) {
+			return;
+		}
+
+		const statusEl =
+			document.getElementById(
+				"va-ai-status-" + n
+			);
+
+		try {
+
+			const response =
+				await fetch(
+					project.imagePromptUrl,
+					{
+						headers: {
+							"Accept":
+								"application/json"
+						}
+					}
+				);
+
+			if (response.status === 404) {
+
+				/* The URL was destroyed elsewhere: stop quietly. */
+				if (project._imagePromptPoller) {
+					clearInterval(
+						project._imagePromptPoller
+					);
+					project._imagePromptPoller =
+						null;
+				}
+
+				return;
+
+			}
+
+			const data =
+				await response
+					.json()
+					.catch(
+						() => ({})
+					);
+
+			if (
+				data &&
+				data.status === "error"
+			) {
+
+				throw new Error(
+					data.error ||
+					"Image prompt generation failed"
+				);
+
+			}
+
+			const prompts =
+				data && Array.isArray(data.prompts)
+					? data.prompts
+					: [];
+
+			/* Still generating: the array stays empty for now. */
+			if (!prompts.length) {
+				return;
+			}
+
+			project.imagePrompts =
+				prompts;
+
+			if (project._imagePromptPoller) {
+				clearInterval(
+					project._imagePromptPoller
+				);
+				project._imagePromptPoller =
+					null;
+			}
+
+			if (statusEl) {
+				statusEl.textContent =
+					prompts.length +
+					" image prompts ready \\u2014 generating one image every 20 seconds\\u2026";
+			}
+
+			scheduleAiImageQueue(n);
+
+		}
+		catch (pollError) {
+
+			console.warn("[image-prompts] poll failed", {
+				videoIndex: n,
+				error:
+					(pollError && pollError.message) ||
+					String(pollError)
+			});
+
+			if (project._imagePromptPoller) {
+				clearInterval(
+					project._imagePromptPoller
+				);
+				project._imagePromptPoller =
+					null;
+			}
+
+			project._imageFlowActive =
+				false;
+
+			setVaUploadEnabled(
+				n,
+				true
+			);
+
+			const btn =
+				document.getElementById(
+					"va-script-btn-" + n
+				);
+
+			if (btn) {
+				btn.disabled = false;
+			}
+
+			if (statusEl) {
+				statusEl.textContent =
+					"Image prompts failed: " +
+					(pollError.message || pollError);
+			}
+
+		}
+
+	}
+
+	function scheduleAiImageQueue(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project || !project.imagePrompts) {
+			return;
+		}
+
+		project._aiImageIndex =
+			0;
+
+		project._aiImageFailures =
+			0;
+
+		const step =
+			async () => {
+
+				if (
+					!project.imagePrompts ||
+					project._aiImageIndex >=
+						project.imagePrompts.length
+				) {
+
+					/* Every prompt was attempted. If some images
+					 * failed, the gallery watcher can never reach
+					 * its target, so finish (and clean up) here. */
+					if (
+						project._aiImageFailures > 0
+					) {
+						finalizeImagePromptFlow(n);
+					}
+
+					return;
+
+				}
+
+				const idx =
+					project._aiImageIndex;
+
+				project._aiImageIndex =
+					idx + 1;
+
+				await generateQueuedAiImage(
+					n,
+					project.imagePrompts[idx],
+					idx + 1
+				);
+
+				if (
+					project.imagePrompts &&
+					project._aiImageIndex <
+						project.imagePrompts.length
+				) {
+
+					/* One generation call every 20 seconds, so the
+					 * image workers are never flooded. */
+					project._aiImageTimer =
+						setTimeout(
+							step,
+							AI_IMAGE_QUEUE_MS
+						);
+
+				}
+				else if (
+					project._aiImageFailures > 0
+				) {
+					finalizeImagePromptFlow(n);
+				}
+
+			};
+
+		step();
+
+	}
+
+	async function generateQueuedAiImage(
+		n,
+		prompt,
+		position
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		const statusEl =
+			document.getElementById(
+				"va-ai-status-" + n
+			);
+
+		const total =
+			project && project.imagePrompts
+				? project.imagePrompts.length
+				: 0;
+
+		if (statusEl) {
+			statusEl.textContent =
+				"Generating AI image " +
+				position +
+				" of " +
+				total +
+				"\\u2026";
+		}
+
+		try {
+
+			const response =
+				await fetch(
+					AI_ENDPOINT(
+						prompt,
+						position
+					)
+				);
+
+			if (!response.ok) {
+
+				let message =
+					"Image generation failed";
+
+				try {
+
+					const errJson =
+						await response.json();
+
+					if (errJson && errJson.error) {
+						message =
+							errJson.error;
+					}
+
+					if (errJson && errJson.credits) {
+						applyCredits(
+							errJson.credits
+						);
+					}
+
+				}
+				catch (jsonError) {
+
+					/* keep default */
+
+				}
+
+				throw new Error(
+					message
+				);
+
+			}
+
+			const blob =
+				await response.blob();
+
+			const file =
+				new File(
+					[blob],
+					"ai-video" +
+						n +
+						"-seo-" +
+						position +
+						"-" +
+						Date.now() +
+						".png",
+					{
+						type:
+							blob.type ||
+							"image/png"
+					}
+				);
+
+			/* The already-written gallery path: fills this
+			 * accordion's gallery (and its image cap). */
+			addAiToVideo(
+				n,
+				file,
+				blob
+			);
+
+			project.aiImagesDone =
+				(project.aiImagesDone || 0) + 1;
+
+			refreshCredits();
+
+			return true;
+
+		}
+		catch (imageError) {
+
+			if (project) {
+				project._aiImageFailures =
+					(project._aiImageFailures || 0) + 1;
+			}
+
+			console.warn("[image-prompts] image failed", {
+				videoIndex: n,
+				position: position,
+				error:
+					(imageError && imageError.message) ||
+					String(imageError)
+			});
+
+			if (statusEl) {
+				statusEl.textContent =
+					"Image " +
+					position +
+					" of " +
+					total +
+					" failed: " +
+					(imageError.message || imageError) +
+					" \\u2014 continuing with the queue\\u2026";
+			}
+
+			return false;
+
+		}
+
+	}
+
+	function watchGalleryCompletion(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project || !project.imagePromptUrl) {
+			return;
+		}
+
+		const gallery =
+			document.getElementById(
+				"va-gallery-" + n
+			);
+
+		if (!gallery) {
+			return;
+		}
+
+		const target =
+			(project.aiGalleryBaseline || 0) +
+			(project.imagePromptExpected || 0);
+
+		if (
+			target > (project.aiGalleryBaseline || 0) &&
+			gallery.children.length >= target
+		) {
+			finalizeImagePromptFlow(n);
+		}
+
+	}
+
+	async function finalizeImagePromptFlow(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project || project._imageFlowFinalizing) {
+			return;
+		}
+
+		project._imageFlowFinalizing =
+			true;
+
+		if (project._imagePromptPoller) {
+			clearInterval(
+				project._imagePromptPoller
+			);
+			project._imagePromptPoller =
+				null;
+		}
+
+		if (project._galleryWatcher) {
+			clearInterval(
+				project._galleryWatcher
+			);
+			project._galleryWatcher =
+				null;
+		}
+
+		if (project._aiImageTimer) {
+			clearTimeout(
+				project._aiImageTimer
+			);
+			project._aiImageTimer =
+				null;
+		}
+
+		/* All images are in the gallery: destroy the dynamic
+		 * image-prompt URL, then re-enable manual uploads. */
+		const url =
+			project.imagePromptUrl;
+
+		project.imagePromptUrl =
+			null;
+
+		if (url) {
+
+			try {
+
+				await fetch(
+					url,
+					{
+						method: "DELETE"
+					}
+				);
+
+			}
+			catch (destroyError) {
+
+				console.warn("[image-prompts] destroy failed", {
+					videoIndex: n,
+					error:
+						(destroyError && destroyError.message) ||
+						String(destroyError)
+				});
+
+			}
+
+		}
+
+		project._imageFlowActive =
+			false;
+
+		project._imageFlowFinalizing =
+			false;
+
+		setVaUploadEnabled(
+			n,
+			true
+		);
+
+		const btn =
+			document.getElementById(
+				"va-script-btn-" + n
+			);
+
+		if (btn) {
+			btn.disabled = false;
+		}
+
+		const statusEl =
+			document.getElementById(
+				"va-ai-status-" + n
+			);
+
+		if (statusEl) {
+			statusEl.textContent =
+				"AI images done \\u2014 " +
+				(project.aiImagesDone || 0) +
+				" image(s) in the gallery. Upload Image, GIF or MP4 is enabled again.";
+		}
+
+	}
+
+
+	async function runSeoScriptRequest(
+		n,
+		topic,
+		minutes,
+		speed
 	) {
 
 		const project =
@@ -12933,28 +14316,19 @@ export const APP_JS = `
 			return;
 		}
 
-		const topic =
-			(topicEl && topicEl.value.trim()) ||
-			(titleEl && titleEl.value.trim()) ||
-			"my video";
-
-		const minutes =
-			Number(
-				minutesEl
-					? minutesEl.value
-					: 1
-			);
-
-		const speed =
-			speedEl
-				? speedEl.value
-				: "medium";
+		let scriptSucceeded =
+			false;
 
 		btn.disabled = true;
 
+		setScriptLoading(
+			n,
+			true
+		);
+
 		if (statusEl) {
 			statusEl.textContent =
-				"Planning SEO keywords + writing your script (AI model)...";
+				"Writing your script from the selected SEO keyword set (AI model)...";
 		}
 
 		const scriptStartedAt = Date.now();
@@ -12981,7 +14355,10 @@ export const APP_JS = `
 								{
 									topic: topic,
 									minutes: minutes,
-									speed: speed
+									speed: speed,
+									keywordSet:
+										project.selectedSeoSet ||
+										undefined
 								}
 							)
 					}
@@ -13124,6 +14501,9 @@ export const APP_JS = `
 					(headingCount === 1 ? "" : "s");
 			}
 
+			scriptSucceeded =
+				true;
+
 		}
 		catch (err) {
 
@@ -13142,9 +14522,20 @@ export const APP_JS = `
 		}
 		finally {
 
-			btn.disabled = false;
+			setScriptLoading(
+				n,
+				false
+			);
+
+			if (!project._imageFlowActive) {
+
+				btn.disabled = false;
+
+			}
 
 		}
+
+		return scriptSucceeded;
 
 	}
 
