@@ -130,13 +130,13 @@ documentation; the current rules live in `system-rules.md` RULE 7:
 - the block is now the **first** section of `.va-left` and is titled **"Generate SEO Script With
   AI"**;
 - a permanent hint line states the rule before the first click
-  (`SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said
-  exactly 2× each · one short keyword is in the title · one is in a heading`), and the button
-  tooltip repeats it;
+  (`SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords said
+  at least 2× each · minimums only, extra uses are allowed · one short keyword is in the title ·
+  one is in a heading`), and the button tooltip repeats it;
 - after a successful run the SEO plan chips (`renderSeoKeywords()`, `#va-script-keywords-N`) show
-  the AI title, the headings and every keyword with its **measured** count (each keyword must
-  measure exactly 2×) and its own tooltip;
-- the status line ends with `· SEO: 1 long-tail (2×) + 4 short keywords (2× each) · title + N
+  the AI title, the headings and every keyword with its **measured** count (the long-tail needs
+  ≥1× and each short ≥2×; a higher count is valid) and its own tooltip;
+- the status line ends with `· SEO: 1 long-tail (≥1×) + 4 short keywords (≥2× each) · title + N
   heading(s)`.
 
 Documentation updated in the same change: `system-rules.md` **RULE 7** (rewritten for the

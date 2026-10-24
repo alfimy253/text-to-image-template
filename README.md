@@ -22,7 +22,8 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 - **AI on demand.** Stable Diffusion XL images per video panel (`/image/gen`), an **SEO explainer
   script** (`/api/script`: the AI first plans 1 long-tail keyword, exactly 4 short keywords, a
   title carrying one short keyword and at least one heading carrying one, then writes an SRT
-  script that *says* every keyword exactly 2× — every rule enforced server-side), and a MeloTTS
+  script that *says* the long-tail keyword at least once and each short keyword at least twice —
+  extra uses allowed, every rule enforced server-side), and a MeloTTS
   voiceover (`/api/voiceover`) with a free fallback TTS engine.
 - **Optional server-side rendering.** **☁️ API** uploads a video's whole payload to KV and a
   background worker tab (the same app opened at its current-day settings URL, e.g.
@@ -117,7 +118,7 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 | Slide timing | 9 s per image/GIF; MP4 clips play in full; the list repeats to cover the MP3 |
 | Captions | 10 rows, 40 characters each; last caption capped at 10 s on screen |
 | Script | 1-6 minutes, `super fast` / `fast` / `medium` / `slow`, valid SRT required |
-| SEO keywords | exactly 1 long-tail (no word/character length rule, said exactly 2×) + exactly 4 short keywords (≤3 words, each said exactly 2×); short/long-tail overlap allowed, shared uses count for both; one short in the AI title (≤70 chars), one in a heading |
+| SEO keywords | exactly 1 long-tail (no word/character length rule, said **at least once**) + exactly 4 short keywords (≤3 words, each said **at least twice**); **minimums only — extra uses are allowed and never rejected**; short/long-tail overlap allowed, shared uses count for both; one short in the AI title (≤70 chars), one in a heading |
 | Ring template images | 5–7 decoded uploads, required before Download MP4 or Add to Video; separate from the normal two background photos |
 | Element rotation / layers | 0–360°, 1° steps; layer buttons move the selected text/graphic one step, never behind the background |
 | Voiceover | 8,000 characters max, chunked at 500; English in the UI |
@@ -141,9 +142,9 @@ the strings that carry the rules (the full inventory, with the constant each one
 
 | Where | Hint |
 | --- | --- |
-| Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` |
-| ✨ **Generate SEO Script** button | tooltip: *AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.* |
-| SEO plan chips (after a successful run) | Title row · Headings row · `long-tail keyword — must be said exactly 2×` · `short keyword — must be said exactly 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading`, each keyword chip showing the measured count, e.g. `coffee brewing 2×` |
+| Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords said at least 2× each · minimums only, extra uses are allowed · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` |
+| ✨ **Generate SEO Script** button | tooltip: *AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the SRT script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.* |
+| SEO plan chips (after a successful run) | Title row · Headings row · `long-tail keyword — must be said at least 1×` · `short keyword — must be said at least 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading`, each keyword chip showing the measured count, e.g. `coffee brewing 2×` (a count above the minimum is valid) |
 | Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the modal explains the selected editor's motion controls and reminds users the exported clip is silent |
 | Template element inspector | `+ Front layer` / `- Back Layer`, `Layer N of M`, `Rotate degrees` + live `N°` readout (0–360°) |
 | Ring template, bottom accordion | `Ring images · N / 7 (min 5)`; choose 5–7 images together; inline errors preserve previous images |
@@ -158,7 +159,15 @@ the strings that carry the rules (the full inventory, with the constant each one
 
 Status lines (`#va-status-N`, `#va-script-status-N`, `#va-ai-status-N`) are the normal progress
 channel; the script line ends with `Script ready — N lines (<speed> speech, <minutes> min) · SEO:
-1 long-tail (2×) + 4 short keywords (2× each) · title + N heading(s)`.
+1 long-tail (≥1×) + 4 short keywords (≥2× each) · title + N heading(s)`.
+
+**Keyword-frequency rule (minimum-only).** The long-tail keyword must appear **at least once**
+in the spoken SRT and each of the four short keywords **at least twice**. There is no maximum:
+a keyword said three or four times is accepted and never triggers a retry. Repetition is counted
+on the spoken dialogue only (cue numbers, timestamps, title and headings do not count), and a
+short keyword nested inside a long-tail occurrence counts for both roles. The server returns
+`min` (and `max: null` = unbounded) with every measured `count`; the full contract is
+`system-rules.md` → RULE 7.
 
 
 ## Setup

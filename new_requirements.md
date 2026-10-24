@@ -171,17 +171,25 @@ This revision supersedes earlier descriptions of mutually exclusive short/long-t
   roles. Neither the planner prompt nor the validator imposes a minimum/maximum word count or
   character length on the long-tail keyword. Empty/non-keyword values remain invalid.
 - Preserve the existing contract: exactly **one long-tail**, exactly **four unique short
-  keywords** (1–3 words each), every keyword measured **exactly twice** in spoken SRT, an AI title
-  of at most 70 characters containing a short keyword, and at least one heading containing a
-  short keyword. Existing short-to-short nesting restrictions remain unchanged.
-- **Shared-count rule:** saying `morning yoga poses` twice already says the short keyword `yoga`
-  twice. Do not require two additional standalone uses. Equivalently, if a one-word long-tail is
-  inside a longer short phrase, those short-phrase uses count toward the long-tail too.
-- Stage 2 and its retries must explain shared counts, not coach the model to insert each phrase
-  independently. Three standalone/nested total uses are still rejected; overlap is not a waiver
-  of the two-use rule. Unicode/hyphen-safe matching and SRT timing validation remain in force.
-- **Acceptance:** overlapping and one-word/>6-word long-tail plans pass; two shared occurrences
-  satisfy both roles; an extra third use fails; planner/writer prompts and UI hints agree.
+  keywords** (1–3 words each), an AI title of at most 70 characters containing a short keyword,
+  and at least one heading containing a short keyword. Existing short-to-short nesting
+  restrictions remain unchanged.
+- **Keyword-frequency rule (2026-10-24, minimum-only):** the long-tail keyword must appear
+  **at least once** in the spoken SRT and each of the four short keywords **at least twice**.
+  There is **no maximum**: a third, fourth or later use is valid and is never retried or
+  rejected. The `min` values are `1` and `2`; the API reports `max: null` (unbounded) and the
+  `*_FREQ_MAX` constants no longer exist. Only deficits are errors, e.g.
+  `the short keyword "yoga" appears 1 time(s); it must appear at least 2 time(s)`.
+- **Shared-count rule:** each long-tail use also counts as a use of a short keyword nested inside
+  it, so saying `morning yoga poses` once already supplies one of the two `yoga` uses and one
+  standalone `yoga` use reaches the minimum. Equivalently, if a one-word long-tail is inside a
+  longer short phrase, those short-phrase uses count toward the long-tail minimum.
+- Stage 2 and its retries must explain minimums and shared counts, not coach the model to insert
+  each phrase independently, and must never ask for a phrase to be removed for being used too
+  often. Unicode/hyphen-safe matching and SRT timing validation remain in force.
+- **Acceptance:** overlapping and one-word/>6-word long-tail plans pass; a minimum set of uses
+  (long-tail ≥1, each short ≥2) passes, including when supplied only through overlap; extra uses
+  pass; a keyword below its minimum fails; planner/writer prompts and UI hints agree.
 - **Implementation:** `src/modules/script-seo.ts`, `src/client/app-js.ts`; deterministic overlap
   fixture in `e2e/index.ts`.
 
