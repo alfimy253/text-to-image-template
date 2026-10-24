@@ -75,6 +75,9 @@ export const REEL_SCENE_EDITOR_JS = `
 			["Heart", "heart", "♥"], ["Arrow", "arrow", "➜"],
 			["Gear", "gear", "⚙"], ["Synth grid", "synth", "▤"], ["Letters", "letters", "ABC"]
 		];
+		// Modules register additional animated graphics here. Each object draws
+		// within the selected element's translation, rotation and scale.
+		const REEL_GRAPHIC_OBJECTS = Object.create(null);
 		const REEL_COLOR_SWATCHES = [
 			["White", "#ffffff"], ["Ink", "#111111"], ["Cream", "#f6f0df"],
 			["Red", "#ff3b30"], ["Orange", "#ff7a00"], ["Yellow", "#ffe600"],
@@ -141,26 +144,26 @@ export const REEL_SCENE_EDITOR_JS = `
 						type: "text", label: "Eyebrow", text: ("0" + (index + 1)).slice(-2) + " · " + scene.style.toUpperCase() + " SCENE",
 						x: 6, y: 7, size: 13, color: isVox ? "#dc2626" : "#c4a87c",
 						font: "mono", align: "left", anim: "none", transition: "fade",
-						transitionSpeed: 1, speed: 1, visible: true, deleted: false
+						transitionSpeed: 1, speed: 1, rotation: 0, visible: true, deleted: false
 					},
 					headline: {
 						type: "text", label: "Headline", text: scene.text,
 						x: 50, y: 39, size: 56, color: isVox ? "#0f172a" : (scene.style === "glitch" ? "#ffffff" : "#ffffff"),
 						font: "sans", align: "center", anim: headlineAnim,
 						transition: "slide", transitionSpeed: 1, speed: 1,
-						visible: true, deleted: false
+						rotation: 0, visible: true, deleted: false
 					},
 					sub: {
 						type: "text", label: "Sub text", text: scene.sub,
 						x: 50, y: 63, size: 16, color: isVox ? "#64748b" : "#dddddd",
 						font: "sans", align: "center", anim: "none", transition: "fade",
-						transitionSpeed: 1, speed: 1, visible: true, deleted: false
+						transitionSpeed: 1, speed: 1, rotation: 0, visible: true, deleted: false
 					},
 					graphic: {
 						type: "graphic", label: "Graphic", kind: scene.graphic === "none" ? "circle" : scene.graphic,
 						x: 50, y: 80, size: 64, color: scene.style === "neon" ? "#ff2d95" : "#7aac2b",
 						anim: "float", transition: "zoom", transitionSpeed: 1,
-						speed: 1, visible: scene.graphic !== "none", deleted: false
+						speed: 1, rotation: 0, visible: scene.graphic !== "none", deleted: false
 					}
 				}
 			};
@@ -193,6 +196,98 @@ export const REEL_SCENE_EDITOR_JS = `
 				key: key,
 				x: x, y: y, width: width, height: height
 			});
+		}
+
+		// Paint order is shared by preview, hit-testing and exported frames.
+		// Background is deliberately outside this order and always stays behind.
+		function reelElementKeys(state) {
+			const keys = Object.keys(state.elements);
+			const order = [];
+			(Array.isArray(state.elementOrder) ? state.elementOrder : []).concat(keys).forEach(function (key) {
+				if (keys.indexOf(key) !== -1 && order.indexOf(key) === -1) order.push(key);
+			});
+			return order;
+		}
+
+		function reelMoveElementLayer(key, direction) {
+			if (exporting) return;
+			const state = reelSelectedState();
+			const order = reelElementKeys(state);
+			const active = order.filter(function (name) { return !state.elements[name].deleted; });
+			const index = active.indexOf(key);
+			const next = index + direction;
+			if (index < 0 || next < 0 || next >= active.length) return;
+			const from = order.indexOf(key);
+			const to = order.indexOf(active[next]);
+			order[from] = active[next];
+			order[to] = key;
+			state.elementOrder = order;
+			reelRenderSceneControls();
+			reelRedrawScene();
+		}
+
+		function reelAddElementTransforms(parent, state, key, element) {
+			reelAddRange(parent, "Rotate degrees", Number(element.rotation) || 0, 0, 360, 1, function (value) {
+				element.rotation = value;
+				reelRedrawScene();
+			}, "°");
+			const order = reelElementKeys(state).filter(function (name) { return !state.elements[name].deleted; });
+			const index = order.indexOf(key);
+			const controls = document.createElement("div");
+			controls.className = "tm-scene-layer-controls";
+			controls.setAttribute("role", "group");
+			controls.setAttribute("aria-label", "Element layer order");
+			const front = reelButton("+ Front layer", "tm-scene-layer-button", function () { reelMoveElementLayer(key, 1); });
+			front.title = "Move this element one layer forward";
+			front.disabled = index === order.length - 1;
+			const back = reelButton("- Back Layer", "tm-scene-layer-button", function () { reelMoveElementLayer(key, -1); });
+			back.title = "Move this element one layer backward (above the background)";
+			back.disabled = index <= 0;
+			const position = document.createElement("span");
+			position.className = "tm-scene-layer-position";
+			position.textContent = "Layer " + (index + 1) + " of " + order.length;
+			controls.appendChild(front);
+			controls.appendChild(back);
+			controls.appendChild(position);
+			parent.appendChild(controls);
+		}
+
+		// Keep a transformed local hit rectangle as well as its canvas bounds.
+		// The inverse test selects rotated elements accurately, in paint order.
+		function reelTransformedHit(context, hitAreas, key, x, y, width, height) {
+			const matrix = context.getTransform();
+			const corners = [[x, y], [x + width, y], [x, y + height], [x + width, y + height]].map(function (point) {
+				return { x: matrix.a * point[0] + matrix.c * point[1] + matrix.e, y: matrix.b * point[0] + matrix.d * point[1] + matrix.f };
+			});
+			const left = Math.min.apply(null, corners.map(function (point) { return point.x; }));
+			const top = Math.min.apply(null, corners.map(function (point) { return point.y; }));
+			hitAreas.push({
+				key: key, x: left, y: top,
+				width: Math.max.apply(null, corners.map(function (point) { return point.x; })) - left,
+				height: Math.max.apply(null, corners.map(function (point) { return point.y; })) - top,
+				matrix: matrix, local: { x: x, y: y, width: width, height: height }
+			});
+		}
+
+		function reelGraphicOptions() {
+			return REEL_GRAPHICS.map(function (item) { return [item[0], item[1]]; }).concat(
+				Object.keys(REEL_GRAPHIC_OBJECTS).map(function (kind) { return [REEL_GRAPHIC_OBJECTS[kind].name, kind]; })
+			);
+		}
+
+		function reelSetGraphicKind(element, kind) {
+			element.kind = kind;
+			const object = REEL_GRAPHIC_OBJECTS[kind];
+			if (object) {
+				element.color = object.color;
+				element.accent = object.accent;
+				element.size = 240;
+				element.anim = "none";
+			}
+			else element.size = Math.min(160, Number(element.size) || 64);
+			element.visible = true;
+			reelRenderSceneControls();
+			reelRedrawScene();
 		}
 
 		function reelCoverImage(context, image, width, height, zoom, offsetX, offsetY) {
@@ -420,20 +515,13 @@ export const REEL_SCENE_EDITOR_JS = `
 			const align = element.align || "center";
 			const left = align === "left" ? x : align === "right" ? x - maxLine : x - maxLine / 2;
 			const top = key === "eyebrow" ? y : y - lineHeight * (lines.length - 1) / 2 - lineHeight / 2;
-			const bounds = {
-				x: Math.max(0, left - 7 * scale),
-				y: Math.max(0, top - 7 * scale),
-				width: Math.min(width, maxLine + 14 * scale),
-				height: Math.min(height, lineHeight * lines.length + 14 * scale)
-			};
-			hitAreas.push({ key: key, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
 
 			const transition = reelTransitionState(element, time, scale);
 			const motionTime = time * (state.speed || 1) * (element.speed || 1);
 			let sx = transition.sx;
 			let sy = transition.sy;
 			let alpha = transition.alpha;
-			let rotation = transition.rotation;
+			let rotation = transition.rotation + (Number(element.rotation) || 0) * DEG;
 			if (element.anim === "scale") {
 				const pulse = (Math.sin(motionTime * Math.PI * 2) + 1) / 2;
 				sx *= 1 + pulse * 0.08;
@@ -453,6 +541,7 @@ export const REEL_SCENE_EDITOR_JS = `
 			context.translate(x + transition.dx, y + transition.dy);
 			context.rotate(rotation);
 			context.scale(sx, sy);
+			reelTransformedHit(context, hitAreas, key, left - x - 7 * scale, top - y - 7 * scale, maxLine + 14 * scale, lineHeight * lines.length + 14 * scale);
 			context.globalAlpha *= alpha;
 			context.textBaseline = "middle";
 			context.fillStyle = reelPaint(context, element.color, maxLine, lineHeight, "#ffffff");
@@ -537,9 +626,9 @@ export const REEL_SCENE_EDITOR_JS = `
 			let sy = transition.sy;
 			let sx = transition.sx;
 			let dy = transition.dy;
-			let rotation = 0;
+			let rotation = transition.rotation + (Number(element.rotation) || 0) * DEG;
 			if (element.anim === "float") dy += Math.sin(motionTime * Math.PI * 2 / 2.4) * 6 * scale;
-			if (element.anim === "spin") rotation = motionTime * Math.PI * 2 / 3;
+			if (element.anim === "spin") rotation += motionTime * Math.PI * 2 / 3;
 			if (element.anim === "pulse") sx *= 1 + (Math.sin(motionTime * Math.PI * 2 / 1.4) + 1) * 0.09, sy *= 1 + (Math.sin(motionTime * Math.PI * 2 / 1.4) + 1) * 0.09;
 			context.save();
 			context.translate(x + transition.dx, y + dy);
@@ -554,7 +643,11 @@ export const REEL_SCENE_EDITOR_JS = `
 				context.shadowColor = reelSolidColor(element.color, "#ff2d95");
 				context.shadowBlur = (12 + (Math.sin(motionTime * 4) + 1) * 8) * scale;
 			}
-			if (element.kind === "letters") {
+			const animatedObject = REEL_GRAPHIC_OBJECTS[element.kind];
+			if (animatedObject) {
+				animatedObject.draw(context, motionTime, size, reelSolidColor(element.color, animatedObject.color), reelSolidColor(element.accent, animatedObject.accent));
+			}
+			else if (element.kind === "letters") {
 				context.font = "900 " + Math.round(size * 0.58) + "px Arial, sans-serif";
 				context.textAlign = "center";
 				context.textBaseline = "middle";
@@ -608,15 +701,15 @@ export const REEL_SCENE_EDITOR_JS = `
 				}
 				else if (element.kind === "gear") reelDrawStar(context, size / 2);
 				if (element.kind === "gear") {
-					context.fill();
-					context.globalCompositeOperation = "destination-out";
-					context.beginPath();
+					// A hole in this graphic, not an eraser for lower layers.
+					context.moveTo(size * 0.14, 0);
 					context.arc(0, 0, size * 0.14, 0, Math.PI * 2);
-					context.fill();
+					context.fill("evenodd");
 				}
 				else context.fill();
 			}
-			hitAreas.push({ key: key, x: x - size * 0.62, y: y + dy - size * 0.62, width: size * 1.24, height: size * 1.24 });
+			const extent = animatedObject ? size : element.kind === "letters" ? size * 1.25 : element.kind === "synth" ? size * 1.1 : size * 0.62;
+			reelTransformedHit(context, hitAreas, key, -extent, -extent, extent * 2, extent * 2);
 			context.restore();
 		}
 
@@ -659,7 +752,7 @@ export const REEL_SCENE_EDITOR_JS = `
 			reelRegisterHit("bg", 0, 0, width, height);
 			reelDrawBackground(context, width, height, time, state, scale);
 			const hitAreas = reelSceneHitAreas;
-			Object.keys(state.elements).forEach(function (key) {
+			reelElementKeys(state).forEach(function (key) {
 				const element = state.elements[key];
 				if (element.type === "graphic") reelDrawGraphic(context, width, height, scale, time, state, key, element, hitAreas);
 				else reelDrawText(context, width, height, scale, time, state, key, element, hitAreas);
@@ -977,7 +1070,7 @@ export const REEL_SCENE_EDITOR_JS = `
 			bgButton.classList.toggle("selected", reelSelectedElement === "bg");
 			bgButton.setAttribute("aria-pressed", reelSelectedElement === "bg" ? "true" : "false");
 			objectsHost.appendChild(bgButton);
-			Object.keys(state.elements).forEach(function (key) {
+			reelElementKeys(state).forEach(function (key) {
 				const element = state.elements[key];
 				const button = reelButton((element.deleted ? "× " : "") + reelNameForElement(key, element), "tm-scene-object", function () { reelSelectSceneElement(key); });
 				button.classList.toggle("selected", reelSelectedElement === key);
@@ -1058,7 +1151,7 @@ export const REEL_SCENE_EDITOR_JS = `
 			}
 			if (element.type === "graphic") {
 				reelAddCheckbox(inspector, "Visible", element.visible, function (value) { element.visible = value; reelRedrawScene(); });
-				reelAddSelect(inspector, "Shape", REEL_GRAPHICS.map(function (item) { return [item[0], item[1]]; }), element.kind, function (value) { element.kind = value; reelRedrawScene(); });
+				reelAddSelect(inspector, "Graphics", reelGraphicOptions(), element.kind, function (value) { reelSetGraphicKind(element, value); });
 				const stickerTitle = document.createElement("div");
 				stickerTitle.className = "tm-scene-subtitle";
 				stickerTitle.textContent = "Shapes & stickers";
@@ -1066,13 +1159,16 @@ export const REEL_SCENE_EDITOR_JS = `
 				const stickers = document.createElement("div");
 				stickers.className = "tm-scene-sticker-grid";
 				REEL_GRAPHICS.forEach(function (shape) {
-					const sticker = reelButton(shape[2] + " " + shape[0], "tm-scene-sticker", function () { element.kind = shape[1]; reelRenderSceneControls(); reelRedrawScene(); });
+					const sticker = reelButton(shape[2] + " " + shape[0], "tm-scene-sticker", function () { reelSetGraphicKind(element, shape[1]); });
 					sticker.classList.toggle("selected", element.kind === shape[1]);
 					stickers.appendChild(sticker);
 				});
 				inspector.appendChild(stickers);
-				reelAddRange(inspector, "Size", element.size, 20, 160, 1, function (value) { element.size = value; reelRedrawScene(); }, " px");
+				reelAddRange(inspector, "Size", element.size, 20, REEL_GRAPHIC_OBJECTS[element.kind] ? 480 : 160, 1, function (value) { element.size = value; reelRedrawScene(); }, " px");
 				reelAddSceneColor(inspector, "Color", element.color, function (value) { element.color = value; reelRedrawScene(); });
+				if (REEL_GRAPHIC_OBJECTS[element.kind]) {
+					reelAddSceneColor(inspector, "Accent color", element.accent, function (value) { element.accent = value; reelRedrawScene(); });
+				}
 				reelAddSelect(inspector, "Animation", REEL_SHAPE_ANIMS, element.anim, function (value) { element.anim = value; reelRedrawScene(); });
 			}
 			else {
@@ -1088,6 +1184,7 @@ export const REEL_SCENE_EDITOR_JS = `
 				reelAddSelect(inspector, "Text align", [["Left", "left"], ["Center", "center"], ["Right", "right"]], element.align, function (value) { element.align = value; reelRedrawScene(); });
 				reelAddSelect(inspector, "Animation", REEL_TEXT_ANIMS, element.anim, function (value) { element.anim = value; reelRedrawScene(); });
 			}
+			reelAddElementTransforms(inspector, state, reelSelectedElement, element);
 			reelAddSelect(inspector, "Enter transition", REEL_TRANSITIONS, element.transition, function (value) { element.transition = value; reelRedrawScene(); });
 			reelAddRange(inspector, "Transition speed", element.transitionSpeed, 0.25, 2, 0.05, function (value) { element.transitionSpeed = value; reelRedrawScene(); }, "×");
 			reelAddRange(inspector, "Element speed", element.speed, 0.5, 2, 0.1, function (value) { element.speed = value; reelRedrawScene(); }, "×");
@@ -1146,7 +1243,7 @@ export const REEL_SCENE_EDITOR_JS = `
 				type: "text", label: "Text " + count, text: "New text",
 				x: 50, y: 50, size: 32, color: "#ffffff", font: "sans", align: "center",
 				anim: "none", transition: "fade", transitionSpeed: 1,
-				speed: 1, visible: true, deleted: false
+				speed: 1, rotation: 0, visible: true, deleted: false
 			};
 			reelSelectSceneElement(key);
 		}
@@ -1165,6 +1262,8 @@ export const REEL_SCENE_EDITOR_JS = `
 				y: reelClamp((source ? Number(source.y) : 50) + 8, 5, 95),
 				size: source ? Number(source.size) : 64,
 				color: source ? source.color : "#7aac2b",
+				accent: source ? source.accent : "#22d3ee",
+				rotation: source ? Number(source.rotation) || 0 : 0,
 				anim: source ? source.anim : "float",
 				transition: source ? source.transition : "zoom",
 				transitionSpeed: source ? Number(source.transitionSpeed) : 1,
@@ -1178,19 +1277,6 @@ export const REEL_SCENE_EDITOR_JS = `
 			const selected = reelSelectedState().elements[reelSelectedElement];
 			if (selected && selected.type === "graphic") reelAddGraphicElement();
 			else reelAddTextElement();
-		}
-
-		function reelBuildSceneList() {
-			const host = document.getElementById("tm-scene-list");
-			if (!host) return;
-			host.innerHTML = "";
-			REEL_SCENES.forEach(function (scene, index) {
-				const button = reelButton((index + 1) + " · " + scene.name, "tm-scene-list-button", function () {
-					reelOpenSceneEditor(index);
-				});
-				button.classList.toggle("active", index === reelSceneIndex);
-				host.appendChild(button);
-			});
 		}
 
 		function reelSetEditorControls(sceneMode) {
@@ -1240,7 +1326,6 @@ export const REEL_SCENE_EDITOR_JS = `
 			if (playBtn) playBtn.textContent = "\\u23f8 Pause";
 			showView();
 			if (statusEl) statusEl.textContent = "Editing scene " + (reelSceneIndex + 1) + " · click an element to configure it, then export or add it to Video " + modalVideo;
-			reelBuildSceneList();
 			reelRenderSceneControls();
 			drawScene(ctx, TPL_W, TPL_H, 0, scene, reelSceneState(reelSceneIndex));
 			ensureTicking();
@@ -1290,7 +1375,18 @@ export const REEL_SCENE_EDITOR_JS = `
 		function reelHitTest(point) {
 			for (let i = reelSceneHitAreas.length - 1; i >= 0; i--) {
 				const area = reelSceneHitAreas[i];
-				if (point.x >= area.x && point.x <= area.x + area.width && point.y >= area.y && point.y <= area.y + area.height) return area.key;
+				if (area.matrix && area.local) {
+					const m = area.matrix;
+					const determinant = m.a * m.d - m.b * m.c;
+					if (Math.abs(determinant) < 0.000001) continue;
+					const dx = point.x - m.e;
+					const dy = point.y - m.f;
+					const x = (m.d * dx - m.c * dy) / determinant;
+					const y = (-m.b * dx + m.a * dy) / determinant;
+					const box = area.local;
+					if (x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height) return area.key;
+				}
+				else if (point.x >= area.x && point.x <= area.x + area.width && point.y >= area.y && point.y <= area.y + area.height) return area.key;
 			}
 			return "bg";
 		}
@@ -1299,7 +1395,7 @@ export const REEL_SCENE_EDITOR_JS = `
 			if (!canvas || canvas.dataset.reelBound === "1") return;
 			canvas.dataset.reelBound = "1";
 			canvas.addEventListener("pointerdown", function (event) {
-				if (!reelSceneMode || !editorView || editorView.style.display === "none") return;
+				if (exporting || !reelSceneMode || !editorView || editorView.style.display === "none") return;
 				const point = reelScenePoint(event);
 				const key = reelHitTest(point);
 				reelSelectSceneElement(key);
@@ -1317,7 +1413,7 @@ export const REEL_SCENE_EDITOR_JS = `
 				event.preventDefault();
 			});
 			canvas.addEventListener("pointermove", function (event) {
-				if (!reelSceneMode) return;
+				if (exporting || !reelSceneMode) return;
 				if (reelSceneDrag) {
 					const element = reelSelectedState().elements[reelSceneDrag.key];
 					const rect = canvas.getBoundingClientRect();
@@ -1373,7 +1469,7 @@ export const REEL_SCENE_EDITOR_JS = `
 			sceneControls.id = "tm-scene-controls";
 			sceneControls.className = "tm-scene-controls";
 			sceneControls.style.display = "none";
-			sceneControls.innerHTML = '<div class="tm-scene-panel"><div class="tm-scene-panel-head"><div><div class="tm-scene-kicker">REEL EDITOR</div><div class="tm-sec-title">Scene elements</div></div><button type="button" id="tm-scene-add-text" class="tm-scene-add">＋ Text</button></div><p class="tm-scene-hint">Click an object in the preview to load its controls. Drag to move it.</p><div id="tm-scene-inspector" class="tm-scene-inspector"></div></div><details class="tm-scene-switcher"><summary>Scenes · ' + REEL_SCENES.length + ' editable designs</summary><div id="tm-scene-list" class="tm-scene-list"></div></details>';
+			sceneControls.innerHTML = '<div class="tm-scene-panel"><div class="tm-scene-panel-head"><div><div class="tm-scene-kicker">REEL EDITOR</div><div class="tm-sec-title">Scene elements</div></div><button type="button" id="tm-scene-add-text" class="tm-scene-add">＋ Text</button></div><p class="tm-scene-hint">Click an object in the preview to load its controls. Drag to move it.</p><div id="tm-scene-inspector" class="tm-scene-inspector"></div></div>';
 			side.appendChild(sceneControls);
 			document.getElementById("tm-scene-add-text").addEventListener("click", reelAddSceneElement);
 

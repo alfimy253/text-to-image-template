@@ -8,13 +8,13 @@
 
 export const TEMPLATE_RING_CAROUSEL_JS = `
 		// =========================================================
-		// INTERACTIVE SCENE: 3D RING CAROUSEL (8 editorial cards)
+		// INTERACTIVE SCENE: 3D RING CAROUSEL (5–7 uploaded images)
 		// =========================================================
 		const RING_CAROUSEL_SCENE = {
 			name: "3D Ring Carousel",
 			style: "editorial",
 			text: "",
-			sub: "Eight editorial cards on an auto-rotating 3D ring.",
+			sub: "Upload 5–7 images for an auto-rotating 3D ring.",
 			image: 0,
 			graphic: "none",
 			reelScene: true,
@@ -22,50 +22,124 @@ export const TEMPLATE_RING_CAROUSEL_JS = `
 		};
 		REEL_SCENES.push(RING_CAROUSEL_SCENE);
 
-		const RING_CAROUSEL_IMAGE_URLS = [
-			"https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=800&q=80",
-			"https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=800&q=80",
-			"https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=800&q=80",
-			"https://images.unsplash.com/photo-1490481651871-ab68de25d43d?auto=format&fit=crop&w=800&q=80",
-			"https://images.unsplash.com/photo-1500917293891-ef795e70e1f6?auto=format&fit=crop&w=800&q=80",
-			"https://images.unsplash.com/photo-1469334031218-e382a71b716b?auto=format&fit=crop&w=800&q=80",
-			"https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=800&q=80",
-			"https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=800&q=80"
-		];
-		let ringCarouselImages = [];
-		let ringCarouselImagesReady = null;
+		const RING_IMAGES_MIN = 5;
+		const RING_IMAGES_MAX = 7;
+		let ringUploadVersion = 0;
 
-		function ringEnsureImages() {
-			if (ringCarouselImagesReady) return ringCarouselImagesReady;
-			ringCarouselImages = RING_CAROUSEL_IMAGE_URLS.map(function (url) {
-				const image = new Image();
-				image.crossOrigin = "anonymous";
-				const ready = new Promise(function (resolve) {
-					let settled = false;
-					let timeoutId = 0;
-					const finish = function () {
-						if (settled) return;
-						settled = true;
-						if (timeoutId) clearTimeout(timeoutId);
-						resolve(image);
-					};
-					image.onload = finish;
-					image.onerror = function () {
-						image.__ringFailed = true;
-						finish();
-					};
-					timeoutId = setTimeout(function () {
-						image.__ringFailed = true;
-						finish();
-					}, 8000);
+		function ringImagesValid(state) {
+			return state.ringImages.length >= RING_IMAGES_MIN && state.ringImages.length <= RING_IMAGES_MAX;
+		}
+
+		function ringSyncExportButtons() {
+			if (!reelSceneMode || !REEL_SCENES[reelSceneIndex].ringCarousel || !editorView || editorView.style.display === "none") return;
+			const state = reelSelectedState();
+			const disabled = exporting || state.ringUploading || state.ringExporting || !ringImagesValid(state);
+			if (exportBtn) exportBtn.disabled = disabled;
+			if (addBtn) addBtn.disabled = disabled;
+		}
+
+		async function ringUploadFiles(event, state) {
+			const files = Array.from(event.target.files || []);
+			event.target.value = "";
+			if (!files.length || exporting || state.ringExporting) return;
+			if (files.length < RING_IMAGES_MIN || files.length > RING_IMAGES_MAX) {
+				state.ringMessage = "Choose 5–7 images together. You selected " + files.length + "; your current images were kept.";
+				ringRenderUploadAccordion(state);
+				return;
+			}
+			if (files.some(function (file) { return !String(file.type).startsWith("image/"); })) {
+				state.ringMessage = "Only image files are allowed. Your current images were kept.";
+				ringRenderUploadAccordion(state);
+				return;
+			}
+			const version = ++ringUploadVersion;
+			const staged = [];
+			state.ringUploading = true;
+			state.ringMessage = "Loading " + files.length + " images…";
+			ringRenderUploadAccordion(state);
+			try {
+				for (const file of files) {
+					const url = URL.createObjectURL(file);
+					const image = new Image();
+					staged.push({ image: image, url: url, name: file.name });
 					image.src = url;
-					if (image.complete) Promise.resolve().then(finish);
+					await image.decode();
+					if (!image.naturalWidth || !image.naturalHeight) throw new Error("Unreadable image");
+					if (version !== ringUploadVersion) return;
+				}
+				// Replace atomically: one unreadable file must not destroy a valid set.
+				state.ringImages.forEach(function (entry) { URL.revokeObjectURL(entry.url); });
+				state.ringImages = staged.slice();
+				staged.length = 0;
+				state.ringMessage = state.ringImages.length + " images ready · used in the preview and MP4.";
+			}
+			catch (error) {
+				if (version === ringUploadVersion) state.ringMessage = "An image could not be read. Choose 5–7 supported images; your current images were kept.";
+			}
+			finally {
+				staged.forEach(function (entry) { URL.revokeObjectURL(entry.url); });
+				if (version === ringUploadVersion) {
+					state.ringUploading = false;
+					ringRenderUploadAccordion(state);
+					reelRedrawScene();
+				}
+			}
+		}
+
+		function ringRenderUploadAccordion(state) {
+			// A decode may finish after the user has switched back to another
+			// template. Keep its saved images, but never show ring controls there.
+			if (!reelSceneMode || !REEL_SCENES[reelSceneIndex].ringCarousel) {
+				const existing = document.getElementById("tm-ring-upload");
+				if (existing) existing.hidden = true;
+				return;
+			}
+			const controls = document.getElementById("tm-scene-controls");
+			if (!controls) return;
+			let accordion = document.getElementById("tm-ring-upload");
+			if (!accordion) {
+				accordion = document.createElement("details");
+				accordion.id = "tm-ring-upload";
+				accordion.className = "tm-ring-upload";
+				accordion.open = true;
+				controls.appendChild(accordion);
+			}
+			accordion.hidden = false;
+			const wasOpen = accordion.open;
+			accordion.innerHTML = '<summary>Ring images · <span id="tm-ring-count"></span> / 7 (min 5)</summary><div class="tm-ring-upload-body"><p class="tm-scene-hint">Choose 5–7 images together to replace the ring cards. At least 5 images are required for Download MP4 and Add to Video. Images stay in this browser session.</p><label class="tm-scene-upload">Choose ring images<input id="tm-ring-files" type="file" accept="image/*" multiple aria-label="Upload 5 to 7 ring images"></label><p id="tm-ring-status" class="tm-ring-status" role="status" aria-live="polite"></p><div id="tm-ring-thumbs" class="tm-ring-thumbs"></div></div>';
+			accordion.open = wasOpen;
+			document.getElementById("tm-ring-count").textContent = String(state.ringImages.length);
+			document.getElementById("tm-ring-status").textContent = state.ringMessage || "Upload 5–7 images to render your ring video. The preview currently shows sample cards.";
+			const input = document.getElementById("tm-ring-files");
+			input.disabled = exporting || state.ringUploading || state.ringExporting;
+			input.addEventListener("change", function (event) { ringUploadFiles(event, state); });
+			const thumbs = document.getElementById("tm-ring-thumbs");
+			state.ringImages.forEach(function (entry, index) {
+				const card = document.createElement("div");
+				card.className = "tm-ring-thumb";
+				const image = document.createElement("img");
+				image.src = entry.url;
+				image.alt = "Ring image " + (index + 1) + ": " + entry.name;
+				const caption = document.createElement("span");
+				caption.textContent = (index + 1) + ". " + entry.name;
+				caption.title = entry.name;
+				const remove = reelButton("×", "tm-ring-remove", function () {
+					if (exporting || state.ringUploading || state.ringExporting || state.ringImages.length <= RING_IMAGES_MIN) return;
+					state.ringImages.splice(index, 1);
+					URL.revokeObjectURL(entry.url);
+					state.ringMessage = state.ringImages.length + " images ready · used in the preview and MP4.";
+					ringRenderUploadAccordion(state);
+					reelRedrawScene();
 				});
-				image.__ringReady = ready;
-				return image;
+				remove.setAttribute("aria-label", "Remove ring image " + (index + 1));
+				remove.disabled = exporting || state.ringUploading || state.ringExporting || state.ringImages.length <= RING_IMAGES_MIN;
+				remove.title = state.ringImages.length <= RING_IMAGES_MIN ? "Keep at least 5 images; choose a new set to replace them" : "Remove this ring image";
+				card.appendChild(image);
+				card.appendChild(caption);
+				card.appendChild(remove);
+				thumbs.appendChild(card);
 			});
-			ringCarouselImagesReady = Promise.all(ringCarouselImages.map(function (image) { return image.__ringReady; }));
-			return ringCarouselImagesReady;
+			ringSyncExportButtons();
 		}
 
 		function ringCarouselElement() {
@@ -77,6 +151,7 @@ export const TEMPLATE_RING_CAROUSEL_JS = `
 				size: 100,
 				radius: 100,
 				tilt: -6,
+				rotation: 0,
 				speed: 1,
 				visible: true,
 				deleted: false
@@ -89,6 +164,10 @@ export const TEMPLATE_RING_CAROUSEL_JS = `
 			if (scene && scene.ringCarousel) {
 				return {
 					style: "editorial",
+					ringImages: [],
+					ringUploading: false,
+					ringExporting: false,
+					ringMessage: "",
 					background: {
 						image: "mood:0",
 						effect: "none",
@@ -234,12 +313,16 @@ export const TEMPLATE_RING_CAROUSEL_JS = `
 			const hitAreas = [{ key: "carousel", x: 0, y: 0, width: width, height: height }];
 			reelSceneHitAreas = hitAreas;
 			if (element.visible && !element.deleted) {
-				const images = ringCarouselImagesReady ? ringCarouselImages : [];
+				const images = state.ringImages.length ? state.ringImages.map(function (entry) { return entry.image; }) : REEL_SCENE_IMAGES;
+				context.save();
+				context.translate(centerX, centerY);
+				context.rotate((Number(element.rotation) || 0) * DEG);
+				context.translate(-centerX, -centerY);
 				const rotation = time * 21 * (Number(element.speed) || 0) * Math.PI / 180;
 				const tilt = (Number(element.tilt) || 0) * Math.PI / 180;
 				const radius = 380 * ((Number(element.radius) || 100) / 100);
-				const cards = RING_CAROUSEL_IMAGE_URLS.map(function (_, index) {
-					const angle = index / RING_CAROUSEL_IMAGE_URLS.length * Math.PI * 2 + rotation;
+				const cards = images.map(function (_, index) {
+					const angle = index / images.length * Math.PI * 2 + rotation;
 					const xBase = Math.sin(angle) * radius;
 					const zBase = Math.cos(angle) * radius;
 					const yBase = Math.sin(tilt) * zBase;
@@ -262,6 +345,7 @@ export const TEMPLATE_RING_CAROUSEL_JS = `
 					const image = images[card.index];
 					ringDrawCard(context, image, card, base, card.index);
 				});
+				context.restore();
 			}
 			if (showSelection) reelDrawSelection(context, hitAreas, "carousel", width, height, scale);
 		}
@@ -280,9 +364,13 @@ export const TEMPLATE_RING_CAROUSEL_JS = `
 			const scene = REEL_SCENES[reelSceneIndex];
 			const addButton = document.getElementById("tm-scene-add-text");
 			if (!scene || !scene.ringCarousel) {
+				const accordion = document.getElementById("tm-ring-upload");
+				if (accordion) accordion.hidden = true;
 				if (addButton) addButton.style.display = "";
 				return ringBaseRenderSceneControls();
 			}
+			const description = document.getElementById("tpl-sub");
+			if (description) description.textContent = "3D Ring Video Template — upload 5–7 images in the Ring images accordion at the bottom of the controls. Drag the ring to move it; adjust speed, radius, card size, tilt and rotation. Your uploaded cards are rendered into the preview and exported MP4.";
 			const state = reelSelectedState();
 			const element = state.elements.carousel;
 			const objectsHost = document.getElementById("tm-scene-objects");
@@ -305,13 +393,14 @@ export const TEMPLATE_RING_CAROUSEL_JS = `
 			inspector.appendChild(heading);
 			const note = document.createElement("div");
 			note.className = "tm-scene-subtitle";
-			note.textContent = "8 editorial cards · ring only · no particles";
+			note.textContent = "5–7 uploaded images · ring only · no particles";
 			inspector.appendChild(note);
 			reelAddCheckbox(inspector, "Visible", element.visible, function (value) { element.visible = value; reelRedrawScene(); });
 			reelAddRange(inspector, "Rotation speed", element.speed, 0, 3, 0.05, function (value) { element.speed = value; reelRedrawScene(); }, "×");
 			reelAddRange(inspector, "Ring radius", element.radius, 55, 145, 1, function (value) { element.radius = value; reelRedrawScene(); }, "%");
 			reelAddRange(inspector, "Card size", element.size, 50, 150, 1, function (value) { element.size = value; reelRedrawScene(); }, "%");
 			reelAddRange(inspector, "3D tilt", element.tilt, -30, 30, 1, function (value) { element.tilt = value; reelRedrawScene(); }, "°");
+			reelAddRange(inspector, "Rotate degrees", Number(element.rotation) || 0, 0, 360, 1, function (value) { element.rotation = value; reelRedrawScene(); }, "°");
 			reelAddRange(inspector, "X %", element.x, 0, 100, 1, function (value) { element.x = value; reelSyncPositionRanges(); reelRedrawScene(); }, "%");
 			reelAddRange(inspector, "Y %", element.y, 0, 100, 1, function (value) { element.y = value; reelSyncPositionRanges(); reelRedrawScene(); }, "%");
 			const reset = reelButton("Reset carousel", "tm-scene-secondary", function () {
@@ -321,19 +410,28 @@ export const TEMPLATE_RING_CAROUSEL_JS = `
 				reelRedrawScene();
 			});
 			inspector.appendChild(reset);
-		};
-
-		const ringBaseBuildSceneGallery = reelBuildSceneGallery;
-		reelBuildSceneGallery = function () {
-			ringEnsureImages();
-			return ringBaseBuildSceneGallery();
+			ringRenderUploadAccordion(state);
 		};
 
 		const ringBaseExportMP4 = exportMP4;
 		exportMP4 = async function (options) {
-			if (reelSceneMode && REEL_SCENES[reelSceneIndex] && REEL_SCENES[reelSceneIndex].ringCarousel) {
-				await ringEnsureImages();
+			if (!reelSceneMode || !REEL_SCENES[reelSceneIndex].ringCarousel) return ringBaseExportMP4(options);
+			const state = reelSelectedState();
+			if (exporting || state.ringExporting) return null;
+			if (state.ringUploading || !ringImagesValid(state)) {
+				state.ringMessage = state.ringUploading ? "Please wait for the images to finish loading." : "Upload 5–7 images before rendering the 3D Ring Video Template.";
+				if (statusEl) statusEl.textContent = state.ringMessage;
+				ringRenderUploadAccordion(state);
+				return null;
 			}
-			return ringBaseExportMP4(options);
+			state.ringExporting = true;
+			ringRenderUploadAccordion(state);
+			try {
+				return await ringBaseExportMP4(options);
+			}
+			finally {
+				state.ringExporting = false;
+				if (reelSceneMode && REEL_SCENES[reelSceneIndex].ringCarousel) ringRenderUploadAccordion(state);
+			}
 		};
 `;

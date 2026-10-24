@@ -1,7 +1,9 @@
 # New Modular Requirements & Architecture (`new_requirements.md`)
 
 **Last Updated:** 2026-10-23  
-**Scope:** Modular Payment Screenshot Upload, `/account` & `/upgrade` Flows, Configurable Local Payment Gateway, Full-Page Dynamic Site Configuration, Admin Payment Verification (`paid_user` Upgrade), and Basic Flat CMS (Max 8 Pages).
+**Scope:** SEO overlap rules and template-editor controls (see §6), Modular Payment Screenshot Upload, `/account` & `/upgrade` Flows, Configurable Local Payment Gateway, Full-Page Dynamic Site Configuration, Admin Payment Verification (`paid_user` Upgrade), and Basic Flat CMS (Max 8 Pages).
+
+**Latest request:** [SEO overlap/no long-tail length rule, 5–7 ring-image uploads, removal of the design accordion, layer/rotation controls, and the Graphics dropdown](#seo-template-requirements) — full requirements and acceptance criteria in §6.
 
 ---
 
@@ -9,7 +11,7 @@
 
 All functionality documented here is implemented as **self-contained, modular subsystems** (`src/modules/*` and `src/client/payment-upload-js.ts`) wired into `src/index.ts` via clean delegation hooks so that existing application code remains untouched and regression-free:
 
-1. **Zero interference with the Video Studio & WebCodecs Engine:** `#studio-app`, `#video-canvas`, scene accordions, template composer, AI image generation, AI SEO script generation, MeloTTS voiceovers, and `mp4-muxer` compilation are preserved unchanged.
+1. **Zero interference with the Video Studio & WebCodecs Engine:** `#studio-app`, `#video-canvas`, scene accordions, AI image generation, MeloTTS voiceovers, and `mp4-muxer` compilation are preserved by the CMS/payment integration. The explicitly requested SEO/template-editor changes are specified separately in §6; the shared preview/export engine remains in use.
 2. **Background Worker Compatibility:** Even though `/{current-day}/config/uvxyz` now renders as a **real full page** (`#cfg-page`) rather than a modal overlay, `#studio-app` and `#video-canvas` remain mounted off-screen in the DOM so `window.workerRunJob(job)` continues to render queued MP4 jobs seamlessly when Background Worker Mode is enabled.
 3. **7-Theme Compatibility:** All standalone pages (`/account`, `/upgrade`, and `/<cms-slug>`) read `config:theme` and honour all 7 skins (`default`, `strata`, `stellar`, `nightlab`, `paper`, `swiss`, `neo`).
 4. **KV-less / Open-Access Resilience:** Every new route degrades gracefully when `KV_BINDING` is unbound (such as `wrangler.e2e.jsonc`), returning defaults on reads and structured `503` JSON messages on writes without throwing uncaught exceptions.
@@ -150,4 +152,124 @@ All functionality documented here is implemented as **self-contained, modular su
 - `src/modules/user-pages.ts` — Server-rendered `/account` and `/upgrade` pages with inline session support.
 - `src/modules/cms.ts` — Flat CMS validation, KV persistence (max 8 pages), public `/<slug>` renderer, and `applyCmsLinksToStudioHtml()` marker injection.
 - `src/client/config-page-js.ts` — Real full-page Dynamic Site Configuration UI (`#cfg-page`) housing all 4 admin tabs under `/{day}/config/uvxyz`.
-- `src/modules/script-seo.ts` — Modular Explainer SEO Script Engine (`POST /api/script`) with Stage-1 non-overlap keyword validation, Unicode/symbol-safe `keywordCount()`, resilient SRT cue canonicalization, pinpoint cue-level retry coaching, and correlated `[script]` structured logging.
+- `src/modules/script-seo.ts` — Modular Explainer SEO Script Engine (`POST /api/script`) with Stage-1 short/long-tail overlap support (no long-tail length rule), Unicode/symbol-safe `keywordCount()`, resilient SRT cue canonicalization, pinpoint cue-level retry coaching, and correlated `[script]` structured logging.
+
+
+---
+
+<a id="seo-template-requirements"></a>
+
+## 6. Current SEO & Video Template Requirements — 2026-10-23
+
+This revision supersedes earlier descriptions of mutually exclusive short/long-tail phrases,
+2–6-word long-tail keywords, an eight-card-only ring, a separate graphics/shape gallery, or the
+"Scenes · 15 editable designs" configuration accordion.
+
+### Requirement 6 — Fix SEO planning: allow short/long-tail overlap, without a long-tail length rule
+
+- A short keyword **may occur within the long-tail phrase**; the same phrase may also serve both
+  roles. Neither the planner prompt nor the validator imposes a minimum/maximum word count or
+  character length on the long-tail keyword. Empty/non-keyword values remain invalid.
+- Preserve the existing contract: exactly **one long-tail**, exactly **four unique short
+  keywords** (1–3 words each), every keyword measured **exactly twice** in spoken SRT, an AI title
+  of at most 70 characters containing a short keyword, and at least one heading containing a
+  short keyword. Existing short-to-short nesting restrictions remain unchanged.
+- **Shared-count rule:** saying `morning yoga poses` twice already says the short keyword `yoga`
+  twice. Do not require two additional standalone uses. Equivalently, if a one-word long-tail is
+  inside a longer short phrase, those short-phrase uses count toward the long-tail too.
+- Stage 2 and its retries must explain shared counts, not coach the model to insert each phrase
+  independently. Three standalone/nested total uses are still rejected; overlap is not a waiver
+  of the two-use rule. Unicode/hyphen-safe matching and SRT timing validation remain in force.
+- **Acceptance:** overlapping and one-word/>6-word long-tail plans pass; two shared occurrences
+  satisfy both roles; an extra third use fails; planner/writer prompts and UI hints agree.
+- **Implementation:** `src/modules/script-seo.ts`, `src/client/app-js.ts`; deterministic overlap
+  fixture in `e2e/index.ts`.
+
+### Requirement 7 — 3D Ring Video Template: 5–7 uploaded images in a bottom accordion
+
+- Keep the gallery template **3D Ring Carousel** (scene 15). Add a **Ring images** upload accordion
+  at the **bottom of its configuration controls**, shown only for this template.
+- A file selection replaces the complete image set and must contain **at least 5 and at most 7
+  decodable image files**. Reject 4/8 files, non-images and unreadable batches with inline feedback
+  while keeping the previous valid set; do not silently truncate or partially replace it.
+- Display thumbnails, names and the current count. Allow removal from 7→6→5; disable removal at
+  five. Replacement/removal releases unused object URLs. Stale asynchronous decodes cannot
+  overwrite a newer selection or reveal ring controls after switching templates.
+- Download MP4 and Add to Video require 5–7 decoded images and wait for uploads to finish. Use the
+  **actual uploaded count and images** for ring spacing, live preview and exported frames.
+  Upload changes are blocked during a ring export. The six bundled sample cards are preview-only,
+  not a substitute for required uploads; there is no remote-photo dependency.
+- Keep images in the browser session, separate from the ordinary two background-photo uploads.
+  Closing/reopening the reusable modal preserves them; page reload does not. Reset carousel
+  resets transforms only and keeps the selected images.
+- **Acceptance:** 5 and 7 images work in both actions; invalid batches preserve state; the upload
+  accordion is absent/hidden on every other template; previews and MP4 contain the same cards.
+- **Implementation:** `src/client/template-ring-carousel.ts`, `src/client/styles.ts`.
+
+### Requirement 8 — Remove the "15 editable designs" accordion from every template configuration
+
+- Remove the entire scene-switcher accordion, its list, builder and obsolete styling. Do not
+  merely change its title or hide one copy with CSS. This does **not** remove the 15 gallery
+  templates or the new Ring images upload accordion.
+- **← Templates** remains the route back to the gallery. No changes to the administrator's
+  site-configuration tabs are needed: this request concerns the template editor's config area.
+- **Acceptance:** no `.tm-scene-switcher`, `#tm-scene-list` or editable-design accordion in the
+  generated modal DOM for any template.
+- **Implementation:** `src/client/template-scene-editor.ts`, `src/client/styles.ts`.
+
+### Requirement 9 — Functional text/graphic layer controls
+
+- Add the exact labels **+ Front layer** and **- Back Layer** to the selected text/graphic's
+  inspector. Each click moves that element **one position** forward/backward, not all the way
+  to the front/back. Disable buttons at their boundaries and show its layer position.
+- Keep the background behind all elements. Use one saved element order for object tags,
+  preview paint order, frontmost hit-testing and MP4 rendering. Newly added elements start on
+  top; switching templates or reopening the modal retains each scene's order.
+- Deleted elements do not consume layer-button steps; they can still be restored. The ring is
+  one carousel object, not a collection of independently layered text/graphic elements.
+- **Acceptance:** overlapping text/graphics visibly change order; the frontmost object receives
+  canvas selection; exported frames use that same order.
+- **Implementation:** `reelElementKeys()`, `reelMoveElementLayer()` and
+  `reelAddElementTransforms()` in `src/client/template-scene-editor.ts`.
+
+### Requirement 10 — Functional rotation-degree slider
+
+- Add **Rotate degrees**, **0–360°**, **1° steps**, to every selectable text/graphic inspector,
+  including the animated graphics, with a live degree readout. Add the same whole-ring rotation
+  control to the ring inspector, separately from 3D tilt and automatic spin speed.
+- Save the angle per element and combine it with existing entry/loop animations. Redraw on
+  slider input even when the preview is paused. Rotated canvas hit targets/selection bounds
+  follow the element; the export must apply the same canvas rotation, not CSS-only transforms.
+- **Acceptance:** a 90° text/graphic rotation changes its actual draw transform in preview and
+  exported frames, and the rotated object remains selectable/draggable.
+- **Implementation:** `src/client/template-scene-editor.ts`, `src/client/template-ring-carousel.ts`.
+
+### Requirement 11 — Move all animated graphics into Graphics; remove their gallery tab
+
+- Keep one **Interactive scenes · 15** gallery. Remove the separate Graphics/Shape-animation tab,
+  its cards/grid and standalone object editor/mode, rather than only hiding the navigation.
+- The selected graphic's **Graphics** dropdown contains **22 choices**: nine existing
+  shapes/stickers plus all thirteen animated objects: Morphing SVG Blob, Rotating 3D Box, Pulsing
+  Ripple Ring, Floating Glass Card, Orbiting Satellite, DNA Helix Pulse, Infinite Tunnel Zoom,
+  Kaleidoscope Spinner, Elastic Bounce Ball, Audio Equalizer Bars, Diamond Crystal Spin, Neon
+  Laser Beam and Shimmer Spinner Ring. Confetti/particle effects stay excluded.
+- These objects render inside the scene as graphics, with main/accent colours, size, speed,
+  position, transition/animation, rotation, layering, visibility, add/clone and delete controls.
+  They use the existing deterministic canvas renderer and the same MP4 path as the scene.
+- **Acceptance:** all 13 appear and render from the dropdown in all 14 Reel templates; neither
+  graphics tab/cards nor standalone shape mode are present in the modal.
+- **Implementation:** graphic registry in `src/client/template-scene-editor.ts`, object geometry
+  in `src/client/template-shape-animations.ts`, updated modal copy in `template-composer-js.ts`.
+
+### Verification & scope
+
+- `npm test`: **32 passing tests** covering SEO API/validator behavior and DOM/canvas-transform tests, including image
+  boundaries, decode errors/races, URL cleanup, persistent edits, all object renderers, layer
+  hit-testing, rotation and both render actions. Test codecs are stubbed; the render loop is real.
+- `npx wrangler deploy --dry-run`: production Worker bundle builds successfully.
+- Local Worker/browser smoke checks: the SEO UI succeeds with the deterministic overlapping,
+  >6-word fixture; real Chromium renders all 13 objects and the ring, produces a valid H.264 MP4,
+  and adds a separately rendered MP4 directly to the video accordion without downloading it.
+- Live Cloudflare AI availability was **not** exercised; `e2e/index.ts` uses a mock model. The
+  full `npm run check` is still blocked by 36 pre-existing `src/index.ts` type errors, not by these
+  changes. No deployment, KV migration or new production endpoint is required by this revision.

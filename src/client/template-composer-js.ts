@@ -1,7 +1,7 @@
 /*
  * TEMPLATE_COMPOSER_JS — MODULE 9: the "Add video from
  * template" composer modal (15 click-to-edit Interactive scenes, including the
- * 3D Ring Carousel, and 13 non-particle shape animations, with live preview,
+ * 3D Ring Carousel, and 13 non-particle graphics in the element dropdown, with live preview,
  * dynamic text layers, photo transitions / motion, animated backgrounds, and
  * WebCodecs + mp4-muxer MP4 export / download). The exported
  * MP4 can also be dropped into the accordion gallery as a
@@ -26,8 +26,8 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 	// The "Add video from template" text link inside every
 	// Video N accordion opens a modal with TWO views:
 	//
-	//   1. Gallery — two grids of live animated previews:
-	//      15 Interactive scenes and 13 Shape animation objects.
+	//   1. Gallery — live animated previews of 15 Interactive scenes.
+	//      Animated graphics are element choices, not separate templates.
 	//   2. Editor  — chosen template controls: dynamic
 	//      text layers (each with its own text, colour,
 	//      position, animation and size), animation
@@ -2122,7 +2122,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				'<div class="modal-title" id="tpl-title">\\ud83c\\udfac Add Video from Template \\u2014 Video ' + n + "</div>" +
 				'<button type="button" class="tpl-x" id="tpl-x" title="Close">\\u2715</button>' +
 				"</div>" +
-				'<p class="tpl-sub" id="tpl-sub">Choose one of 15 Interactive scenes, including the 3D Ring Carousel, or one of 13 non-particle Shape animations. Edit text layers, positions, colours, stickers, animations, transitions, photos, backgrounds, ring controls and animated objects. Download a portrait 9:16 or landscape 16:9 MP4 (max ' + TPL_MAX_DURATION + ' seconds) straight to disk, or render it directly into this video&rsquo;s Images / MP4s gallery like any uploaded clip.</p>' +
+				'<p class="tpl-sub" id="tpl-sub">Choose one of 15 Interactive scenes, including the 3D Ring Carousel. Add any of 13 animated objects from the Graphics dropdown. Edit text, layer order, rotation, positions, colours, stickers, animations, transitions, photos and backgrounds. The ring accepts 5–7 uploaded images in its bottom accordion. Download a portrait 9:16 or landscape 16:9 MP4 (max ' + TPL_MAX_DURATION + ' seconds) straight to disk, or render it directly into this video&rsquo;s Images / MP4s gallery like any uploaded clip.</p>' +
 
 				'<div id="tm-gallery" class="tm-view">' +
 				'<div class="tm-gallery-grid" id="tm-grid"></div>' +

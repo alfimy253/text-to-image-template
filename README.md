@@ -79,25 +79,34 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 - **Large accordion controls.** In every theme, buttons inside each **Video N** accordion use the
   Upload Image proportions (`12px 24px` padding, 1rem type, at least 48px high/wide). Neo
   Brutalist gives every one of those buttons square corners, including icon and remove buttons.
-- **Template composer.** The "Add video from template" link opens two galleries, with
-  **Interactive scenes selected by default**. Motion templates and their tab/cards are no longer
-  exposed. **Interactive scenes · 15** contains the 14 Reel designs (Kinetic Typography, Duotone,
-  Neon, Glitch Art and Vox Magazine) plus **3D Ring Carousel**, ported only from the uploaded
-  editorial demo's eight-card rotating ring—not its flip book, sound, page chrome or ambient
-  particles. **Shape animations · 13** contains Morphing SVG Blob, Rotating 3D Box, Pulsing Ripple
-  Ring, Floating Glass Card, Orbiting Satellite, DNA Helix Pulse, Infinite Tunnel Zoom,
-  Kaleidoscope Spinner, Elastic Bounce Ball, Audio Equalizer Bars, Diamond Crystal Spin, Neon Laser
-  Beam and Shimmer Spinner Ring; particle/confetti effects remain omitted.
-  In Reel scenes, element tags sit below the left preview. Click a tag or canvas object to edit its
-  content, colour, font, size, animation, transition, speed and position; drag to reposition.
-  **＋ Text** becomes **＋ Graphic** for a selected graphic. Compact colour boxes offer 12 solids,
-  a custom colour and one row of four gradients. The ring has visibility, rotation-speed, radius,
-  card-size, 3D-tilt, X/Y and reset controls; its eight CORS-loaded editorial images have a
-  deterministic illustrated fallback. Shape animations have colour, background, size, speed and
-  X/Y controls. Every gallery previews through the same canvas used for H.264 MP4 export
-  (WebCodecs + mp4-muxer, no screen capture). **⬇ Download MP4** is the single download action;
-  **➕ Add to Video N** performs the same render without downloading and inserts it directly into
-  that accordion's gallery as a normal clip. Portrait 9:16 or landscape 16:9, 1–25 s.
+- **Template composer.** The "Add video from template" link opens one gallery of
+  **Interactive scenes · 15**: the 14 Reel designs (Kinetic Typography, Duotone, Neon,
+  Glitch Art and Vox Magazine) plus **3D Ring Carousel**. There are no Motion or
+  Graphics/Shape-animation gallery tabs or cards, and no "15 editable designs" accordion
+  in any template's configuration; use **← Templates** to choose another design.
+  In Reel scenes, element tags sit below the preview. Select a text or graphic element to
+  edit it, drag it to reposition, use **+ Front layer** / **- Back Layer** to move it one
+  layer forward/backward, and use **Rotate degrees** (0–360°, 1° steps) to rotate it.
+  Layer limits disable the corresponding button; the background always stays behind elements.
+  **＋ Text** becomes **＋ Graphic** for a selected graphic. The **Graphics** dropdown has the
+  original nine shapes/stickers plus all **13 animated objects**: Morphing SVG Blob, Rotating
+  3D Box, Pulsing Ripple Ring, Floating Glass Card, Orbiting Satellite, DNA Helix Pulse,
+  Infinite Tunnel Zoom, Kaleidoscope Spinner, Elastic Bounce Ball, Audio Equalizer Bars,
+  Diamond Crystal Spin, Neon Laser Beam and Shimmer Spinner Ring. These are real elements with
+  main/accent colours, size, motion, speed, position, rotation and layer controls, not separate
+  templates. Particle/confetti effects remain omitted. Compact colour boxes offer 12 solids,
+  a custom colour and one row of four gradients.
+  The **3D Ring Video Template** has a **Ring images** accordion at the bottom of its controls:
+  upload **5–7 images together** to replace the cards. Invalid counts, non-images or unreadable
+  files keep the previous valid set; thumbnails allow removal down to five images. Both export
+  actions require a valid decoded set. The ring uses exactly those images for preview/export,
+  with visibility, rotation-speed, radius, card-size, 3D-tilt, 0–360° rotation, X/Y and reset
+  controls. Reset keeps uploads; images remain in browser memory only. Bundled samples are
+  preview-only until the user uploads their own images; no remote image service is required.
+  Every editor uses the same canvas for preview and H.264 MP4 export (WebCodecs + mp4-muxer,
+  no screen capture). **⬇ Download MP4** is the only download action; **➕ Add to Video N**
+  renders without downloading and inserts the clip directly into that accordion's gallery.
+  Portrait 9:16 or landscape 16:9, 1–25 s.
 
 ## Limits worth knowing
 
@@ -108,7 +117,9 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 | Slide timing | 9 s per image/GIF; MP4 clips play in full; the list repeats to cover the MP3 |
 | Captions | 10 rows, 40 characters each; last caption capped at 10 s on screen |
 | Script | 1-6 minutes, `super fast` / `fast` / `medium` / `slow`, valid SRT required |
-| SEO keywords | exactly 1 long-tail (said exactly 2×) + exactly 4 short keywords (each said exactly 2×); one short keyword in the AI title (≤70 chars), one in at least 1 heading |
+| SEO keywords | exactly 1 long-tail (no word/character length rule, said exactly 2×) + exactly 4 short keywords (≤3 words, each said exactly 2×); short/long-tail overlap allowed, shared uses count for both; one short in the AI title (≤70 chars), one in a heading |
+| Ring template images | 5–7 decoded uploads, required before Download MP4 or Add to Video; separate from the normal two background photos |
+| Element rotation / layers | 0–360°, 1° steps; layer buttons move the selected text/graphic one step, never behind the background |
 | Voiceover | 8,000 characters max, chunked at 500; English in the UI |
 | Render API | 10 in-flight jobs, 60 MB payload, outputs kept 2 h (job records 1 h) |
 | CMS | 8 pages · 100 blocks/page · flat slug up to 64 chars · paragraph text up to 20,000 chars/block · HTTP(S) image URLs only |
@@ -130,10 +141,12 @@ the strings that carry the rules (the full inventory, with the constant each one
 
 | Where | Hint |
 | --- | --- |
-| Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading` |
-| ✨ **Generate SEO Script** button | tooltip: *AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them* |
-| SEO plan chips (after a successful run) | Title row · Headings row · `long-tail keyword — must be said exactly 2×` · `short keyword — must be said exactly 2×; one short keyword is in the title and one in a heading`, each keyword chip showing the measured count, e.g. `coffee brewing 2×` |
+| Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule (explainer): 1 long-tail keyword said exactly 2× · exactly 4 short keywords said exactly 2× each · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` |
+| ✨ **Generate SEO Script** button | tooltip: *AI plans 1 long-tail keyword (said exactly 2x), exactly 4 short keywords (each said exactly 2x) plus the explainer title and headings, then writes the SRT script around them. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.* |
+| SEO plan chips (after a successful run) | Title row · Headings row · `long-tail keyword — must be said exactly 2×` · `short keyword — must be said exactly 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading`, each keyword chip showing the measured count, e.g. `coffee brewing 2×` |
 | Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the modal explains the selected editor's motion controls and reminds users the exported clip is silent |
+| Template element inspector | `+ Front layer` / `- Back Layer`, `Layer N of M`, `Rotate degrees` + live `N°` readout (0–360°) |
+| Ring template, bottom accordion | `Ring images · N / 7 (min 5)`; choose 5–7 images together; inline errors preserve previous images |
 | Video accordion, **AI Images** | `2 images per submit · 480px landscape` (also the status line for failures) |
 | 🎙 **Generate Voiceover** | tooltip: *Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
 | ☁️ **API** button | tooltip: *Send all of this video's elements to the render API* |
@@ -225,7 +238,8 @@ skin covers the whole site.
   inventory of every user-visible hint: tooltips, notes, placeholders and alerts, RULE 19 =
   the seven themes and where the choice is stored, RULE 22 = the studio shell and its two views,
   RULE 23 = CMS, payments and the account dashboard).
-- **`new_requirements.md`** — the modular CMS/payment/account requirement notes and KV schema;
+- **`new_requirements.md`** — the modular CMS/payment/account notes and KV schema plus the
+  SEO overlap, ring uploads, layer/rotation and Graphics-dropdown requirements (§6);
   the README, userflow and system rules describe the verified current behavior.
 - **`kv-scale-test.md`** — measured KV behaviour (operations per request, list-page caps,
   free-tier allowance maths) with the reproduction commands.
@@ -252,3 +266,22 @@ skin covers the whole site.
   never imported).
 - `npm run check` currently fails at the `tsc` step (the codebase is untyped JS-in-TS); see
   `bug-audit.md` #11.
+
+### Regression checks for the SEO/template revision
+
+```sh
+npm ci
+npm test
+npx wrangler deploy --dry-run
+```
+
+`npm test` (verified on Node 22.22.3) covers the SEO planner/writer contract and a DOM/canvas-transform harness for the
+composer, including image counts, failed/stale decodes, object-URL cleanup, layer order,
+rotated hit testing, every animated graphic and both MP4 actions. The harness stubs the codecs,
+not the application render loop. `e2e/index.ts` provides a deterministic AI fixture with an
+overlapping, >6-word long-tail plan for `npm run e2e:dev`; this is **mock AI**, not a live model.
+Actual Chromium/WebCodecs download and direct gallery insertion were also smoke-tested.
+
+`npm run check` still stops on the **36 pre-existing TypeScript errors in `src/index.ts`**;
+the standalone Wrangler dry-run succeeds. This revision does not claim to fix those unrelated
+legacy type errors or to verify live Cloudflare model availability.

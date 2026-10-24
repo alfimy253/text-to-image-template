@@ -10,8 +10,6 @@
 export const SEO_LONG_TAIL = 1;
 export const SEO_SHORT_TOTAL = 4;
 export const SEO_SHORT_WORDS_MAX = 3;
-export const SEO_LONG_WORDS_MIN = 2;
-export const SEO_LONG_WORDS_MAX = 6;
 export const SEO_LONG_FREQ_MIN = 2;
 export const SEO_LONG_FREQ_MAX = 2;
 export const SEO_SHORT_FREQ_MIN = 2;
@@ -473,8 +471,8 @@ export function srtSpokenText(srt: string): string {
 
 /*
  * Parses and validates the Stage-1 SEO keyword JSON plan.
- * Enforces non-overlapping keywords across `[longTail, ...shorts]` so Stage 2
- * is guaranteed to be mathematically satisfiable (`count === 2` for every keyword).
+ * Allows short keywords inside the long-tail phrase: a spoken occurrence can
+ * satisfy both roles. Long-tail keywords have no word- or character-length rule.
  */
 export function parseKeywordSet(
 	text: string
@@ -545,30 +543,6 @@ export function parseKeywordSet(
 		};
 	}
 
-	const longWordCount = longTail.split(" ").length;
-	if (longWordCount < SEO_LONG_WORDS_MIN) {
-		return {
-			ok: false,
-			error:
-				'the long-tail keyword "' +
-				longTail +
-				'" must be at least ' +
-				SEO_LONG_WORDS_MIN +
-				" words"
-		};
-	}
-	if (longWordCount > SEO_LONG_WORDS_MAX) {
-		return {
-			ok: false,
-			error:
-				'the long-tail keyword "' +
-				longTail +
-				'" is longer than ' +
-				SEO_LONG_WORDS_MAX +
-				" words"
-		};
-	}
-
 	// 2. Exactly 4 unique short-tail keywords
 	const shortList =
 		data && Array.isArray(data.short)
@@ -623,25 +597,10 @@ export function parseKeywordSet(
 		};
 	}
 
-	// 3. Pairwise phrase-containment check across [longTail, ...shorts]
-	// Ensures saying one keyword 2x never forces another keyword over 2x!
-	for (const sk of shorts) {
-		if (
-			sk === longTail ||
-			keywordCount(longTail, sk) > 0 ||
-			keywordCount(sk, longTail) > 0
-		) {
-			return {
-				ok: false,
-				error:
-					'the short keyword "' +
-					sk +
-					'" overlaps with the long-tail keyword "' +
-					longTail +
-					'" - choose distinct non-overlapping phrases so each can appear 2 times independently'
-			};
-		}
-	}
+	// 3. Short/long-tail overlap is explicitly allowed, including an identical
+	// phrase in both roles. Count each spoken occurrence for BOTH roles; do
+	// not demand two additional standalone uses of a nested short keyword.
+	// The four short keywords still remain distinct from one another.
 	for (let i = 0; i < shorts.length; i++) {
 		for (let j = 0; j < shorts.length; j++) {
 			if (i !== j && keywordCount(shorts[i], shorts[j]) > 0) {
@@ -652,7 +611,7 @@ export function parseKeywordSet(
 						shorts[j] +
 						'" is contained inside "' +
 						shorts[i] +
-						'" - choose 4 distinct non-overlapping short keywords'
+						'" - choose 4 distinct short keywords without nesting them inside one another'
 				};
 			}
 		}
@@ -875,6 +834,37 @@ export function keywordUsageAudit(
 	return entries;
 }
 
+/*
+ * Spell out shared counts for the writer AND its retries. For example,
+ * "yoga" inside "morning yoga poses" needs no extra standalone insertion.
+ * Matching uses the same Unicode/hyphen rules as final SRT enforcement.
+ */
+export function keywordOverlapInstructions(
+	keywordSet: { longTail: string; shorts: string[] }
+): string {
+	const nested = keywordSet.shorts.filter(
+		(short) => keywordCount(keywordSet.longTail, short) > 0
+	);
+	let instructions =
+		"- OVERLAP COUNTING: A short keyword inside the spoken long-tail counts toward BOTH totals, including across subtitle line/cue breaks. Never add extra standalone uses when that short already totals two.\n";
+	for (const short of nested) {
+		const shared = keywordCount(keywordSet.longTail, short) * SEO_LONG_FREQ_MIN;
+		instructions +=
+			'- "' + short + '" is inside "' + keywordSet.longTail +
+			'": the two long-tail uses already contribute ' + shared +
+			' short-keyword uses. It needs ' + Math.max(0, SEO_SHORT_FREQ_MIN - shared) +
+			" additional standalone uses.\n";
+	}
+	for (const short of keywordSet.shorts) {
+		if (keywordCount(short, keywordSet.longTail) > 0 && nested.indexOf(short) === -1) {
+			instructions +=
+				'- The long-tail "' + keywordSet.longTail + '" is inside the short keyword "' + short +
+				'": its two short-keyword uses already count toward the long-tail total. Do not add extra standalone long-tail uses.\n';
+		}
+	}
+	return instructions;
+}
+
 function buildPinpointRetryInstructions(
 	lastError: string,
 	previousCheck: SrtValidationResult | null,
@@ -932,7 +922,8 @@ function buildPinpointRetryInstructions(
 		feedback +=
 			"\n\nExact keyword audit of your previous SRT:\n" +
 			lines.join("\n") +
-			"\n\nRevise your previous SRT below so EVERY keyword is 2/2 while keeping valid SRT timestamps and outputting ONLY the corrected SRT:\n" +
+			"\nShared occurrences count for both short and long-tail roles. Preserve correct long-tail uses; if a nested short is overused, remove its EXTRA standalone uses, not the required long-tail phrases.\n" +
+			"\nRevise your previous SRT below so EVERY keyword is 2/2 while keeping valid SRT timestamps and outputting ONLY the corrected SRT:\n" +
 			previousCheck.srt;
 	}
 
@@ -1066,17 +1057,13 @@ export async function handleSeoScriptGeneration(
 			". Plan:\n" +
 			"1) Exactly " +
 			SEO_LONG_TAIL +
-			" long-tail keyword (" +
-			SEO_LONG_WORDS_MIN +
-			"-" +
-			SEO_LONG_WORDS_MAX +
-			" words, lower case, a specific search phrase about the topic).\n" +
+			" long-tail keyword (lower case, a specific search phrase about the topic; NO minimum or maximum word count or character length).\n" +
 			"2) Exactly " +
 			SEO_SHORT_TOTAL +
 			" unique short-tail keywords (1-" +
 			SEO_SHORT_WORDS_MAX +
 			" words each, lower case, closely related to the topic).\n" +
-			"CRITICAL NON-OVERLAP RULE: None of the 5 keywords (the 1 long-tail + 4 short keywords) may contain another keyword as a sub-phrase! For example, do NOT pair \"yoga\" with \"yoga poses\" or \"morning yogaposes\" — every one of the 5 phrases must be mutually non-overlapping so each phrase can be spoken 2 times independently.\n" +
+			"SHORT/LONG-TAIL OVERLAP IS ALLOWED: A short keyword may occur inside the long-tail keyword, or even be the same phrase. Each spoken occurrence counts toward BOTH roles. If a short is inside the long-tail, saying the long-tail twice already satisfies that short's two uses; do not add two standalone uses. Choose four distinct short keywords that do not contain one another. Avoid repeating any short more than once within the long-tail, because the spoken total for every keyword must remain exactly two.\n" +
 			"3) The explainer video TITLE (at most " +
 			SEO_TITLE_MAX +
 			" characters): it MUST include at least one of the " +
@@ -1113,13 +1100,13 @@ export async function handleSeoScriptGeneration(
 				reqId,
 				attempt,
 				temperature: plannerTemp,
-				maxTokens: 512,
+				maxTokens: 1024,
 				promptChars: prompt.length
 			});
 
 			const result = await env.AI.run(scriptModel, {
 				prompt,
-				max_tokens: 512,
+				max_tokens: 1024,
 				temperature: plannerTemp
 			});
 
@@ -1247,6 +1234,7 @@ export async function handleSeoScriptGeneration(
 			" times each (not 1 and not 3): " +
 			keywordSet.shorts.map((s) => '"' + s + '"').join(", ") +
 			".\n" +
+			keywordOverlapInstructions(keywordSet) +
 			"- Weave every keyword naturally into spoken sentences (never read them as a list).\n" +
 			"- Follow this explainer section flow in order (for topic structure ONLY — do NOT speak or print the title/headings verbatim, because they contain short keywords and repeating them would push your keyword count over 2): " +
 			keywordSet.headings
