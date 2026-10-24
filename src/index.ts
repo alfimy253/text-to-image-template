@@ -28,7 +28,12 @@ import {
 	renderAccountPageResponse,
 	renderUpgradePageResponse
 } from "./modules/user-pages";
-import { handleSeoScriptGeneration } from "./modules/script-seo";
+import { handleSeoScriptGeneration, handleSeoPlanGeneration } from "./modules/script-seo";
+import {
+	handleCreateImagePromptJob,
+	handleDestroyImagePromptJob,
+	handleGetImagePromptJob
+} from "./modules/image-prompts";
 
 /*
  * =============================================================
@@ -144,7 +149,7 @@ function applyTheme(html: string, theme: string) {
 }
 
 export default {
-	async fetch(request, env) {
+	async fetch(request, env, ctx: any) {
 
 		const url =
 			new URL(request.url);
@@ -1034,6 +1039,80 @@ export default {
 			*     times with the problem
 			*     spelled out).
 		*/
+		/*
+		 * SEO PLAN (two selectable keyword sets) for the accordion
+		 * walkthrough: POST /api/seo-plan {topic} plans TWO different
+		 * validated sets (1 long-tail + exactly 4 shorts, title and
+		 * headings each); the client shows both, the user selects one,
+		 * and that set is then sent back as `keywordSet` to
+		 * POST /api/script, which skips its own planner.
+		 */
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/seo-plan"
+		) {
+
+			return handleSeoPlanGeneration(
+				request,
+				env,
+				SCRIPT_MODEL
+			);
+
+		}
+
+		/*
+		 * AI IMAGE-PROMPT JOBS (dynamic poll URL):
+		 *   POST   /api/image-prompts       create -> 202 {id, url, prompts: []}
+		 *   GET    /api/image-prompts/<id>  poll (empty array until ready)
+		 *   DELETE /api/image-prompts/<id>  destroy the URL
+		 * The prompt count follows the script length (1 min -> 10,
+		 * 2-3 min -> 14, 4-5 min -> 20) and every prompt carries the
+		 * user-chosen video image style. Creation returns at once; the
+		 * instruct-model call finishes in the background (waitUntil).
+		 */
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/image-prompts"
+		) {
+
+			return handleCreateImagePromptJob(
+				request,
+				env,
+				ctx,
+				SCRIPT_MODEL
+			);
+
+		}
+
+		const imagePromptJobMatch =
+			url.pathname.match(
+				/^\/api\/image-prompts\/([A-Za-z0-9-]+)$/
+			);
+
+		if (
+			request.method === "GET" &&
+			imagePromptJobMatch
+		) {
+
+			return handleGetImagePromptJob(
+				env,
+				imagePromptJobMatch[1]
+			);
+
+		}
+
+		if (
+			request.method === "DELETE" &&
+			imagePromptJobMatch
+		) {
+
+			return handleDestroyImagePromptJob(
+				env,
+				imagePromptJobMatch[1]
+			);
+
+		}
+
 		if (
 			request.method === "POST" &&
 			url.pathname === "/api/script"

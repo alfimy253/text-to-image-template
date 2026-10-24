@@ -25,6 +25,19 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   script that *says* the long-tail keyword at least once and each short keyword at least twice —
   extra uses allowed, every rule enforced server-side), and a MeloTTS
   voiceover (`/api/voiceover`) with a free fallback TTS engine.
+- **Generate SEO Script walkthrough.** Pressing **✨ Generate SEO Script** disables that video's
+  **Upload Image, GIF or MP4** button and opens a walkthrough modal: `POST /api/seo-plan` plans
+  **two different SEO keyword sets** for the topic (the modal can be closed while they generate;
+  it re-opens when they arrive), the user selects one set and enters a **video image style**,
+  then the modal closes, the script section shows a loading animation and the SRT is written
+  from the selected set. Once the script is shown, a dynamic image-prompt URL
+  (`POST /api/image-prompts`, polled every **30 s**, empty array until ready) yields **10 image
+  prompts for a 1-minute script, 14 for 2–3 minutes, 20 for 4–5 minutes** in the chosen style;
+  the browser then generates **one image every 20 s** into that video's gallery, destroys the
+  prompt URL (`DELETE /api/image-prompts/:id`) once the last image lands, and re-enables the
+  upload button. Accordion form controls share the Upload MP3 Audio button's radius/padding
+  (3px bottom margin; text inputs/textareas 4px top / 5px bottom), dropdown labels sit above
+  their dropdowns, and the accordion has no Captions section. See `system-rules.md` RULE 24.
 - **Optional server-side rendering.** **☁️ API** uploads a video's whole payload to KV and a
   background worker tab (the same app opened at its current-day settings URL, e.g.
   `/16/config/uvxyz` on 2026-10-16 in Asia/Taipei) claims the job, renders it in *its* browser
@@ -219,7 +232,9 @@ skin covers the whole site.
 | `GET /{slug}` | Public CMS page after all built-in routes; one flat non-reserved slug, otherwise `404` |
 | `GET /image/:i` | Workers AI demo image (unmetered, index into `prompts[]`) |
 | `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` for a cold anonymous request when KV is bound, `429` at the limit, `X-Credit-*` headers on success |
-| `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated SRT (with keyword counts) |
+| `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated SRT (with keyword counts); accepts a user-selected `keywordSet` from `/api/seo-plan`, which is re-validated and skips the planner |
+| `POST /api/seo-plan` | Two different validated SEO keyword sets (title + headings + 1 long-tail + 4 shorts each) for a topic, for the walkthrough's Select step |
+| `POST /api/image-prompts` · `GET`/`DELETE /api/image-prompts/:id` | Create a dynamic image-prompt URL (202, empty `prompts` until the background LLM finishes; count 10/14/20 by script length 1 / 2–3 / 4–5 min, in the chosen image style) / poll it / destroy it |
 | `POST /api/voiceover` · `GET /tts` | MeloTTS voiceover / fallback TTS proxy |
 | `GET /api/session` · `POST /api/signup` · `POST /api/login` · `POST /api/logout` | Accounts (session/signup/login include `usertype`, `plan` and `credits`) |
 | `GET /api/credits` | Today's plan, used counters, remaining allowances and `resetsAt` — for the signed-in user, or the IP-keyed guest plan after `/free` |
@@ -268,6 +283,9 @@ skin covers the whole site.
 
 - `src/index.ts` holds the route table and delegates the modular CMS/payment/account surfaces to
   `src/modules/{cms,payments,user-pages}.ts`; `src/page.ts` assembles and caches the studio page.
+  The SEO planner/writer lives in `src/modules/script-seo.ts` (plus the two-set
+  `/api/seo-plan` handler and the `keywordSet` fast path), and the pollable image-prompt jobs
+  live in `src/modules/image-prompts.ts`.
   Template code is split across `template-composer-js.ts`, `template-scene-editor.ts`,
   `template-ring-carousel.ts` and `template-shape-animations.ts`.
 - The client files are template literals whose escapes are load-bearing — do not reformat them.

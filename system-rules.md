@@ -407,8 +407,11 @@
     **"Generate SEO Script With AI"**, with the always-visible hint line
     `SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords said at least 2× each · minimums only, extra uses are allowed · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule`
     and a matching button tooltip. See RULE 18 for the hint inventory.
-  - The client still sends only `{topic, minutes, speed}`: the user never picks keywords, title or
-    headings — the UI only reports the ones the model produced and the server verified.
+  - Originally the client sent only `{topic, minutes, speed}` and the user never picked keywords.
+    **Superseded by RULE 24:** the walkthrough now has the user pick one of two planned sets and
+    sends it back as `keywordSet`; the server re-validates it with `parseKeywordSet` and skips
+    the planner, otherwise this bullet still applies. The UI still only *reports* the title,
+    headings and counts the model produced and the server verified.
   - On success `generateScript()` stores `project.srt`, `project.seoTitle` and
     `project.seoHeadings`; **if the video title input `#va-title-N` is still empty it is autofilled
     with `title.slice(0, 70)`** (the input's `maxlength` is 70, so the SEO title always fits); it
@@ -1563,3 +1566,60 @@ cites `kv-scale-test.md` §8, the last section of that document.
 | 7.4 | **No rule described the page structure.** §3 of every earlier document described `.header` + `.studio` + hidden panels. | New **RULE 22** documents the shell (`app-top`, `main.app-main`, two views, `.engine-panels`), the read-only grid, the memory-only view choice and the absence of the timeline. |
 | 7.5 | `README.md` and `userflow.md` claimed three themes and a single-canvas studio. | Feature bullet, limits, `userflow.md` §11 and the header counts updated. |
 | 7.6 | No document said what the studio deliberately *lacks*. | RULE 22 and `bug-fix-session-240.md` §6 name the dropped reference widgets (timeline, rail, metrics, in-bar picker, preview fake widgets, bulk operations). |
+
+## RULE 24 — The Generate SEO Script walkthrough: two selectable keyword sets, an image style, then queued AI images
+
+> Added with this revision. RULE 7's keyword contract is unchanged; RULE 24 only changes
+> *when* each stage runs and *who chooses* the keyword set.
+
+- **Accordion form standard (all Video N accordions).** Every form element inside
+  `#video-accordions` (`input[type=text]`, `input[type=number]`, `select`, `textarea`) shares the
+  **Upload MP3 Audio** button's proportions — `border-radius: 8px`, `padding: 12px 24px` — with a
+  **3px bottom margin**; themed skins use the theme's button radius token instead, and Neo
+  Brutalist stays square like its buttons. **Text inputs and textareas** override the rhythm with
+  **4px top / 5px bottom** margins. **Dropdown labels always sit above their dropdown**
+  (`label.quality-select` is a column: label text on its own line, select full width below it),
+  never beside it. The accordion has **no Captions (bottom) section** any more; the hidden global
+  caption rows remain the render engine's working state, and every `va-captions-N` consumer
+  tolerates the missing container.
+- **Step 1 — SEO plan (`POST /api/seo-plan {topic}`).** Clicking **✨ Generate SEO Script**
+  immediately disables that video's **Upload Image, GIF or MP4** button
+  (`#va-upload-btn-N`, also honoured by `clickVaFiles`) and opens the walkthrough modal
+  (`#seo-walkthrough-modal`) at the *SEO plan* step. The server plans **two different** validated
+  keyword sets (each: 1 long-tail, exactly 4 shorts, a title and headings, all per RULE 7) —
+  the second planner call is instructed to differ and an identical reply is rejected/retried by
+  `planOneSeoKeywordSet`/`keywordSetsEqual` in `src/modules/script-seo.ts`. The modal may be
+  closed while the plan is being generated; the fetch continues in the background and the modal
+  **re-opens automatically** when the two sets arrive. On plan failure the modal closes, the
+  status line shows the error and the upload + script buttons are re-enabled.
+- **Step 2 — selection + video image style.** Each set is a card with its title, headings,
+  long-tail and short chips and a **Select this set** button. Selecting a set advances the modal
+  to the *Video image style* step (a labelled text input, label above the input; empty input
+  falls back to `cinematic photorealistic, rich detail`). **Generate Script & Images** closes
+  the modal, shows the **loading animation on the script section** (`.va-script-loading` spinner
+  in `#va-script-box-N`) and calls `POST /api/script` with `{topic, minutes, speed, keywordSet}`.
+  A supplied `keywordSet` is re-validated by `parseKeywordSet` (invalid → `400`, no AI call,
+  no usage count) and **skips the Stage-1 planner**; requests without it behave exactly as
+  RULE 7 describes. The existing SRT display, SEO chips, title autofill, Download .srt and
+  voiceover reveal are unchanged. Script failure ends the flow: upload + script buttons are
+  re-enabled. Minutes come from the existing Minutes dropdown and **default to 1**.
+- **Step 3 — image prompts (dynamic URL).** Once the script is shown, the client creates an
+  image-prompt job: `POST /api/image-prompts {topic, minutes, style, script, keywordSet}` →
+  `202 {id, url: "/api/image-prompts/<id>", prompts: [], expectedCount}`. Creation returns at
+  once; the instruct model (`buildImagePromptInstruction` in `src/modules/image-prompts.ts`)
+  finishes in the background via `ctx.waitUntil` and writes the job record (KV
+  `image-prompts:<id>`, 1 h TTL; in-isolate Map when KV is unbound). The count follows the
+  script length: **1 min → 10, 2–3 min → 14, 4–5 min → 20** (6 min also 20). Every prompt is a
+  single text-free scene in the chosen style, in script order. The browser **polls the dynamic
+  URL every 30 s** (`IMAGE_PROMPT_POLL_MS`); pending jobs answer `prompts: []`, ready jobs the
+  full set, destroyed/unknown ids `404`.
+- **Step 4 — queued image generation + teardown.** When the prompts arrive, the browser
+  generates **one AI image every 20 s** (`AI_IMAGE_QUEUE_MS`) through the existing
+  `/image/gen` route (`AI_ENDPOINT`) and adds each image straight into that video's gallery via
+  the existing `addAiToVideo` path (daily image credits apply as before). A watcher polls the
+  gallery count every 1 s (`GALLERY_WATCH_MS`, exposed as `window.__SEO_FLOW_TIMING`); once the
+  last expected image is in `#va-gallery-N`, the client calls
+  **`DELETE /api/image-prompts/<id>`** (destroying the dynamic URL — later polls get `404`),
+  stops all timers and **re-enables Upload Image, GIF or MP4** and the script button. If some
+  images fail, the flow still finalises after the last prompt was attempted so the URL is
+  never leaked and the upload button never stays disabled.

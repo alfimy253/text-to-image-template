@@ -946,3 +946,35 @@ chrome are not ported. Both Download MP4 and direct Add to Video N use the share
   mock AI; live model availability and the pre-existing legacy TypeScript errors are separate.
 
 See `new_requirements.md` §6 for acceptance criteria, source-file mappings and verification scope.
+
+## 12. Flow 6 — Generate SEO Script walkthrough (this revision)
+
+1. In a Video N accordion the user writes a topic (or leaves it to fall back to the video
+   title), picks Minutes (default **1**) and Speech, then presses **✨ Generate SEO Script**.
+   That video's **Upload Image, GIF or MP4** button disables immediately and the walkthrough
+   modal opens at *1 · SEO plan* while `POST /api/seo-plan` plans **two different** SEO keyword
+   sets (long-tail + short-tail keywords, title and headings for each).
+2. The user may close the modal while the plan is generated — the request keeps running in the
+   background, and when the two sets arrive the modal **re-opens by itself** at
+   *2 · Choose a keyword set*, showing both sets as cards.
+3. The user clicks **Select this set** on the set that targets their topic. The modal advances
+   to *3 · Video image style*; the user types the style for the AI-generated images and presses
+   **Generate Script & Images**.
+4. The modal closes and the script section shows a loading animation while
+   `POST /api/script` writes the SRT from the selected set (the planner is skipped; the set is
+   re-validated server-side). The finished script appears in the script box exactly as before,
+   with the SEO plan chips, Download .srt and Generate Voiceover.
+5. With the script shown, the browser creates a dynamic image-prompt URL
+   (`POST /api/image-prompts`) and **polls it every 30 seconds**. Until the AI finishes writing
+   the prompts (count by script length: **10** for 1 minute, **14** for 2–3 minutes, **20** for
+   4–5 minutes, all in the chosen image style) the URL answers an empty array.
+6. When the prompts arrive, the browser generates **one image every 20 seconds** through the
+   normal AI image route and drops each finished image into that video's gallery. A watcher
+   keeps polling the gallery count; once the last image is in the gallery it **destroys the
+   dynamic URL** (`DELETE /api/image-prompts/<id>`) and **re-enables Upload Image, GIF or MP4**,
+   so the user can add their own media again.
+
+The accordion form controls follow one standard throughout: every form element uses the
+Upload MP3 Audio button's corner radius and padding with a 3px bottom margin (text inputs and
+textareas: 4px top / 5px bottom), dropdown labels always sit above their dropdown, and there
+is no Captions section in the accordion.
