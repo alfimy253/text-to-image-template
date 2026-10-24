@@ -8203,10 +8203,19 @@ export const APP_CSS = `
 
 		#tpl-modal .tm-scene-panel-head {
 			display: flex;
+			flex-wrap: wrap;
 			align-items: center;
 			justify-content: space-between;
 			gap: 10px;
 			margin-bottom: 6px;
+		}
+
+		#tpl-modal .tm-scene-panel-actions {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			justify-content: flex-end;
+			gap: 6px;
 		}
 
 		#tpl-modal .tm-scene-kicker {
@@ -8454,30 +8463,6 @@ export const APP_CSS = `
 			accent-color: #7aac2b;
 		}
 
-		#tpl-modal .tm-scene-sticker-grid {
-			grid-column: 1 / -1;
-			display: grid;
-			grid-template-columns: repeat(4, minmax(0,1fr));
-			gap: 5px;
-		}
-
-		#tpl-modal .tm-scene-sticker {
-			min-width: 0;
-			border: 1px solid rgba(255,255,255,.12);
-			border-radius: 7px;
-			background: #16161c;
-			color: #d4d4db;
-			padding: 7px 3px;
-			font: 9px 'JetBrains Mono', monospace;
-			cursor: pointer;
-		}
-
-		#tpl-modal .tm-scene-sticker.selected,
-		#tpl-modal .tm-scene-sticker:hover {
-			border-color: #7aac2b;
-			color: #c8f36f;
-		}
-
 		#tpl-modal .tm-scene-delete,
 		#tpl-modal .tm-scene-secondary {
 			border: 1px solid rgba(255,82,98,.45);
@@ -8556,20 +8541,10 @@ export const APP_CSS = `
 			gap: 8px;
 		}
 
+		/* Layer controls also carry .tm-tool so they share the exact
+		 * compact neutral treatment of the top-right Pause button. */
 		#tpl-modal .tm-scene-layer-button {
-			padding: 9px 12px;
-			min-height: 36px;
-			border: 1px solid rgba(122,172,43,.6);
-			border-radius: 7px;
-			background: rgba(122,172,43,.12);
-			color: #c8f36f;
-			font-size: 11px;
-			font-weight: 700;
-			cursor: pointer;
-		}
-
-		#tpl-modal .tm-scene-layer-button:hover:not(:disabled) {
-			background: rgba(122,172,43,.25);
+			white-space: nowrap;
 		}
 
 		#tpl-modal .tm-scene-layer-button:disabled,
@@ -8829,15 +8804,19 @@ export const APP_CSS = `
 		}
 
 		.seo-wt-card {
-			border: 1px solid #374151;
-			border-radius: 8px;
+			border: 1px solid var(--t-line, #d1d5db);
+			border-top: 3px solid var(--accent, #7aac2b);
+			border-radius: var(--t-radius-sm, 8px);
 			padding: 12px;
-			background: #0b0e14;
+			background: #ffffff;
+			color: #111827;
+			box-shadow: 0 5px 16px rgba(0, 0, 0, .12);
 		}
 
 		.seo-wt-card-title {
 			font-weight: 700;
 			margin-bottom: 8px;
+			color: #111827;
 		}
 
 		.seo-wt-card .upload-btn {
@@ -8849,21 +8828,48 @@ export const APP_CSS = `
 		.seo-wt-style-label {
 			display: block;
 			font-size: 0.85rem;
-			color: #d1d5db;
+			font-weight: 700;
+			color: var(--t-heading, #111827);
 			margin-top: 12px;
 		}
 
-		#seo-wt-style-input {
+		#seo-wt-style-select {
 			box-sizing: border-box;
+			display: block;
 			width: 100%;
-			border-radius: 8px;
-			padding: 12px 24px;
+			min-height: 46px;
+			border-radius: var(--t-radius-sm, 8px);
+			padding: 10px 16px;
 			margin-top: 4px;
 			margin-bottom: 5px;
-			background: #14171c;
-			color: var(--text);
-			border: 1px solid #374151;
+			background: var(--t-input, #ffffff);
+			color: var(--t-ink, #111827);
+			border: 1px solid var(--t-line, #d1d5db);
 			font-size: 1rem;
+			cursor: pointer;
+		}
+
+		#seo-wt-selected {
+			margin-top: 8px;
+			padding: 12px;
+			border: 1px solid var(--t-line, #d1d5db);
+			border-top: 3px solid var(--accent, #7aac2b);
+			border-radius: var(--t-radius-sm, 8px);
+			background: #ffffff;
+			color: #111827;
+			box-shadow: 0 5px 16px rgba(0, 0, 0, .12);
+		}
+
+		#seo-walkthrough-modal .seo-wt-card .va-seo-chip,
+		#seo-wt-selected .va-seo-chip {
+			background: #f3f4f6;
+			color: #111827;
+			border-color: var(--t-line, #d1d5db);
+		}
+
+		#seo-walkthrough-modal .seo-wt-card .va-seo-label,
+		#seo-wt-selected .va-seo-label {
+			color: #4b5563;
 		}
 
 		.seo-wt-actions {

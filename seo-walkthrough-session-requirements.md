@@ -15,11 +15,11 @@ It records, in order:
      other (pre-existing) code;
    - **Register B** — inconsistencies between the documentation and the code.
 
-The registers are an audit record. Writing this document did **not** fix the
-listed inconsistencies; items marked **Open** still describe the code as it
-stands. Where older documentation and this document disagree, the code is the
-behaviour users actually get, and Register B names the older passage that is
-wrong.
+The registers preserve the original double-check snapshot; the 2026-10-24 follow-up
+at the end of this file records fixes to several entries and gives the current behavior.
+Items not marked as resolved there remain open. Where older documentation and this document
+disagree, the code is the behaviour users actually get, and Register B names the older passage
+that is wrong.
 
 ---
 
@@ -150,19 +150,22 @@ There is no walkthrough markup in `src/client/markup.ts`.
    tied to the modal and keeps running. When the plan resolves,
    `generateScript` re-creates the modal if it is absent, renders both sets
    as `.seo-wt-card`s (`renderSeoPlanSets` + `seoSetChipsHTML`, all strings
-   through `escapeHTML`) and shows step *2 · Choose a keyword set*. On plan
+   through `escapeHTML`) and shows step *2 · Choose a keyword set*. The
+   script trigger is re-enabled once the plan is ready, so closing after the
+   sets arrive no longer strands the cached-set/style reopen path. On plan
    failure the modal is closed, the accordion status line shows
-   `SEO plan failed: …`, and the upload and script buttons are re-enabled.
+   `SEO plan failed: …`, and upload/script buttons are re-enabled.
 4. **Selection (SR-8).** Each card’s **Select this set** button calls
    `selectSeoKeywordSet(n, idx)`, storing `project.selectedSeoSet` and
    advancing to step *3 · Video image style*, showing the chosen set’s
-   chips above a labelled text input (`#seo-wt-style-input`, label above
-   the field). Re-clicking Generate SEO Script with cached sets/a selection
-   reopens the modal at the corresponding step without a new plan request.
+   chips above a theme-styled dropdown (`#seo-wt-style-select`). The dropdown
+   contains exactly ten canonical values; a change is saved on the project
+   so closing/reopening preserves the choice. Re-clicking Generate SEO
+   Script with cached sets/a selection reopens the modal without a new plan.
 5. **Style + script (SR-9, SR-10, SR-11).** **Generate Script & Images**
-   (`confirmSeoStyleAndGenerate`) stores `project.videoImageStyle`
-   (empty input falls back to `cinematic photorealistic, rich detail`),
-   closes the modal, sets `project._imageFlowActive = true` and awaits
+   (`confirmSeoStyleAndGenerate`) stores `project.videoImageStyle` from the
+   selected canonical dropdown option (default `Cinematic Film`), closes
+   the modal, sets `project._imageFlowActive = true` and awaits
    `runSeoScriptRequest(n, topic, minutes, speed)`. That function is the
    pre-existing script generator, kept intact except that it now also
    sends `keywordSet: project.selectedSeoSet` and drives
@@ -188,16 +191,17 @@ next to `/api/script`, and driven by MODULE 8b’s
 `finalizeImagePromptFlow`.
 
 - **Job creation (SR-16, first half).** After the script is shown,
-  `startImagePromptFlow(n)` records the gallery’s current child count as
-  `aiGalleryBaseline` and POSTs
-  `{topic, minutes, style, script: project.srt, keywordSet}` to
-  `/api/image-prompts`. The handler validates (topic sanitised/capped at
-  160 chars, minutes integer 1–6 default 1, style capped at 300 chars with
-  the cinematic fallback), stores a `pending` job with `prompts: []` and
-  answers **`202 {success, id, url: "/api/image-prompts/<id>", status,
-  prompts: [], expectedCount, style, minutes}`** immediately. The LLM work
-  runs in the background: `ctx.waitUntil(work)` when an execution context
-  is supplied, otherwise the promise continues inside the isolate.
+  `startImagePromptFlow(n)` records the gallery baseline and available still
+  slots, then POSTs `{topic, minutes, style, script: project.srt, keywordSet}`
+  to `/api/image-prompts`. The handler sanitises/caps the topic at 160 chars,
+  requires minutes 1–6 (default 1), normalises the style against the ten
+  canonical labels (default `Cinematic Film`, unknown values → `400`), and
+  compacts the SRT to a two-sentence script idea capped at 480 characters.
+  It stores a `pending` job with `prompts: []` and immediately answers
+  **`202 {success, id, url: "/api/image-prompts/<id>", status, prompts: [],
+  expectedCount, style, minutes}`**. LLM work runs via `ctx.waitUntil(work)`
+  when an execution context is supplied; otherwise the promise continues
+  inside the isolate.
 - **Storage.** With `KV_BINDING` bound, jobs are KV records
   `image-prompts:<id>` with a 1-hour TTL. Without KV (tests, the e2e
   fixture) an in-isolate `Map` is used instead.
@@ -205,41 +209,38 @@ next to `/api/script`, and driven by MODULE 8b’s
   tells the instruct model (`SCRIPT_MODEL`, the same llama instruct model
   as the script) to answer with only `{"prompts":[...]}`: exactly
   `imagePromptCountForMinutes(minutes)` prompts — **1 → 10, 2–3 → 14,
-  4–5 → 20**, and 6 (the UI maximum, unspecified by SR-12) also → 20 —
-  in script order, one distinct text-free scene each, every prompt ending
-  in the user’s image style, with the SEO keywords and a 4,000-character
-  script excerpt woven in. `generateImagePrompts` retries up to 3 times
-  until the parsed list (`parseImagePrompts`: JSON object/array, or a
-  numbered-list rescue; trimmed, de-duplicated, capped at 500 chars each)
-  reaches the exact count, then marks the job `ready` (or `error`).
-- **Polling (SR-16, second half).** The client polls the dynamic URL with
-  `setInterval(..., IMAGE_PROMPT_POLL_MS)` where
-  `IMAGE_PROMPT_POLL_MS = 30000` (first query 30 s after creation; the
-  cadence constants are exposed as `window.__SEO_FLOW_TIMING`).
-  `GET /api/image-prompts/<id>` answers `prompts: []` while `pending`,
-  the full array when `ready`, the stored error when `error`, and `404`
-  for a destroyed/unknown id.
-- **Queued generation (SR-15, SR-17, SR-18).** When a poll returns a
-  nonempty prompt array, polling stops and `scheduleAiImageQueue` runs:
-  the first image is requested immediately, each subsequent one via
-  `setTimeout(step, AI_IMAGE_QUEUE_MS)` (`20000`) scheduled **after** the
-  previous request settles. Each image is fetched from the pre-existing
-  `/image/gen` route through the existing `AI_ENDPOINT(prompt, variant)`
-  builder and inserted into that video’s gallery with the pre-existing
-  `addAiToVideo(n, file, blob)` path (which enforces the 25-image cap via
-  `videoCounts` and builds the gallery card). Credits are the existing
-  `/image/gen` daily image credits; `refreshCredits()` runs after each
-  success.
-- **Completion and teardown (SR-19, SR-20).** A second interval,
-  `GALLERY_WATCH_MS = 1000`, polls `#va-gallery-N`’s child count. When it
-  reaches `aiGalleryBaseline + imagePromptExpected`,
-  `finalizeImagePromptFlow` clears all three timers, sends
-  `DELETE /api/image-prompts/<id>` (the record is removed; subsequent
-  GETs answer `404`), and re-enables **Upload Image, GIF or MP4** and the
-  Generate SEO Script button with the status
-  `AI images done — N image(s) in the gallery. …`. If image requests
-  failed, finalisation also runs after the last prompt has been attempted
-  so the buttons are not left disabled on the all-failed path.
+  4–6 → 20** — in opening-to-closing order, each a concise text-free scene
+  representing the whole idea rather than a cue-by-cue retelling. The LLM
+  sees only the opening and closing spoken sentences (≤480 chars), not the
+  full transcript. `generateImagePrompts` retries up to 3 times until the
+  parsed list reaches the exact count, then `applyImageStyleToPrompts`
+  appends consistent guidance for the selected style to every prompt before
+  the job becomes `ready` (or `error`).
+- **Polling (SR-16, second half).** After validating the returned dynamic
+  same-origin URL, job id and expected count, the client polls immediately,
+  then every `IMAGE_PROMPT_POLL_MS = 30000` (`window.__SEO_FLOW_TIMING`).
+  Poll requests time out at 60 s and retry up to three transient failures;
+  a terminal job error or `404` enters finalization instead of merely
+  stopping the poller.
+- **Queued generation (SR-15, SR-17, SR-18).** When a poll returns the
+  exact prompt count, polling stops and `scheduleAiImageQueue` runs: the
+  first image is requested immediately, each subsequent one via
+  `setTimeout(step, AI_IMAGE_QUEUE_MS)` (`20000`) after the prior attempt
+  settles. Each image is fetched through `AI_ENDPOINT` from `/image/gen`;
+  the queue handles binary responses, daily-credit errors and bounded
+  retries/timeouts. `addAiToVideo(n, file, blob, jobId, true)` inserts into
+  that video's gallery, returns an explicit success value, tags the asset
+  and card with the prompt-job id, and enforces the 25-still cap. The target
+  is limited to currently available gallery slots; `refreshCredits()` runs
+  after each success.
+- **Completion and teardown (SR-19, SR-20).** `GALLERY_WATCH_MS = 1000`
+  checks only job-tagged cards whose parent is `#va-gallery-N` (not total
+  children or the original baseline). Finalization occurs once the available
+  successful-image target is reached or the queue has attempted its usable
+  prompts, including partial/all-failed/cap-limited runs. It clears all
+  timers, aborts in-flight requests, retries DELETE once if necessary, and
+  re-enables **Upload Image, GIF or MP4** plus the script trigger. The final
+  status reports the actual tagged image count and any failure/limit reason.
 
 ### 2.4 Requirement-by-requirement conformance
 
@@ -251,27 +252,29 @@ next to `/api/script`, and driven by MODULE 8b’s
 | SR-4 | Implemented | Visible section removed; caption plumbing remains as dead/guarded code. See A-13. |
 | SR-5 | Implemented | Upload button disabled at click; modal shows step 1 while `/api/seo-plan` runs. |
 | SR-6 | Partially implemented | Two validated sets; “different” is enforced only as “not the identical long-tail + ordered-shorts combination”, and the prompt’s stronger wording is not validated. See A-10. |
-| SR-7 | Implemented during generation | Close removes the modal; the fetch continues; success re-creates and reopens it. Closing **after** the sets arrive strands the flow (A-1). |
+| SR-7 | Implemented | Close removes the modal while the plan continues; success re-creates/reopens it, and the script trigger remains enabled once sets are ready so cached sets/style can reopen. |
 | SR-8 | Implemented | Select buttons on both cards store the chosen set. |
-| SR-9 | Implemented | Style step with labelled text input; empty input uses a default style. |
+| SR-9 | Implemented | Theme-aware labelled dropdown with exactly ten canonical styles; the selected value persists when reopened. |
 | SR-10 | Implemented with a defect | Loading animation shows while awaiting the script and the old display path is kept; a failed **re**-generation leaves the spinner in the box instead of restoring the previous SRT (A-5). |
 | SR-11 | Implemented | Image-prompt job is created only after script success is displayed. |
 | SR-12 | Implemented (+ assumption) | 10/14/20 for 1 / 2–3 / 4–5 min; 6 min (unspecified) also maps to 20. |
 | SR-13 | Implemented | Minutes come from the existing dropdown, default/selected 1; server also defaults omitted minutes to 1. |
-| SR-14 | Implemented as instruction only | Count and style are in the LLM instruction and the count is validated exactly; the presence of the style in each returned prompt is **not** validated. See A-14. |
-| SR-15 | Implemented approximately | First image immediately on prompt arrival, then one call per 20 s **after** the previous settles — not a fixed wall-clock 20 s ticker. See A-8. |
+| SR-14 | Implemented | The LLM receives a ≤480-character opening/closing script idea and instructions for concise general scenes; styles are canonicalized and consistent direction is appended to every validated prompt. |
+| SR-15 | Implemented | First image immediately on prompt arrival, then each next request 20 s after the previous attempt settles; the queue respects cap, credit and retry limits. |
 | SR-16 | Deviation in sequencing | The dynamic URL is created **after** style confirmation and after the script succeeds, not at the moment of keyword-set selection; polling itself is every 30 s and returns `[]` until ready. See A-11. |
-| SR-17 | Partially implemented | Reuses the existing `/image/gen` endpoint builder `AI_ENDPOINT` and the gallery inserter `addAiToVideo`, but bypasses the existing panel generator `submitAiImages` and its pre-checks. See A-7. |
+| SR-17 | Implemented via existing primitives | Uses the existing `/image/gen` endpoint builder, daily credit gate and `addAiToVideo` gallery inserter; the custom queue remains necessary to honor one-prompt-at-a-time cadence. |
 | SR-18 | Implemented | Images are added to `#va-gallery-N` of the same accordion. |
-| SR-19 | Implemented on the happy path | DELETE is sent at finalisation; several error/edge paths never DELETE (A-3, A-4). |
-| SR-20 | Implemented on the happy path | 1 s gallery-count poller finalises at baseline + expected; cap/removal/in-flight races can defeat it (A-2). |
-| SR-21 | Verified as far as tested | Full test suite, type check and dry-run pass; live mock-AI route checks pass. Edge defects are logged in Register A rather than silently fixed. |
+| SR-19 | Implemented best-effort | All terminal/error/partial paths attempt DELETE, retrying once; a double DELETE failure is logged and the job's one-hour TTL remains the last-resort cleanup. |
+| SR-20 | Implemented | 1 s watcher counts only job-tagged cards in the target gallery; cap-limited, partial, failed and successful queues all finalize and re-enable controls. |
+| SR-21 | Verified as far as tested | Full tests and Wrangler dry-run pass; `tsc` still reports the existing 36 diagnostics in `src/index.ts`. Mock-worker and jsdom client-flow tests cover the full plan-to-gallery path. |
 
 ---
 
-## 3. Double-check evidence (this audit)
+## 3. Original double-check evidence (historical snapshot)
 
-Run after `npm ci` (dependencies are not persisted between sessions):
+These results describe the original walkthrough pass before the 2026-10-24 follow-up; use §6
+for current verification and behavior. Run after `npm ci` (dependencies are not persisted between
+sessions):
 
 - `npm test` — **40 tests, 40 pass, 0 fail**, including the five new
   `tests/seo-walkthrough.test.mjs` tests: two different plan sets from
@@ -285,9 +288,10 @@ Run after `npm ci` (dependencies are not persisted between sessions):
 - `npx wrangler deploy --dry-run` — succeeds.
 - Live mock-AI checks (`npm run e2e:dev`, `wrangler.e2e.jsonc`):
   - `POST /api/seo-plan {"topic":"key light setup"}` → `200` with two sets;
-  - `POST /api/image-prompts {"minutes":3,"style":"neon noir"}` → `202`,
+  - Historical pre-follow-up behavior: `POST /api/image-prompts {"minutes":3,"style":"neon noir"}` → `202`,
     then `GET` → `status:"ready"` with **14** prompts, `DELETE` → destroyed,
-    next `GET` → `404`;
+    next `GET` → `404`. The fixed catalog now rejects unsupported free-text labels with `400`;
+    current coverage is in §6.
   - served `/free` HTML contains **0** occurrences of `Captions (bottom)`
     and contains the `va-upload-btn-` hook.
 - Static audit: every claim in §2 was re-read against
@@ -327,7 +331,8 @@ Run after `npm ci` (dependencies are not persisted between sessions):
 
 Severity: **H** = can strand or corrupt a user flow, **M** = behaviour
 differs from the surrounding system’s conventions, **L** = cosmetic/dead
-code. All items are **Open** (documented, not fixed) unless stated.
+code. This register records the original snapshot; §6 lists follow-up resolutions
+(A-1 through A-4, A-7 and the style portion of A-14) and remaining open items.
 
 - **A-1 (H) — Closing the modal after the sets arrive strands the flow.**
   `generateScript` disables both the upload button and the Generate SEO
@@ -562,3 +567,63 @@ text to distrust. The canonical behaviour is §2 above plus RULE 24 in
 *End of the session record. Registers A and B are the bottom-of-document
 lists requested for this double-check; every item in them is an observed
 code/documentation mismatch, not a planned fix.*
+
+---
+
+## 6. Follow-up fixes — 2026-10-24
+
+This section is the current source of truth for the six fixes requested after the original
+snapshot above. The earlier Register A/B entries remain as audit history; they are not claims
+that the resolved defects still reproduce.
+
+### UI and image style
+
+- The template scene graphic inspector no longer renders the **Shapes & stickers** heading or
+  sticker-box grid. **Delete element** is in the same header row as **＋ Text / ＋ Graphic**, and
+  is hidden/disabled for the background or a deleted/unselected element. The **+ Front layer**
+  and **- Back Layer** controls retain their position and share `.tm-tool` styling with the
+  top-right **Pause** button.
+- SEO keyword-set and selected-set cards use white backgrounds with readable dark text, themed
+  borders/accents and a theme-aware style dropdown. The dropdown exposes exactly: `Cinematic
+  Film`, `Editorial Magazine`, `Kinetic Typography`, `Neon Night`, `Minimalist`, `Retro Poster`,
+  `Documentary`, `Split Composition`, `Dream Glow`, and `Pop Comic`. The chosen value persists
+  when the modal is closed/reopened; the server accepts only these canonical labels.
+- `summarizeScriptIdea()` extracts the opening and closing spoken sentences and caps the result
+  at 480 characters; image-prompt instructions ask for concise broad scenes conveying the
+  script's central idea rather than detailed SRT cue-by-cue retellings. The selected style's
+  direction is appended to each prompt after exact-count parsing, keeping every scene consistent.
+
+### Flow diagnosis and correction
+
+The failure path was in client-side orchestration rather than the script or image model route:
+`addAiToVideo()` returned no success value at the 25-still cap, so the queue counted refused
+images as successes. Meanwhile, gallery completion compared total DOM children against
+`baseline + expected prompts`, which could be unreachable for a nearly-full gallery or reached
+early by unrelated cards. Prompt polling waited for its first 30-second interval and terminal
+poll/404 paths did not reliably destroy the job or stop the gallery watcher; image-credit
+`401`/`429` responses could also let the queue continue. Those paths could leave the dynamic job
+and upload button hanging even though the script had already been generated.
+
+The client now validates the same-origin dynamic URL, matching job id and expected count; polls
+immediately and then every 30 seconds with bounded retries/timeouts; schedules images 20 seconds
+after each prior attempt settles; stops on exhausted credits and hard gallery errors; and tags
+each inserted asset/card with the prompt-job id. Available capacity is computed against the
+25-still cap. Completion counts only tagged cards in the correct video gallery and finalizes
+when the target is reached or the queue has attempted its usable prompts. Success, partial,
+cap-limited, prompt-error, 404 and image-error paths all clear timers, abort outstanding requests,
+attempt DELETE (retry once), report actual inserted images and re-enable the controls. Server
+`[image-gen]` logs include variant, prompt length and latency/result but not prompt content.
+
+### Verification
+
+- `npm test` — **45 tests, 45 pass, 0 fail**. Coverage includes a Worker-level mock-AI sequence
+  through SEO plan → selected-set script → dynamic prompt job → poll → `/image/gen` → DELETE,
+  plus a jsdom client-flow test that fills a gallery to 24/25, verifies one tagged image lands in
+  the correct gallery, confirms the cap, checks the chosen style and partial-result finalization,
+  and asserts the upload/script controls are re-enabled.
+- `npx wrangler deploy --dry-run` succeeds. `npx tsc --noEmit --pretty false` still reports the
+  36 pre-existing diagnostics in `src/index.ts`; the revised modules/client add no TypeScript
+  diagnostics. Live Cloudflare model availability is not exercised by the mock suite.
+- Register A items **A-1, A-2, A-3, A-4, A-7** and the style-catalog/output portion of **A-14**
+  are resolved by this follow-up. Other historical items remain outside scope unless separately
+  changed.

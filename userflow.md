@@ -413,8 +413,11 @@ Reel scene: select text/graphic by tag or canvas click; drag to move
            size, animation, transition/speed, X/Y, visibility, add/clone and delete/restore
   both   → Rotate degrees [0…360°, 1° step] + live degree readout
            [+ Front layer] / [- Back Layer] move ONE layer step, disable at boundaries
+           same neutral .tm-tool styling as the top-right Pause control; positions unchanged
            background stays behind; tags, frontmost selection and MP4 use the same order
            paused preview redraws on rotation/layer edits; rotated hit targets follow objects
+  scene controls → [＋ Text] / [＋ Graphic] and [Delete element] share one header row
+           Delete appears for an active non-background element; no Shapes & stickers heading/grid
   [＋ Text] becomes [＋ Graphic] for a graphic and clones its settings into a new top layer
   colours: 12 solids + custom colour + four gradients; animated geometry has main/accent colours
   background retains mood/uploaded photo, style, effect, speed and transition controls
@@ -952,32 +955,43 @@ See `new_requirements.md` §6 for acceptance criteria, source-file mappings and 
 1. In a Video N accordion the user writes a topic (or leaves it to fall back to the video
    title), picks Minutes (default **1**) and Speech, then presses **✨ Generate SEO Script**.
    That video's **Upload Image, GIF or MP4** button disables immediately and the walkthrough
-   modal opens at *1 · SEO plan* while `POST /api/seo-plan` plans **two different** SEO keyword
-   sets (long-tail + short-tail keywords, title and headings for each).
+   modal opens at *1 · SEO plan* while `POST /api/seo-plan` plans **two validated** SEO keyword
+   sets (long-tail + short-tail keywords, title and headings for each); their combined long-tail
+   plus ordered short-keyword lists must differ.
 2. The user may close the modal while the plan is generated — the request keeps running in the
    background, and when the two sets arrive the modal **re-opens by itself** at
    *2 · Choose a keyword set*, showing both sets as cards.
 3. The user clicks **Select this set** on the set that targets their topic. The modal advances
-   to *3 · Video image style*; the user types the style for the AI-generated images and presses
-   **Generate Script & Images**.
+   to *3 · Video image style*; the user chooses from the fixed dropdown: **Cinematic Film,
+   Editorial Magazine, Kinetic Typography, Neon Night, Minimalist, Retro Poster, Documentary,
+   Split Composition, Dream Glow** or **Pop Comic**, then presses **Generate Script & Images**.
+   The selection is retained if the modal is closed and reopened.
 4. The modal closes and the script section shows a loading animation while
    `POST /api/script` writes the SRT from the selected set (the planner is skipped; the set is
    re-validated server-side). The finished script appears in the script box exactly as before,
    with the SEO plan chips, Download .srt and Generate Voiceover.
 5. With the script shown, the browser creates a dynamic image-prompt URL
-   (`POST /api/image-prompts`) and **polls it every 30 seconds**. Until the AI finishes writing
-   the prompts (count by script length: **10** for 1 minute, **14** for 2–3 minutes, **20** for
-   4–5 minutes, all in the chosen image style) the URL answers an empty array.
-6. When the prompts arrive, the browser generates **one image every 20 seconds** through the
-   normal AI image route and drops each finished image into that video's gallery. A watcher
-   keeps polling the gallery count; once the last image is in the gallery it **destroys the
-   dynamic URL** (`DELETE /api/image-prompts/<id>`) and **re-enables Upload Image, GIF or MP4**,
-   so the user can add their own media again.
+   (`POST /api/image-prompts`), polls immediately, then **polls every 30 seconds**. The prompt
+   writer receives a compact idea made from the opening and closing spoken sentences rather
+   than the full SRT, and is instructed to create concise, broad representative scenes that
+   convey the script's central idea without a literal cue-by-cue retelling. It applies the
+   selected style consistently to every prompt. Counts follow script length: **10** for 1 minute,
+   **14** for 2–3 minutes, and **20** for 4–6 minutes; pending jobs answer an empty array.
+6. When prompts arrive, the browser uses `/image/gen` to create the first image immediately and
+   then schedules subsequent requests **20 seconds after the previous attempt settles**. Each
+   generated image is tagged to its prompt job and added to that video's gallery. The flow
+   respects the **25-still-image cap**, so it may generate fewer images than prompts when the
+   gallery is nearly full. Failed prompts, exhausted credits, network/model errors and partial
+   cap-limited runs all finalize: the job URL is deleted, upload and script controls are
+   re-enabled, and the status reports the actual number of flow-tagged images in that gallery.
+   Transient polling/image failures have bounded retries; request timeouts and server-side
+   `[image-gen]` timing/error logs make a stalled stage diagnosable.
 
-The accordion form controls follow one standard throughout: every form element uses the
-Upload MP3 Audio button's corner radius and padding with a 3px bottom margin (text inputs and
-textareas: 4px top / 5px bottom), dropdown labels always sit above their dropdown, and there
-is no Captions section in the accordion.
+The accordion form controls follow one standard throughout: accordion text/number inputs,
+selects and textareas use the Upload MP3 Audio button's corner radius and padding with a 3px
+bottom margin (text inputs/textareas: 4px top / 5px bottom), and dropdown labels sit above their
+dropdown. The walkthrough image-style dropdown is separately themed. There is no Captions
+section in the accordion.
 
 ## 13. Audit addendum — SEO walkthrough double-check (corrections to §4, §4.2, §10 and Flow 6)
 
@@ -1048,3 +1062,20 @@ is no Captions section in the accordion.
    set" without Flow 6 flagging the deviation (B-6); DELETE is idempotent
    `200` even for unknown ids, and a failed prompt job polls as
    `200 {success:true, status:"error"}` rather than `success:false` (B-11).
+
+## 14. Follow-up corrections — template controls and SEO image-flow reliability (2026-10-24)
+
+This section supersedes the outdated descriptions above for the updated template scene controls and
+SEO style/image-generation flow. The scene inspector has no **Shapes & stickers** heading or
+sticker-box grid; **Delete element** is beside **＋ Text / ＋ Graphic**; layer buttons keep their
+position and match the neutral Pause control. SEO set cards are white and theme-accented, while
+the style selector contains the ten fixed labels listed in Flow 6.
+
+Prompt jobs now use a compact opening/closing-sentence idea and instruct the LLM to make broad,
+concise general scenes, consistently styled, instead of recounting every subtitle. The client
+validates the dynamic polling URL, polls immediately then every 30 seconds, generates images at
+the existing 20-second settle-based cadence, and inserts job-tagged cards into the correct
+video gallery. It targets only available slots under the 25-still limit and cleans up/re-enables
+controls on success, partial results, exhausted credits, prompt errors, expired jobs and image
+failures. See `system-rules.md` RULE 24's 2026-10-24 follow-up and §6 of
+`seo-walkthrough-session-requirements.md` for implementation details and regression coverage.

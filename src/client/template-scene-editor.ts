@@ -237,10 +237,10 @@ export const REEL_SCENE_EDITOR_JS = `
 			controls.className = "tm-scene-layer-controls";
 			controls.setAttribute("role", "group");
 			controls.setAttribute("aria-label", "Element layer order");
-			const front = reelButton("+ Front layer", "tm-scene-layer-button", function () { reelMoveElementLayer(key, 1); });
+			const front = reelButton("+ Front layer", "tm-tool tm-scene-layer-button", function () { reelMoveElementLayer(key, 1); });
 			front.title = "Move this element one layer forward";
 			front.disabled = index === order.length - 1;
-			const back = reelButton("- Back Layer", "tm-scene-layer-button", function () { reelMoveElementLayer(key, -1); });
+			const back = reelButton("- Back Layer", "tm-tool tm-scene-layer-button", function () { reelMoveElementLayer(key, -1); });
 			back.title = "Move this element one layer backward (above the background)";
 			back.disabled = index <= 0;
 			const position = document.createElement("span");
@@ -1058,12 +1058,18 @@ export const REEL_SCENE_EDITOR_JS = `
 			const badge = document.getElementById("tm-scene-selection-badge");
 			if (!objectsHost || !inspector) return;
 			const addButton = document.getElementById("tm-scene-add-text");
+			const deleteButton = document.getElementById("tm-scene-delete");
 			const selectedForAdd = state.elements[reelSelectedElement];
 			const graphicSelected = !!(selectedForAdd && selectedForAdd.type === "graphic");
 			if (addButton) {
 				addButton.textContent = graphicSelected ? "＋ Graphic" : "＋ Text";
 				addButton.title = graphicSelected ? "Add a graphic element" : "Add a text element";
 				addButton.setAttribute("aria-label", graphicSelected ? "Add a graphic element" : "Add a text element");
+			}
+			if (deleteButton) {
+				const canDelete = reelSelectedElement !== "bg" && selectedForAdd && !selectedForAdd.deleted;
+				deleteButton.hidden = !canDelete;
+				deleteButton.disabled = !canDelete;
 			}
 			objectsHost.innerHTML = "";
 			const bgButton = reelButton("Background", "tm-scene-object", function () { reelSelectSceneElement("bg"); });
@@ -1152,18 +1158,6 @@ export const REEL_SCENE_EDITOR_JS = `
 			if (element.type === "graphic") {
 				reelAddCheckbox(inspector, "Visible", element.visible, function (value) { element.visible = value; reelRedrawScene(); });
 				reelAddSelect(inspector, "Graphics", reelGraphicOptions(), element.kind, function (value) { reelSetGraphicKind(element, value); });
-				const stickerTitle = document.createElement("div");
-				stickerTitle.className = "tm-scene-subtitle";
-				stickerTitle.textContent = "Shapes & stickers";
-				inspector.appendChild(stickerTitle);
-				const stickers = document.createElement("div");
-				stickers.className = "tm-scene-sticker-grid";
-				REEL_GRAPHICS.forEach(function (shape) {
-					const sticker = reelButton(shape[2] + " " + shape[0], "tm-scene-sticker", function () { reelSetGraphicKind(element, shape[1]); });
-					sticker.classList.toggle("selected", element.kind === shape[1]);
-					stickers.appendChild(sticker);
-				});
-				inspector.appendChild(stickers);
 				reelAddRange(inspector, "Size", element.size, 20, REEL_GRAPHIC_OBJECTS[element.kind] ? 480 : 160, 1, function (value) { element.size = value; reelRedrawScene(); }, " px");
 				reelAddSceneColor(inspector, "Color", element.color, function (value) { element.color = value; reelRedrawScene(); });
 				if (REEL_GRAPHIC_OBJECTS[element.kind]) {
@@ -1190,14 +1184,6 @@ export const REEL_SCENE_EDITOR_JS = `
 			reelAddRange(inspector, "Element speed", element.speed, 0.5, 2, 0.1, function (value) { element.speed = value; reelRedrawScene(); }, "×");
 			reelAddRange(inspector, "X %", element.x, 0, 100, 1, function (value) { element.x = value; reelSyncPositionRanges(); reelRedrawScene(); }, "%");
 			reelAddRange(inspector, "Y %", element.y, 0, 100, 1, function (value) { element.y = value; reelSyncPositionRanges(); reelRedrawScene(); }, "%");
-			const deleteButton = reelButton("Delete element", "tm-scene-delete", function () {
-				element.deleted = true;
-				element.visible = false;
-				reelSelectedElement = "bg";
-				reelRenderSceneControls();
-				reelRedrawScene();
-			});
-			inspector.appendChild(deleteButton);
 		}
 
 		function reelSyncPositionRanges() {
@@ -1221,6 +1207,17 @@ export const REEL_SCENE_EDITOR_JS = `
 					if (output) output.textContent = element.y + "%";
 				}
 			}
+		}
+
+		function reelDeleteSelectedElement() {
+			const state = reelSelectedState();
+			const element = state.elements[reelSelectedElement];
+			if (!element || reelSelectedElement === "bg" || element.deleted) return;
+			element.deleted = true;
+			element.visible = false;
+			reelSelectedElement = "bg";
+			reelRenderSceneControls();
+			reelRedrawScene();
 		}
 
 		function reelSelectSceneElement(key) {
@@ -1469,9 +1466,10 @@ export const REEL_SCENE_EDITOR_JS = `
 			sceneControls.id = "tm-scene-controls";
 			sceneControls.className = "tm-scene-controls";
 			sceneControls.style.display = "none";
-			sceneControls.innerHTML = '<div class="tm-scene-panel"><div class="tm-scene-panel-head"><div><div class="tm-scene-kicker">REEL EDITOR</div><div class="tm-sec-title">Scene elements</div></div><button type="button" id="tm-scene-add-text" class="tm-scene-add">＋ Text</button></div><p class="tm-scene-hint">Click an object in the preview to load its controls. Drag to move it.</p><div id="tm-scene-inspector" class="tm-scene-inspector"></div></div>';
+			sceneControls.innerHTML = '<div class="tm-scene-panel"><div class="tm-scene-panel-head"><div><div class="tm-scene-kicker">REEL EDITOR</div><div class="tm-sec-title">Scene elements</div></div><div class="tm-scene-panel-actions"><button type="button" id="tm-scene-add-text" class="tm-scene-add">＋ Text</button><button type="button" id="tm-scene-delete" class="tm-scene-delete" hidden disabled>Delete element</button></div></div><p class="tm-scene-hint">Click an object in the preview to load its controls. Drag to move it.</p><div id="tm-scene-inspector" class="tm-scene-inspector"></div></div>';
 			side.appendChild(sceneControls);
 			document.getElementById("tm-scene-add-text").addEventListener("click", reelAddSceneElement);
+			document.getElementById("tm-scene-delete").addEventListener("click", reelDeleteSelectedElement);
 
 			const objects = document.createElement("div");
 			objects.id = "tm-scene-objects";
