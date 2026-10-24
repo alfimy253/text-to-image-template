@@ -1623,3 +1623,74 @@ cites `kv-scale-test.md` §8, the last section of that document.
   stops all timers and **re-enables Upload Image, GIF or MP4** and the script button. If some
   images fail, the flow still finalises after the last prompt was attempted so the URL is
   never leaked and the upload button never stays disabled.
+
+---
+
+## RULE 24 AUDIT ADDENDUM — corrections and inconsistency register (double-check)
+
+> This addendum is part of the double-check of the SEO walkthrough session. The full
+> requirement-by-requirement record (SR-1 … SR-21), the implementation map and the
+> verification evidence live in `seo-walkthrough-session-requirements.md`. Where RULE 24
+> above and this addendum disagree, **this addendum describes the code as it actually
+> behaves**; nothing here changes RULE 7's keyword contract.
+
+**Corrections to RULE 24's wording**
+
+1. "Two different keyword sets" means, in code, only that the second set's
+   *combined* long-tail + ordered four shorts are not identical to the first set's
+   (`keywordSetsEqual`). The second set may reuse individual shorts, the title and
+   the headings; the planner prompt asks for more than the validator enforces.
+2. The form standard covers accordion text/number inputs, selects and textareas
+   only (buttons follow the older accordion-button rule), and Sticker/Quality are
+   bare selects headed by their section title — they have no `<label>` element.
+3. The dynamic image-prompt URL is created after style confirmation **and** after
+   the script succeeds, not at the moment the keyword set is selected (a deliberate
+   dependency-order interpretation of the original requirement).
+4. Queued generation fires the first image immediately when prompts arrive, then
+   schedules each next call 20 s **after the previous request settles**; it reuses
+   `AI_ENDPOINT` (`/image/gen`) and `addAiToVideo`, not the AI panel's
+   `submitAiImages` and its credit pre-check / 401 / 429 stop behaviour.
+5. RULE 24's teardown guarantee ("the URL is never leaked and the upload button
+   never stays disabled") holds only on the happy path and the all-images-failed
+   path. It does **not** hold for the edge paths in the register below.
+
+**Inconsistencies with other code (from Register A of the session record)**
+
+- Closing the walkthrough modal after the sets arrive strands the flow: both the
+  upload and Generate SEO Script buttons are disabled, so the cached-set reopen
+  branches in `generateScript()` are unreachable (A-1).
+- Gallery completion is judged by DOM child count (`baseline + expectedCount`),
+  while `addAiToVideo` enforces a still-image cap and returns no success value:
+  a nearly-full, edited or externally-grown gallery can make finalisation
+  unreachable or premature, an in-flight image can land (and reschedule) after
+  finalisation, and cap refusals are still counted as "done" (A-2, A-3).
+- Prompt-poll error/external-404 paths never DELETE the dynamic URL and leave the
+  1 s gallery watcher running; finalisation never checks the DELETE status (A-4).
+- A failed script *regeneration* leaves the loading spinner in the SRT box instead
+  of restoring the previous script, contradicting RULE 7's failure-retention
+  behaviour; Download/Voiceover stay usable against the old SRT mid-request (A-5).
+- The walkthrough modal is one global DOM singleton (`#seo-walkthrough-modal`)
+  inside a system of up to 10 independent per-video accordions; overlapping plans
+  for two videos overwrite each other's modal (A-6).
+- Topic/minutes/speed are snapshotted and cached sets are reopened without
+  comparison, so edits made while the modal is closed are silently ignored (A-8).
+- `/api/seo-plan` and `/api/image-prompts` are anonymous and never record usage,
+  unlike `/api/script`'s `onValidated` telemetry; the prompt URL is an
+  unauthenticated capability URL (A-12). Caption code
+  (`vaCaptionRowHTML`/`addVaCaptionRow`/`swapVaCaptions*`) remains as dead or
+  always-empty plumbing after SR-4 (A-13).
+
+**Inconsistencies between documentation and code (from Register B)**
+
+- This file's RULE 7 client bullet, RULE 18 hint inventory and RULE 1 route-order
+  list predate the walkthrough: the client no longer simply sends
+  `{topic, minutes, speed}` in one click, the Generate SEO Script tooltip/hint do
+  not mention set selection, image style, the disabled upload button or queued
+  images, and neither new route appears in the route order.
+- `userflow.md` §4's accordion diagram still lists a Captions (bottom) section,
+  §4.2/§10 describe the one-click script flow, and §2/§9 omit the new routes and
+  MODULE 8b; `README.md` still describes each accordion as having its own captions
+  and gives the 10-caption limit. See `userflow.md` §13 for the matching register.
+- The session's own summary texts (`README.md`, RULE 24, `userflow.md` Flow 6)
+  overstate "two different sets", "every form element" and the teardown guarantee
+  as detailed in the corrections above and in B-4/B-5/B-7 of the session record.

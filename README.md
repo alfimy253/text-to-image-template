@@ -278,6 +278,12 @@ skin covers the whole site.
   read-only bulk grid, hidden legacy panels, no timeline) and the four extra skins ported from
   the uploaded `video_bulk_production` reference, with the 44-check DOM harness and the 36-check
   route harness.
+- **`seo-walkthrough-session-requirements.md`** — the SEO walkthrough session record: every
+  session requirement (SR-1 … SR-21), the implementation map, the double-check evidence
+  (40 passing tests, live mock-AI route checks), and — at the bottom — Register A
+  (inconsistencies between the new code and other code) and Register B (inconsistencies
+  between the documentation and the code). Read it before trusting older walkthrough,
+  caption or script-flow passages elsewhere.
 
 ## Notes for contributors
 
