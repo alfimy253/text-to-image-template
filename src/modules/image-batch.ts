@@ -45,6 +45,94 @@ export const IMAGE_ATTEMPT_TIMEOUT_MS = 75000;
 export const IMAGE_WIDTH = 1024;
 export const IMAGE_HEIGHT = 576;
 
+/*
+ * Session #211 — the quick-batch table's Resolution and Orientation columns.
+ *
+ * The studio used to render every AI image at one fixed 1024x576 frame. A row
+ * can now ask for its own frame, and the choice travels with the prompt list:
+ *
+ *   resolution  = the LONG edge in pixels (480 / 540 / 720 / 1024)
+ *   orientation = "square" (1:1) | "landscape" (16:9) | "portrait" (9:16)
+ *
+ * SDXL only accepts multiples of 8, so the short edge is rounded to one. The
+ * long edge is echoed back unchanged (480, 720 and 1024 already are), which
+ * keeps the column labels honest: 480px really renders a 480px long edge.
+ */
+export const IMAGE_RESOLUTIONS = [480, 540, 720, 1024] as const;
+export const IMAGE_ORIENTATIONS = ["square", "landscape", "portrait"] as const;
+export const IMAGE_DEFAULT_RESOLUTION = 1024;
+export const IMAGE_DEFAULT_ORIENTATION = "landscape";
+
+export type ImageResolution = (typeof IMAGE_RESOLUTIONS)[number];
+export type ImageOrientation = (typeof IMAGE_ORIENTATIONS)[number];
+
+export interface ImageFrame {
+	resolution: ImageResolution;
+	orientation: ImageOrientation;
+	width: number;
+	height: number;
+}
+
+/* The smallest edge SDXL renders predictably. */
+const IMAGE_MIN_EDGE = 256;
+
+function roundTo8(value: number): number {
+	return Math.max(IMAGE_MIN_EDGE, Math.round(value / 8) * 8);
+}
+
+/* "720", 720 or "720px" -> 720; anything outside the list -> null. */
+export function normalizeImageResolution(value: unknown): ImageResolution | null {
+	const raw = String(value ?? "").trim().toLowerCase().replace(/px$/, "");
+	if (!raw) return null;
+	const size = Number(raw);
+	if (!Number.isFinite(size)) return null;
+	const rounded = Math.round(size);
+	return (IMAGE_RESOLUTIONS as readonly number[]).indexOf(rounded) === -1
+		? null
+		: (rounded as ImageResolution);
+}
+
+export function normalizeImageOrientation(value: unknown): ImageOrientation | null {
+	const raw = String(value ?? "").trim().toLowerCase();
+	return IMAGE_ORIENTATIONS.find((entry) => entry === raw) || null;
+}
+
+/* resolution + orientation -> the exact pixels to ask SDXL for. */
+export function imageFrameFor(
+	resolutionValue: unknown,
+	orientationValue: unknown
+): ImageFrame {
+	const resolution = normalizeImageResolution(resolutionValue) || IMAGE_DEFAULT_RESOLUTION;
+	const orientation = normalizeImageOrientation(orientationValue) || IMAGE_DEFAULT_ORIENTATION;
+	const long = roundTo8(resolution);
+	if (orientation === "square") {
+		return { resolution, orientation, width: long, height: long };
+	}
+	const short = roundTo8((resolution * 9) / 16);
+	return orientation === "portrait"
+		? { resolution, orientation, width: short, height: long }
+		: { resolution, orientation, width: long, height: short };
+}
+
+/*
+ * Validates the optional body fields of POST /api/image-batch. Absent fields
+ * keep the historical 1024x576 landscape frame; a field that is present but
+ * invalid is a 400, so a typo can never silently render the wrong size.
+ */
+export function sanitizeImageFrame(body: Record<string, unknown>): ImageFrame | { error: string } {
+	const rawResolution = body ? body.resolution : undefined;
+	const rawOrientation = body ? body.orientation : undefined;
+	const hasResolution = rawResolution !== undefined && rawResolution !== null && rawResolution !== "";
+	const hasOrientation = rawOrientation !== undefined && rawOrientation !== null && rawOrientation !== "";
+	if (hasResolution && !normalizeImageResolution(rawResolution)) {
+		return { error: "Resolution must be one of " + IMAGE_RESOLUTIONS.join(", ") + " (pixels, long edge)" };
+	}
+	if (hasOrientation && !normalizeImageOrientation(rawOrientation)) {
+		return { error: "Orientation must be one of " + IMAGE_ORIENTATIONS.join(", ") };
+	}
+	return imageFrameFor(rawResolution, rawOrientation);
+}
+
 /* The model is text-free by design; the negative prompt keeps it that way. */
 export const IMAGE_NEGATIVE_PROMPT =
 	"text, words, letters, writing, script, kanji, Chinese characters, Japanese characters, hiragana, katakana, CJK characters, subtitles, captions, signs, billboards, logos, watermarks, typography, numbers";
@@ -239,13 +327,19 @@ function sanitizePrompts(raw: unknown): string[] | { error: string } {
 
 async function generateOneWithRetry(
 	env: AiEnv,
-	prompt: string
+	prompt: string,
+	frame?: ImageFrame
 ): Promise<{ ok: true; result: ImageModelResult } | { ok: false; error: string }> {
 	let lastError = "Image generation failed";
 	for (let attempt = 1; attempt <= IMAGE_BATCH_ATTEMPTS; attempt++) {
 		try {
 			const result = await withTimeout(
-				runImageModel(env, prompt, { seed: Math.floor(Math.random() * 2147483647) }),
+				runImageModel(env, prompt, {
+					seed: Math.floor(Math.random() * 2147483647),
+					/* The row's own Resolution + Orientation columns. */
+					width: frame ? frame.width : IMAGE_WIDTH,
+					height: frame ? frame.height : IMAGE_HEIGHT
+				}),
 				IMAGE_ATTEMPT_TIMEOUT_MS,
 				"Image generation"
 			);
@@ -280,6 +374,16 @@ export async function handleImageBatch(
 	if ("error" in sanitized) {
 		return json({ success: false, error: sanitized.error }, 400);
 	}
+
+	/*
+	 * The optional frame fields (Session #211). Absent = the historical
+	 * 1024x576 landscape frame, so every existing caller keeps working.
+	 */
+	const frameInput = sanitizeImageFrame(body);
+	if ("error" in frameInput) {
+		return json({ success: false, error: frameInput.error }, 400);
+	}
+	const frame = frameInput;
 
 	const requested = sanitized.length;
 	const reservation = await credits.consume(requested);
@@ -324,6 +428,10 @@ export async function handleImageBatch(
 		count,
 		available: reservation.granted,
 		concurrency: IMAGE_BATCH_CONCURRENCY,
+		resolution: frame.resolution,
+		orientation: frame.orientation,
+		width: frame.width,
+		height: frame.height,
 		promptChars: prompts.reduce((total, prompt) => total + prompt.length, 0)
 	});
 
@@ -338,8 +446,10 @@ export async function handleImageBatch(
 			requested,
 			count,
 			concurrency: Math.min(IMAGE_BATCH_CONCURRENCY, count),
-			width: IMAGE_WIDTH,
-			height: IMAGE_HEIGHT,
+			width: frame.width,
+			height: frame.height,
+			resolution: frame.resolution,
+			orientation: frame.orientation,
 			model: IMAGE_MODEL,
 			credits: summary
 		});
@@ -355,7 +465,7 @@ export async function handleImageBatch(
 			while (!stopped()) {
 				const index = nextIndex++;
 				if (index >= count) return;
-				const outcome = await generateOneWithRetry(env, prompts[index]);
+				const outcome = await generateOneWithRetry(env, prompts[index], frame);
 				if (stopped()) return;
 				if (outcome.ok) {
 					generated++;

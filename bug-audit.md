@@ -48,7 +48,7 @@ RULE 22.
 | 8 | S2 | ASI bug: `return` / `null;` returns `undefined` (`findWavChunk`) | open (benign today) |
 | 9 | S3 | `frames - 1` divisor divides by zero for 1-frame slides | open |
 | 10 | S3 | Two Workers AI image generations on **every page load** | open |
-| 11 | S3 | `npm run check` can never pass: `tsc` fails with 48 errors on clean `main` | open |
+| 11 | S3 | `npm run check` can never pass: `tsc` fails on clean `main` — **37** errors as measured on 2026-10-25 (earlier sessions counted 48; the count drifts with the tree, the defect does not) | open |
 | 12 | S3 | `src/index.ts.original` is a stale 21k-line duplicate of the worker | open |
 | 13 | S3 | `README.md` documents a different product (stock template) | **fixed** |
 | 14 | S3 | Three user-visible strings contradict the render engine | **fixed** |
@@ -598,3 +598,20 @@ they break is recorded here instead.
   /api/job/<id>`, `GET /media/<id>.mp3`, `/api/health` and static files, sets `job.file`/`job.url`
   on completion and honours `signal` **inside** the chunk loop, which is what makes its Stop button
   meaningful.
+## Bug Fix Session #244 — silent retries, table layout, three credit pages (2026-10-26)
+
+Four runtime defects were found while reading the batch pipeline and the settings page, and all
+four are fixed. No new open finding was added to the lists above.
+
+| # | Where | Defect | Fix |
+| --- | --- | --- | --- |
+| S2-244a | `src/client/app-js.ts` `runBatchRow` | A failed step set `stage = "error"` and printed the raw `error.message` in the row's status cell. Every browser-originated failure is an `AbortError` from `batchFetch()`'s own `AbortController`, so the cell could read **"signal is aborted without reason"** / **"The user aborted a request"** — the "signal"/"aborted" rows. Nothing was retried. | `batchRunStep()` retries each step up to 4 times with backoff, keeps the working label, and `batchFetch()` now classifies its own timeout (`TimeoutError`) and a user stop (`row.stopRequested`) instead of letting the browser's abort wording through. A stop is never retried. |
+| S2-244b | `src/client/app-js.ts` `requestBatchImages` | After the response headers arrived the NDJSON reader had **no deadline**: a stalled stream left the row on "Rendering the AI images" forever (until the page was closed) and counted as one attempt of a 480 s request. | `batchReadChunk()` races each `reader.read()` against `BATCH_STREAM_IDLE_TIMEOUT_MS` (90 s), cancels the reader on a stall and throws a retryable `TimeoutError`. |
+| S3-244c | `src/client/styles.ts` `.batch-table-edit` | The seven columns are declared in percentages but the table used the browser's **auto** layout, so a long status line or a wide `<select>` re-measured a column and shoved the rest sideways **while rows were processing**. | `table-layout: fixed` + `min-width: 880px` inside `.table-scroll`; `.batch-row-status` now wraps (`overflow-wrap: anywhere`). |
+| S3-244d | `src/client/config-page-js.ts` | The CMS delete affordance existed but only as one 0.75 rem button inside each saved-page pill, with no delete anywhere in the editor; the credits were two adjacent cards crammed into tab 1. | One shared `deleteCmsPage(page)` with confirmation is used by the pill **and** by a new **Delete This Page** button in the editor (`#cms-delete-btn`, shown only while an existing page is open); the credits are now three tabs (Guest Credits by IP / Plans / Accounts Credits). |
+
+Verified after the change: `npm test` **89/89** (79 before + 10 new in
+`tests/session-244.test.mjs`), `npx tsc --noEmit` **36** pre-existing `src/index.ts` errors (37
+before, none in a touched file), the served settings page carries all seven `data-cfg-tab`
+values, and a `wrangler dev` smoke test created a CMS page, listed it, deleted it through
+`POST /api/config/cms/delete`, and got `{success:true, pages:[]}` back.

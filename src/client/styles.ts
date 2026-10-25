@@ -2317,10 +2317,19 @@ export const APP_CSS = `
 
 
 		/*
-		 * The delete icon on a generated-image card is 40% smaller than
-		 * the original 20x20 / 2px circle: 12x12 box, 1.2px inset and no
-		 * inherited button padding, so it hugs the card corner in every
-		 * theme instead of covering the image.
+		 * The delete icon on a generated-image card. Session #243 made it
+		 * 40% smaller than the original 20x20 / 2px circle (12x12 box,
+		 * 1.2px inset, padding 0). Session #211 then asked for another
+		 * 30% off the type and 30% off the red shape's padding:
+		 *
+		 *   font-size  0.5rem  -> 0.35rem        (-30%)
+		 *   red shape  12x12   -> 8.4x8.4 (-30%)  (the 2px padding of the
+		 *                                          original badge scaled to 0,
+		 *                                          so the shape itself carries
+		 *                                          the padding reduction)
+		 *
+		 * The glyph is centred with flex so the smaller box still reads as
+		 * one clickable circle in every theme.
 		 */
 		.va-card-remove {
 
@@ -2334,13 +2343,22 @@ export const APP_CSS = `
 				1.2px;
 
 			width:
-				12px;
+				8.4px;
 
 			height:
-				12px;
+				8.4px;
 
 			padding:
 				0;
+
+			display:
+				flex;
+
+			align-items:
+				center;
+
+			justify-content:
+				center;
 
 			border-radius:
 				50%;
@@ -2355,7 +2373,7 @@ export const APP_CSS = `
 				#ffffff;
 
 			font-size:
-				0.5rem;
+				0.35rem;
 
 			cursor:
 				pointer;
@@ -2532,7 +2550,7 @@ export const APP_CSS = `
 
 
 		/*
-		 * Sticker / Quality are bare
+		 * Quality is a bare
 		 * selects carrying the
 		 * .quality-select class.
 		 */
@@ -7637,23 +7655,43 @@ export const APP_CSS = `
 
 		#studio-app .batch-table-edit {
 			white-space: normal;
+			/*
+			 * Session #244: the seven columns are declared in percentages,
+			 * but the browser's default auto layout re-measures a column
+			 * from its content - so one long status line ("Rendering the
+			 * AI images, 11 of 12 done") or a wide select used to shove
+			 * every other column sideways mid-processing. Fixed layout
+			 * keeps the columns exactly where the percentages put them,
+			 * and the scroll wrapper takes any overflow.
+			 */
+			table-layout: fixed;
+			min-width: 880px;
 		}
 
 		#studio-app .batch-table-edit .batch-col-script {
-			width: 46%;
+			width: 34%;
 		}
 
 		#studio-app .batch-table-edit .batch-col-style {
-			width: 18%;
+			width: 15%;
 		}
 
 		#studio-app .batch-table-edit .batch-col-min {
-			width: 8%;
+			width: 6%;
+		}
+
+		/* Session #211: the two AI-frame columns (resolution + orientation). */
+		#studio-app .batch-table-edit .batch-col-resolution {
+			width: 10%;
+		}
+
+		#studio-app .batch-table-edit .batch-col-orientation {
+			width: 12%;
 		}
 
 		#studio-app .batch-table-edit .batch-col-preview,
 		#studio-app .batch-table-edit .batch-col-export {
-			width: 14%;
+			width: 11.5%;
 		}
 
 		#studio-app .batch-table-edit td.batch-cell {
@@ -7695,6 +7733,8 @@ export const APP_CSS = `
 
 		#studio-app .batch-script-input,
 		#studio-app .batch-style-select,
+		#studio-app .batch-resolution-select,
+		#studio-app .batch-orientation-select,
 		#studio-app .batch-minutes-input {
 			box-sizing: border-box;
 			width: 100%;
@@ -7729,6 +7769,23 @@ export const APP_CSS = `
 			font-size: 0.7rem;
 			line-height: 1.45;
 			color: var(--t-muted, #9ca3af);
+			/* A long status line wraps inside its column instead of
+			   widening the table while the row is processing. */
+			overflow-wrap: anywhere;
+			word-break: break-word;
+		}
+
+		/*
+		 * Session #244: the row's working state borrows the editor's
+		 * script-section loading animation (.va-spinner + va-loading-pulse)
+		 * pixel for pixel, so a silent in-row retry is indistinguishable
+		 * from a first attempt.
+		 */
+		#studio-app .batch-row-status[data-loading="1"] {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			animation: va-loading-pulse 1.2s ease-in-out infinite;
 		}
 
 		#studio-app .batch-row-status[data-stage="images"],

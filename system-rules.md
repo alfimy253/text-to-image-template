@@ -38,6 +38,14 @@
 > 2-5 shorts in total, long tail said ≥1×, shorts said 2-5×) no longer exists in any file. A future
 > non-SEO / non-explainer script mode is documented in RULE 7 (not implemented).
 >
+> **Session #211 second pass (2026-10-25): editor + table corrections.** A 30% smaller
+> delete icon on every accordion gallery card, a per-video lock on **Generate 2 Images** while
+> that video's script & style walkthrough renders, three simultaneous rows in the Quick batch
+> table, finished rows skipped by Generate, and two new per-row columns (**Resolution**,
+> **Orientation**) that travel into both image calls. RULEs 6, 18, 25, 27 were corrected against
+> the code; the inconsistency register is `toberesolved.md` and the session record is
+> `bug-fix-session-211.md` (second pass).
+>
 > **Session #243 (2026-10-25): UI corrections + planner resilience.** The accordion **Sticker**
 > section (and the sticker renderer behind it) is gone; the removed **☁️ API** header button is
 > replaced by **🗑 Delete Video**, which renumbers the stack; the generated-image delete icon is
@@ -45,6 +53,18 @@
 > bulk-grid CSS from Session #240 was deleted; and `POST /api/seo-plan` now retries, falls back to
 > a second model and can answer with one set (`partial: true`). See **RULE 27** at the end of this
 > file, `script-keyword-retry-debug.md` and `quick-batch-table-system-requirements.md`.
+>
+> **Session #244 (2026-10-26): silent in-row retries, fixed table layout, three credit pages.**
+> The Quick batch table no longer has an error state: a failed step is retried inside its row
+> (up to 4 attempts, exponential backoff) while the row keeps the editor's script-section loading
+> animation, then goes back to **Ready** with `row.error = ""` — no error text, no warning colour,
+> no toast, and no browser abort wording ("signal is aborted without reason") ever reaching the
+> table (RULE 25). The seven columns are `table-layout: fixed` so processing cannot reflow the
+> table, and each NDJSON read has a 90 s idle budget. The Site Admin page now has **seven** tabs:
+> General & Themes, **Guest Credits by IP**, **Plans**, **Accounts Credits**, Local Payment
+> Gateway, Payment Transactions, CMS Pages (RULE 18). A CMS page (and the Top Menu / Footer link
+> it renders) can be deleted from its saved-page pill **or** from the editor's **Delete This
+> Page** button. Session record: `bug-fix-session-244.md`.
 >
 > **Current SEO/template revision (2026-10-23):** short/long-tail overlap is allowed with shared
 > counts; long-tail keywords have no word/character length rule. RULE 13 now has one scene gallery,
@@ -205,7 +225,15 @@
   - Restriction: the theme is a **global** setting (one page serves every visitor), not a
     per-user preference.
 - **Full-page/worker mode:** the config script builds `#cfg-page` on `body.cfg-real-page` with
-  four tabs, not the retired modal/mode-select UI. The General tab's **Background Worker Mode**
+  **seven** tabs (Session #244): `general | guests | plans | accounts | payment-gateway | payments
+  | cms`, each its own `#cfg-panel-*` section, switched by `activateTab()` which also lazily
+  loads that tab's data (`loadGuests`, `loadCreditUsers`, `loadPaymentsPage`,
+  `loadGatewayConfig`, `loadCmsPages`). Credits were two adjacent cards in tab 1 before, and are
+  now three separate pages: **2. Guest Credits by IP** (`#cfg-guests-list`,
+  `#cfg-guests-refresh`), **3. Plans** (`#cfg-plans-list` from the `plans[]` in
+  `GET /api/config/users`, plus the read-only guest plan) and **4. Accounts Credits**
+  (`#cfg-credit-user`, `#cfg-credit-plan`, `#cfg-credit-reset`, `#cfg-plan-save`,
+  `#cfg-users-list`). The General tab's **Background Worker Mode**
   card has Start/Stop and a polling log. `#studio-app` is moved off-screen and visually hidden,
   but its canvas, JS and render engine remain alive to perform claimed jobs.
 - Registered worker URLs:
@@ -315,13 +343,20 @@
 - `GET /image/gen?prompt=&variant=` — the per-video AI panel.
   - `prompt` is required (`400 "Missing prompt"` otherwise); `variant` is echoed back in
     `X-Image-Variant`; also `Cache-Control: no-store`.
-  - The server appends `", 16:9 landscape, a completely text-free image"` to the prompt and
-    sends a long `negative_prompt` banning text, CJK characters, subtitles, signs, logos,
-    watermarks and numbers.
-    - Restriction: no `width`/`height` parameters are sent — the code comment states the API
-      rejects custom dimensions, so the "480 px landscape" size is a client display/format
-      promise, not an API guarantee.
-  - Client behaviour: each submit is **2 sequential requests** (`variant` 1 and 2).
+  - The server appends `", 16:9 landscape, a completely text-free image"` to the prompt, sends a
+    long `negative_prompt` banning text, CJK characters, subtitles, signs, logos, watermarks and
+    numbers, **and** asks the model for a real size: `runImageModel()` always sends the module's
+    `IMAGE_WIDTH = 1024` / `IMAGE_HEIGHT = 576` (16:9) defaults. The panel's hint says
+    **landscape 16:9 · 1024×576** for exactly that reason; the old "480 px landscape" wording (and
+    the unused `AI_IMAGE_WIDTH = 854` / `AI_IMAGE_HEIGHT = 480` pair next to it) never described a
+    rendered file. See `toberesolved.md` A1-A3.
+  - Client behaviour: each submit is **2 parallel requests** (`variant` 1 and 2, fired through
+    `Promise.all`, not one after the other).
+    - Restriction: while *this* video's script & style walkthrough is rendering its images
+      (`project._imageFlowActive`), its **✨ Generate 2 Images** button is disabled
+      (`setVaAiGenerateEnabled(n, false)`, re-enabled in `finalizeImagePromptFlow()`), and
+      `submitAiImages(n)` refuses a programmatic click. The lock is per video: another
+      accordion's button stays live and may generate at the same time.
     - The results panel keeps at most 4 cards; generating again while it holds 4 clears it
       first (revoking the object URLs).
     - "+ Add to Video" wraps the PNG in a `File` and pushes it as a normal still image, so it
@@ -832,19 +867,18 @@
 | `AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the plain narration script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
 | `Long-tail keyword — must be said at least 1×` · `Short keyword — must be said at least 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading` · `Explainer title — includes at least one short keyword` · `Section heading — at least one heading includes a short keyword` | SEO plan chips, `renderSeoKeywords()` tooltips (the `N×` shown is the measured count, which may exceed the minimum) | `SEO_LONG_FREQ_MIN = 1`, `SEO_SHORT_FREQ_MIN = 2`, title/heading inclusion rules (RULE 7) |
 | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)` | video accordion, media section (`.va-note`) | `MAX_GIF_UPLOADS = 5`, `MAX_IMAGE_UPLOADS = 25`, `MAX_MP4_UPLOADS = 5`, `MP4_MAX_DURATION_S = 60` |
-| `2 images per submit · 480px landscape` | video accordion, AI images section (`.va-note`, doubles as the status line) | the route always asks SDXL for 2 images; **the 480 is not enforced anywhere** (bug-audit #16) |
+| `2 images per submit · landscape 16:9 · 1024×576` (placeholder: `Describe the image (always landscape 16:9, 1024×576)`; success line: `Done — landscape 16:9 · 1024×576`) | video accordion, AI images section (`.va-note`, doubles as the status line) | two `GET /image/gen` requests of one image each, rendered by `runImageModel()` at `IMAGE_WIDTH = 1024` / `IMAGE_HEIGHT = 576` (the old `480px landscape` copy was wrong — `toberesolved.md` A2/A3) |
 | `Add a video (up to 10)` | `+ Add Video` button tooltip | `VIDEO_MAX_VIDEOS = 10` |
 | `Caption text (max 40 characters)` | caption row placeholder (accordion + main panel) | `CAPTION_MAX_CHARS = 40` |
 | `Each caption appears centred horizontally at 4/7 of the height from the bottom, in 17px Bookman … The last caption is capped at 10 seconds on screen.` | main panel caption note (`.audio-note`) | `CAPTION_FONT_SIZE = 17`, `CAPTION_MAX_VISIBLE_MS = 10 000`, overlay geometry (RULE 10) |
 | `The slideshow repeats to cover the whole track.` | main panel audio note | slide timing: the asset list loops to cover the MP3 (RULE 9) |
-| `White 435 × 150 rectangle, square corners, flush with the bottom right corner and hanging 40px past the right edge.` | main panel sticker note | `STICKER_WIDTH = 435`, `STICKER_HEIGHT = 150`, sticker geometry (RULE 10) |
 | `MeloTTS (Cloudflare AI) speaks the script as an English MP3 (one fixed voice). The MP3 can be uploaded as this video's audio track.` | voiceover modal note | `/api/voiceover` with the locked English select (RULE 8) |
 | `Speak the script to MP3 with MeloTTS (English) + apply it as subtitles` | **🎙 Generate Voiceover** tooltip | the two modal actions (voiceover + subtitles toggle) |
-| `One row — one video` (`#batch-note`, rewritten live as `N rows · M with a script`) · `Type or paste a script in the first box, pick the video image style and the minimum minutes, then press ✨ Generate at the top right of the table. … Until a row is finished its last two cells read **Preview Here** and **Export Video** — both unlock at the same moment, and the export is built in this browser.` | **Quick batch table** (`.card-note`, `.va-note.batch-hint`) | `BATCH_ROW_LIMIT = VIDEO_MAX_VIDEOS = 10`, minutes 1-6, `batchRowFinished()` (RULE 25) |
-| `Add another row (10 rows at most)` · `Generate every row that has a script: voiceover, AI images and the animation` | `#batch-add-row` / `#batch-generate` tooltips | the row cap and the sequential pipeline (RULE 25) |
+| `One row — one video` (`#batch-note`, rewritten live as `N rows · M with a script`) · `Type or paste a script in the first box, pick the video image style, the minimum minutes, the AI image resolution and the frame orientation, then press ✨ Generate at the top right of the table. … a row that is empty is skipped, and so is a row that is already finished … Three rows render at the same time. …` | **Quick batch table** (`.card-note`, `.va-note.batch-hint`) | `BATCH_ROW_LIMIT = VIDEO_MAX_VIDEOS = 10`, minutes 1-6, `BATCH_RUN_CONCURRENCY = 3`, `batchRowPending()`, `batchRowFinished()` (RULE 25) |
+| `Add another row (10 rows at most)` · `Generate every row that has a script and is not finished yet: voiceover, AI images and the animation, three rows at a time` | `#batch-add-row` / `#batch-generate` tooltips | the row cap, the three-lane pipeline and the finished-row skip (RULE 25) |
+| `480px` / `540px` / `720px` / `1024px` and `Square 1:1` / `Landscape 16:9` / `Portrait 9:16` (plus the live `W×H` hint under the resolution select) | Quick batch table columns 4-5 (`batch-resolution-select`, `batch-orientation-select`) | `BATCH_RESOLUTIONS`, `BATCH_ORIENTATIONS`, `batchRowDimensions()` client-side and `imageFrameFor()` worker-side (RULE 25) |
 | `No rows yet — press ＋ Add Row, paste a script, pick a style and press ✨ Generate.` | `#batch-empty` | the table is seeded with one blank row **once**, so an emptied table stays empty (RULE 25) |
 | `Plain narration script - the words the voiceover reads. Timestamps are not needed.` | the accordion's **▼ Script** tooltip | the plain-script payload of `/api/script` (RULE 7) |
-| `Send all of this video's elements to the render API` | **☁️ API** tooltip | the `/api/render` payload (RULE 4) |
 | `Compose a portrait or landscape MP4 (max 25 seconds) from a design template …` | `Add video from template` tooltip | the composer caps 1-25 s (RULE 13) |
 | `+ Front layer` / `- Back Layer` · `Layer N of M` | text/graphic inspector | one-step saved paint order; disabled at boundaries (RULE 13) |
 | `Rotate degrees` + live `N°` readout | text/graphic and ring inspectors | 0–360°, 1° steps; real canvas rotation (RULE 13) |
@@ -1252,6 +1286,14 @@ addresses and gives visitors without an account a small, IP-metered allowance.
     reorder/remove, reset/new, saved-page edit/delete pills and an escaped live preview. Create
     and update share `POST /api/config/cms`; optional `id` selects update. Delete by id or slug
     releases a slot; if both are supplied, id takes precedence and only one record is removed. Public `/<slug>` matching occurs after built-in routes, otherwise `404`.
+  - **Deleting a page / menu URL (Session #244).** Two affordances share one client function,
+    `deleteCmsPage(page)`: the **Delete** button on each saved-page pill and **Delete This Page**
+    beside *Save CMS Page* (`#cms-delete-btn`, visible only while `#cms-edit-id` is set —
+    `setCmsDeleteEnabled()` in `editCmsPage()` / `resetCmsEditor()`). Both confirm, POST
+    `{pw, id, slug}` to `/api/config/cms/delete`, then re-render the pills, the `N / 8` counter and
+    the editor from the response's own `pages[]`. The Top Menu / Footer link is not cached anywhere:
+    `applyCmsLinksToStudioHtml()` re-reads the KV list on every HTML response, so the link is gone
+    on the next request.
   - Top/footer placement injects links into the shared shell/studio navigation. Without KV the
     public list is empty/public pages are `404`; password-gated CMS routes return `503`.
 - **Manual local payments.**
@@ -1868,26 +1910,81 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   `addBatchRow()` returning `null` + `showRequiredModal([...])`, not by a silent no-op.
   `bindBatchTable()` seeds **one** blank row once (`batchTableSeeded`), so deleting every row
   leaves the table empty — `renderBatchTable()` must never re-seed.
-- Row shape: `{id, script, style, minutes, stage, detail, error, mp3, mp3Url, audio, prompts[],
-  images[], objectUrls[], slides[], subtitles[], animated, startedAt, finishedAt, controller}`.
+- Row shape: `{id, script, style, minutes, resolution, orientation, stage, detail, error, mp3,
+  mp3Url, audio, prompts[], images[], objectUrls[], slides[], subtitles[], animated, startedAt,
+  finishedAt, controller, running}`.
   `minutes` is clamped to 1…6 on input; `style` is one of the ten walkthrough styles
-  (**Cinematic Film** is the default); `stage` walks
-  `empty → ready → queued → voice → timing → prompts → images → animate → done`, or `error`.
+  (**Cinematic Film** is the default); `resolution` is one of `BATCH_RESOLUTIONS`
+  (`480 / 540 / 720 / 1024`, default **1024** — the long edge) and `orientation` one of
+  `square | landscape | portrait` (default **landscape**); `stage` walks
+  `empty → ready → voice → timing → prompts → images → animate → done`, and back to `ready`
+  when the row could not finish (Session #244 — there is no visible error stage any more).
+  - Restriction: `BATCH_STAGE_LABELS.queued` ("Queued") and its colour rule still exist, but no
+    code ever assigns `stage = "queued"` — a row goes straight from `ready` to `voice` when its
+    lane picks it up. The label is dead copy (`toberesolved.md` B5).
+- **Frame maths.** `batchRowDimensions(row)` (client) and `imageFrameFor()` (worker) are the same
+  rule: the resolution is the **long edge**, the short edge is `round(res × 9/16)` for 16:9, both
+  rounded to a multiple of 8 (SDXL's requirement), and `square` makes both edges the long one. So
+  480 → 480×272, 540 → 544×304 (540 is not a multiple of 8), 720 → 720×408, 1024 → 1024×576.
 - **The gating rule.** `batchRowFinished(row)` — `row.mp3 && row.images.length && row.animated &&
   row.slides.length` — is the *single* condition behind both action cells. Until it is true the
   cells are text (`<span class="batch-pending">Preview Here</span>`, `Export Video`); afterwards
   they are buttons, **both at once**. There is no preview-only or export-only state, and a row with
   no script never gets a control at all (`generateBatchRows()` skips it).
-- **Pipeline** (`runBatchRow`, one row at a time behind `batchRunBusy`):
+- **Pipeline** (`runBatchRow`):
   `POST /api/voiceover {text, lang:"en"}` → `decodeBatchAudio` → `buildScriptCues(script, ms)` →
-  `POST /api/image-prompts {topic, minutes, style, script}` → `POST /api/image-batch` (NDJSON) →
+  `POST /api/image-prompts {topic, minutes, style, resolution, orientation, script}` →
+  `POST /api/image-batch {prompts, resolution, orientation}` (NDJSON) →
   `buildBatchSlides` → `animated = true`. `BATCH_REQUEST_TIMEOUT_MS = 240000` bounds each request
   and `BATCH_SLIDE_DECODE_MS = 10000` bounds each `img.decode()`.
-- **Isolation.** Any failure sets `stage = "error"` and `row.error` on that row only; the loop
-  continues with the next row. `stopBatchRows()` does not kill the run in flight — it aborts
-  through `row.controller` and the toolbar button reads **■ Stop after the current row**.
+- **Three rows at a time.** `generateBatchRows()` builds the pending queue
+  (`batchRowPending(row)` = has a script **and** `!batchRowFinished(row)` **and** `!row.running`),
+  starts `BATCH_RUN_CONCURRENCY = 3` lanes (fewer when the queue is shorter) behind one
+  `batchRunBusy` flag, and every lane pulls the next pending row when its own row finishes. Each
+  row keeps its own controller/object URLs, so three voiceover → prompts → batch → slide pipelines
+  overlap instead of running in series. A finished row unlocks its buttons without waiting for the
+  rest of the table.
+- **A finished row is never generated again.** Because the queue is built from
+  `batchRowPending()`, pressing ✦ Generate again skips every row whose Preview/Export buttons are
+  already live: its MP3, images and slides are in memory, so re-running it would re-bill the
+  credits and throw the animation away. With no pending row left the table shows
+  `showRequiredModal(["Every row with a script is already finished …"])` instead of starting a run.
+  (A *failed* row is pending again and is retried by the next Generate; clear a finished row's
+  script to make it runnable anew.)
+- **Isolation + silent retries (Session #244).** A failure is contained to its own row **and is
+  never shown**. Every step runs through `batchRunStep(row, stage, detail, step)`:
+  - up to `BATCH_STEP_ATTEMPTS` = 4 attempts with exponential backoff
+    (`BATCH_RETRY_BASE_MS` = 800 ms, capped at `BATCH_RETRY_MAX_MS` = 4000 ms);
+  - the row's stage label is painted once (attempt 1) and **not touched** on a retry, so the UI
+    shows the same working state for attempt 1 and attempt 4;
+  - while a row works (`voice | timing | prompts | images | animate`) its status cell renders
+    `<span class="va-spinner"></span><span class="batch-status-text">…</span>` with
+    `data-loading="1"` — the editor's script-section animation (`.va-spinner` +
+    `va-loading-pulse`), not a new one;
+  - object URLs created by a failed attempt are revoked before the retry
+    (`revokeBatchUrlsSince`), so a retried voice/image step cannot leak or double-count;
+  - aborts and timeouts are classified (`batchIsAbortError`): a stop (`row.stopRequested`) is not
+    retried, and no `AbortError`/`"signal is aborted without reason"` text can reach the table;
+  - when the last attempt fails the row is left at `stage = "ready"`, `row.error = ""`, with the
+    failure in `console.warn` only — the next ✦ Generate retries it. `batchStatusText()`'s
+    `⚠ …` error branch is kept for older call sites but nothing in the batch table assigns it.
+
+  `stopBatchRows()` marks `row.stopRequested` **before** aborting `row.controller`, clears
+  `batchRunBusy`, and the toolbar button reads **■ Stop generating**.
+- **Layout must not move while processing (Session #244).** `.batch-table-edit` is
+  `table-layout: fixed` with a `min-width` inside `.table-scroll`, and `.batch-row-status` uses
+  `overflow-wrap: anywhere`. The seven percentage column widths are therefore stable for the whole
+  run; the old auto layout re-measured a column from its content, so one long status line or a
+  wide `<select>` shifted every other column sideways mid-processing.
+- **Streams have an idle budget (Session #244).** `batchReadChunk(reader)` races each
+  `reader.read()` against `BATCH_STREAM_IDLE_TIMEOUT_MS` = 90000 ms and cancels the reader on a
+  stall; the timeout is retryable, so a dead NDJSON stream becomes a quiet retry instead of a row
+  that waits forever. `batchFetch()` reports its own `BATCH_REQUEST_TIMEOUT_MS` as a
+  `TimeoutError` (never the browser's abort wording). The policy is published as
+  `window.__BATCH_RETRY = {attempts, baseMs, maxMs}` for tests.
 - **Preview** is an injected `#batch-preview-modal` opened via `openModal` (so it stacks correctly
-  over a walkthrough, RULE 7): 1024 × 576 canvas + `requestAnimationFrame`, the exporter's own Ken
+  over a walkthrough, RULE 7): a canvas the size of the row's own frame
+  (`batchRowDimensions(row)`, e.g. 408 × 720 for 720 px portrait) + `requestAnimationFrame`, the exporter's own Ken
   Burns zoom-in (1 → 1.08 across each slide, cover-fit, black letterbox), slides drawn from
   `row.slides` with the list looping at `slideDurationSec(row.slides[0])` (9 s when the helper is
   unavailable), `drawSubtitles(context, row.subtitles, timestampMs, width, height)` for the
@@ -1902,15 +1999,21 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   into a server job.
 - The CSS is named after the markup that is actually emitted — `batch-cell batch-cell-script` /
   `-style` / `-min` / `-action` on the `<td>`s, `.batch-script-input`, `.batch-style-select`,
-  `.batch-minutes-input`, `.batch-row-head` / `-no` / `-sub` / `-status` (which also carries the
+  `.batch-minutes-input`, `.batch-resolution-select`, `.batch-orientation-select` (with
+  `.batch-col-resolution` / `.batch-col-orientation` widths), `.batch-row-head` / `-no` / `-sub` / `-status` (which also carries the
   `data-stage` attribute behind the status colours), `.batch-row-del`, `.batch-pending`,
   `.batch-live`, `.batch-preview-box|canvas|bar|note` — so every selector in `styles.ts` can be
   grepped from `app-js.ts` and every emitted class has a rule. The rules the replaced read-only
   grid left behind (`.batch-index`, `.batch-title`, `.batch-sub`, `.batch-badge[data-state=…]`,
   `.batch-open`) were deleted together with the markup they matched, and `.batch-col-preview` /
   `.batch-col-export` gained the width rules the other three columns already had.
-- Covered by `tests/quick-batch-table.test.mjs` (jsdom, one whole Generate run against mocked
-  `/api/voiceover`, `/api/image-prompts` and `/api/image-batch`).
+- **Export frame.** The MP4 is still written by the studio renderer at the hidden quality
+  setting (`854×480` low, `1280×720` balanced/high); the two new columns control the **AI images**
+  and the **preview**, not the export canvas. That difference is documented, not hidden
+  (`toberesolved.md` B9).
+- Covered by `tests/quick-batch-table.test.mjs` (jsdom, whole Generate runs against mocked
+  `/api/voiceover`, `/api/image-prompts` and `/api/image-batch`): three lanes in flight, the
+  finished-row skip, and the resolution/orientation payloads on both image calls.
 
 ---
 
@@ -1986,8 +2089,11 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   must never contain a gap**; this is the invariant the delete path exists to preserve.
   `window.__VIDEO_PROJECTS` exposes the live array for tests, like `window.__BATCH_ROWS`.
 - **Generated-image controls are smaller, in every theme.** `.va-card-remove` (the ✕ on an
-  AI-generated image card) is 40% smaller than the original 20×20 / 2 px circle: **12×12**, inset
-  **1.2 px**, `padding: 0`, `font-size: 0.5rem`. `.va-body .va-ai-actions .upload-btn(.small)`
+  AI-generated image card) was made 40% smaller than the original 20×20 / 2 px circle in #243
+  (**12×12**, inset 1.2 px, `padding: 0`, `font-size: 0.5rem`) and **Session #211 took another
+  30% off**: the box is now **8.4×8.4**, the glyph `font-size: 0.35rem`, still `padding: 0` with
+  the ✕ centred by flex (the original badge's 2 px padding scaled to nothing, so the badge itself
+  carries the 30% reduction). `.va-body .va-ai-actions .upload-btn(.small)`
   (`+ Add to Video`, `Fullscreen`) is 30% smaller than the accordion standard: **0.7rem** type and
   **8px 17px** padding instead of `1rem` / `12px 24px`. Both live after the accordion-button rule
   in `styles.ts`, so the seven themes inherit them without per-theme overrides.
@@ -2009,4 +2115,6 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   historical names because they are still live.
 - **Verification.** `tests/studio-ui-session-243.test.mjs` (accordion has no sticker / no API
   button / Delete Video present; delete renumbering keeps state; CSS proportions; no `.bulk-*`
-  left) and `tests/seo-plan-resilience.test.mjs` (8 planner/retry cases). `npm test` → 75/75.
+  left) and `tests/seo-plan-resilience.test.mjs` (8 planner/retry cases). `npm test` →
+  **79/79** after the Session #211 second pass (the four new table/editor cases live in
+  `tests/quick-batch-table.test.mjs`).

@@ -44,12 +44,18 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   scenes, and always re-enables the upload/script controls. See `system-rules.md` RULE 24 and
   `bug-fix-session-241.md`.
 - **Quick Batch table.** The studio's **Table** view is a spreadsheet of up to **10** rows —
-  Script (plain text you can paste), Style, Minutes — with **＋ Add row** and
-  **✦ Generate (N)**. Generate runs one row at a time (voiceover → prompts → batch images → slides
-  → animation), a row that fails is marked failed on its own line, and **Preview Here** /
-  **Export Video** only become buttons once that row has all four parts. Export reuses the studio's
-  own in-browser WebCodecs renderer and downloads `YouTubeVibeStudio_Row<N>_<slug>.mp4`; nothing is
-  posted to a render endpoint. See `system-rules.md` RULE 25.
+  Script (plain text you can paste), Style, Minutes, **Resolution** (480 / 540 / 720 / 1024 px long
+  edge) and **Orientation** (square 1:1, landscape 16:9, portrait 9:16) — with **＋ Add row** and
+  **✦ Generate (N)**. Both frame columns are sent to `/api/image-prompts` (each scene is written
+  for that shape) and to `/api/image-batch` (SDXL really renders at that size), and the preview
+  canvas uses the row's frame. Generate runs **three rows at the same time** (voiceover → prompts →
+  batch images → slides → animation per row, next queued row as soon as a lane frees up), a row
+  that fails is marked failed on its own line, and a row that is **already finished is skipped** —
+  its MP3/images/animation are in memory, so pressing Generate again never re-bills it.
+  **Preview Here** / **Export Video** only become buttons once that row has all four parts. Export
+  reuses the studio's own in-browser WebCodecs renderer and downloads
+  `YouTubeVibeStudio_Row<N>_<slug>.mp4`; nothing is posted to a render endpoint. See
+  `system-rules.md` RULE 25.
 - **Optional local render app.** `render-app/` (also shipped as `render-app-tts.zip`) turns a script
   of up to **20,000 characters** into one MP3 by driving a **free, no-login** online TTS site with
   Playwright, choosing between exactly two voices — **one male, one female** — behind a hardcoded
@@ -183,12 +189,14 @@ the strings that carry the rules (the full inventory, with the constant each one
 | Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the modal explains the selected editor's motion controls and reminds users the exported clip is silent |
 | Template element inspector | `+ Front layer` / `- Back Layer`, `Layer N of M`, `Rotate degrees` + live `N°` readout (0–360°) |
 | Ring template, bottom accordion | `Ring images · N / 7 (min 5)`; choose 5–7 images together; inline errors preserve previous images |
-| Video accordion, **AI Images** | `2 images per submit · 480px landscape` (also the status line for failures) |
+| Video accordion, **AI Images** | `2 images per submit · landscape 16:9 · 1024×576` (placeholder: *Describe the image (always landscape 16:9, 1024×576)*; also the status line for failures: `Done — landscape 16:9 · 1024×576` or `1 of 2 failed: <error>`) |
 | 🎙 **Generate Voiceover** | tooltip: *Speak the script to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
 | Video accordion header | **🗑 Delete Video** — tooltip: *Delete this video with its images, MP4s, audio and script* (replaces the removed ☁️ API button; deleting renumbers the stack) |
 | Main panel notes | slideshow repeats to cover the track · captions sit 4/7 up from the bottom, 17px Bookman, last one capped at 10 s |
 | Onboarding | `Click ＋ Add Video above, then press Generate.` |
 | Bulk grid (batch table) / editor heads | `One row — one video` → `N rows · M with a script` (`#batch-note`) · `N of 10 videos` (`#concept-count`) · `idle` / `N in queue` / `table generating` (`#preview-state`) · empty state `No rows yet — press ＋ Add Row, paste a script, pick a style and press ✨ Generate.` (`#batch-empty`) |
+| Quick batch table columns | `Script` · `Video style` · `Min` · `Resolution` (`480px` / `540px` / `720px` / `1024px`, with a live `W×H` hint underneath) · `Orientation` (`Square 1:1` / `Landscape 16:9` / `Portrait 9:16`) · `Preview` · `Export` |
+| Quick batch table hint + tooltips | *… pick the video image style, the minimum minutes, the AI image resolution and the frame orientation … a row that is empty is skipped, and so is a row that is already finished … Three rows render at the same time.* · Generate tooltip: *Generate every row that has a script and is not finished yet … three rows at a time* · busy label `■ Stop generating` |
 | Settings page, Appearance | `Current theme: Night Lab.` · `Preview only — press Save theme to apply it for everyone.` · `Saved — reload the studio page to see the new theme.` |
 | Blocking alerts | only for hard failures and cap breaches (e.g. `You can add at most 25 images (jpg, png, jpeg).`); the AI script instead reports `Script failed after 3 attempts: <error>` in its status line (two retries happen first, silently) so a retry can start immediately |
 
@@ -289,7 +297,11 @@ skin covers the whole site.
 - **`script-keyword-retry-debug.md`** — Session #243: why `POST /api/seo-plan` was failing, the
   retry contract of every keyword function, the transport-retry / model-fallback / one-set
   (`partial: true`) fixes and their tests.
-- **`quick-batch-table-system-requirements.md`** — Session #243: how the Quick batch table works
+- **`toberesolved.md`** — the code-vs-documentation inconsistency register (code is the source of
+  truth): every claim that disagreed with the working tree, what the code really does, and whether
+  the Session #211 second pass fixed it.
+- **`quick-batch-table-system-requirements.md`** — Session #244 (+ the #211 second-pass columns,
+  the three-lane run and the Session #244 silent-retry policy): how the Quick batch table works
   row by row, the hanging bulk-grid code the audit found and removed, and the system requirements
   (bindings, browser APIs, limits, timeouts) it depends on.
 - **`new_requirements.md`** — the modular CMS/payment/account notes and KV schema plus the
@@ -311,6 +323,11 @@ skin covers the whole site.
 - **`bug-fix-session-242.md`** — Bug Fix Session #242: plain-text scripts (SRT removed from the
   whole path), the three-paragraph prompt guard, script retry + stacking modals, the Quick Batch
   table's Preview/Export unlock rule, and the new `render-app/`.
+- **`bug-fix-session-244.md`** — Bug Fix Session #244: silent in-row retries for the Quick batch
+  table (the editor's script-section loading animation, no error UI), the fixed table layout and
+  the abort/stalled-stream fixes that removed the "signal is aborted" rows, one shared CMS delete
+  path (pill + **Delete This Page**), and the Site Admin split into seven tabs with **Guest
+  Credits by IP**, **Plans** and **Accounts Credits** as separate pages.
 - **`render-app/README.md`** — the standalone script → MP3 helper: how to run it, its two API
   routes, the 20,000-character cap, its two voices and how to retarget a host.
 - **`seo-walkthrough-session-requirements.md`** — the SEO walkthrough record: original

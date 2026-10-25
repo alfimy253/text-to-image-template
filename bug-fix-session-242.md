@@ -119,16 +119,19 @@ Rules that the implementation is built around:
 - `renderBatchTable()` skips rebuilding while the id signature is unchanged — typing is never
   interrupted by a re-render — and `updateBatchToolbar()` owns `#batch-note`
   ("N rows · M with a script"), `#batch-empty`, `#batch-generate`
-  ("✦ Generate (N)" / "■ Stop after the current row") and `#batch-add-row`;
+  ("✦ Generate (N)" / "■ Stop generating" — it read "■ Stop after the current row" until the
+  Session #211 second pass, when one run became three lanes) and `#batch-add-row`;
 - `batchRowFinished(row) = row.mp3 && row.images.length && row.animated && row.slides.length` is
   the **single** gate feeding both action cells: an unfinished row shows
   `<span class="batch-pending">Preview Here</span>` / `Export Video` text, a finished row shows two
   working buttons. Preview and export therefore unlock together, and scriptless rows never get a
   button at all;
 - one row failing sets `stage = "error"` on **that** row only; the others keep running
-  (`generateBatchRows()` is sequential behind `batchRunBusy`, `stopBatchRows()` aborts through
-  `row.controller`, `BATCH_REQUEST_TIMEOUT_MS = 240000`);
-- preview is an injected `#batch-preview-modal` (1024×576 canvas, `requestAnimationFrame`, the
+  (`generateBatchRows()` was sequential behind `batchRunBusy` when this session ran — since the
+  Session #211 second pass it runs `BATCH_RUN_CONCURRENCY = 3` lanes and skips finished rows;
+  `stopBatchRows()` aborts through `row.controller`, `BATCH_REQUEST_TIMEOUT_MS = 240000`);
+- preview is an injected `#batch-preview-modal` (1024×576 canvas then; since the Session #211
+  second pass the canvas takes the row's own Resolution/Orientation frame, `requestAnimationFrame`, the
   exporter's own Ken Burns zoom-in of 1 → 1.08 per slide cover-fit, `drawSubtitles`, and the slide
   list looping at `slideDurationSec(row.slides[0])`), opened through `openModal` so it stacks with
   the walkthrough; slide decode is raced against `BATCH_SLIDE_DECODE_MS = 10000` and a non-promise

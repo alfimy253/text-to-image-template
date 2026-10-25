@@ -112,7 +112,8 @@ from `wrangler tail` without reproducing it.
 7. lenient reply shapes parse, and too-few shorts are still rejected;
 8. `/api/script` retries a planner model error instead of returning `500`.
 
-Existing suites are unchanged and green (`npm test` → 75 tests): `seo-walkthrough.test.mjs`
+Existing suites are unchanged and green (`npm test` → 79 tests after the Session #211 second
+pass, 75 at the time of this document): `seo-walkthrough.test.mjs`
 (two-set success, `keywordSet` skips the planner, invalid set → `400` with no AI call),
 `script-seo.test.mjs` (RULE 7 validators), `quick-batch-table.test.mjs`,
 `template-composer.test.mjs`, `studio-ui-session-243.test.mjs`.
