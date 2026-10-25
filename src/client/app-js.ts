@@ -6136,6 +6136,9 @@ export const APP_JS = `
 	const batchActivePromises =
 		new Set();
 
+	const batchAttemptedRows =
+		new Set();
+
 	let batchFinishedCount =
 		0;
 
@@ -6318,6 +6321,8 @@ export const APP_JS = `
 			batchQueue.filter(function (r) {
 				return String(r.id) !== String(id);
 			});
+
+		batchAttemptedRows.delete(String(id));
 
 		if (!batchRows.length) {
 			closeBatchPreview();
@@ -7688,9 +7693,7 @@ export const APP_JS = `
 			}
 			catch (loadError) {
 
-				console.warn("[batch-table] slide " + (index + 1) + " was skipped", loadError);
-
-				continue;
+				console.warn("[batch-table] slide " + (index + 1) + " decode warning", loadError);
 
 			}
 
@@ -7954,6 +7957,8 @@ export const APP_JS = `
 		batchQueue =
 			targets.slice();
 
+		batchAttemptedRows.clear();
+
 		batchFinishedCount =
 			0;
 
@@ -8012,12 +8017,12 @@ export const APP_JS = `
 
 		}
 
-		/* If batchQueue is empty but a run is active, harvest any newly-added pending rows */
+		/* If batchQueue is empty but a run is active, harvest any newly-added pending rows that have not run in this pass */
 		if (!batchQueue.length) {
 
 			const unqueued =
 				batchRows.filter(function (r) {
-					return batchRowPending(r);
+					return batchRowPending(r) && !batchAttemptedRows.has(String(r.id));
 				});
 
 			if (unqueued.length) {
@@ -8068,9 +8073,11 @@ export const APP_JS = `
 			const row =
 				batchQueue.shift();
 
-			if (!row || row.running || batchRowFinished(row)) {
+			if (!row || row.running || batchRowFinished(row) || batchAttemptedRows.has(String(row.id))) {
 				continue;
 			}
+
+			batchAttemptedRows.add(String(row.id));
 
 			row.running =
 				true;
@@ -8119,6 +8126,8 @@ export const APP_JS = `
 
 		batchQueue =
 			[];
+
+		batchAttemptedRows.clear();
 
 		for (const row of batchRows) {
 

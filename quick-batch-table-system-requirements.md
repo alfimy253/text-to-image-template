@@ -176,7 +176,8 @@ payload with zero behaviour, so it is now gone.
 | Suite | Guards |
 | --- | --- |
 | `tests/quick-batch-table.test.mjs` | editable rows, three-lane generate, the finished-row skip, the resolution/orientation payloads (client + worker frame maths), per-row failure isolation, Preview+Export unlock together, export is client-side (`no /api/render`) |
-| `tests/studio-ui-session-243.test.mjs` (new) | no sticker section / no API button / Delete Video present; delete renumbers the accordion stack and keeps state; CSS proportions; **no `.bulk-*` selectors left** |
-| `tests/seo-plan-resilience.test.mjs` (new) | planner retry/fallback/partial-plan contract (see `script-keyword-retry-debug.md`) |
+| `tests/studio-ui-session-243.test.mjs` | no sticker section / no API button / Delete Video present; delete renumbers the accordion stack and keeps state; CSS proportions; **no `.bulk-*` selectors left** |
+| `tests/seo-plan-resilience.test.mjs` | planner retry/fallback/partial-plan contract (see `script-keyword-retry-debug.md`) |
+| `tests/session-248.test.mjs` | staggered pipelining queue advancement, 5-row voiceover concurrency cap, stop semantics, single row completion to `done`, no infinite re-queueing of failed rows |
 
-`npm test` → **79 tests, 79 pass** (4 cases added by the Session #211 second pass).
+`npm test` → **95 tests, 95 pass**.

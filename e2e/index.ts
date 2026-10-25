@@ -1,7 +1,40 @@
 import worker from "../src/index";
 
-/* A minimal but valid-length PNG signature (the routes check the magic bytes). */
-const pngSignature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+/* A valid 1x1 PNG image (70 bytes) that decodes properly in all browsers. */
+const validPng = new Uint8Array([
+	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13,
+	73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+	8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0,
+	13, 73, 68, 65, 84, 120, 218, 99, 100, 248, 207, 80,
+	15, 0, 3, 134, 1, 128, 90, 52, 125, 107, 0, 0,
+	0, 0, 73, 69, 78, 68, 174, 66, 96, 130
+]);
+
+/* A valid 1-second silent WAV audio file for MeloTTS mock */
+function mockAudioResponse(): Uint8Array {
+	const sampleRate = 44100;
+	const durationSec = 1;
+	const numChannels = 1;
+	const bytesPerSample = 2;
+	const totalSamples = Math.floor(sampleRate * durationSec);
+	const dataSize = totalSamples * numChannels * bytesPerSample;
+	const buffer = new ArrayBuffer(44 + dataSize);
+	const view = new DataView(buffer);
+	view.setUint32(0, 0x52494646, false); // "RIFF"
+	view.setUint32(4, 36 + dataSize, true);
+	view.setUint32(8, 0x57415645, false); // "WAVE"
+	view.setUint32(12, 0x666d7420, false); // "fmt "
+	view.setUint32(16, 16, true);
+	view.setUint16(20, 1, true); // PCM
+	view.setUint16(22, numChannels, true);
+	view.setUint32(24, sampleRate, true);
+	view.setUint32(28, sampleRate * numChannels * bytesPerSample, true);
+	view.setUint16(32, numChannels * bytesPerSample, true);
+	view.setUint16(34, 16, true);
+	view.setUint32(36, 0x64617461, false); // "data"
+	view.setUint32(40, dataSize, true);
+	return new Uint8Array(buffer);
+}
 
 function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 	const prompt = String(input?.prompt || "");
@@ -113,10 +146,14 @@ function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 const env = {
 	AI: {
 		run: async (model: string, input: Record<string, unknown>) => {
-			if (String(model || "").includes("llama")) {
+			const m = String(model || "");
+			if (m.includes("llama")) {
 				return mockLlmResponse(input || {});
 			}
-			return pngSignature;
+			if (m.includes("melotts") || m.includes("tts")) {
+				return mockAudioResponse();
+			}
+			return validPng;
 		}
 	}
 } as unknown as Env;

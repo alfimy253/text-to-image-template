@@ -277,3 +277,82 @@ test("Stop generating halts active rows and clears unprocessed queue so pending 
 	assert.equal(row4.stage, "ready");
 	assert.equal(row5.stage, "ready");
 });
+
+/* ------------------------------------------------------------------ */
+/* Test 5: Single row runs to done and unlocks preview and export     */
+/* ------------------------------------------------------------------ */
+
+test("single row in batch table runs to done and unlocks both preview and export", async () => {
+	const calls = [];
+	const state = { inFlight: 0, maxInFlight: 0 };
+	const { dom, w } = makeApp();
+	test.after(() => dom.window.close());
+
+	// Simulate image decode that warns/rejects to verify slides are kept
+	w.Image = class {
+		constructor() { this.src = ""; }
+		async decode() { throw new Error("Simulated browser decode warning"); }
+	};
+
+	mockRoutes(w, calls, state);
+	blankTable(w);
+
+	const row = w.addBatchRow({ script: "Testing single row bulk video creation." });
+	assert.equal(row.stage, "ready");
+
+	w.document.getElementById("batch-generate").click();
+
+	const done = await waitFor(() => w.batchRowFinished(w.getBatchRow(row.id)), 4000);
+	assert.ok(done, "single row finished pipeline");
+
+	const finished = w.getBatchRow(row.id);
+	assert.equal(finished.stage, "done");
+	assert.ok(finished.mp3, "row has MP3");
+	assert.equal(finished.slides.length, 1, "slide kept despite decode warning");
+	assert.ok(w.batchRowFinished(finished));
+
+	const rowEl = w.document.querySelector('[data-batch-row="' + row.id + '"]');
+	assert.equal(rowEl.querySelectorAll('[data-batch-slot="preview"] button').length, 1);
+	assert.equal(rowEl.querySelectorAll('[data-batch-slot="export"] button').length, 1);
+});
+
+/* ------------------------------------------------------------------ */
+/* Test 6: A failing row does not trigger an infinite loop in pass   */
+/* ------------------------------------------------------------------ */
+
+test("failing row exits pass cleanly and does not re-queue infinitely in the same pass", async () => {
+	const calls = [];
+	const state = { inFlight: 0, maxInFlight: 0 };
+	const { dom, w } = makeApp();
+	test.after(() => dom.window.close());
+
+	w.fetch = async (url) => {
+		const path = String(url);
+		calls.push({ path });
+		if (path === "/api/voiceover") {
+			return jsonResponse({ success: false, error: "Permanent failure" }, 500);
+		}
+		return jsonResponse({ success: true });
+	};
+
+	blankTable(w);
+	const row = w.addBatchRow({ script: "Failing row test." });
+
+	w.document.getElementById("batch-generate").click();
+
+	// Wait for the generate pass to complete (generate button restored)
+	const passEnded = await waitFor(() => {
+		const btn = w.document.getElementById("batch-generate");
+		return btn && btn.textContent.includes("Generate") && !btn.textContent.includes("Stop");
+	}, 4000);
+
+	assert.ok(passEnded, "generate pass ended without infinite re-queuing");
+
+	const r = w.getBatchRow(row.id);
+	assert.equal(r.stage, "ready", "failed row parked at ready for next click");
+	assert.equal(r.running, false);
+
+	// Voiceover was attempted attempts * 1 times (2 attempts configured in makeApp), NOT looped
+	const voiceCalls = calls.filter((c) => c.path === "/api/voiceover").length;
+	assert.equal(voiceCalls, 2, "only the configured quiet attempts ran, no infinite harvesting");
+});
