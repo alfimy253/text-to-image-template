@@ -1310,164 +1310,6 @@ export const APP_CSS = `
 		}
 
 
-		.bulk-panel {
-
-			max-width:
-				980px;
-
-			margin:
-				0 auto 25px auto;
-
-			padding:
-				14px 18px;
-
-			background:
-				var(--card);
-
-			border:
-				1px solid #2e3440;
-
-			border-radius:
-				12px;
-		}
-
-
-		.bulk-panel-header {
-
-			display:
-				flex;
-
-			justify-content:
-				space-between;
-
-			align-items:
-				center;
-
-			margin-bottom:
-				10px;
-		}
-
-
-		.bulk-panel-title {
-
-			font-family:
-				'Oswald',
-				sans-serif;
-
-			font-size:
-				1.1rem;
-
-			color:
-				var(--text);
-		}
-
-
-		.bulk-arrow {
-
-			background:
-				none;
-
-			border:
-				none;
-
-			color:
-				var(--text);
-
-			font-size:
-				20px;
-
-			line-height:
-				1;
-
-			cursor:
-				pointer;
-		}
-
-
-		.bulk-slot {
-
-			border-top:
-				1px solid #2e3440;
-
-			padding:
-				10px 0;
-		}
-
-
-		.bulk-slot-top {
-
-			display:
-				flex;
-
-			align-items:
-				center;
-
-			gap:
-				12px;
-
-			margin-bottom:
-				8px;
-		}
-
-
-		.bulk-slot-name {
-
-			font-weight:
-				700;
-
-			min-width:
-				70px;
-		}
-
-
-		.bulk-status {
-
-			font-size:
-				0.75rem;
-
-			padding:
-				2px 10px;
-
-			border-radius:
-				999px;
-
-			background:
-				#374151;
-
-			color:
-				#d1d5db;
-		}
-
-
-		.bulk-summary {
-
-			color:
-				#9ca3af;
-
-			font-size:
-				0.85rem;
-		}
-
-
-		.bulk-slot-actions {
-
-			display:
-				flex;
-
-			gap:
-				8px;
-
-			flex-wrap:
-				wrap;
-		}
-
-
-		.bulk-caption-wrap {
-
-			margin-top:
-				10px;
-		}
-
 		/* =====================================================
 		   VIDEO SECTIONS (stacked Video N accordions)
 		   ===================================================== */
@@ -1579,10 +1421,15 @@ export const APP_CSS = `
 		}
 
 
-		.va-api-btn {
+		/*
+		 * Delete Video sits where the old API button was. It is the
+		 * only red control in the accordion header, so a video can
+		 * always be removed without hunting for a menu.
+		 */
+		.va-delete-btn {
 
 			background:
-				#1d4ed8;
+				#b91c1c;
 
 			border:
 				none;
@@ -1604,10 +1451,10 @@ export const APP_CSS = `
 		}
 
 
-		.va-api-btn:hover {
+		.va-delete-btn:hover {
 
 			background:
-				#2563eb;
+				#dc2626;
 		}
 
 
@@ -1819,6 +1666,12 @@ export const APP_CSS = `
 		}
 
 
+		/*
+		 * Add to Video + Fullscreen are secondary controls: 30% smaller
+		 * than the accordion's standard button (1rem -> 0.7rem type,
+		 * 12x24 -> 8x17 padding) in every theme, because the whole
+		 * accordion-button rule above would otherwise make them huge.
+		 */
 		.va-ai-actions {
 
 			display:
@@ -1832,6 +1685,17 @@ export const APP_CSS = `
 
 			flex-wrap:
 				wrap;
+		}
+
+
+		.va-body .va-ai-actions .upload-btn,
+		.va-body .va-ai-actions .upload-btn.small {
+
+			padding:
+				8px 17px;
+
+			font-size:
+				0.7rem;
 		}
 
 
@@ -2452,22 +2316,31 @@ export const APP_CSS = `
 		}
 
 
+		/*
+		 * The delete icon on a generated-image card is 40% smaller than
+		 * the original 20x20 / 2px circle: 12x12 box, 1.2px inset and no
+		 * inherited button padding, so it hugs the card corner in every
+		 * theme instead of covering the image.
+		 */
 		.va-card-remove {
 
 			position:
 				absolute;
 
 			top:
-				2px;
+				1.2px;
 
 			right:
-				2px;
+				1.2px;
 
 			width:
-				20px;
+				12px;
 
 			height:
-				20px;
+				12px;
+
+			padding:
+				0;
 
 			border-radius:
 				50%;
@@ -2480,6 +2353,9 @@ export const APP_CSS = `
 
 			color:
 				#ffffff;
+
+			font-size:
+				0.5rem;
 
 			cursor:
 				pointer;
@@ -4446,7 +4322,6 @@ export const APP_CSS = `
 
 		html[data-theme] .studio,
 		html[data-theme] .video-accordion,
-		html[data-theme] .bulk-panel,
 		html[data-theme] .modal-box,
 		html[data-theme] .auth-box,
 		html[data-theme] #tpl-modal .tpl-box {
@@ -4512,7 +4387,6 @@ export const APP_CSS = `
 		}
 
 		html[data-theme] .va-section,
-		html[data-theme] .bulk-slot,
 		html[data-theme] h2,
 		html[data-theme] .estimate,
 		html[data-theme] .auth-footer-hr {
@@ -4566,8 +4440,7 @@ export const APP_CSS = `
 			letter-spacing: .02em;
 			font-size: 1rem;
 		}
-		html[data-theme="strata"] .va-status,
-		html[data-theme="strata"] .bulk-status {
+		html[data-theme="strata"] .va-status {
 			background: rgba(8, 36, 54, .55);
 			color: #ffffff;
 		}
@@ -4632,8 +4505,6 @@ export const APP_CSS = `
 		html[data-theme] #tpl-modal .tpl-sub,
 		html[data-theme] #tpl-modal .tpl-tips,
 		html[data-theme] .tpl-len span,
-		html[data-theme] .bulk-summary,
-		html[data-theme] .bulk-caption-wrap,
 		html[data-theme] .va-ai-label,
 		html[data-theme] .voiceover-voice-label {
 			color:
@@ -4716,7 +4587,7 @@ export const APP_CSS = `
 				0.6;
 		}
 
-		html[data-theme] .va-api-btn,
+		html[data-theme] .va-delete-btn,
 		html[data-theme] .va-scroll-toggle,
 		html[data-theme] .toggle-btn,
 		html[data-theme] .add-caption-btn,
@@ -4746,7 +4617,7 @@ export const APP_CSS = `
 				var(--t-muted);
 		}
 
-		html[data-theme] .va-api-btn:hover,
+		html[data-theme] .va-delete-btn:hover,
 		html[data-theme] .va-scroll-toggle:hover,
 		html[data-theme] .toggle-btn:hover,
 		html[data-theme] .add-caption-btn:hover,
@@ -4793,8 +4664,7 @@ export const APP_CSS = `
 				1px solid var(--t-btn-line);
 		}
 
-		html[data-theme] .va-status,
-		html[data-theme] .bulk-status {
+		html[data-theme] .va-status {
 			background:
 				var(--t-panel-3);
 			color:
