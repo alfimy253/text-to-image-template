@@ -4906,7 +4906,7 @@ export const APP_JS = `
 	 * rest.
 	 *
 	 * The old single-video panels (title, MP3, captions,
-	 * sticker, quality, main gallery) stay in the DOM but are
+	 * quality, main gallery) stay in the DOM but are
 	 * hidden; they act as the engine's "working state". Before
 	 * each video is rendered, that video's values are copied
 	 * into the hidden panels, the engine renders, then the
@@ -5651,9 +5651,9 @@ export const APP_JS = `
 				'</div>' +
 				'<div class="va-section">' +
 				'<div class="va-section-title">AI Images \u2014 Cloudflare</div>' +
-				'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always 480px landscape)"></textarea>' +
+				'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always landscape 16:9, 1024\u00d7576)"></textarea>' +
 				'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">\u2728 Generate 2 Images</button>' +
-				'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit \u00b7 480px landscape</span>' +
+				'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit \u00b7 landscape 16:9 \u00b7 1024\u00d7576</span>' +
 				'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
 				'</div>' +
 				'<div class="va-section">' +
@@ -5950,14 +5950,25 @@ export const APP_JS = `
 	//   column 2  the video image style - the SAME ten options the
 	//             script modal offers, in the same order
 	//   column 3  the minimum length in minutes
-	//   column 4  "Preview Here" while the row works, then a live
+	//   column 4  the AI image resolution: 480, 540, 720 or 1024 px
+	//             (the LONG edge; passed to both image calls)
+	//   column 5  the frame orientation: square 1:1, landscape 16:9
+	//             or portrait 9:16 (passed to both image calls)
+	//   column 6  "Preview Here" while the row works, then a live
 	//             Preview button
-	//   column 5  "Export Video" while the row works, then a live
+	//   column 7  "Export Video" while the row works, then a live
 	//             Export button
 	//
 	// The \u2726 Generate button at the TOP RIGHT of the table runs every
-	// row that has a script. A row without one is skipped. Missing
-	// inputs fall back to their defaults: 1 minute and Cinematic Film.
+	// row that has a script and is NOT finished yet. A row without one
+	// is skipped, and so is a row whose Preview / Export buttons are
+	// already live (re-pressing Generate must never re-bill a finished
+	// video). Missing inputs fall back to their defaults: 1 minute,
+	// Cinematic Film, 1024 px and landscape 16:9.
+	//
+	// Rows run BATCH_RUN_CONCURRENCY (3) at a time: three rows speak,
+	// draw and animate simultaneously, and the next queued row starts
+	// as soon as one of them finishes.
 	//
 	// A row is finished when all four steps are through - the spoken
 	// MP3, the AI images, and the animation that stitches them - and
@@ -5984,6 +5995,114 @@ export const APP_JS = `
 	/* Never let a stalled image decode hold the row open. */
 	const BATCH_SLIDE_DECODE_MS =
 		10000;
+
+	/*
+	 * Session #211: the table used to run one row at a time, so a five-row
+	 * table paid the full voiceover + prompt + image + animate cost five
+	 * times in series. Three rows now render at the same time; the fourth
+	 * starts as soon as one of the three finishes.
+	 */
+	const BATCH_RUN_CONCURRENCY =
+		3;
+
+	/*
+	 * Session #244: a step that fails is retried INSIDE its row, silently.
+	 * Nothing about a retry reaches the screen - the row keeps its normal
+	 * stage label and its spinner spinning (the same .va-spinner the
+	 * editor's script section shows), so a row that needed three attempts
+	 * looks exactly like a row that needed one.
+	 */
+	const BATCH_STEP_ATTEMPTS =
+		4;
+
+	/* Backoff between the silent retries: 0.8s, 1.6s, 3.2s. */
+	const BATCH_RETRY_BASE_MS =
+		800;
+
+	const BATCH_RETRY_MAX_MS =
+		4000;
+
+	/*
+	 * A batch stream that stops sending lines is as dead as one that
+	 * never answered: the NDJSON reader gets this idle budget per read
+	 * instead of hanging the row open until the tab is closed.
+	 */
+	const BATCH_STREAM_IDLE_TIMEOUT_MS =
+		90000;
+
+	/*
+	 * The policy above, in one mutable object: batchRunStep reads it, and
+	 * tests (or a future admin knob) can shorten the backoff without
+	 * touching the retry logic itself.
+	 */
+	const batchRetryPolicy = {
+		attempts: BATCH_STEP_ATTEMPTS,
+		baseMs: BATCH_RETRY_BASE_MS,
+		maxMs: BATCH_RETRY_MAX_MS
+	};
+
+	/*
+	 * The two new per-row columns: the rendered size of the AI images and
+	 * the frame orientation. The resolution is the LONG edge in pixels; the
+	 * short edge follows the orientation (16:9 for landscape / portrait,
+	 * 1:1 for square) so 480 / 540 / 720 stay honest names.
+	 * The values are sent to BOTH /api/image-prompts (so every scene prompt
+	 * is written for that frame) and /api/image-batch (so SDXL really draws
+	 * at that size).
+	 */
+	const BATCH_RESOLUTIONS = [480, 540, 720, 1024];
+
+	const BATCH_DEFAULT_RESOLUTION = 1024;
+
+	const BATCH_ORIENTATIONS = [
+		{ value: "square", label: "Square 1:1", ratio: [1, 1] },
+		{ value: "landscape", label: "Landscape 16:9", ratio: [16, 9] },
+		{ value: "portrait", label: "Portrait 9:16", ratio: [9, 16] }
+	];
+
+	const BATCH_DEFAULT_ORIENTATION = "landscape";
+
+	/* The orientation record for a row value (defaults to landscape). */
+	function batchOrientation(value) {
+		for (const entry of BATCH_ORIENTATIONS) {
+			if (entry.value === value) {
+				return entry;
+			}
+		}
+		return BATCH_ORIENTATIONS[1];
+	}
+
+	/* A row's stored resolution, coerced to one of the four allowed sizes. */
+	function batchResolution(value) {
+		const size = Math.round(Number(value) || 0);
+		return BATCH_RESOLUTIONS.indexOf(size) === -1
+			? BATCH_DEFAULT_RESOLUTION
+			: size;
+	}
+
+	/*
+	 * Long edge = resolution, short edge = long edge × ratio, both rounded
+	 * to a multiple of 8 (SDXL's requirement). Mirrors imageFrameFor() in
+	 * src/modules/image-batch.ts - the client uses it for the preview
+	 * canvas, the worker for the real render.
+	 */
+	function batchRowDimensions(row) {
+		const resolution =
+			batchResolution(row && row.resolution);
+		const orientation =
+			batchOrientation(row && row.orientation);
+		const round8 = function (value) {
+			return Math.max(256, Math.round(value / 8) * 8);
+		};
+		if (orientation.value === "square") {
+			return { width: round8(resolution), height: round8(resolution), resolution: resolution, orientation: "square" };
+		}
+		const long = round8(resolution);
+		const short = round8(resolution * 9 / 16);
+		return orientation.value === "portrait"
+			? { width: short, height: long, resolution: resolution, orientation: "portrait" }
+			: { width: long, height: short, resolution: resolution, orientation: "landscape" };
+	}
 
 	const batchRows = [];
 
@@ -6032,6 +6151,10 @@ export const APP_JS = `
 					"Cinematic Film",
 				minutes:
 					BATCH_MIN_MINUTES,
+				resolution:
+					BATCH_DEFAULT_RESOLUTION,
+				orientation:
+					BATCH_DEFAULT_ORIENTATION,
 				stage:
 					"empty",
 				detail:
@@ -6215,6 +6338,42 @@ export const APP_JS = `
 
 	}
 
+	/* The resolution column's options, one per allowed long edge. */
+	function batchResolutionOptionsHTML(selected) {
+
+		const current =
+			batchResolution(selected);
+
+		return BATCH_RESOLUTIONS
+			.map(function (size) {
+				return (
+					'<option value="' + size + '"' +
+					(size === current ? " selected" : "") +
+					">" + size + "px</option>"
+				);
+			})
+			.join("");
+
+	}
+
+	/* The orientation column's options. */
+	function batchOrientationOptionsHTML(selected) {
+
+		const current =
+			batchOrientation(selected).value;
+
+		return BATCH_ORIENTATIONS
+			.map(function (entry) {
+				return (
+					'<option value="' + entry.value + '"' +
+					(entry.value === current ? " selected" : "") +
+					">" + escapeHTML(entry.label) + "</option>"
+				);
+			})
+			.join("");
+
+	}
+
 	function batchStatusText(row) {
 
 		if (row.stage === "error") {
@@ -6230,6 +6389,377 @@ export const APP_JS = `
 		return row.detail
 			? label + " \u00b7 " + row.detail
 			: label;
+
+	}
+
+	/*
+	 * Session #244: the stages that mean "this row is working right now".
+	 * They are the ONLY stages that paint the editor's script-section
+	 * animation (.va-spinner + the va-loading-pulse), and the animation is
+	 * painted for the whole step - first attempt and third retry alike -
+	 * so a silent retry changes nothing on screen.
+	 */
+	const BATCH_ACTIVE_STAGES = [
+		"voice",
+		"timing",
+		"prompts",
+		"images",
+		"animate"
+	];
+
+	function batchRowBusy(row) {
+
+		return !!(
+			row &&
+			BATCH_ACTIVE_STAGES.indexOf(row.stage) !== -1
+		);
+
+	}
+
+	/* The status cell's markup: spinner + label while the row works. */
+	function batchStatusHTML(row) {
+
+		const text =
+			escapeHTML(batchStatusText(row));
+
+		if (!batchRowBusy(row)) {
+
+			return text;
+
+		}
+
+		return (
+			'<span class="va-spinner" aria-hidden="true"></span>' +
+			'<span class="batch-status-text">' + text + "</span>"
+		);
+
+	}
+
+	/* Paint one row's status cell from its own state. */
+	function paintBatchRowStatus(row) {
+
+		const status =
+			document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="status"]');
+
+		if (!status) {
+
+			return;
+
+		}
+
+		status.innerHTML =
+			batchStatusHTML(row);
+
+		status.setAttribute(
+			"data-stage",
+			row.stage
+		);
+
+		status.setAttribute(
+			"data-loading",
+			batchRowBusy(row) ? "1" : "0"
+		);
+
+	}
+
+	/* An Error with a machine name, never with browser abort wording. */
+	function batchError(message, name) {
+
+		const error =
+			new Error(message);
+
+		error.name =
+			name || "BatchStepError";
+
+		return error;
+
+	}
+
+	function batchDelay(ms) {
+
+		return new Promise(function (resolve) {
+
+			setTimeout(resolve, ms);
+
+		});
+
+	}
+
+	/*
+	 * Aborts are plumbing, not content. The browser words them as
+	 * "signal is aborted without reason" / "The user aborted a request",
+	 * and that text must never reach a row's status line.
+	 */
+	function batchIsAbortError(error) {
+
+		if (!error) {
+
+			return false;
+
+		}
+
+		const name =
+			String(error.name || "");
+
+		if (
+			name === "AbortError" ||
+			name === "TimeoutError"
+		) {
+
+			return true;
+
+		}
+
+		return /abort|signal/i.test(
+			String(error.message || error)
+		);
+
+	}
+
+	/*
+	 * A STOP is not a failure and is never retried (the user asked for it).
+	 * A timeout is a failure and IS retried - which is why this is a
+	 * narrower test than batchIsAbortError().
+	 */
+	function batchIsStopError(error) {
+
+		if (!error) {
+
+			return false;
+
+		}
+
+		const name =
+			String(error.name || "");
+
+		if (name === "AbortError") {
+
+			return true;
+
+		}
+
+		if (name === "TimeoutError") {
+
+			return false;
+
+		}
+
+		return /abort/i.test(
+			String(error.message || error)
+		);
+
+	}
+
+	/* One short line for the console - the table itself stays quiet. */
+	function batchErrorBrief(error) {
+
+		if (!error) {
+
+			return "unknown";
+
+		}
+
+		const name =
+			String(error.name || "Error");
+
+		const message =
+			String(error.message || error)
+				.replace(/\\s+/g, " ")
+				.trim();
+
+		return message && message !== name
+			? name + ": " + message
+			: name;
+
+	}
+
+	/* Throw away every object URL a failed attempt allocated. */
+	function revokeBatchUrlsSince(row, keepCount) {
+
+		if (!row || !Array.isArray(row.objectUrls)) {
+
+			return;
+
+		}
+
+		const keep =
+			Math.max(0, Number(keepCount) || 0);
+
+		const dropped =
+			row.objectUrls.splice(keep);
+
+		for (const url of dropped) {
+
+			try {
+
+				URL.revokeObjectURL(url);
+
+			}
+			catch (revokeError) { }
+
+		}
+
+		if (
+			row.mp3Url &&
+			row.objectUrls.indexOf(row.mp3Url) === -1
+		) {
+
+			row.mp3 = null;
+			row.mp3Url = "";
+
+		}
+
+		if (Array.isArray(row.images)) {
+
+			row.images =
+				row.images.filter(function (image) {
+
+					return row.objectUrls.indexOf(image.url) !== -1;
+
+				});
+
+		}
+
+	}
+
+	/* One positive number out of the retry policy (or its constant). */
+	function batchRetrySetting(name, fallback) {
+
+		const value =
+			Number(batchRetryPolicy[name]);
+
+		return (
+			typeof value === "number" &&
+			isFinite(value) &&
+			value > 0
+		)
+			? value
+			: fallback;
+
+	}
+
+	/*
+	 * Run ONE step with silent in-row retries.
+	 *
+	 *  - attempt 1 paints the step's normal label;
+	 *  - a failed attempt is retried after a short backoff and the row's
+	 *    label is NOT touched, so the user only ever sees the same
+	 *    working animation the editor's script section shows;
+	 *  - object URLs made by a failed attempt are revoked before the
+	 *    retry, so a retried image step cannot leak or double-count.
+	 *
+	 * The attempt number is the only place a retry is visible at all -
+	 * in the console.
+	 */
+	async function batchRunStep(
+		row,
+		stage,
+		detail,
+		step
+	) {
+
+		const attempts =
+			Math.max(
+				1,
+				Math.round(batchRetrySetting("attempts", BATCH_STEP_ATTEMPTS))
+			);
+
+		let lastError =
+			null;
+
+		for (
+			let attempt = 1;
+			attempt <= attempts;
+			attempt++
+		) {
+
+			if (row.stopRequested) {
+
+				throw batchError("The row was stopped", "AbortError");
+
+			}
+
+			if (attempt === 1) {
+
+				setBatchStage(
+					row,
+					stage,
+					detail
+				);
+
+			}
+			else {
+
+				/* Same stage, same label, same spinner: nothing moves. */
+				row.retrying =
+					true;
+
+				paintBatchRowStatus(row);
+
+			}
+
+			const urlsBefore =
+				(row.objectUrls || []).length;
+
+			try {
+
+				const result =
+					await step(attempt);
+
+				row.retrying =
+					false;
+
+				return result;
+
+			}
+			catch (error) {
+
+				row.retrying =
+					false;
+
+				revokeBatchUrlsSince(
+					row,
+					urlsBefore
+				);
+
+				if (
+					row.stopRequested ||
+					batchIsStopError(error)
+				) {
+
+					/* A stop is not a failure - it is not retried. */
+
+					throw error;
+
+				}
+
+				lastError =
+					error;
+
+				console.warn(
+					"[batch-table] row " + row.id + " step " + stage + " attempt " + attempt + " of " + attempts + " did not finish - retrying quietly",
+					batchErrorBrief(error)
+				);
+
+				if (attempt < attempts) {
+
+					await batchDelay(
+						Math.min(
+							batchRetrySetting("maxMs", BATCH_RETRY_MAX_MS),
+							batchRetrySetting("baseMs", BATCH_RETRY_BASE_MS) * Math.pow(2, attempt - 1)
+						)
+					);
+
+				}
+
+			}
+
+		}
+
+		throw (
+			lastError ||
+			batchError("The step did not finish", "BatchStepError")
+		);
 
 	}
 
@@ -6276,6 +6806,10 @@ export const APP_JS = `
 		const script =
 			String(row.script || "").replace(/</g, "&lt;");
 
+		/* The exact pixels this row's images will be rendered at. */
+		const frame =
+			batchRowDimensions(row);
+
 		return (
 			'<tr data-batch-row="' + row.id + '">' +
 				'<td class="batch-cell batch-cell-script">' +
@@ -6284,7 +6818,7 @@ export const APP_JS = `
 						'<button type="button" class="batch-row-del" data-batch-action="remove" data-batch-row="' + row.id + '" title="Remove this row">\u2715</button>' +
 					"</div>" +
 					'<textarea class="batch-script-input" data-batch-field="script" rows="5" spellcheck="false" aria-label="Script for row ' + index + '" placeholder="Paste or type the narration script for this row\u2026">' + script + "</textarea>" +
-					'<div class="batch-row-status" data-batch-slot="status" data-stage="' + escapeHTML(row.stage) + '">' + escapeHTML(batchStatusText(row)) + "</div>" +
+					'<div class="batch-row-status" data-batch-slot="status" data-stage="' + escapeHTML(row.stage) + '" data-loading="' + (batchRowBusy(row) ? "1" : "0") + '">' + batchStatusHTML(row) + "</div>" +
 				"</td>" +
 				'<td class="batch-cell batch-cell-style">' +
 					'<select class="batch-style-select" data-batch-field="style" aria-label="Video image style for row ' + index + '" title="Same ten styles as the script modal">' +
@@ -6295,7 +6829,19 @@ export const APP_JS = `
 				'<td class="batch-cell batch-cell-min">' +
 					'<input type="number" class="batch-minutes-input" data-batch-field="minutes" min="' + BATCH_MIN_MINUTES + '" max="' + BATCH_MAX_MINUTES + '" step="1" value="' + minutes + '" aria-label="Minimum length in minutes for row ' + index + '">' +
 					'<div class="batch-row-sub">min</div>' +
-				"</td>" +
+					"</td>" +
+				'<td class="batch-cell batch-cell-resolution">' +
+					'<select class="batch-resolution-select" data-batch-field="resolution" aria-label="AI image resolution for row ' + index + '" title="Long edge of every AI image in this row. The label is the size the worker really requests.">' +
+					batchResolutionOptionsHTML(row.resolution) +
+					"</select>" +
+					'<div class="batch-row-sub">' + frame.width + "\u00d7" + frame.height + "</div>" +
+					"</td>" +
+				'<td class="batch-cell batch-cell-orientation">' +
+					'<select class="batch-orientation-select" data-batch-field="orientation" aria-label="Frame orientation for row ' + index + '" title="Frame shape of every AI image in this row">' +
+					batchOrientationOptionsHTML(row.orientation) +
+					"</select>" +
+					'<div class="batch-row-sub">frame</div>' +
+					"</td>" +
 				'<td class="batch-cell batch-cell-action" data-batch-slot="preview">' +
 					batchActionCell(row, "preview") +
 				"</td>" +
@@ -6326,12 +6872,17 @@ export const APP_JS = `
 
 			if (status) {
 
-				status.textContent =
-					batchStatusText(row);
+				status.innerHTML =
+					batchStatusHTML(row);
 
 				status.setAttribute(
 					"data-stage",
 					row.stage
+				);
+
+				status.setAttribute(
+					"data-loading",
+					batchRowBusy(row) ? "1" : "0"
 				);
 
 			}
@@ -6496,20 +7047,8 @@ export const APP_JS = `
 
 		}
 
-		const status =
-			document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="status"]');
-
-		if (status) {
-
-			status.textContent =
-				batchStatusText(row);
-
-			status.setAttribute(
-				"data-stage",
-				row.stage
-			);
-
-		}
+		/* Spinner + label for the working stages, plain text otherwise. */
+		paintBatchRowStatus(row);
 
 		console.info("[batch-table] row " + row.id, {
 			stage: row.stage,
@@ -6538,9 +7077,18 @@ export const APP_JS = `
 		row.controller =
 			controller;
 
+		/*
+		 * Session #244: an abort caused by THIS timeout is a retryable
+		 * timeout, not a user stop - and it is reported as one, so the
+		 * browser's abort wording never becomes a row's status text.
+		 */
+		let timedOut =
+			false;
+
 		const timer =
 			controller && typeof setTimeout === "function"
 				? setTimeout(function () {
+					timedOut = true;
 					try {
 						controller.abort();
 					}
@@ -6560,6 +7108,42 @@ export const APP_JS = `
 			);
 
 		}
+		catch (fetchError) {
+
+			if (timedOut) {
+
+				throw batchError(
+					"The request took too long",
+					"TimeoutError"
+				);
+
+			}
+
+			if (row.stopRequested) {
+
+				throw batchError(
+					"The row was stopped",
+					"AbortError"
+				);
+
+			}
+
+			/*
+			 * Any other abort that is not a stop is still a dead request:
+			 * name it as a timeout so the row can retry it quietly.
+			 */
+			if (batchIsAbortError(fetchError)) {
+
+				throw batchError(
+					"The request was interrupted",
+					"TimeoutError"
+				);
+
+			}
+
+			throw fetchError;
+
+		}
 		finally {
 
 			if (timer) {
@@ -6568,6 +7152,70 @@ export const APP_JS = `
 
 			row.controller =
 				null;
+
+		}
+
+	}
+
+	/*
+	 * One NDJSON read with an idle budget. A stream that goes quiet is
+	 * cancelled and reported as a retryable timeout, so the row can start
+	 * the step again instead of waiting for a chunk that never comes.
+	 */
+	async function batchReadChunk(reader) {
+
+		if (typeof setTimeout !== "function") {
+
+			return reader.read();
+
+		}
+
+		let timer =
+			null;
+
+		try {
+
+			return await Promise.race([
+
+				reader.read(),
+
+				new Promise(function (resolve, reject) {
+
+					timer =
+						setTimeout(function () {
+
+							try {
+
+								if (reader && typeof reader.cancel === "function") {
+
+									reader.cancel().catch(function () { });
+
+								}
+
+							}
+							catch (cancelError) { }
+
+							reject(
+								batchError(
+									"The image stream stopped sending",
+									"TimeoutError"
+								)
+							);
+
+						}, BATCH_STREAM_IDLE_TIMEOUT_MS);
+
+				})
+
+			]);
+
+		}
+		finally {
+
+			if (timer) {
+
+				clearTimeout(timer);
+
+			}
 
 		}
 
@@ -6672,6 +7320,15 @@ export const APP_JS = `
 								row.minutes,
 							style:
 								row.style,
+								/*
+								 * Session #211: the frame the row asked for is
+								 * written into the prompts themselves, so every
+								 * scene is composed for that shape and size.
+								 */
+								resolution:
+									batchResolution(row.resolution),
+								orientation:
+									batchOrientation(row.orientation).value,
 							script:
 								String(row.script || "").trim()
 						})
@@ -6748,7 +7405,12 @@ export const APP_JS = `
 					},
 					body:
 						JSON.stringify({
-							prompts: prompts
+							prompts: prompts,
+							/* The same frame the prompts were written for. */
+							resolution:
+								batchResolution(row.resolution),
+							orientation:
+								batchOrientation(row.orientation).value
 						})
 				},
 				BATCH_REQUEST_TIMEOUT_MS * 2
@@ -6847,8 +7509,15 @@ export const APP_JS = `
 
 		for (;;) {
 
+			/*
+			 * Session #244: a stream that stops sending lines must not
+			 * hang the row open. Each read gets an idle budget; a stall
+			 * is a retryable timeout, so the step is retried quietly
+			 * instead of leaving the row "Rendering the AI images"
+			 * forever (or surfacing an abort message).
+			 */
 			const chunk =
-				await reader.read();
+				await batchReadChunk(reader);
 
 			if (chunk.done) {
 				break;
@@ -7017,6 +7686,8 @@ export const APP_JS = `
 		/* A re-run starts from a clean row. */
 		revokeBatchRow(row);
 
+		row.stopRequested = false;
+		row.retrying = false;
 		row.mp3 = null;
 		row.mp3Url = "";
 		row.audio = null;
@@ -7028,37 +7699,53 @@ export const APP_JS = `
 		row.error = "";
 		row.startedAt = Date.now();
 
-		setBatchStage(row, "voice", "Speaking " + String(row.script || "").trim().length + " characters");
-
 		try {
 
-			const blob =
-				await requestBatchVoiceover(row);
-
-			if (!blob || !blob.size) {
-
-				throw new Error(
-					"The voiceover model returned no audio"
-				);
-
-			}
-
-			row.mp3 =
-				blob;
-
-			row.mp3Url =
-				URL.createObjectURL(blob);
-
-			row.objectUrls.push(row.mp3Url);
-
-			setBatchStage(row, "timing");
-
-			const measuredMs =
-				await decodeBatchAudio(row, blob);
-
+			/*
+			 * Session #244: every step runs through batchRunStep, which
+			 * retries a failed step inside this row - silently. The row
+			 * never leaves its working animation and never prints an
+			 * error, so the table looks the same whether a step needed
+			 * one attempt or four.
+			 */
 			const spanMs =
-				measuredMs ||
-				Math.round(row.minutes * 60 * 1000);
+				await batchRunStep(
+					row,
+					"voice",
+					"Speaking " + String(row.script || "").trim().length + " characters",
+					async function () {
+
+						const blob =
+							await requestBatchVoiceover(row);
+
+						if (!blob || !blob.size) {
+
+							throw new Error(
+								"The voiceover model returned no audio"
+							);
+
+						}
+
+						row.mp3 =
+							blob;
+
+						row.mp3Url =
+							URL.createObjectURL(blob);
+
+						row.objectUrls.push(row.mp3Url);
+
+						setBatchStage(row, "timing");
+
+						const measuredMs =
+							await decodeBatchAudio(row, blob);
+
+						return (
+							measuredMs ||
+							Math.round(row.minutes * 60 * 1000)
+						);
+
+					}
+				);
 
 			/* Subtitles come from the same plain text the voice read. */
 			row.subtitles =
@@ -7067,37 +7754,46 @@ export const APP_JS = `
 					spanMs
 				);
 
-			setBatchStage(
-				row,
-				"prompts",
-				"for " + row.minutes + " min \u00b7 " + row.style
-			);
-
 			row.prompts =
-				await requestBatchPrompts(row);
-
-			setBatchStage(
-				row,
-				"images",
-				"0 of " + row.prompts.length
-			);
-
-			row.images =
-				await requestBatchImages(
+				await batchRunStep(
 					row,
-					row.prompts
+					"prompts",
+					"for " + row.minutes + " min \u00b7 " + row.style,
+					function () {
+
+						return requestBatchPrompts(row);
+
+					}
 				);
 
-			setBatchStage(
-				row,
-				"animate",
-				row.images.length + " slides"
-			);
+			row.images =
+				await batchRunStep(
+					row,
+					"images",
+					"0 of " + row.prompts.length,
+					function () {
+
+						return requestBatchImages(
+							row,
+							row.prompts
+						);
+
+					}
+				);
 
 			row.slides =
-				await buildBatchSlides(
+				await batchRunStep(
 					row,
-					row.images
+					"animate",
+					row.images.length + " slides",
+					function () {
+
+						return buildBatchSlides(
+							row,
+							row.images
+						);
+
+					}
 				);
 
 			row.animated =
@@ -7122,17 +7818,26 @@ export const APP_JS = `
 		}
 		catch (rowError) {
 
-			const message =
-				rowError && rowError.message
-					? rowError.message
-					: String(rowError);
+			/*
+			 * Session #244: nothing here is shown to the user. The row goes
+			 * back to looking like a row that has not started yet - no error
+			 * text, no abort wording (a stop or an abort is not a failure at
+			 * all), no warning colour. The next Generate press retries it.
+			 */
+			const stopped =
+				!!row.stopRequested || batchIsStopError(rowError);
 
-			console.error("[batch-table] row " + row.id + " failed", message);
+			console.warn(
+				"[batch-table] row " + row.id + (stopped ? " stopped" : " could not finish after its quiet attempts") + " - no error is shown in the table",
+				batchErrorBrief(rowError)
+			);
+
+			row.error = "";
 
 			setBatchStage(
 				row,
-				"error",
-				message
+				"ready",
+				""
 			);
 
 		}
@@ -7140,6 +7845,17 @@ export const APP_JS = `
 		refreshBatchRowCells();
 
 		return batchRowFinished(row);
+
+	}
+
+	/* Rows that still need work: a script, and no live Preview/Export yet. */
+	function batchRowPending(row) {
+
+		return !!(
+			batchRowHasScript(row) &&
+			!batchRowFinished(row) &&
+			!row.running
+		);
 
 	}
 
@@ -7151,10 +7867,10 @@ export const APP_JS = `
 
 		}
 
-		const targets =
+		const scripted =
 			batchRows.filter(batchRowHasScript);
 
-		if (!targets.length) {
+		if (!scripted.length) {
 
 			showRequiredModal([
 				"No row has a script yet - type or paste one in column 1 first."
@@ -7165,32 +7881,99 @@ export const APP_JS = `
 		}
 
 		/*
-		 * Rows run one after another on purpose: every row speaks, draws
-		 * and animates with the same browser (and the same credit
-		 * budget), so a queue finishes each row - and unlocks its two
-		 * buttons - instead of stalling all ten at once.
+		 * Session #211: a finished row is NEVER generated again. Its two
+		 * live buttons (Preview / Export) are the proof that its MP3, its
+		 * images and its animation are already in memory, so re-running it
+		 * would only re-bill the credits and throw the animation away.
+		 */
+		const targets =
+			batchRows.filter(batchRowPending);
+
+		if (!targets.length) {
+
+			showRequiredModal([
+				"Every row with a script is already finished - its Preview and Export buttons are live. Add a row, or clear a finished row's script, to generate again."
+			]);
+
+			return;
+
+		}
+
+		/*
+		 * Three rows at a time (BATCH_RUN_CONCURRENCY). Each row owns its
+		 * own state, abort handle and gallery, so three pipelines can run
+		 * side by side: the browser awaits three fetches at once instead of
+		 * one, and a finished row unlocks its buttons without waiting for
+		 * the rest of the table. Lanes pull from one shared queue, so the
+		 * next pending row starts the moment a lane frees up.
 		 */
 		batchRunBusy =
 			true;
 
 		renderBatchTable();
 
+		const queue =
+			targets.slice();
+
 		let finished =
 			0;
 
-		for (const row of targets) {
+		const laneCount =
+			Math.max(
+				1,
+				Math.min(BATCH_RUN_CONCURRENCY, queue.length)
+			);
 
-			if (!batchRunBusy) {
-				break;
+		const lane = async function () {
+
+			while (batchRunBusy && queue.length) {
+
+				const row =
+					queue.shift();
+
+				if (!row || row.running) {
+					continue;
+				}
+
+				row.running =
+					true;
+
+				try {
+
+					if (await runBatchRow(row)) {
+
+						finished += 1;
+
+					}
+
+				}
+				finally {
+
+					/*
+					 * A failed row is pending again (its cells stay
+					 * text-only), so the next Generate retries it.
+					 */
+					row.running =
+						false;
+
+				}
+
 			}
 
-			if (await runBatchRow(row)) {
+		};
 
-				finished += 1;
+		const lanes =
+			[];
 
-			}
+		for (let index = 0; index < laneCount; index++) {
+
+			lanes.push(
+				lane()
+			);
 
 		}
+
+		await Promise.all(lanes);
 
 		batchRunBusy =
 			false;
@@ -7199,7 +7982,8 @@ export const APP_JS = `
 
 		console.info("[batch-table] generate pass done", {
 			requested: targets.length,
-			finished: finished
+			finished: finished,
+			concurrency: laneCount
 		});
 
 	}
@@ -7210,6 +7994,17 @@ export const APP_JS = `
 			false;
 
 		for (const row of batchRows) {
+
+			/*
+			 * Session #244: a stop is a decision, not an error. The row
+			 * is marked FIRST, so the aborted fetch is reported as a
+			 * stop and never retried or rendered as an abort message.
+			 */
+			row.stopRequested =
+				true;
+
+			row.retrying =
+				false;
 
 			if (row.controller) {
 
@@ -7289,6 +8084,10 @@ export const APP_JS = `
 
 		closeBatchPreview();
 
+		/* The preview paints the row's own frame (resolution + orientation). */
+		const frame =
+			batchRowDimensions(row);
+
 		const modal =
 			document.createElement(
 				"div"
@@ -7308,7 +8107,7 @@ export const APP_JS = `
 		modal.innerHTML =
 			'<div class="modal-box batch-preview-box">' +
 				'<div class="modal-title">\u25b6 Preview \u2014 Row ' + escapeHTML(String(row.id)) + "</div>" +
-				'<canvas id="batch-preview-canvas" class="batch-preview-canvas" width="1024" height="576"></canvas>' +
+				'<canvas id="batch-preview-canvas" class="batch-preview-canvas" width="' + frame.width + '" height="' + frame.height + '"></canvas>' +
 				'<div class="batch-preview-bar">' +
 					'<button type="button" class="upload-btn small" data-batch-preview="toggle">\u23f8 Pause</button>' +
 					'<button type="button" class="upload-btn small" data-batch-preview="restart">\u21ba Restart</button>' +
@@ -8026,6 +8825,66 @@ export const APP_JS = `
 				}
 			);
 
+			/*
+			 * The resolution / orientation selects are <select> elements: they
+			 * also fire "change" (some browsers only reliably fire that one),
+			 * so the row state and its pixel hint are written from both.
+			 */
+			body.addEventListener(
+				"change",
+				function (event) {
+
+					const target =
+						event.target;
+
+					if (!target || !target.getAttribute) {
+
+						return;
+
+					}
+
+					const field =
+						target.getAttribute(
+							"data-batch-field"
+						);
+
+					if (field !== "resolution" && field !== "orientation") {
+
+						return;
+
+					}
+
+					const tr =
+						target.closest
+							? target.closest("[data-batch-row]")
+							: null;
+
+					if (!tr) {
+
+						return;
+
+					}
+
+					const row =
+						getBatchRow(
+							tr.getAttribute(
+								"data-batch-row"
+							)
+						);
+
+					if (row) {
+
+						syncBatchRowInput(
+							row,
+							field,
+							target
+						);
+
+					}
+
+				}
+			);
+
 			body.addEventListener(
 				"click",
 				function (event) {
@@ -8167,6 +9026,10 @@ export const APP_JS = `
 		window.__BATCH_ROWS =
 			batchRows;
 
+		/* Session #244: the silent-retry policy (attempts + backoff). */
+		window.__BATCH_RETRY =
+			batchRetryPolicy;
+
 	}
 
 	/* The toolbar mirrors the rows: how many can be generated, and busy? */
@@ -8188,7 +9051,7 @@ export const APP_JS = `
 
 			generate.textContent =
 				batchRunBusy
-					? "\u25a0 Stop after the current row"
+					? "\u25a0 Stop generating"
 					: "\u2726 Generate" +
 						(runnable ? " (" + runnable + ")" : "");
 
@@ -8210,6 +9073,31 @@ export const APP_JS = `
 				" with a script";
 
 		}
+
+	}
+
+	/*
+	 * Keeps the small hint under the resolution select honest: it shows the
+	 * pixels the worker will really request for this row's frame.
+	 */
+	function refreshBatchRowFrame(row) {
+
+		if (!row) {
+			return;
+		}
+
+		const cell =
+			document.querySelector('[data-batch-row="' + row.id + '"] .batch-cell-resolution .batch-row-sub');
+
+		if (!cell) {
+			return;
+		}
+
+		const frame =
+			batchRowDimensions(row);
+
+		cell.textContent =
+			frame.width + "\u00d7" + frame.height;
 
 	}
 
@@ -8240,6 +9128,34 @@ export const APP_JS = `
 			row.style =
 				element.value ||
 				row.style;
+
+			return;
+
+		}
+
+		if (field === "resolution") {
+
+			row.resolution =
+				batchResolution(element.value);
+
+			element.value =
+				String(row.resolution);
+
+			refreshBatchRowFrame(row);
+
+			return;
+
+		}
+
+		if (field === "orientation") {
+
+			row.orientation =
+				batchOrientation(element.value).value;
+
+			element.value =
+				row.orientation;
+
+			refreshBatchRowFrame(row);
 
 			return;
 
@@ -9874,13 +10790,23 @@ export const APP_JS = `
 		2;
 
 	/*
-	 * DISPLAY size of the generated
-	 * images (card crop): 480px
-	 * landscape, 16:9. The CF SDXL
-	 * model itself generates at its
-	 * default size because the API
-	 * rejects custom width/height
-	 * parameters.
+	 * Historical DISPLAY hint for the
+	 * generated images: 854x480 (16:9).
+	 *
+	 * Neither constant is read anywhere
+	 * any more - the AI panel crops with
+	 * CSS (.va-ai-img, aspect-ratio
+	 * 854 / 480) - and they never
+	 * reached the model. The route that
+	 * really renders the images
+	 * (runImageModel() in
+	 * src/modules/image-batch.ts) asks
+	 * SDXL for 1024x576 landscape, so
+	 * 854x480 is NOT the size of a
+	 * generated file. Session #211 left
+	 * them in place (dead code, listed in
+	 * toberesolved.md) but corrected the
+	 * copy around them.
 	 */
 	const AI_IMAGE_WIDTH =
 		854;
@@ -9898,8 +10824,12 @@ export const APP_JS = `
 	 * this accordion's form. Each
 	 * submit = AI_IMAGES_PER_PROMPT
 	 * requests (variant 1, 2) = 2
-	 * images. Images are always 480px
-	 * landscape (832x480, 16:9).
+	 * images, sent together
+	 * (Promise.all), not one after the
+	 * other. Every image is 1024x576
+	 * landscape 16:9 (the worker's
+	 * IMAGE_WIDTH / IMAGE_HEIGHT
+	 * defaults).
 	 */
 	const AI_ENDPOINT =
 		(prompt, variant) =>
@@ -9945,6 +10875,27 @@ export const APP_JS = `
 			!resultsEl
 		) {
 			return;
+		}
+
+		/*
+		 * Session #211: while THIS video's script & style walkthrough is
+		 * rendering its own images, a manual submit would open a second
+		 * stream into the same gallery and spend the same credits twice.
+		 * The button is disabled for the duration; this guard also covers
+		 * a keyboard / programmatic click.
+		 */
+		const flowProject =
+			videoProjects[n - 1];
+
+		if (flowProject && flowProject._imageFlowActive) {
+
+			if (statusEl) {
+				statusEl.textContent =
+					"The script & image-style window is generating this video's AI images — the manual button unlocks when it finishes.";
+			}
+
+			return;
+
 		}
 
 		const prompt =
@@ -10088,7 +11039,7 @@ export const APP_JS = `
 						AI_IMAGES_PER_PROMPT +
 						" failed: " +
 						lastError
-					: "Done \u2014 480px landscape";
+					: "Done \u2014 landscape 16:9 \u00b7 1024\u00d7576";
 		}
 
 		/*
@@ -12400,7 +13351,7 @@ export const APP_JS = `
 	/*
 	 * Collects ALL of video n's elements
 	 * (assets, MP3, title, font, colour,
-	 * sticker, quality, captions) for the
+	 * quality, captions) for the
 	 * /api/render payload.
 	 */
 	function collectVideoPayload(
@@ -14161,6 +15112,39 @@ export const APP_JS = `
 
 	}
 
+	/*
+	 * The accordion's own "Generate 2 Images" button (the Cloudflare AI
+	 * Images panel). Session #211: while the script & style walkthrough of
+	 * THIS video is rendering its images, the manual button is locked -
+	 * a second stream would race the walkthrough's own /api/image-batch
+	 * call for the same gallery and the same credits. Other accordions keep
+	 * their own button enabled and may generate at the same time: this is
+	 * strictly per video (the va-ai-btn-<n> button), never global.
+	 */
+	function setVaAiGenerateEnabled(
+		n,
+		enabled
+	) {
+
+		const btn =
+			document.getElementById(
+				"va-ai-btn-" + n
+			);
+
+		if (!btn) {
+			return;
+		}
+
+		btn.disabled =
+			!enabled;
+
+		btn.title =
+			enabled
+				? ""
+				: "This video's AI images are being generated from the script & image-style window. The button unlocks when that flow finishes.";
+
+	}
+
 	function setScriptLoading(
 		n,
 		on
@@ -15087,6 +16071,14 @@ export const APP_JS = `
 			project.videoImageStyle ||
 			DEFAULT_SEO_IMAGE_STYLE;
 
+		/*
+		 * The walkthrough's images are generating for THIS video: lock its
+		 * manual "Generate 2 Images" button until finalizeImagePromptFlow()
+		 * runs (every exit path of this flow ends there). Other videos are
+		 * untouched and can still generate their own images at the same time.
+		 */
+		setVaAiGenerateEnabled(n, false);
+
 		/* A second run for this video cancels the previous one's stream. */
 		if (project._imageBatchController) {
 			try { project._imageBatchController.abort(); } catch (abortError) { }
@@ -15448,6 +16440,8 @@ export const APP_JS = `
 		project.imagePrompts = null;
 		project._imageFlowFinalizing = false;
 		setVaUploadEnabled(n, true);
+		/* The walkthrough's images are done: the manual button unlocks. */
+		setVaAiGenerateEnabled(n, true);
 		const scriptButton =
 			document.getElementById(
 				"va-script-btn-" + n

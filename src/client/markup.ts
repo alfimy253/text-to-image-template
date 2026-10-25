@@ -352,8 +352,11 @@ export const PAGE_MARKUP = `
 	     An editable table: one row is one video. Column 1 is the
 	     script, column 2 the video image style (the same ten
 	     options as the script modal), column 3 the minimum length
-	     in minutes, columns 4-5 Preview + Export. Rows are
-	     independent of the "Video N" accordions below.
+	     in minutes, column 4 the AI image resolution (480 / 540 /
+	     720 / 1024 px long edge), column 5 the frame orientation
+	     (square / landscape / portrait), columns 6-7 Preview +
+	     Export. Rows are independent of the "Video N" accordions
+	     below.
 	     ====================================================== -->
 
 	<section id="view-table" class="view">
@@ -365,18 +368,21 @@ export const PAGE_MARKUP = `
 				<strong>Quick batch table</strong>
 				<span class="card-note" id="batch-note">One row \u2014 one video</span>
 				<button type="button" class="upload-btn small batch-add-row" id="batch-add-row" title="Add another row (10 rows at most)">\uff0b Add Row</button>
-				<button type="button" class="app-generate batch-generate" id="batch-generate" title="Generate every row that has a script: voiceover, AI images and the animation">\u2726 Generate</button>
+				<button type="button" class="app-generate batch-generate" id="batch-generate" title="Generate every row that has a script and is not finished yet: voiceover, AI images and the animation, three rows at a time">\u2726 Generate</button>
 
 			</div>
 
 			<p class="va-note batch-hint">
 				Type or paste a script in the first box, pick the video image
-				style and the minimum minutes, then press
+				style, the minimum minutes, the AI image resolution and the frame
+				orientation, then press
 				<strong>\u2726 Generate</strong> at the top right of the table.
 				Every row that has a script is spoken (MP3), illustrated with
-				AI images and animated; a row that is empty is skipped.
-				Until a row is finished its last two cells read
-				<strong>Preview Here</strong> and
+				AI images and animated; a row that is empty is skipped, and so is
+				a row that is already finished (its Preview and Export buttons are
+				live \u2014 it is never generated or billed twice). Three rows
+				render at the same time. Until a row is finished its last two
+				cells read <strong>Preview Here</strong> and
 				<strong>Export Video</strong> \u2014 both unlock at the same
 				moment, and the export is built in this browser.
 			</p>
@@ -390,6 +396,8 @@ export const PAGE_MARKUP = `
 							<th class="batch-col-script">Script</th>
 							<th class="batch-col-style">Video style</th>
 							<th class="batch-col-min">Min</th>
+							<th class="batch-col-resolution">Resolution</th>
+							<th class="batch-col-orientation">Orientation</th>
 							<th class="batch-col-preview">Preview</th>
 							<th class="batch-col-export">Export</th>
 						</tr>

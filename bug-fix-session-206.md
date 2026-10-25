@@ -297,7 +297,8 @@ Guest suite coverage:
 14. Accounts keep their own allowances (`paid_user`, scope `account`, limit 1,200).
 15. No IP header → the `unknown` bucket.
 
-`npx tsc` output is **byte-identical to the clean-`main` baseline**: 48 errors, same messages
+`npx tsc` output is **byte-identical to the clean-`main` baseline** (48 errors when that session
+ran; the tree carries 37 on 2026-10-25), same messages
 (the repository's pre-existing strictness debt — `bug-audit.md` #11). No new type errors.
 
 Live smoke test on `wrangler dev --local` (port 8787):

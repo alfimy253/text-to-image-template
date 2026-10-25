@@ -731,9 +731,12 @@ export const CONFIG_PAGE_SCRIPT = `
 			'<div id="cfg-unlocked-view" style="display:none;">' +
 				'<nav class="cfg-tabs" role="tablist" aria-label="Configuration sections">' +
 					'<button type="button" class="cfg-tab-btn active" data-cfg-tab="general">1. General &amp; Themes</button>' +
-					'<button type="button" class="cfg-tab-btn" data-cfg-tab="payment-gateway">2. Local Payment Gateway</button>' +
-					'<button type="button" class="cfg-tab-btn" data-cfg-tab="payments">3. Payment Transactions</button>' +
-					'<button type="button" class="cfg-tab-btn" data-cfg-tab="cms">4. CMS Pages (Max 8)</button>' +
+					'<button type="button" class="cfg-tab-btn" data-cfg-tab="guests">2. Guest Credits by IP</button>' +
+					'<button type="button" class="cfg-tab-btn" data-cfg-tab="plans">3. Plans</button>' +
+					'<button type="button" class="cfg-tab-btn" data-cfg-tab="accounts">4. Accounts Credits</button>' +
+					'<button type="button" class="cfg-tab-btn" data-cfg-tab="payment-gateway">5. Local Payment Gateway</button>' +
+					'<button type="button" class="cfg-tab-btn" data-cfg-tab="payments">6. Payment Transactions</button>' +
+					'<button type="button" class="cfg-tab-btn" data-cfg-tab="cms">7. CMS Pages (Max 8)</button>' +
 				'</nav>' +
 
 				/* TAB 1: GENERAL & THEMES */
@@ -774,44 +777,68 @@ export const CONFIG_PAGE_SCRIPT = `
 						'</div>' +
 					'</div>' +
 
-					'<div class="cfg-two-col">' +
-						'<div class="cfg-card">' +
-							'<h2>Plans &amp; Account Credits</h2>' +
-							'<p class="cfg-sub">Free: 50 AI images/day · Paid (<code>paid_user</code>): 1,200 AI images/day. Click any account row to edit its plan.</p>' +
-							'<div style="display:grid;gap:10px;">' +
-								'<div>' +
-									'<label class="cfg-label" for="cfg-credit-user">Username</label>' +
-									'<input id="cfg-credit-user" class="cfg-input" type="text" placeholder="username" />' +
-								'</div>' +
-								'<div>' +
-									'<label class="cfg-label" for="cfg-credit-plan">Plan</label>' +
-									'<select id="cfg-credit-plan" class="cfg-select">' +
-										'<option value="free">Free — 50 AI images / day</option>' +
-										'<option value="paid_user">Paid (paid_user) — 1,200 AI images / day</option>' +
-									'</select>' +
-								'</div>' +
-								'<label style="display:flex;align-items:center;gap:8px;font-size:0.84rem;color:#cbd5e1;cursor:pointer;">' +
-									'<input id="cfg-credit-reset" type="checkbox" /> Reset today counters' +
-								'</label>' +
-								'<div>' +
-									'<button type="button" class="cfg-btn cfg-btn-primary" id="cfg-plan-save">Save Plan</button>' +
-								'</div>' +
-							'</div>' +
-							'<div class="cfg-msg" id="cfg-plan-msg"></div>' +
-							'<div id="cfg-users-list" style="margin-top:12px;max-height:200px;overflow-y:auto;"></div>' +
-						'</div>' +
+				'</section>' +
 
-						'<div class="cfg-card">' +
-							'<h2>Guest Credits by IP (Today UTC+8)</h2>' +
-							'<p class="cfg-sub">Visitors on GET /free receive 10 AI images/day per masked IP. Reset clears today’s counter.</p>' +
+				/* TAB 2: GUEST CREDITS BY IP (its own page, session #244) */
+				'<section class="cfg-panel" id="cfg-panel-guests">' +
+					'<div class="cfg-card">' +
+						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+							'<div>' +
+								'<h2>Guest Credits by IP (Today UTC+8)</h2>' +
+								'<p class="cfg-sub" style="margin-bottom:0;">Visitors on GET /free receive 10 AI images/day per masked IP. Reset clears today\u2019s counter for that IP.</p>' +
+							'</div>' +
 							'<button type="button" class="cfg-btn" id="cfg-guests-refresh">Refresh Guest IPs</button>' +
-							'<div id="cfg-guests-list" style="margin-top:12px;max-height:220px;overflow-y:auto;"></div>' +
-							'<div class="cfg-msg" id="cfg-guests-msg"></div>' +
 						'</div>' +
+						'<div id="cfg-guests-list" style="margin-top:12px;max-height:420px;overflow-y:auto;"></div>' +
+						'<div class="cfg-msg" id="cfg-guests-msg"></div>' +
 					'</div>' +
 				'</section>' +
 
-				/* TAB 2: LOCAL PAYMENT GATEWAY */
+				/* TAB 3: PLANS (its own page, session #244) */
+				'<section class="cfg-panel" id="cfg-panel-plans">' +
+					'<div class="cfg-card">' +
+						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+							'<div>' +
+								'<h2>Plans &amp; Daily Limits</h2>' +
+								'<p class="cfg-sub" style="margin-bottom:0;">The plan definitions the credit meter enforces. Assign a plan to an account on the <strong>Accounts Credits</strong> page; guest IPs use the guest plan on the <strong>Guest Credits by IP</strong> page.</p>' +
+							'</div>' +
+							'<button type="button" class="cfg-btn" id="cfg-plans-refresh">Refresh Plans</button>' +
+						'</div>' +
+						'<div id="cfg-plans-list" style="margin-top:12px;display:grid;gap:10px;"></div>' +
+						'<div class="cfg-msg" id="cfg-plans-msg"></div>' +
+					'</div>' +
+				'</section>' +
+
+				/* TAB 4: ACCOUNTS CREDITS (its own page, session #244) */
+				'<section class="cfg-panel" id="cfg-panel-accounts">' +
+					'<div class="cfg-card">' +
+						'<h2>Accounts Credits</h2>' +
+						'<p class="cfg-sub">Free: 50 AI images/day \u00b7 Paid (<code>paid_user</code>): 1,200 AI images/day. Click any account row to load it into the form.</p>' +
+						'<div style="display:grid;gap:10px;">' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-credit-user">Username</label>' +
+								'<input id="cfg-credit-user" class="cfg-input" type="text" placeholder="username" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-credit-plan">Plan</label>' +
+								'<select id="cfg-credit-plan" class="cfg-select">' +
+									'<option value="free">Free \u2014 50 AI images / day</option>' +
+									'<option value="paid_user">Paid (paid_user) \u2014 1,200 AI images / day</option>' +
+								'</select>' +
+							'</div>' +
+							'<label style="display:flex;align-items:center;gap:8px;font-size:0.84rem;color:#cbd5e1;cursor:pointer;">' +
+								'<input id="cfg-credit-reset" type="checkbox" /> Reset today counters' +
+							'</label>' +
+							'<div>' +
+								'<button type="button" class="cfg-btn cfg-btn-primary" id="cfg-plan-save">Save Plan</button>' +
+							'</div>' +
+						'</div>' +
+						'<div class="cfg-msg" id="cfg-plan-msg"></div>' +
+						'<div id="cfg-users-list" style="margin-top:12px;max-height:420px;overflow-y:auto;"></div>' +
+					'</div>' +
+				'</section>' +
+
+				/* TAB 5: LOCAL PAYMENT GATEWAY */
 				'<section class="cfg-panel" id="cfg-panel-payment-gateway">' +
 					'<div class="cfg-card">' +
 						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
@@ -842,7 +869,7 @@ export const CONFIG_PAGE_SCRIPT = `
 					'</div>' +
 				'</section>' +
 
-				/* TAB 3: UPLOADED PAYMENT TRANSACTIONS */
+				/* TAB 6: UPLOADED PAYMENT TRANSACTIONS */
 				'<section class="cfg-panel" id="cfg-panel-payments">' +
 					'<div class="cfg-card">' +
 						'<div class="cfg-pay-toolbar">' +
@@ -869,7 +896,7 @@ export const CONFIG_PAGE_SCRIPT = `
 					'</div>' +
 				'</section>' +
 
-				/* TAB 4: BASIC CMS (MAX 8 PAGES) */
+				/* TAB 7: BASIC CMS (MAX 8 PAGES) */
 				'<section class="cfg-panel" id="cfg-panel-cms">' +
 					'<div class="cfg-card">' +
 						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
@@ -917,6 +944,8 @@ export const CONFIG_PAGE_SCRIPT = `
 								'<div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
 									'<button type="submit" class="cfg-btn cfg-btn-primary" id="cms-save-btn">Save CMS Page</button>' +
 									'<button type="button" class="cfg-btn" id="cms-reset-btn">Clear Form</button>' +
+									/* Session #244: delete the page that is open in the editor. */
+									'<button type="button" class="cfg-btn cfg-btn-danger" id="cms-delete-btn" style="display:none;">Delete This Page</button>' +
 								'</div>' +
 								'<div class="cfg-msg" id="cms-msg"></div>' +
 							'</form>' +
@@ -991,11 +1020,14 @@ export const CONFIG_PAGE_SCRIPT = `
 			var match = btn.getAttribute("data-cfg-tab") === tabName;
 			btn.classList.toggle("active", match);
 		});
-		["general", "payment-gateway", "payments", "cms"].forEach(function(id) {
+		["general", "guests", "plans", "accounts", "payment-gateway", "payments", "cms"].forEach(function(id) {
 			var panel = document.getElementById("cfg-panel-" + id);
 			if (panel) panel.classList.toggle("active", id === tabName);
 		});
 		if (unlockedPw) {
+			if (tabName === "guests") loadGuests();
+			if (tabName === "plans") loadCreditUsers();
+			if (tabName === "accounts") loadCreditUsers();
 			if (tabName === "payments") loadPaymentsPage(currentPayPage);
 			if (tabName === "payment-gateway") loadGatewayConfig();
 			if (tabName === "cms") loadCmsPages();
@@ -1009,7 +1041,7 @@ export const CONFIG_PAGE_SCRIPT = `
 		});
 	});
 
-	// --- TAB 1: Themes, Workers, Plans, Guest IPs ---
+	// --- TAB 1: Themes & Workers (credits moved to tabs 2-4, session #244) ---
 	function renderThemeGrid() {
 		var wrap = document.getElementById("cfg-themes");
 		if (!wrap) return;
@@ -1203,11 +1235,58 @@ export const CONFIG_PAGE_SCRIPT = `
 		setWorkerActive(!workerActive);
 	});
 
+	/*
+	 * TAB 3 (Plans, session #244): the plan definitions the credit meter
+	 * enforces, read from the same GET /api/config/users payload the
+	 * accounts list uses - no extra endpoint, no duplicated limits.
+	 */
+	function renderPlansPanel(d) {
+		var box = document.getElementById("cfg-plans-list");
+		var msg = document.getElementById("cfg-plans-msg");
+		if (!box) return;
+		box.innerHTML = "";
+		if (!d || !d.success) {
+			box.innerHTML = '<div style="font-size:0.82rem;color:#6b7280;">' + esc((d && d.error) || "Could not load the plans.") + '</div>';
+			return;
+		}
+		var users = d.users || [];
+		var plans = Array.isArray(d.plans) ? d.plans.slice() : [];
+		/* The guest plan is an actor type, not assignable - show it too. */
+		plans.push({ id: "guest", label: "Guest (per masked IP)", limits: { images: 10 } });
+		plans.forEach(function(plan) {
+			var limit = plan && plan.limits && plan.limits.images !== null
+				? plan.limits.images
+				: null;
+			var onPlan = users.filter(function(u) { return (u.usertype || "free") === plan.id; });
+			var usedToday = onPlan.reduce(function(sum, u) {
+				return sum + Number((u.used && u.used.images) || 0);
+			}, 0);
+			var card = document.createElement("div");
+			card.className = "cfg-worker-row";
+			card.setAttribute("data-cfg-plan-row", plan.id || "");
+			card.innerHTML =
+				'<strong>' + esc(plan.label || plan.id || "Plan") + '</strong>' +
+				'<span style="font-size:0.78rem;color:#9ca3af;">' +
+					'<code>' + esc(plan.id || "") + '</code> · ' +
+					(limit === null ? "unlimited AI images" : esc(limit) + " AI images / day") +
+					(plan.id === "guest" ? "" : " · " + onPlan.length + " account" + (onPlan.length === 1 ? "" : "s") + " · " + usedToday + " used today") +
+				'</span>';
+			box.appendChild(card);
+		});
+		if (msg) {
+			msg.className = "cfg-msg";
+			msg.textContent = d.day
+				? "Counters reset daily at midnight Asia/Taipei (today " + d.day + ")."
+				: "";
+		}
+	}
+
 	function loadCreditUsers() {
 		var box = document.getElementById("cfg-users-list");
 		fetch("/api/config/users?pw=" + encodeURIComponent(unlockedPw), { credentials: "same-origin" })
 			.then(function(r) { return r.json().catch(function() { return {}; }); })
 			.then(function(d) {
+				renderPlansPanel(d);
 				if (!box) return;
 				box.innerHTML = "";
 				if (!d || !d.success) {
@@ -1346,7 +1425,9 @@ export const CONFIG_PAGE_SCRIPT = `
 
 	document.getElementById("cfg-guests-refresh").addEventListener("click", loadGuests);
 
-	// --- TAB 2: Local Payment Gateway Config ---
+	document.getElementById("cfg-plans-refresh").addEventListener("click", loadCreditUsers);
+
+	// --- TAB 5: Local Payment Gateway Config ---
 	function loadGatewayConfig() {
 		fetch("/api/config/payment-gateway")
 			.then(function(r) { return r.ok ? r.json() : null; })
@@ -1542,7 +1623,7 @@ export const CONFIG_PAGE_SCRIPT = `
 		loadPaymentsPage(1);
 	});
 
-	// --- TAB 4: Basic CMS (Max 8 Pages, Live Preview, 200px Paragraph Textbox, 2-per-line URL Images) ---
+	// --- TAB 7: Basic CMS (Max 8 Pages, Live Preview, 200px Paragraph Textbox, 2-per-line URL Images) ---
 	var cmsSavedPages = [];
 	var cmsDraftBlocks = [];
 
@@ -1675,7 +1756,15 @@ export const CONFIG_PAGE_SCRIPT = `
 		});
 	}
 
+	function setCmsDeleteEnabled(on) {
+		var btn = document.getElementById("cms-delete-btn");
+		if (!btn) return;
+		btn.style.display = on ? "" : "none";
+		btn.disabled = !on;
+	}
+
 	function resetCmsEditor() {
+		setCmsDeleteEnabled(false);
 		document.getElementById("cms-edit-id").value = "";
 		document.getElementById("cms-page-url").value = "";
 		document.getElementById("cms-page-title").value = "";
@@ -1687,6 +1776,7 @@ export const CONFIG_PAGE_SCRIPT = `
 	}
 
 	function editCmsPage(page) {
+		setCmsDeleteEnabled(true);
 		document.getElementById("cms-edit-id").value = page.id;
 		document.getElementById("cms-page-url").value = page.url;
 		document.getElementById("cms-page-title").value = page.title;
@@ -1699,6 +1789,58 @@ export const CONFIG_PAGE_SCRIPT = `
 		renderCmsBlockEditors();
 		renderCmsLivePreview();
 		renderCmsSavedBar();
+	}
+
+	/*
+	 * Session #244: ONE delete path for a CMS page, whether the admin
+	 * clicks Delete on the saved-page pill or Delete This Page inside the
+	 * editor. Both send the page's id (and slug as a fallback) to
+	 * /api/config/cms/delete, then re-render from the server's own list,
+	 * so the pill, the counter and the editor can never disagree with the
+	 * stored pages - and the Top Menu / Footer link is gone immediately
+	 * because the worker renders the menu from that same list.
+	 */
+	function deleteCmsPage(page) {
+		if (!page) return;
+		var label = page.url || page.title || "this page";
+		if (typeof window.confirm === "function" &&
+			!window.confirm("Delete " + label + "?\\n\\nThe Top Menu / Footer link disappears immediately and the URL stops resolving.")) {
+			return;
+		}
+		var msg = document.getElementById("cms-msg");
+		if (msg) {
+			msg.className = "cfg-msg";
+			msg.textContent = "Deleting " + label + "...";
+		}
+		fetch("/api/config/cms/delete", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pw: unlockedPw, id: page.id, slug: page.slug })
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				if (res.ok && res.body && res.body.success) {
+					cmsSavedPages = res.body.pages || [];
+					if (document.getElementById("cms-edit-id").value === page.id) {
+						resetCmsEditor();
+					} else {
+						renderCmsSavedBar();
+					}
+					if (msg) {
+						msg.className = "cfg-msg ok";
+						msg.textContent = "Deleted " + label + ". Its menu link is gone.";
+					}
+				} else if (msg) {
+					msg.className = "cfg-msg err";
+					msg.textContent = (res.body && res.body.error) || "Delete failed.";
+				}
+			})
+			.catch(function() {
+				if (msg) {
+					msg.className = "cfg-msg err";
+					msg.textContent = "Network error - the page was not deleted.";
+				}
+			});
 	}
 
 	function renderCmsSavedBar() {
@@ -1728,28 +1870,7 @@ export const CONFIG_PAGE_SCRIPT = `
 				editCmsPage(p);
 			});
 			pill.querySelector('[data-act="del"]').addEventListener("click", function() {
-				var msg = document.getElementById("cms-msg");
-				fetch("/api/config/cms/delete", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ pw: unlockedPw, id: p.id })
-				})
-					.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
-					.then(function(res) {
-						if (res.ok && res.body && res.body.success) {
-							cmsSavedPages = res.body.pages || [];
-							if (document.getElementById("cms-edit-id").value === p.id) {
-								resetCmsEditor();
-							} else {
-								renderCmsSavedBar();
-							}
-							msg.className = "cfg-msg ok";
-							msg.textContent = "Deleted " + p.url + ".";
-						} else {
-							msg.className = "cfg-msg err";
-							msg.textContent = (res.body && res.body.error) || "Delete failed.";
-						}
-					});
+				deleteCmsPage(p);
 			});
 			bar.appendChild(pill);
 		});
@@ -1799,6 +1920,17 @@ export const CONFIG_PAGE_SCRIPT = `
 	document.getElementById("cms-reset-btn").addEventListener("click", function() {
 		resetCmsEditor();
 		document.getElementById("cms-msg").textContent = "";
+	});
+
+	document.getElementById("cms-delete-btn").addEventListener("click", function() {
+		var editId = document.getElementById("cms-edit-id").value.trim();
+		if (!editId) return;
+		for (var i = 0; i < cmsSavedPages.length; i++) {
+			if (cmsSavedPages[i].id === editId) {
+				deleteCmsPage(cmsSavedPages[i]);
+				return;
+			}
+		}
 	});
 
 	document.getElementById("cms-editor-form").addEventListener("submit", function(e) {

@@ -3,8 +3,9 @@
 Session #243 companion document. It explains how the **Quick batch table** (`#view-table`,
 "Table" view of the studio) actually works, records the **leftover code this audit found and what
 was done with it**, and states the **system requirements** the table depends on. Canonical rules
-stay in `system-rules.md` RULE 25 (quick batch table) and RULE 22 (two views, one state); nothing
-in those rules changed.
+stay in `system-rules.md` RULE 25 (quick batch table) and RULE 22 (two views, one state). RULE 25 was
+re-verified against the code by the Session #211 second pass, which added the Resolution and
+Orientation columns, the three-lane run and the finished-row skip (`toberesolved.md` B1-B11).
 
 ---
 
@@ -25,25 +26,44 @@ render endpoint:
 | Script | `<textarea data-batch-field="script">` | plain narration text, typed or pasted; a row without one is skipped |
 | Video style | `<select data-batch-field="style">` | the same ten styles as the script walkthrough (`SEO_IMAGE_STYLES`), default **Cinematic Film** |
 | Min | `<input type="number" min="1" max="6">` | target length in minutes, default **1** |
+| Resolution | `<select data-batch-field="resolution">` | 480 / 540 / 720 / 1024 px **long edge**, default **1024**; the live hint under it shows the pixels (`W×H`) | 
+| Orientation | `<select data-batch-field="orientation">` | Square 1:1 / Landscape 16:9 / Portrait 9:16, default **landscape** |
 | Preview | `Preview Here` → **▶ Preview** | plain text until the row is finished, then a live button |
 | Export | `Export Video` → **⬇ Export Video** | same gate; both cells are rewritten from one flag, so they always unlock together |
 | ✕ | `batch-row-del` | removes the row and revokes its object URLs |
 
 Toolbar: **＋ Add Row** (≤ `BATCH_ROW_LIMIT` = 10 rows) and **✦ Generate** (`#batch-generate`),
 whose label carries the runnable row count. Pressing Generate **while a run is busy stops the
-run** (`stopBatchRows()` aborts each row's `AbortController`) — one control, no second button.
+run** (`stopBatchRows()` marks `row.stopRequested` then aborts each row's `AbortController`) —
+one control, no second button.
 
-### Row pipeline (`runBatchRow`, one row at a time)
+**Layout (Session #244):** `.batch-table-edit` is `table-layout: fixed` with a `min-width` inside
+`.table-scroll`, and `.batch-row-status` wraps (`overflow-wrap: anywhere`). The seven percentage
+columns therefore keep their widths while rows process; before this, one long status line or a
+wide `<select>` let the browser re-measure the auto layout and shove the other columns sideways
+mid-run.
+
+**Timeouts (Session #244):** `batchFetch()` still caps a request at `BATCH_REQUEST_TIMEOUT_MS`
+(240 s; the image batch gets 480 s) but reports its own timeout as a `TimeoutError` instead of
+the browser's abort wording, and `batchReadChunk()` gives every NDJSON read an idle budget of
+`BATCH_STREAM_IDLE_TIMEOUT_MS` = 90 s (a stalled stream is cancelled and retried) so a row can
+never sit on "Rendering the AI images" forever.
+
+The retry policy is published as `window.__BATCH_RETRY = {attempts, baseMs, maxMs}` so tests can
+shorten the backoff; `window.__BATCH_ROWS` remains the live row array.
+
+### Row pipeline (`runBatchRow`, three rows at a time since Session #211)
 
 | Stage (`row.stage`) | Call | Result |
 | --- | --- | --- |
 | `voice` | `POST /api/voiceover {text, lang:"en"}` | MP3 blob → `row.mp3`, `row.mp3Url` |
 | `timing` | `decodeBatchAudio(row, blob)` | `row.audio` (duration) + `row.subtitles` from the script |
-| `prompts` | `POST /api/image-prompts {topic, minutes, style, script}` | `row.prompts` — 10 / 14 / 20 prompts by length |
-| `images` | `POST /api/image-batch {prompts}` (NDJSON stream) | `row.images` + one object URL per image |
+| `prompts` | `POST /api/image-prompts {topic, minutes, style, resolution, orientation, script}` | `row.prompts` — 10 / 14 / 20 prompts by length, each written for the row's frame |
+| `images` | `POST /api/image-batch {prompts, resolution, orientation}` (NDJSON stream) | `row.images` + one object URL per image, rendered at the row's frame |
 | `animate` | `buildBatchSlides(row)` | `row.slides`, `row.animated = true` |
 | `done` | — | `batchRowFinished(row)` true → Preview + Export unlock |
-| `error` | any step | `row.stage = "error"`, `row.error = <message>`, cells stay plain text |
+| `retry` | any step | **Silent, in-row.** `batchRunStep()` retries the failed step up to `BATCH_STEP_ATTEMPTS` = 4 times (backoff 0.8 / 1.6 / 3.2 s, capped at `BATCH_RETRY_MAX_MS` = 4 s). Nothing about the failure reaches the screen: the row keeps its normal stage label and paints the editor's script-section animation (`.va-spinner` + `va-loading-pulse`). Object URLs made by the failed attempt are revoked before the retry. |
+| `ready` | after the last attempt | `row.error = ""` and `row.stage = "ready"` — no error text, no warning colour, no toast; the row is simply pending again for the next ✦ Generate. Aborts and timeouts are classified (`batchIsAbortError`) and are never rendered; a user Stop is reported as a stop. |
 
 `batchRowFinished(row)` is the single definition of "finished": `row.mp3 && row.images.length &&
 row.animated && row.slides.length`.
@@ -73,7 +93,7 @@ below is what was still lying around, and what was done about it.
 | 4 | **`bulk-toggle` class on the ＋ Add Video button** (legacy name from the bulk-grid era) and `#bulk-banner` ("Bulk generation is in progress…") used by `renderAllVideos()`. | **Kept** — both are live; only the name is historical. Renaming would touch theme CSS for no behaviour change. |
 | 5 | **`☁️ API` button + `apiRenderVideo()` module (MODULE 7)** — the per-video render-API flow. Per this session's instruction the **visual button is removed** (the header slot now holds **Delete Video**) and the JS was deliberately **left in place**, unreachable from the UI. It still serves the background-worker mode (`workerRunJob` in `config-page-js.ts`) and `renderVideoLocally()` is shared with it. | Button removed; JS kept (documented in the table above of §4). |
 | 6 | **Caption plumbing** (`addVaCaptionRow`, `vaCaptionRowHTML`, `swapVaCaptionsIn/Out`) after the Captions section was dropped from the accordions (RULE 24) — the rows are the render engine's hidden working state. | **Kept** and still used by the renderer/`prepareVideo()`; not dead, but it is the one place where "empty by design" is normal. |
-| 7 | **Row fields** — audited all of `mp3Url`, `subtitles`, `objectUrls`, `prompts`, `slides`, `animated`, `startedAt`, `finishedAt`, `detail`, `error`, `controller`, `audio`, `mp3`, `images`, `stage`: every one is written **and** read. | No dead fields, no half-implemented "bulk" column. |
+| 7 | **Row fields** — audited all of `mp3Url`, `subtitles`, `objectUrls`, `prompts`, `slides`, `animated`, `startedAt`, `finishedAt`, `detail`, `error`, `controller`, `audio`, `mp3`, `images`, `stage` (plus `resolution`, `orientation`, `running` since Session #211): every one is written **and** read. | No dead fields, no half-implemented "bulk" column. |
 | 8 | **`window.__BATCH_ROWS`** test hook. | Live and documented; `window.__VIDEO_PROJECTS` was added in the same style for the accordion tests. |
 
 The one genuine "unfinished because the previous session ran out of budget" item was **#1**: a
@@ -90,7 +110,7 @@ payload with zero behaviour, so it is now gone.
 | --- | --- | --- |
 | Cloudflare Worker with **`ai` binding** (`AI`) | required | `/api/voiceover`, `/api/image-prompts`, `/api/image-batch`, `/api/script`, `/api/seo-plan` |
 | **`kv_namespaces` → `KV_BINDING`** | required for credits/accounts | without KV the app runs unmetered and account routes answer `503`; the table itself still works |
-| Image model | `@cf/stabilityai/stable-diffusion-xl-base-1.0` at 1024×576, 20 steps | `src/modules/image-batch.ts` |
+| Image model | `@cf/stabilityai/stable-diffusion-xl-base-1.0`, 20 steps, at the row's frame (default 1024×576 landscape; other sizes come from the Resolution/Orientation columns, short edge rounded to a multiple of 8) | `src/modules/image-batch.ts` |
 | TTS model | `@cf/myshell-ai/melotts` + free fallback URL | `/api/voiceover`, 8,000 chars, chunked at 500 |
 | Text model | `@cf/meta/llama-3.1-8b-instruct-fp8` (+ `llama-3.3-70b-instruct-fp8-fast` planner fallback) | `/api/image-prompts`, `/api/seo-plan`, `/api/script` |
 | Route surface used by the table | `POST /api/voiceover`, `POST /api/image-prompts`, `POST /api/image-batch` | no job URL, no polling, no `/api/render` |
@@ -106,7 +126,7 @@ payload with zero behaviour, so it is now gone.
 | `URL.createObjectURL` / `revokeObjectURL` | required | row images, MP3, preview |
 | `requestAnimationFrame`, `<canvas>`, `<audio>` | required | Preview player and slide animation |
 | `File`, `Blob`, `Image`, `createImageBitmap`/`HTMLImageElement` decode | required | slides are built from decoded images |
-| Memory | grows with rows: ~10 rows × 14–20 images at 1024×576 | images stay in memory as blobs + object URLs until the row is removed |
+| Memory | grows with rows: ~10 rows × 10–20 images at up to 1024 px long edge (and up to 3 rows generating at once) | images stay in memory as blobs + object URLs until the row is removed |
 
 ### 3.3 Limits and timeouts (constants)
 
@@ -116,6 +136,10 @@ payload with zero behaviour, so it is now gone.
 | `BATCH_MIN_MINUTES` / `BATCH_MAX_MINUTES` | 1 / 6 | `app-js.ts` |
 | `BATCH_REQUEST_TIMEOUT_MS` | 240 s (image batch: ×2 = 480 s) | `app-js.ts` |
 | `BATCH_SLIDE_DECODE_MS` | 10 s per image decode | `app-js.ts` |
+| `BATCH_RUN_CONCURRENCY` | 3 rows in flight at once | `app-js.ts` |
+| `BATCH_RESOLUTIONS` / `BATCH_DEFAULT_RESOLUTION` | `[480, 540, 720, 1024]` / `1024` (long edge, px) | `app-js.ts` + `src/modules/image-batch.ts` |
+| `BATCH_ORIENTATIONS` / `BATCH_DEFAULT_ORIENTATION` | `square \| landscape \| portrait` / `landscape` | `app-js.ts` |
+| `IMAGE_BATCH_CONCURRENCY` | 4 images in parallel inside one request | `src/modules/image-batch.ts` |
 | `IMAGE_BATCH_MAX_PROMPTS` | 20 per request | `src/modules/image-batch.ts` |
 | Prompt count by length | 1 min → 10, 2–3 min → 14, 4–6 min → 20 | `src/modules/image-prompts.ts` |
 | Voiceover | 8,000 characters, chunked at 500 | `src/index.ts` |
@@ -123,8 +147,14 @@ payload with zero behaviour, so it is now gone.
 
 ### 3.4 Behavioural requirements
 
-1. **One row at a time, sequentially**, so each finished row unlocks its own two buttons instead
-   of all ten stalling together.
+1. **Three rows at a time** (`BATCH_RUN_CONCURRENCY = 3`), so a table of ten scripts is not ten
+   serial pipelines while still letting each finished row unlock its own two buttons. A lane takes
+   the next pending row as soon as it frees up. (Session #211 replaced the original one-row-at-a-time
+   loop, which made every table feel sequential.)
+1a. **A finished row is never processed again.** The queue is
+   `batchRowPending(row)` = has a script **and** `!batchRowFinished(row)` **and** `!row.running`, so
+   rows whose Preview/Export buttons are already live are skipped; with nothing pending the table
+   says so instead of starting a run. A failed row is pending again and is retried.
 2. **A failed row fails alone**: it shows `⚠ <reason>` in its own status cell, keeps its text
    cells editable, and its Preview/Export cells stay plain text (no dead buttons).
 3. **Preview and Export unlock together**, only when `batchRowFinished(row)` is true.
@@ -143,8 +173,8 @@ payload with zero behaviour, so it is now gone.
 
 | Suite | Guards |
 | --- | --- |
-| `tests/quick-batch-table.test.mjs` (pre-existing) | editable rows, sequential generate, per-row failure isolation, Preview+Export unlock together, export is client-side (`no /api/render`) |
+| `tests/quick-batch-table.test.mjs` | editable rows, three-lane generate, the finished-row skip, the resolution/orientation payloads (client + worker frame maths), per-row failure isolation, Preview+Export unlock together, export is client-side (`no /api/render`) |
 | `tests/studio-ui-session-243.test.mjs` (new) | no sticker section / no API button / Delete Video present; delete renumbers the accordion stack and keeps state; CSS proportions; **no `.bulk-*` selectors left** |
 | `tests/seo-plan-resilience.test.mjs` (new) | planner retry/fallback/partial-plan contract (see `script-keyword-retry-debug.md`) |
 
-`npm test` → **75 tests, 75 pass**.
+`npm test` → **79 tests, 79 pass** (4 cases added by the Session #211 second pass).

@@ -114,7 +114,7 @@ User opens /
    │    1. prompts[] injected from src/prompts.ts
    │    2. build 2 legacy AI cards into #gallery and immediately call fetchAIImage(0) + fetchAIImage(1)
    │         → 2 automatic GET /image/:i requests on every page load (cards end up hidden, output unused)
-   │    3. wire the legacy panels: MP3 upload, title, sticker, captions, quality, gallery upload
+   │    3. wire the legacy panels: MP3 upload, title, captions, quality, gallery upload
    │    4. initVideoStudio() → hides every .audio-panel, .controls and #gallery
    │                          moves #render-btn into #action-bar as "🎬 Generate Videos"
    │    5. bindStudioShell() → bindBatchTable() then paints #view-table, wires #view-switch
@@ -319,8 +319,15 @@ Publish/read
 
 Edit / Delete
    Edit restores id, fields and blocks; saving at the 8-page cap is allowed for an existing id
-   Delete posts /api/config/cms/delete {pw,id} → removes the record and releases one slot
+   Delete posts /api/config/cms/delete {pw,id,slug} → removes the record and releases one slot
    (API also accepts slug; if both id and slug are present, id wins and only one page is removed)
+   TWO delete affordances, one code path (deleteCmsPage(), Session #244):
+     • Delete on the saved-page pill at the top of the CMS tab
+     • Delete This Page next to Save CMS Page - shown only while an existing page is open
+       (setCmsDeleteEnabled in editCmsPage/resetCmsEditor)
+   both ask for confirmation, then re-render the pills, the N / 8 counter and the editor from the
+   server's own page list, and the Top Menu / Footer link disappears on the next request because
+   the worker renders that menu from the same KV list
 ```
 
 ---
@@ -334,7 +341,8 @@ Edit / Delete
 new project = { n, name:"Video N", assets:[], audioFile:null, audio:null, status:"empty", el }
    ▼
 accordion = header + body
-   header : 🎬 Video N · status pill · [☁️ API] · summary · ▼ collapse
+   header : 🎬 Video N · status pill · [🗑 Delete Video] · summary · ▼ collapse
+            (the old [☁️ API] slot; the API button itself is not rendered any more - RULE 27)
    body   : ONE COLUMN — every .va-section stacks full width (3px bottom margin each)
             ├ Generate SEO Script With AI  ← FIRST block, with the always-visible hint line
             │           "SEO rule (explainer): 1 long-tail keyword said at least 1× ·
@@ -352,18 +360,23 @@ accordion = header + body
             │           note: "Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)"
             ├ AI Images — directly under the gallery: prompt textarea +
             │           "✨ Generate 2 Images" + results panel (thumb grid)
-            │           note: "2 images per submit · 480px landscape"
+            │           note: "2 images per submit · landscape 16:9 · 1024×576"
+            │           (disabled while this video's script & style
+            │            walkthrough is rendering its own images)
             ├ Audio — one MP3 (video length = MP3 length)
             ├ Title (top left) — text, font, colour
             ├ Captions (bottom) — up to 10 rows, each hh:mm:ss + ≤40 chars
-            ├ Sticker (bottom right) — 7 presets
             └ Quality — 480p Light / 720p Balanced / 720p High
 ```
 
-Across all seven themes, every button in the accordion (including its header API/disclosure
-controls and card/caption remove buttons) has a minimum 48 × 48 px target, 12px 24px padding and
-1rem type, matching the Upload Image button's proportions. Under **Neo Brutalist**, all of these
-buttons have `border-radius: 0`; other themes retain their own corner tokens.
+Across all seven themes, the accordion's normal buttons (including the header's Delete Video /
+disclosure controls and the caption remove buttons) follow the Upload Image proportions: 12px 24px
+padding and 1rem type. Two deliberate exceptions, both smaller by request: the **+ Add to Video** /
+**Fullscreen** buttons on a generated-image card are 30% smaller (`0.7rem`, `8px 17px`), and the
+**✕** on a gallery card is a tiny 8.4 × 8.4 px badge with a `0.35rem` glyph and no padding (40%
+smaller in #243, another 30% in #211) — the red badge itself is the padding. Under **Neo
+Brutalist**, all of these buttons have `border-radius: 0`; other themes retain their own corner
+tokens. (The old "minimum 48 × 48 px target" sentence described the pre-#243 rules and is gone.)
 
 ### 4.1 Media intake — three independent entry points
 
@@ -387,12 +400,14 @@ per file, in order, one at a time
 
 ```
 type prompt → [✨ Generate 2 Images]
+  (refused while this video's script & style walkthrough renders: its own
+   /api/image-batch stream owns the gallery and the credits)
   results panel already holds 4 cards? → clear it first (object URLs revoked)
-  variant = 1 → GET /image/gen?prompt=…&variant=1
-  variant = 2 → GET /image/gen?prompt=…&variant=2      (2 sequential calls per submit)
-  card = 480 px landscape preview + [+ Add to Video] + [Fullscreen]
+  variant = 1 → GET /image/gen?prompt=…&variant=1  ┐ both fired together,
+  variant = 2 → GET /image/gen?prompt=…&variant=2  ┘ Promise.all (2 parallel calls)
+  card = landscape 16:9 preview (the file is 1024×576) + [+ Add to Video] + [Fullscreen]
      + Add to Video → counts against the 25-image cap, appended to this video's gallery
-  status line: "Done — 480px landscape" or "1 of 2 failed: <server error>"
+  status line: "Done — landscape 16:9 · 1024×576" or "1 of 2 failed: <server error>"
 ```
 
 **C. Template composer (`Add video from template` link → #tpl-modal)**
@@ -560,13 +575,13 @@ Hints in this flow (inventory: `system-rules.md` RULE 18): the section hint line
   │
   ▼ runGenerationQueue()
    banner "⚠️ Bulk generation is in progress…" shown, button disabled
-   snapshot the engine's working state (slides, audio, caption rows, title, font, colour, sticker, quality)
+   snapshot the engine's working state (slides, audio, caption rows, title, font, colour, quality)
    │
    for n = 1 … videoProjects.length        (STRICTLY SEQUENTIAL — one video at a time)
      status = "rendering" → updateVideoStatus()
      prepareVideo(n):  decode MP3 (AudioContext.decodeAudioData)  ·  decode stills  ·
                        decode + composite GIF frames (120 MB frame budget)  ·  reuse probed MP4 elements
-     swap that video's caption rows into the hidden engine rows, copy its title/font/colour/sticker/quality
+     swap that video's caption rows into the hidden engine rows, copy its title/font/colour/quality
      activeSlides ← this video's slides, currentAudio ← this video's MP3
      renderContext = { fileName:"YouTubeVibeStudio_<VideoN>.mp4", subtitles: project.subtitles || [] }
      result = generateMP4()   → "done" | "skipped" | "error"
@@ -590,7 +605,7 @@ pick output target:
       → if estimated size > 250 MB → confirm() "may crash the tab" → declined = "skipped"
 
 settings: quality preset → W×H + video bitrate + audio bitrate; FPS = 30
-          canvas resized to W×H; title font + caption font + sticker art preloaded
+          canvas resized to W×H; title font + caption font preloaded
           slides = getSlideSequence()   (repeat from the start until the audio ends;
                                          final slide trimmed to end exactly with the audio)
           KEYFRAME_INTERVAL = 30 × 10 frames (10 s; no visual transitions)
@@ -606,7 +621,7 @@ muxer: Mp4Muxer.Muxer
 
 per slide → per frame:
    clear canvas → Ken-Burns effect cycling [slide-left, slide-right, slide-down, zoom-in]
-                → draw image/GIF frame/clip frame → title → sticker → captions → subtitles
+                → draw image/GIF frame/clip frame → title → captions → subtitles
    GIF: current frame chosen from the decoded loop timeline, blitted from a scratch canvas
    MP4 slide: prepared (pause → seek 0 → play muted) and advanced one frame per video frame
    flushAudioUpTo(frameTimestamp) writes every AAC chunk whose timestamp has arrived
@@ -634,12 +649,17 @@ empty ──▶ rendering ──▶ done
 
 ---
 
-## 6. Flow 3 — "☁️ API" button (server render job + background worker)
+## 6. Flow 3 — the server render job + background worker (formerly the "☁️ API" button)
+
+> **Historical entry point (unchanged since Session #243).** The live studio no longer renders a
+> **☁️ API** button — that header slot holds **🗑 Delete Video** — so this flow is reachable only from
+> the current-day settings route's background-worker mode. The module (`apiRenderVideo()`,
+> `collectVideoPayload()`, `renderVideoLocally()`) and the routes still exist.
 
 ```
-[☁️ API] in a Video N header
+(formerly) [☁️ API] in a Video N header
   │  every asset file + the MP3 are read as base64 (FileReader) and POSTed inline
-  ▼ POST /api/render { name, project:{title,font,color,sticker,quality,captions,subtitles},
+  ▼ POST /api/render { name, project:{title,font,color,quality,captions,subtitles},
                        assets:[{name,type,data}], audio:{name,type,data}|null }
   │
   ├─ payload JSON > 60 MB → 413 "Payload too large (max 60MB)" → alert
@@ -670,7 +690,7 @@ empty ──▶ rendering ──▶ done
         returns { job:{id,name,project,assets(base64),audio} }   (or {job:null})
      → window.workerRunJob(job)
           rebuild File objects from base64, probe MP4s, rebuild caption rows,
-          set title/font/colour/sticker/quality from job.project,
+          set title/font/colour/quality from job.project,
           run the SAME generateMP4() engine with window.__workerMode = true
           → POST /api/worker/deliver?job=<id> with the raw MP4 body
              server stores file-<jobId> blob (2 h TTL), job → done + fileId + size + finishedAt
@@ -706,20 +726,31 @@ Unlock Site Configuration
                 the entered value stays in memory as unlockedPw for subsequent admin APIs;
                 the hard-coded literal is not embedded in this client script
 
-Four full-page tabs
+Seven full-page tabs (the credits were split into their own pages in Bug Fix Session #244)
   1. General & Themes
-     seven theme cards + Save Theme; registered worker URLs; Background Worker Mode;
-     Plans & credits (free/paid_user + optional counter reset); Guest credits by IP
+     seven theme cards + Save Theme; registered worker URLs; Background Worker Mode
      background mode polls /api/worker/poll and renders queued jobs until Stop/tab close
-  2. Local Payment Gateway
+  2. Guest Credits by IP
+     GET /api/config/ipcredits lists today's masked IPs with used/left on the 10-image guest
+     plan; one Reset button per row (POST /api/config/ipcredits {pw,key}) + Refresh
+  3. Plans
+     GET /api/config/users {plans, users} renders one row per plan definition: Free 50 AI
+     images/day, Paid (paid_user) 1,200/day and the read-only Guest plan 10/day per IP, each
+     with the number of accounts on it and today's images used; Refresh Plans re-reads it
+  4. Accounts Credits
+     username + plan select + optional "Reset today counters" → POST /api/config/users
+     {pw,username,usertype,resetCredits}; the account list below loads a row into the form
+  5. Local Payment Gateway
      GET /api/config/payment-gateway loads name/details/instructions
      Save → POST same route {pw,gatewayName,gatewayDetails,uploadInstructions}
      /upgrade reads the saved public instructions
-  3. Payment Transactions
+  6. Payment Transactions
      paginated all/pending/approved receipt review → admin image → verified transaction number
      Approve follows Flow 0.6 and promotes the receipt owner to paid_user
-  4. CMS Pages (Max 8)
-     Add Page / Live Preview / saved-page Edit & Delete follow Flow 0.7
+  7. CMS Pages (Max 8)
+     Add Page / Live Preview / saved-page Edit & Delete follow Flow 0.7. A page (and the Top
+     Menu / Footer link it renders) can be deleted from the saved-page pill **or** from the
+     editor's own "Delete This Page" button, which appears only while an existing page is open.
 ```
 
 > The registered worker URLs are **stored only**. Nothing in the codebase ever contacts
@@ -806,12 +837,14 @@ once), exactly 4 short keywords (each said at least twice) plus the explainer ti
 writes the plain narration script around them; the chips under the button show the whole SEO plan with each
 keyword's measured count, and an empty video title is autofilled from the AI title → apply subtitles → optionally generate a voiceover and upload it as the audio track →
 press **🎬 Generate Videos** → the browser decodes everything, encodes audio then video,
-draws Ken-Burns slides with title/sticker/captions/subtitles, muxes an MP4 and saves it to disk →
+draws Ken-Burns slides with title/captions/subtitles, muxes an MP4 and saves it to disk →
 the status pill turns green *done* and the summary reads "Bulk complete: 1 saved, 0 skipped, 0 failed."
 
-Or, for server-mediated rendering: press **☁️ API** on that video, leave the tab polling, and let a
-current-day settings-route worker tab (Flow 3) pick the job up, render it in *its* browser and deliver the MP4
-back — the original tab downloads `API_Video1.mp4`.
+Or, for server-mediated rendering (the historical **☁️ API** path, Flow 3 — that button is no longer
+rendered; only the settings route's background-worker mode uses it): queue the video through
+`/api/render`, leave the tab polling, and let a current-day settings-route worker tab pick the job
+up, render it in *its* browser and deliver the MP4 back — the original tab downloads
+`API_Video1.mp4`.
 
 ## 11. Flow 5 — The two studio views (Bug Fix Session #240)
 
@@ -1144,18 +1177,31 @@ Rows live in their own array (`const batchRows`, also exposed as `window.__BATCH
 ### 16.2 One row, start to finish
 
 ```
-[+ Generate (N)]  ->  generateBatchRows(): sequential, guarded by batchRunBusy,
-                      rows without a script are skipped and stay text-only
+[+ Generate (N)]  ->  generateBatchRows(): batchRowPending() rows only
+                      (has a script, not finished, not already running),
+                      BATCH_RUN_CONCURRENCY = 3 lanes behind one batchRunBusy;
+                      a finished row is never re-generated or re-billed
    |
    +- stage "voice"    POST /api/voiceover {text: row.script, lang:"en"}   (3 retries server-side)
    +- stage "timing"   decodeBatchAudio(mp3) -> durationMs -> buildScriptCues(script, ms)
-   +- stage "prompts"  POST /api/image-prompts {topic, minutes, style, script} -> {prompts[]}
-   |                   (3 paragraphs / 30 words each / 2 600 chars, padded - never rejected)
-   +- stage "images"   POST /api/image-batch {prompts} -> NDJSON start|tick|image|error|done
+   +- stage "prompts"  POST /api/image-prompts {topic, minutes, style, resolution,
+   |                                             orientation, script} -> {prompts[]}
+   |                   (3 paragraphs / 30 words each / 2 600 chars, padded - never rejected;
+   |                    the frame is written into every scene prompt)
+   +- stage "images"   POST /api/image-batch {prompts, resolution, orientation}
+   |                   -> NDJSON start|tick|image|error|done, rendered at the row's frame
    +- stage "animate"  buildBatchSlides(row) -> row.animated = true -> stage "done"
    |
-   +- any failure      that row -> stage "error" + row.error; the queue continues with the next row
-                      [+ Stop after the current row] aborts through row.controller
+   +- any failure      Retried INSIDE the row, silently (Session #244): batchRunStep() makes up
+                      to 4 attempts per step (0.8 s / 1.6 s / 3.2 s backoff) and revokes the
+                      object URLs a failed attempt made before the retry. The row's status is
+                      NEVER an error: while a step runs it shows the editor's script-section
+                      animation (.va-spinner + va-loading-pulse), which is the same pixel for
+                      attempt 1 and attempt 4. When every attempt fails the row goes back to
+                      "Ready — press ✦ Generate" with row.error = "" (console only), so the next
+                      Generate retries it; the other lanes keep going.
+                      [■ Stop generating] sets row.stopRequested, clears batchRunBusy and aborts
+                      row.controller(s) - a stop is reported as a stop, never as an abort error.
 ```
 
 ```
@@ -1165,7 +1211,8 @@ row cells            batchActionCell(row, "preview" | "export")
                       row.mp3 && row.images.length && row.animated && row.slides.length
 
 [> Preview Here]  ->  #batch-preview-modal via openModal (stacks above any walkthrough)
-                      1024x576 canvas + requestAnimationFrame, the exporter's own Ken Burns
+                      canvas = the row's own frame (batchRowDimensions: e.g. 720x408 landscape,
+                      408x720 portrait, 480x480 square) + requestAnimationFrame, Ken Burns
                       zoom-in (1 -> 1.08 per slide, cover-fit), drawSubtitles(...), one slide per
                       slideDurationSec(row.slides[0]) (9 s default) with the list looping,
                       img.decode() raced against 10 s so a stalled image cannot hang the modal

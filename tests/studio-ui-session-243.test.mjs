@@ -103,10 +103,16 @@ test("delete video renumbers the stack and keeps the survivors' state", () => {
 });
 
 test("the theme CSS keeps the requested control proportions in every theme", () => {
-	/* Delete icon on a generated-image card: 40% smaller than 20x20 / 2px. */
-	assert.match(APP_CSS, /\.va-card-remove\s*\{[^}]*width:\s*\n?\s*12px/);
-	assert.match(APP_CSS, /\.va-card-remove\s*\{[^}]*height:\s*\n?\s*12px/);
+	/*
+	 * Delete icon on a generated-image card. #243 made it 40% smaller than
+	 * the 20x20 / 2px circle (12px); #211 took another 30% off the type and
+	 * 30% off the red shape: 8.4px box, 0.35rem glyph, no padding.
+	 */
+	assert.match(APP_CSS, /\.va-card-remove\s*\{[^}]*width:\s*\n?\s*8\.4px/);
+	assert.match(APP_CSS, /\.va-card-remove\s*\{[^}]*height:\s*\n?\s*8\.4px/);
 	assert.match(APP_CSS, /\.va-card-remove\s*\{[^}]*padding:\s*\n?\s*0;/);
+	assert.match(APP_CSS, /\.va-card-remove\s*\{[^}]*font-size:\s*\n?\s*0\.35rem/);
+	assert.match(APP_CSS, /\.va-card-remove\s*\{[^}]*background:\s*\n?\s*#b91c1c/);
 
 	/* Add to Video + Fullscreen: 30% smaller than the 1rem / 12px 24px rule. */
 	assert.match(APP_CSS, /\.va-ai-actions \.upload-btn/);

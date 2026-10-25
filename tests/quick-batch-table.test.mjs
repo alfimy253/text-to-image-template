@@ -317,10 +317,20 @@ test("one Generate runs every row that has a script and unlocks both cells toget
 	assert.match(w.document.getElementById("batch-note").textContent, /3 rows . 1 with a script/);
 });
 
-test("a row that fails mid-run reports it in its own cell only", async () => {
+/*
+ * Session #244 changed this contract: a failing step is retried inside the
+ * row and NOTHING about the failure is shown. The row keeps its cells as
+ * text (no dead buttons) and goes back to Ready, so the next Generate
+ * simply tries it again. tests/session-244.test.mjs guards the silent
+ * retry loop itself.
+ */
+test("a row that keeps failing stays quiet and keeps its cells as text", async () => {
 	const calls = [];
 	const { dom, w } = makeApp();
 	test.after(() => dom.window.close());
+	w.__BATCH_RETRY.attempts = 2;
+	w.__BATCH_RETRY.baseMs = 1;
+	w.__BATCH_RETRY.maxMs = 2;
 	mockBatchRoutes(w, calls, { failVoiceover: true });
 	await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -332,10 +342,14 @@ test("a row that fails mid-run reports it in its own cell only", async () => {
 	await w.runBatchRow(added);
 
 	const row = w.getBatchRow(added.id);
-	assert.equal(row.stage, "error");
-	assert.match(row.error, /MeloTTS is busy/);
+	assert.equal(row.stage, "ready");
+	assert.equal(row.error, "");
 	assert.equal(w.batchRowFinished(row), false);
-	assert.match(w.document.querySelector('[data-batch-row="' + added.id + '"] [data-batch-slot="status"]').textContent, /MeloTTS is busy/);
+	const status = w.document.querySelector('[data-batch-row="' + added.id + '"] [data-batch-slot="status"]');
+	assert.doesNotMatch(status.textContent, /MeloTTS|failed|error|\u26a0/i);
+	assert.equal(status.getAttribute("data-loading"), "0");
+	/* every attempt was a quiet retry, never a visible error */
+	assert.equal(calls.filter((call) => call.path === "/api/voiceover").length, 2);
 	/* a failed row keeps its cells as text: no dead buttons to press */
 	assert.equal(w.document.querySelectorAll('[data-batch-slot="preview"] button').length, 0);
 	/* and the table never touched the accordion state */
@@ -369,4 +383,218 @@ test("export is a client-side job: no render endpoint is ever called", async () 
 	assert.ok(body.includes("window.__lastRenderBlob"));
 	assert.ok(!body.includes("fetch("), "the export path never calls the network");
 	assert.equal(calls.filter((call) => call.path === "/api/render").length, 0);
+});
+
+/*
+ * ---------------------------------------------------------------------------
+ * Session #211 — the four table/lock corrections.
+ * ---------------------------------------------------------------------------
+ */
+
+/* A fetch mock whose voiceover call blocks, so overlap can be measured. */
+function mockSlowRoutes(w, calls, state, options = {}) {
+	const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+	w.fetch = async (url, opts = {}) => {
+		const path = String(url);
+		const method = String(opts.method || "GET").toUpperCase();
+		calls.push({ path, method, body: opts.body || null });
+
+		if (path === "/api/session") return jsonResponse({ success: true, authenticated: true, user: { username: "T", usertype: "free" }, remaining: {} });
+		if (path === "/api/credits") return jsonResponse({ success: true, plan: { id: "free", label: "Free", limits: { images: 50 } }, remaining: { images: 20 } });
+
+		if (path === "/api/voiceover") {
+			state.inFlight += 1;
+			state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+			await delay(options.voiceDelay === undefined ? 40 : options.voiceDelay);
+			state.inFlight -= 1;
+			return {
+				ok: true,
+				status: 200,
+				headers: { get: () => "audio/mpeg" },
+				blob: async () => new w.Blob([new Uint8Array([255, 243, 1, 2, 3, 4])], { type: "audio/mpeg" })
+			};
+		}
+
+		if (path === "/api/image-prompts" && method === "POST") {
+			return jsonResponse({ success: true, prompts: ["Scene one lead.\n\nScene one middle.\n\nScene one close."], count: 1, expectedCount: 1, style: "Neon Night" });
+		}
+
+		if (path === "/api/image-batch" && method === "POST") {
+			const body = JSON.parse(opts.body);
+			const events = [{ type: "start", count: body.prompts.length, width: 1024, height: 576 }];
+			body.prompts.forEach((_, index) => events.push({ type: "image", index, ok: true, mime: "image/png", data: pngBase64 }));
+			events.push({ type: "done", generated: body.prompts.length, failed: 0 });
+			return {
+				ok: true,
+				status: 200,
+				headers: { get: () => "application/x-ndjson" },
+				body: new ReadableStream({
+					start(controller) {
+						const encoder = new TextEncoder();
+						for (const event of events) controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+						controller.close();
+					}
+				})
+			};
+		}
+
+		return jsonResponse({ success: false, error: "Unexpected mock request: " + method + " " + path }, 404);
+	};
+}
+
+test("three rows render at the same time, and a finished row is never generated twice", async () => {
+	const calls = [];
+	const state = { inFlight: 0, maxInFlight: 0 };
+	const { dom, w } = makeApp();
+	test.after(() => dom.window.close());
+	mockSlowRoutes(w, calls, state);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+
+	while (w.__BATCH_ROWS.length) {
+		w.removeBatchRow(w.__BATCH_ROWS[0].id);
+	}
+
+	const rows = [];
+	for (let index = 1; index <= 5; index++) {
+		rows.push(w.addBatchRow({ script: "Row " + index + " narration. " + script }));
+	}
+
+	w.document.getElementById("batch-generate").click();
+	const allDone = await waitFor(w, () => rows.every((row) => w.batchRowFinished(w.getBatchRow(row.id))), 15000);
+	assert.ok(allDone, "every row finished");
+
+	/* Session #211: the lanes are three deep, never one. */
+	assert.equal(state.maxInFlight, 3, "three voiceovers were in flight at once");
+	assert.equal(calls.filter((call) => call.path === "/api/voiceover").length, 5);
+
+	const voiceCalls = calls.filter((call) => call.path === "/api/voiceover").length;
+
+	/* Pressing Generate again must not re-bill a finished row. */
+	w.document.getElementById("batch-generate").click();
+	await new Promise((resolve) => setTimeout(resolve, 120));
+	assert.equal(calls.filter((call) => call.path === "/api/voiceover").length, voiceCalls, "no finished row was generated again");
+	assert.match(
+		w.document.getElementById("required-modal-list").textContent,
+		/already finished/
+	);
+
+	/* ...and every finished row still offers both live buttons. */
+	for (const row of rows) {
+		const tr = w.document.querySelector('[data-batch-row="' + row.id + '"]');
+		assert.equal(tr.querySelectorAll('[data-batch-slot="preview"] button').length, 1);
+		assert.equal(tr.querySelectorAll('[data-batch-slot="export"] button').length, 1);
+	}
+});
+
+test("the resolution and orientation columns travel with both image calls", async () => {
+	const calls = [];
+	const state = { inFlight: 0, maxInFlight: 0 };
+	const { dom, w } = makeApp();
+	test.after(() => dom.window.close());
+	mockSlowRoutes(w, calls, state);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+
+	while (w.__BATCH_ROWS.length) {
+		w.removeBatchRow(w.__BATCH_ROWS[0].id);
+	}
+
+	/* The columns exist, with the four sizes and the three orientations. */
+	const html = createHTML();
+	for (const column of ["Resolution", "Orientation"]) {
+		assert.ok(html.includes(">" + column + "<"), column + " is a table column");
+	}
+
+	const row = w.addBatchRow({ script: script, style: "Neon Night", resolution: 720, orientation: "portrait" });
+	assert.equal(row.resolution, 720);
+	assert.equal(row.orientation, "portrait");
+
+	const selects = w.document.querySelectorAll('[data-batch-row="' + row.id + '"] select');
+	assert.equal(selects.length, 3, "style + resolution + orientation");
+	const resolutionSelect = w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-field="resolution"]');
+	for (const size of ["480", "540", "720", "1024"]) {
+		assert.ok(resolutionSelect.innerHTML.includes('value="' + size + '"'), size + " is offered");
+	}
+
+	await w.generateBatchRows();
+	assert.ok(w.batchRowFinished(w.getBatchRow(row.id)));
+
+	const prompts = JSON.parse(calls.find((call) => call.path === "/api/image-prompts").body);
+	assert.equal(prompts.resolution, 720);
+	assert.equal(prompts.orientation, "portrait");
+
+	const batch = JSON.parse(calls.find((call) => call.path === "/api/image-batch").body);
+	assert.equal(batch.resolution, 720);
+	assert.equal(batch.orientation, "portrait");
+
+	/* The client's frame maths matches the worker's: long edge 720, 9:16. */
+	const frame = w.batchRowDimensions({ resolution: 720, orientation: "portrait" });
+	assert.equal(frame.width, 408);
+	assert.equal(frame.height, 720);
+	assert.equal(w.batchRowDimensions({ resolution: 720, orientation: "landscape" }).width, 720);
+	assert.equal(w.batchRowDimensions({ resolution: 480, orientation: "square" }).height, 480);
+
+	/* A change in the select writes back to the row and the pixel hint. */
+	resolutionSelect.value = "480";
+	resolutionSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
+	assert.equal(w.getBatchRow(row.id).resolution, 480);
+});
+
+test("the worker validates the frame and writes it into every scene prompt", async () => {
+	const { imageFrameFor, sanitizeImageFrame, IMAGE_RESOLUTIONS, IMAGE_ORIENTATIONS } = await import("../src/modules/image-batch.ts");
+
+	assert.deepEqual([...IMAGE_RESOLUTIONS], [480, 540, 720, 1024]);
+	assert.deepEqual([...IMAGE_ORIENTATIONS], ["square", "landscape", "portrait"]);
+
+	/* Defaults: the historical 1024x576 landscape frame. */
+	assert.deepEqual(imageFrameFor(undefined, undefined), { resolution: 1024, orientation: "landscape", width: 1024, height: 576 });
+	assert.deepEqual(imageFrameFor(720, "portrait"), { resolution: 720, orientation: "portrait", width: 408, height: 720 });
+	assert.deepEqual(imageFrameFor(480, "square"), { resolution: 480, orientation: "square", width: 480, height: 480 });
+	/* 540 is not a multiple of 8, so the long edge lands on 544 (the hint says so). */
+	assert.deepEqual(imageFrameFor("540px", "landscape"), { resolution: 540, orientation: "landscape", width: 544, height: 304 });
+
+	/* Present but invalid = rejected, so a typo cannot silently resize. */
+	assert.ok(sanitizeImageFrame({ resolution: 999 }).error);
+	assert.ok(sanitizeImageFrame({ orientation: "diagonal" }).error);
+	assert.equal(sanitizeImageFrame({ orientation: "portrait" }).orientation, "portrait");
+
+	const instruction = buildImagePromptInstruction({ topic: "Morning yoga", minutes: 1, style: "Neon Night", script, resolution: 720, orientation: "portrait" });
+	assert.match(instruction, /FRAME: every image is rendered as a PORTRAIT frame at 408x720 px \(720 px long edge\)/);
+	assert.match(instruction, /Compose vertically/);
+
+	const landscape = buildImagePromptInstruction({ topic: "Morning yoga", minutes: 1, style: "Neon Night", script });
+	assert.match(landscape, /LANDSCAPE frame at 1024x576 px/);
+	assert.match(landscape, /Compose wide/);
+});
+
+test("the accordion's Generate AI Image button is locked only while its own walkthrough renders", async () => {
+	const calls = [];
+	const state = { inFlight: 0, maxInFlight: 0 };
+	const { dom, w } = makeApp();
+	test.after(() => dom.window.close());
+	mockSlowRoutes(w, calls, state);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+
+	w.addVideoAccordion();
+	w.addVideoAccordion();
+
+	const first = w.__VIDEO_PROJECTS[0];
+	first.script = script;
+	first._seoTopic = "Morning yoga";
+	first._seoMinutes = 1;
+	first._seoSpeed = "medium";
+	first._imageFlowActive = true;
+
+	const flow = w.startImagePromptFlow(1);
+
+	/* Synchronously locked for video 1 only. */
+	assert.equal(w.document.getElementById("va-ai-btn-1").disabled, true, "video 1 is locked");
+	assert.equal(w.document.getElementById("va-ai-btn-2").disabled, false, "video 2 may still generate");
+
+	/* A programmatic submit is refused while the flow owns the gallery. */
+	await w.submitAiImages(1);
+	assert.match(w.document.getElementById("va-ai-status-1").textContent, /unlocks when it finishes/);
+
+	await flow;
+	assert.equal(w.document.getElementById("va-ai-btn-1").disabled, false, "video 1 unlocks when the flow ends");
+	assert.equal(w.document.getElementById("va-ai-btn-2").disabled, false, "video 2 was never touched");
 });

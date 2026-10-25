@@ -27,7 +27,7 @@
  * enforced by `enforceParagraphGuard()` so no short prompt reaches SDXL.
  */
 
-import { IMAGE_PROMPT_TIMEOUT_MS } from "./image-batch";
+import { IMAGE_PROMPT_TIMEOUT_MS, imageFrameFor } from "./image-batch";
 
 export const IMAGE_STYLES = [
 	"Cinematic Film",
@@ -65,6 +65,9 @@ export interface ImagePromptInput {
 	script?: string;
 	scriptIdea?: string;
 	keywordSet?: { longTail?: string; short?: string[]; title?: string } | null;
+	/* Session #211: the quick-batch table's Resolution + Orientation columns. */
+	resolution?: number;
+	orientation?: string;
 }
 
 type AiEnv = {
@@ -218,6 +221,23 @@ export function buildImagePromptInstruction(
 	const style = normalizeImageStyle(input.style) || DEFAULT_IMAGE_STYLE;
 	const styleGuide = IMAGE_STYLE_GUIDANCE[style];
 	const topic = String(input.topic || "my video").replace(/\s+/g, " ").trim().slice(0, 160) || "my video";
+	const frame = imageFrameFor(input.resolution, input.orientation);
+	const frameRule =
+		"FRAME: every image is rendered as a " +
+		frame.orientation.toUpperCase() +
+		" frame at " +
+		frame.width +
+		"x" +
+		frame.height +
+		" px (" +
+		frame.resolution +
+		" px long edge). " +
+		(frame.orientation === "portrait"
+			? "Compose vertically: a tall subject or vertical leading lines, the focal point in the lower or middle third, nothing important near the top or bottom edge, and no wide panoramic detail."
+			: frame.orientation === "square"
+				? "Compose for a square crop: one centred focal point, generous negative space on all four sides, nothing important in the extreme corners."
+				: "Compose wide: keep the subject laterally balanced with headroom, natural depth from foreground to background, and nothing important at the extreme left or right edge.") +
+		" Describe the scene so it works at exactly that shape and size.";
 	const keywords = input.keywordSet
 		? [input.keywordSet.longTail || "", ...((input.keywordSet.short as string[]) || [])]
 				.filter(Boolean)
@@ -231,6 +251,7 @@ export function buildImagePromptInstruction(
 		"Treat the short script idea below as the general meaning of the whole video. Create broad, representative scenes that portray its central idea and progression; do not make a literal shot for every line of narration or copy lines from the script. " +
 		"The video topic is: " + topic + ". The script length is " + input.minutes + " minute(s), so return exactly " + count + " image prompts in opening-to-closing order. " +
 		"Every prompt must consistently follow the same selected video image style: " + style + ". Style direction: " + styleGuide + ". Apply this visual language to every scene; do not mix in another aesthetic. " +
+		frameRule + " " +
 		"QUALITY / STYLE GUARD - LENGTH: every prompt must be at least " + IMAGE_PROMPT_MIN_PARAGRAPHS + " paragraphs long, separated by a blank line, written inside one JSON string with \\n\\n between the paragraphs. " +
 		"Paragraph 1 = the subject and its action in this scene. Paragraph 2 = the setting, atmosphere, weather, time of day and light. Paragraph 3 = camera and lens (shot size, angle, height, depth of field), colour grade and the finishing style notes. " +
 		"Each paragraph needs at least " + IMAGE_PROMPT_PARAGRAPH_MIN_WORDS + " words of concrete, filmable visual detail; a prompt of one or two short sentences is rejected and re-asked. Do not pad with filler, repeat a sentence, or describe the narration - add real visual information instead. " +
@@ -476,12 +497,38 @@ const rawIdea = typeof body.scriptIdea === "string"
 	: typeof body.script === "string"
 		? body.script.slice(0, 40000)
 		: "";
+	/*
+	 * Session #211: the frame is optional. Absent = the historical landscape
+	 * 1024 px frame; present-but-invalid is a 400 so a typo never silently
+	 * produces prompts for the wrong shape.
+	 */
+	const frame = imageFrameFor(body.resolution, body.orientation);
+	if (body.resolution !== undefined && body.resolution !== null && body.resolution !== "") {
+		const raw = String(body.resolution).trim().toLowerCase().replace(/px$/, "");
+		if (!/^\d+$/.test(raw) || imageFrameFor(raw, body.orientation).resolution !== Number(raw)) {
+			return { error: "Resolution must be one of 480, 540, 720 or 1024 (pixels, long edge)" };
+		}
+	}
+	if (body.orientation !== undefined && body.orientation !== null && body.orientation !== "") {
+		const raw = String(body.orientation).trim().toLowerCase();
+		if (["square", "landscape", "portrait"].indexOf(raw) === -1) {
+			return { error: "Orientation must be one of square, landscape, portrait" };
+		}
+	}
 	const scriptIdea = summarizeScriptIdea(rawIdea, topic);
 	const keywordSet =
 		body.keywordSet && typeof body.keywordSet === "object" && !Array.isArray(body.keywordSet)
 			? (body.keywordSet as ImagePromptInput["keywordSet"])
 			: null;
-	return { topic, minutes, style, scriptIdea, keywordSet };
+	return {
+		topic,
+		minutes,
+		style,
+		scriptIdea,
+		keywordSet,
+		resolution: frame.resolution,
+		orientation: frame.orientation
+	};
 }
 
 /*
@@ -504,11 +551,14 @@ export async function handleGenerateImagePrompts(
 
 	const startedAt = Date.now();
 	const expectedCount = imagePromptCountForMinutes(input.minutes);
+	const frame = imageFrameFor(input.resolution, input.orientation);
 	console.info("[image-prompts] started", {
 		model,
 		minutes: input.minutes,
 		expectedCount,
 		style: input.style,
+		resolution: frame.resolution,
+		orientation: frame.orientation,
 		topicChars: input.topic.length,
 		scriptIdeaChars: (input.scriptIdea || "").length
 	});
@@ -527,6 +577,10 @@ export async function handleGenerateImagePrompts(
 			expectedCount,
 			style: input.style,
 			minutes: input.minutes,
+			resolution: frame.resolution,
+			orientation: frame.orientation,
+			width: frame.width,
+			height: frame.height,
 			model,
 			ms: Date.now() - startedAt
 		});
