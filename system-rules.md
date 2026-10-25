@@ -38,6 +38,14 @@
 > 2-5 shorts in total, long tail said ≥1×, shorts said 2-5×) no longer exists in any file. A future
 > non-SEO / non-explainer script mode is documented in RULE 7 (not implemented).
 >
+> **Session #243 (2026-10-25): UI corrections + planner resilience.** The accordion **Sticker**
+> section (and the sticker renderer behind it) is gone; the removed **☁️ API** header button is
+> replaced by **🗑 Delete Video**, which renumbers the stack; the generated-image delete icon is
+> 40% smaller and the Add to Video / Fullscreen buttons 30% smaller in every theme; the dead
+> bulk-grid CSS from Session #240 was deleted; and `POST /api/seo-plan` now retries, falls back to
+> a second model and can answer with one set (`partial: true`). See **RULE 27** at the end of this
+> file, `script-keyword-retry-debug.md` and `quick-batch-table-system-requirements.md`.
+>
 > **Current SEO/template revision (2026-10-23):** short/long-tail overlap is allowed with shared
 > counts; long-tail keywords have no word/character length rule. RULE 13 now has one scene gallery,
 > animated objects in Graphics, working layer/rotation controls and required 5–7 ring uploads.
@@ -1947,3 +1955,58 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   same invariants pinned from the repo suite. The live browser path must be run by the operator:
   this sandbox has no Chromium and no route to the free hosts.
 - See `render-app/README.md` for setup and `bug-fix-session-242.md` for the decision record.
+
+---
+
+## RULE 27 — Session #243 corrections: no sticker, Delete Video, smaller AI-card controls, no API button, resilient planner
+
+> Added 2026-10-25. Nothing here changes RULE 7's keyword contract, RULE 8's voiceover, RULE 22's
+> two views or RULE 25's quick-batch table; it records UI removals and two retry guarantees.
+
+- **No sticker anywhere in the studio.** The `Video N` accordion has no *Sticker (bottom right)*
+  section, the hidden global `#sticker-select` engine panel is deleted from `markup.ts`, and the
+  renderer no longer draws one (`STICKER_*` constants, `STICKER_PRESETS`, `getSticker()`,
+  `stickerEmojiString()`, `emojiCodePoints()`, `loadStickerAssets()`, `measureEmoji()`,
+  `stickerPath()` and `drawSticker()` were removed, including the embedded emoji PNG data).
+  `generateMP4()` frames contain the image, the title overlay and the captions only. Template
+  scene *graphic* stickers (RULE 13's Graphics dropdown) are a different feature and are untouched.
+- **`🗑 Delete Video` replaces the `☁️ API` button** in every accordion header
+  (`#va-delete-N`, class `.va-delete-btn`). The API button is removed **visually only** - the
+  `apiRenderVideo()` module, `collectVideoPayload()`, `renderVideoLocally()` and the server routes
+  are still in the code and are now unreachable from the studio (the settings page's
+  background-worker mode still uses the same bundled helpers). Style follows the theme button tokens
+  (`html[data-theme] .va-delete-btn`).
+- **Delete renumbers the stack.** `deleteVideoAccordion(n)` asks for confirmation, revokes the
+  removed video's object URLs, closes its transient per-video modals
+  (`seo-walkthrough-modal-N`, `voiceover-modal-N` for every index >= n), splices
+  `videoProjects`, then rebuilds the survivors as `Video 1..N` via
+  `captureVideoAccordionState()` / `restoreVideoAccordionState()`: title, font, colour, quality,
+  script topic/minutes/speed, the SEO chips, the script box, the status line, the MP3 line and
+  every gallery card are carried over. Every lookup in the studio is positional, so **the stack
+  must never contain a gap**; this is the invariant the delete path exists to preserve.
+  `window.__VIDEO_PROJECTS` exposes the live array for tests, like `window.__BATCH_ROWS`.
+- **Generated-image controls are smaller, in every theme.** `.va-card-remove` (the ✕ on an
+  AI-generated image card) is 40% smaller than the original 20×20 / 2 px circle: **12×12**, inset
+  **1.2 px**, `padding: 0`, `font-size: 0.5rem`. `.va-body .va-ai-actions .upload-btn(.small)`
+  (`+ Add to Video`, `Fullscreen`) is 30% smaller than the accordion standard: **0.7rem** type and
+  **8px 17px** padding instead of `1rem` / `12px 24px`. Both live after the accordion-button rule
+  in `styles.ts`, so the seven themes inherit them without per-theme overrides.
+- **Planner resilience (`POST /api/seo-plan`).** `runPlannerModelCall()` bounds every planner call
+  (`SEO_PLAN_AI_TIMEOUT_MS = 45000`) and retries a transport error / empty reply once on the same
+  model; `planOneSeoKeywordSet()` keeps 3 validation attempts per model and then tries
+  `SEO_PLAN_FALLBACK_MODELS`; `handleSeoPlanGeneration()` treats only the **first** set as
+  mandatory and answers `200 {success:true, partial:true, sets:[one], warning}` when the second
+  cannot differ (the client renders one card and continues). `parseKeywordSet()` accepts
+  `long_tail` / `shorts` / `shortKeywords` / object entries / delimited strings and trims a fifth
+  short, while still enforcing every RULE 7 rule.
+- **Stage loops retry model errors.** In `handleSeoScriptGeneration()` a thrown `env.AI.run()`
+  now consumes one of the three attempts (planner and writer) instead of aborting the request; the
+  planner prompt repeats the ask and the writer coaching is cleared so no stale SRT is reused.
+- **Dead bulk-grid CSS deleted.** `.bulk-panel`, `.bulk-panel-header`, `.bulk-panel-title`,
+  `.bulk-arrow`, `.bulk-slot`, `.bulk-slot-top`, `.bulk-slot-name`, `.bulk-status`, `.bulk-summary`,
+  `.bulk-slot-actions` and `.bulk-caption-wrap` (plus their five theme selectors) styled no
+  element; they are gone. `.bulk-toggle` (the ＋ Add Video button) and `#bulk-banner` keep their
+  historical names because they are still live.
+- **Verification.** `tests/studio-ui-session-243.test.mjs` (accordion has no sticker / no API
+  button / Delete Video present; delete renumbering keeps state; CSS proportions; no `.bulk-*`
+  left) and `tests/seo-plan-resilience.test.mjs` (8 planner/retry cases). `npm test` → 75/75.

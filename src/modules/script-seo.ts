@@ -529,6 +529,83 @@ export function srtSpokenText(srt: string): string {
 	return words.join(" ");
 }
 
+
+/*
+ * Lenient field lookup + list coercion for the planner reply.
+ *
+ * The 8B instruct model regularly answers with one of several equally
+ * reasonable shapes - `long_tail`, `longtail`, `keyword`, `shorts`,
+ * `shortKeywords`, a comma-separated string instead of an array, objects
+ * like `{"keyword": "..."}` - and the strict `{"title","headings","longTail",
+ * "short"}` reading used to reject every one of them, which is one of the
+ * reasons plan generation failed over and over. Accepting these shapes does
+ * NOT relax RULE 7: the extracted values still go through every existing
+ * check (exactly 4 unique 1-3 word shorts, no nesting, short keyword in the
+ * title and in at least one heading, title <= 70 characters).
+ */
+function pickField(
+	data: Record<string, unknown>,
+	keys: string[]
+): unknown {
+	for (const key of keys) {
+		const value = data[key];
+		if (value !== undefined && value !== null && value !== "") {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+/* Strips wrapping quotes, bullets and a trailing full stop from a phrase. */
+function cleanPhrase(value: unknown): string {
+	let text = String(value === undefined || value === null ? "" : value)
+		.replace(/[\u0000-\u0008\u000B\u000E-\u001F]/g, " ")
+		.trim();
+	text = text.replace(/^[\s"'`*•\-–—]+/, "").replace(/[\s"'`*•]+$/, "");
+	text = text.replace(/[.;,]+$/, "");
+	return text.trim();
+}
+
+/*
+ * A list field may arrive as an array (strings or `{keyword}`-ish objects),
+ * or as one delimited string. `null` means "field absent".
+ */
+function coerceStringList(value: unknown): unknown[] | null {
+	if (value === undefined || value === null) {
+		return null;
+	}
+	if (Array.isArray(value)) {
+		return value;
+	}
+	if (typeof value === "object") {
+		const inner = value as Record<string, unknown>;
+		const keyword = pickField(inner, ["keyword", "term", "name", "text", "value"]);
+		return keyword === undefined ? null : [keyword];
+	}
+	const parts = String(value)
+		.split(/[\n|;,]+/)
+		.map((part) => part.trim())
+		.filter(Boolean);
+	return parts.length ? parts : null;
+}
+
+/* One list entry (string or object) as a phrase. */
+function listEntryPhrase(entry: unknown): string {
+	if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+		return cleanPhrase(
+			pickField(entry as Record<string, unknown>, [
+				"keyword",
+				"term",
+				"name",
+				"text",
+				"value",
+				"phrase"
+			])
+		);
+	}
+	return cleanPhrase(entry);
+}
+
 /*
  * Parses and validates the Stage-1 SEO keyword JSON plan.
  * Allows short keywords inside the long-tail phrase: a spoken occurrence can
@@ -579,17 +656,21 @@ export function parseKeywordSet(
 	}
 
 	// 1. Exactly 1 long-tail keyword (lenient input shapes)
-	let longRaw: unknown = data ? (data.longTail ?? data.long_tail) : null;
+	let longRaw: unknown = data
+		? pickField(data, [
+				"longTail",
+				"long_tail",
+				"longtail",
+				"longTailKeyword",
+				"long",
+				"keyword",
+				"primaryKeyword"
+			])
+		: null;
 	if (Array.isArray(longRaw)) {
-		const first = longRaw[0];
-		longRaw =
-			first && typeof first === "object"
-				? (first as Record<string, unknown>).keyword
-				: first;
+		longRaw = longRaw[0];
 	}
-	if (longRaw && typeof longRaw === "object") {
-		longRaw = (longRaw as Record<string, unknown>).keyword;
-	}
+	longRaw = listEntryPhrase(longRaw) || cleanPhrase(longRaw);
 
 	const longTail = String(longRaw || "")
 		.trim()
@@ -605,11 +686,19 @@ export function parseKeywordSet(
 
 	// 2. Exactly 4 unique short-tail keywords
 	const shortList =
-		data && Array.isArray(data.short)
-			? data.short
-			: data && Array.isArray(data.shorts)
-				? data.shorts
-				: null;
+		data
+			? coerceStringList(
+					pickField(data, [
+						"short",
+						"shorts",
+						"shortKeywords",
+						"short_keywords",
+						"shortTail",
+						"short_tail",
+						"shorttails"
+					])
+				)
+			: null;
 
 	if (!shortList) {
 		return {
@@ -620,8 +709,7 @@ export function parseKeywordSet(
 
 	const shorts: string[] = [];
 	for (const shortEntry of shortList) {
-		const shortKeyword = String(shortEntry || "")
-			.trim()
+		const shortKeyword = listEntryPhrase(shortEntry)
 			.toLowerCase()
 			.replace(/\s+/g, " ");
 		if (!shortKeyword || !/[\p{L}\p{N}]/u.test(shortKeyword)) {
@@ -644,6 +732,17 @@ export function parseKeywordSet(
 		if (shorts.indexOf(shortKeyword) === -1) {
 			shorts.push(shortKeyword);
 		}
+	}
+
+	/*
+	 * Extra shorts are trimmed to the first four instead of failing the
+	 * whole plan: the model overshooting on count is a formatting slip, and
+	 * the four that remain still pass every RULE 7 check below. Too FEW
+	 * shorts stays an error, because the validator must never invent a
+	 * keyword the model never wrote.
+	 */
+	if (shorts.length > SEO_SHORT_TOTAL) {
+		shorts.length = SEO_SHORT_TOTAL;
 	}
 
 	if (shorts.length !== SEO_SHORT_TOTAL) {
@@ -678,8 +777,17 @@ export function parseKeywordSet(
 	}
 
 	// 4. Explainer video TITLE (<= 70 chars, includes >= 1 short keyword)
-	const title = String((data && data.title) || "")
-		.trim()
+	const title = cleanPhrase(
+		data
+			? pickField(data, [
+					"title",
+					"videoTitle",
+					"video_title",
+					"explainerTitle",
+					"youtubeTitle"
+				])
+			: ""
+	)
 		.replace(/\s+/g, " ");
 	if (!title) {
 		return {
@@ -707,11 +815,17 @@ export function parseKeywordSet(
 
 	// 5. Section HEADINGS (>= 1 heading, <= 12 words each, >= 1 includes a short keyword)
 	const headingList =
-		data && Array.isArray(data.headings)
-			? data.headings
-			: data && typeof data.heading === "string"
-				? [data.heading]
-				: null;
+		data
+			? coerceStringList(
+					pickField(data, [
+						"headings",
+						"heading",
+						"sections",
+						"sectionHeadings",
+						"section_headings"
+					])
+				)
+			: null;
 
 	if (!headingList || headingList.length < SEO_HEADINGS_MIN) {
 		return {
@@ -731,9 +845,7 @@ export function parseKeywordSet(
 
 	const headings: string[] = [];
 	for (const headingEntry of headingList) {
-		const heading = String(headingEntry || "")
-			.trim()
-			.replace(/\s+/g, " ");
+		const heading = listEntryPhrase(headingEntry).replace(/\s+/g, " ");
 		if (!heading) {
 			return {
 				ok: false,
@@ -1006,58 +1118,253 @@ export function buildSeoPlannerPrompt(
 }
 
 /*
- * One validated keyword set from the planner (max 3 attempts, same retry
- * contract as the script route's Stage 1). When `avoid` is given the prompt
- * instructs the model to produce a different set, and a reply that is still
- * identical to `avoid` is rejected and retried.
+ * ---------------------------------------------------------------------------
+ * PLANNER TRANSPORT RESILIENCE (2026-10-25)
+ *
+ * The keyword planner used to treat a *model* failure the same as a
+ * *validation* failure only in the validation case: a Workers AI transport
+ * error (AiError, rate limit, a retired model slug, a hung call) was thrown
+ * straight out of `planOneSeoKeywordSet`, so `/api/seo-plan` answered 500
+ * after a single failed call and the walkthrough dead-ended on
+ * "SEO plan failed: ...". Nothing was retried and no other model was tried.
+ *
+ * Two fixes live here:
+ *   1. `runPlannerModelCall()` retries the SAME model once on a transport
+ *      error (short backoff) and bounds every call with a timeout, so a hung
+ *      model cannot hold the request forever.
+ *   2. `planOneSeoKeywordSet()` keeps its 3 validation attempts per model and
+ *      then falls back to the next model in `SEO_PLAN_FALLBACK_MODELS`,
+ *      which is what keeps planning alive when the cheapest 8B instruct
+ *      model is overloaded, deprecated or answers garbage.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Tried in order after the configured script model. */
+export const SEO_PLAN_FALLBACK_MODELS: string[] =
+	["@cf/meta/llama-3.3-70b-instruct-fp8-fast"];
+
+/* A hung Workers AI call must not hold a plan forever. */
+export const SEO_PLAN_AI_TIMEOUT_MS = 45000;
+
+/* Transport attempts per model (validation attempts are separate). */
+export const SEO_PLAN_TRANSPORT_ATTEMPTS = 2;
+
+function plannerSleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function errorMessage(err: unknown): string {
+	if (err instanceof Error) {
+		return err.message;
+	}
+	if (err && typeof err === "object" && "message" in err) {
+		return String((err as { message: unknown }).message);
+	}
+	return String(err || "model call failed");
+}
+
+export interface PlannerModelResult {
+	ok: boolean;
+	text: string;
+	error: string;
+	attempts: number;
+	ms: number;
+}
+
+/*
+ * One model, up to `SEO_PLAN_TRANSPORT_ATTEMPTS` calls, each bounded by
+ * `SEO_PLAN_AI_TIMEOUT_MS`. Returns `{ok:false, error}` instead of throwing,
+ * so the caller can decide between "retry the same prompt" and "next model".
+ */
+export async function runPlannerModelCall(
+	env: { AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> } },
+	model: string,
+	prompt: string,
+	maxTokens: number,
+	temperature: number,
+	timeoutMs: number = SEO_PLAN_AI_TIMEOUT_MS
+): Promise<PlannerModelResult> {
+	const startedAt = Date.now();
+	let lastError = "";
+	let attempts = 0;
+
+	for (let attempt = 1; attempt <= SEO_PLAN_TRANSPORT_ATTEMPTS; attempt++) {
+		attempts = attempt;
+		if (!env || !env.AI) {
+			return {
+				ok: false,
+				text: "",
+				error: "AI binding not configured",
+				attempts,
+				ms: Date.now() - startedAt
+			};
+		}
+
+		let timer: ReturnType<typeof setTimeout> | null = null;
+
+		try {
+			const call = env.AI.run(model, {
+				prompt,
+				max_tokens: maxTokens,
+				temperature
+			});
+
+			const timeout = new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(() => {
+					reject(
+						new Error(
+							"model call timed out after " + timeoutMs + " ms"
+						)
+					);
+				}, timeoutMs);
+			});
+
+			const result = await Promise.race([call, timeout]);
+			const text = aiText(result);
+
+			if (!text) {
+				lastError = "the model returned an empty reply";
+			} else {
+				return {
+					ok: true,
+					text,
+					error: "",
+					attempts,
+					ms: Date.now() - startedAt
+				};
+			}
+		} catch (err: unknown) {
+			lastError = errorMessage(err);
+		} finally {
+			if (timer) {
+				clearTimeout(timer);
+			}
+		}
+
+		console.warn("[seo-plan] model call failed", {
+			model,
+			attempt,
+			error: lastError
+		});
+
+		if (attempt < SEO_PLAN_TRANSPORT_ATTEMPTS) {
+			await plannerSleep(400 * attempt);
+		}
+	}
+
+	return {
+		ok: false,
+		text: "",
+		error: lastError,
+		attempts,
+		ms: Date.now() - startedAt
+	};
+}
+
+/*
+ * One validated keyword set from the planner (max 3 validation attempts per
+ * model, same retry contract as the script route's Stage 1). When `avoid` is
+ * given the prompt instructs the model to produce a different set, and a
+ * reply that is still identical to `avoid` is rejected and retried.
+ *
+ * A transport error retries the same model once and then moves to the next
+ * model in `fallbackModels`, so a single failed call no longer kills the
+ * whole plan.
  */
 export async function planOneSeoKeywordSet(
 	env: { AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> } },
 	scriptModel: string,
 	topic: string,
-	avoid?: PlannedKeywordSet | null
+	avoid?: PlannedKeywordSet | null,
+	fallbackModels: string[] = SEO_PLAN_FALLBACK_MODELS
 ): Promise<PlannedKeywordSet> {
 	const basePrompt = buildSeoPlannerPrompt(topic, avoid);
-	let keywordError = "";
-	let prevRaw = "";
-	for (let attempt = 1; attempt <= 3; attempt++) {
-		const prompt =
-			basePrompt +
-			(attempt > 1
-				? " Your previous attempt was rejected: " +
-					keywordError +
-					(prevRaw
-						? " Your previous JSON was: " + prevRaw.slice(0, 420) + "."
-						: "") +
-					" Try again and fix that exact problem."
-				: "");
-		const result = await env.AI!.run(scriptModel, {
-			prompt,
-			max_tokens: 1024,
-			temperature: attempt === 1 ? 0.55 : 0.4
-		});
-		const rawText = aiText(result);
-		const check = parseKeywordSet(rawText);
-		if (check.ok && avoid && keywordSetsEqual(check.data, avoid)) {
-			keywordError =
-				"the keyword set is identical to the other set - choose a different long-tail keyword and different short keywords";
-			prevRaw = rawText.replace(/\s+/g, " ").trim();
-			continue;
+
+	/* Primary first, then each fallback once (no duplicates). */
+	const models: string[] = [];
+	for (const model of [scriptModel, ...fallbackModels]) {
+		if (model && models.indexOf(model) === -1) {
+			models.push(model);
 		}
-		if (check.ok) {
-			return check.data;
-		}
-		keywordError = check.error;
-		prevRaw = rawText.replace(/\s+/g, " ").trim();
 	}
-	throw new Error("SEO keywords invalid (" + keywordError + ") - try again");
+
+	let keywordError = "";
+	let transportError = "";
+
+	for (const model of models) {
+		let prevRaw = "";
+
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			const prompt =
+				basePrompt +
+				(attempt > 1
+					? " Your previous attempt was rejected: " +
+						keywordError +
+						(prevRaw
+							? " Your previous JSON was: " + prevRaw.slice(0, 420) + "."
+							: "") +
+						" Try again and fix that exact problem."
+					: "");
+
+			const call = await runPlannerModelCall(
+				env,
+				model,
+				prompt,
+				1024,
+				attempt === 1 ? 0.55 : 0.4
+			);
+
+			/*
+			 * The model itself failed (transport, timeout, empty reply):
+			 * stop spending attempts on this slug and try the next one.
+			 */
+			if (!call.ok) {
+				transportError = model + ": " + call.error;
+				break;
+			}
+
+			const check = parseKeywordSet(call.text);
+
+			if (check.ok && avoid && keywordSetsEqual(check.data, avoid)) {
+				keywordError =
+					"the keyword set is identical to the other set - choose a different long-tail keyword and different short keywords";
+				prevRaw = call.text.replace(/\s+/g, " ").trim();
+				continue;
+			}
+			if (check.ok) {
+				return check.data;
+			}
+			keywordError = check.error;
+			prevRaw = call.text.replace(/\s+/g, " ").trim();
+		}
+	}
+
+	if (!keywordError && transportError) {
+		throw new Error("SEO planner model failed (" + transportError + ") - try again");
+	}
+
+	throw new Error(
+		"SEO keywords invalid (" +
+			(keywordError || "no usable reply") +
+			(transportError ? "; model error: " + transportError : "") +
+			") - try again"
+	);
 }
 
 /*
  * POST /api/seo-plan {topic} -> {success, topic, sets:[setA, setB], model}
  * Each set is {title, headings, longTail, short:[4 shorts]} and has passed
- * the same `parseKeywordSet` validation the script route enforces. The two
- * sets are guaranteed different (different long-tail and short keywords).
+ * the same `parseKeywordSet` validation the script route enforces. When two
+ * sets are returned they are guaranteed different (different long-tail or
+ * different short keywords - `keywordSetsEqual`).
+ *
+ * DEGRADED SUCCESS (2026-10-25): only the FIRST set is mandatory. If the
+ * second planner run cannot produce a distinct, valid set - the usual
+ * production failure, because the 8B model tends to repeat itself when told
+ * to "be different" - the route answers 200 with ONE set plus
+ * `partial: true` and a `warning`, instead of failing the whole plan and
+ * dead-ending the walkthrough. The client renders whatever it receives
+ * (one card or two), so a topic is never left without a usable keyword set.
  */
 export async function handleSeoPlanGeneration(
 	request: Request,
@@ -1074,25 +1381,66 @@ export async function handleSeoPlanGeneration(
 	if (!env || !env.AI) {
 		return scriptJson({ success: false, error: "AI binding not configured" }, 503);
 	}
+	const startedAt = Date.now();
+
+	let first: PlannedKeywordSet;
+
 	try {
-		const first = await planOneSeoKeywordSet(env, scriptModel, topic);
-		const second = await planOneSeoKeywordSet(env, scriptModel, topic, first);
-		console.log("[seo-plan] ok", {
+		first = await planOneSeoKeywordSet(env, scriptModel, topic);
+	} catch (err: unknown) {
+		const message = errorMessage(err) || "SEO plan failed";
+		console.error("[seo-plan] failed", {
 			topic: topic.slice(0, 80),
-			first: first.longTail,
-			second: second.longTail
+			stage: "first-set",
+			ms: Date.now() - startedAt,
+			error: message
 		});
+		return scriptJson({ success: false, error: message }, 500);
+	}
+
+	let second: PlannedKeywordSet | null = null;
+	let secondError = "";
+
+	try {
+		second = await planOneSeoKeywordSet(env, scriptModel, topic, first);
+	} catch (err: unknown) {
+		secondError = errorMessage(err) || "second set failed";
+		console.warn("[seo-plan] second set unavailable, returning one set", {
+			topic: topic.slice(0, 80),
+			stage: "second-set",
+			ms: Date.now() - startedAt,
+			error: secondError
+		});
+	}
+
+	if (!second) {
 		return scriptJson({
 			success: true,
+			partial: true,
 			topic,
-			sets: [plannedSetToClient(first), plannedSetToClient(second)],
-			model: scriptModel
+			sets: [plannedSetToClient(first)],
+			model: scriptModel,
+			warning:
+				"Only one keyword set could be planned this time; pick it to continue. (" +
+				secondError +
+				")"
 		});
-	} catch (err: unknown) {
-		const message = err instanceof Error ? err.message : String(err || "SEO plan failed");
-		console.error("[seo-plan] failed", { topic: topic.slice(0, 80), error: message });
-		return scriptJson({ success: false, error: message || "SEO plan failed" }, 500);
 	}
+
+	console.log("[seo-plan] ok", {
+		topic: topic.slice(0, 80),
+		first: first.longTail,
+		second: second.longTail,
+		ms: Date.now() - startedAt,
+		model: scriptModel
+	});
+
+	return scriptJson({
+		success: true,
+		topic,
+		sets: [plannedSetToClient(first), plannedSetToClient(second)],
+		model: scriptModel
+	});
 }
 
 function buildPinpointRetryInstructions(
@@ -1334,23 +1682,69 @@ export async function handleSeoScriptGeneration(
 				promptChars: prompt.length
 			});
 
-			const result = await env.AI.run(scriptModel, {
-				prompt,
-				max_tokens: 1024,
-				temperature: plannerTemp
-			});
+			/*
+			 * A transport failure (AiError, rate limit, timeout, a retired
+			 * model slug) is a RETRY reason, not a reason to abandon the
+			 * request: it consumes one of the three planner attempts and the
+			 * next prompt repeats the original ask. Before this, any thrown
+			 * model error jumped straight to the outer catch and answered
+			 * 500 without a single retry.
+			 */
+			let rawText = "";
 
-			const rawText = aiText(result);
-			if (!rawText && result) {
-				console.warn("[script] unrecognized AI output shape (keywords)", {
+			try {
+				const result = await env.AI.run(scriptModel, {
+					prompt,
+					max_tokens: 1024,
+					temperature: plannerTemp
+				});
+
+				rawText = aiText(result);
+
+				if (!rawText && result) {
+					console.warn("[script] unrecognized AI output shape (keywords)", {
+						reqId,
+						attempt,
+						resultType: typeof result,
+						keys:
+							typeof result === "object" && result !== null
+								? Object.keys(result as Record<string, unknown>)
+								: []
+					});
+				}
+			} catch (modelError: unknown) {
+				keywordError =
+					"the planner model call failed (" +
+					errorMessage(modelError) +
+					")";
+				prevPlannerRaw = "";
+				plannerTrace.push({
+					attempt,
+					ok: false,
+					ms: Date.now() - attemptT0,
+					transport: true,
+					reason: keywordError
+				});
+				console.warn("[script] keywords model error", {
 					reqId,
 					attempt,
-					resultType: typeof result,
-					keys:
-						typeof result === "object" && result !== null
-							? Object.keys(result as Record<string, unknown>)
-							: []
+					ms: Date.now() - attemptT0,
+					error: keywordError
 				});
+				continue;
+			}
+
+			if (!rawText) {
+				keywordError = "the planner returned an empty reply";
+				prevPlannerRaw = "";
+				plannerTrace.push({
+					attempt,
+					ok: false,
+					ms: Date.now() - attemptT0,
+					empty: true,
+					reason: keywordError
+				});
+				continue;
 			}
 
 			const check = parseKeywordSet(rawText);
@@ -1494,13 +1888,40 @@ export async function handleSeoScriptGeneration(
 				hasPreviousValidSrt: Boolean(prevCheck && prevCheck.ok)
 			});
 
-			const result = await env.AI.run(scriptModel, {
-				prompt,
-				max_tokens: writerMaxTokens,
-				temperature: writerTemp
-			});
+			/* Same rule as the planner: a thrown model error retries. */
+			let rawSrt = "";
 
-			const rawSrt = aiText(result);
+			try {
+				const result = await env.AI.run(scriptModel, {
+					prompt,
+					max_tokens: writerMaxTokens,
+					temperature: writerTemp
+				});
+
+				rawSrt = aiText(result);
+			} catch (modelError: unknown) {
+				lastError =
+					"the script model call failed (" +
+					errorMessage(modelError) +
+					")";
+				prevCheck = null;
+				prevAudit = null;
+				writerTrace.push({
+					attempt,
+					ok: false,
+					ms: Date.now() - attemptT0,
+					transport: true,
+					reason: lastError
+				});
+				console.warn("[script] model error", {
+					reqId,
+					attempt,
+					ms: Date.now() - attemptT0,
+					error: lastError
+				});
+				continue;
+			}
+
 			const check = validateSrt(rawSrt, minutes);
 			const spokenText =
 				check.ok && check.srt ? srtSpokenText(check.srt) : "";

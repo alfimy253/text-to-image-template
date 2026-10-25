@@ -2,8 +2,8 @@
 
 A creator landing page and video studio served by one Cloudflare Worker. The studio runs
 **entirely in the browser**: turn images, GIFs, MP4 clips and an MP3 into a finished MP4 with a
-title, sticker, timestamp captions written from a plain narration script and a MeloTTS
-voiceover.
+title, timestamp captions written from a plain narration script and a MeloTTS
+voiceover. Stickers are gone: there is no sticker control and nothing is drawn over the frame.
 
 > The repository started life as Cloudflare's `text-to-image-template`; the only part of the
 > original that remains is the Workers AI image route. The README below describes **this**
@@ -15,8 +15,9 @@ voiceover.
   and bottom **Log in** menu open the existing KV-backed account flow. A signed-out visitor can
   explore the landing page before entering the studio.
 - **Videos stack, not one timeline.** Press **+ Add Video** to create up to **10** independent
-  "Video N" accordions, each with its own images/GIFs/MP4s, MP3, title, sticker, captions,
-  quality, script and AI image panel. **🎬 Generate Videos** renders them one after another.
+  "Video N" accordions, each with its own images/GIFs/MP4s, MP3, title, quality, script and AI
+  image panel — and a **🗑 Delete Video** button in the header that removes the video and
+  renumbers the stack (Video 1..N, no gaps; the survivors keep their files, audio and script). **🎬 Generate Videos** renders them one after another.
 - **Rendering is local and free.** WebCodecs `VideoEncoder` (H.264) + `AudioEncoder` (AAC) +
   `mp4-muxer` — no FFmpeg, no server rendering. Chrome/Edge stream the file straight to disk via
   the File System Access API; other browsers build it in memory.
@@ -57,11 +58,12 @@ voiceover.
 - **Template scene controls.** Graphic configuration has no Shapes & stickers heading/grid;
   **Delete element** sits beside **＋ Text / ＋ Graphic**, and the layer buttons match the neutral
   top-right **Pause** style without moving.
-- **Optional server-side rendering.** **☁️ API** uploads a video's whole payload to KV and a
-  background worker tab (the same app opened at its current-day settings URL, e.g.
-  `/16/config/uvxyz` on 2026-10-16 in Asia/Taipei) claims the job, renders it in *its* browser
-  and delivers the MP4 back — the studio polls and downloads it. If 10 jobs are already in
-  flight the app renders the video locally instead.
+- **Server-side render API (no longer in the UI).** The former **☁️ API** button was removed in
+  Session #243 — that header slot now holds **🗑 Delete Video**. The route set
+  (`POST /api/render`, `GET /api/render/<id>`, `/api/worker/poll|deliver|failed`) and the
+  background-worker mode on the current-day settings page remain in the code; nothing in the
+  studio accordions calls them, and every video is rendered locally or through the quick batch
+  table.
 - **Accounts.** KV-backed sign-up/sign-in, unlimited accounts (each with an `email:<address>`
   uniqueness index).
 - **Account dashboard and manual upgrades.** `/account` shows the signed-in profile, live daily
@@ -183,8 +185,8 @@ the strings that carry the rules (the full inventory, with the constant each one
 | Ring template, bottom accordion | `Ring images · N / 7 (min 5)`; choose 5–7 images together; inline errors preserve previous images |
 | Video accordion, **AI Images** | `2 images per submit · 480px landscape` (also the status line for failures) |
 | 🎙 **Generate Voiceover** | tooltip: *Speak the script to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
-| ☁️ **API** button | tooltip: *Send all of this video's elements to the render API* |
-| Main panel notes | slideshow repeats to cover the track · captions sit 4/7 up from the bottom, 17px Bookman, last one capped at 10 s · sticker is a 435 × 150 white rectangle hanging 40 px past the right edge |
+| Video accordion header | **🗑 Delete Video** — tooltip: *Delete this video with its images, MP4s, audio and script* (replaces the removed ☁️ API button; deleting renumbers the stack) |
+| Main panel notes | slideshow repeats to cover the track · captions sit 4/7 up from the bottom, 17px Bookman, last one capped at 10 s |
 | Onboarding | `Click ＋ Add Video above, then press Generate.` |
 | Bulk grid (batch table) / editor heads | `One row — one video` → `N rows · M with a script` (`#batch-note`) · `N of 10 videos` (`#concept-count`) · `idle` / `N in queue` / `table generating` (`#preview-state`) · empty state `No rows yet — press ＋ Add Row, paste a script, pick a style and press ✨ Generate.` (`#batch-empty`) |
 | Settings page, Appearance | `Current theme: Night Lab.` · `Preview only — press Save theme to apply it for everyone.` · `Saved — reload the studio page to see the new theme.` |
@@ -284,6 +286,12 @@ skin covers the whole site.
   the seven themes and where the choice is stored, RULE 22 = the studio shell and its two views,
   RULE 23 = CMS, payments and the account dashboard, RULE 25 = the Quick Batch table,
   RULE 26 = the local render app).
+- **`script-keyword-retry-debug.md`** — Session #243: why `POST /api/seo-plan` was failing, the
+  retry contract of every keyword function, the transport-retry / model-fallback / one-set
+  (`partial: true`) fixes and their tests.
+- **`quick-batch-table-system-requirements.md`** — Session #243: how the Quick batch table works
+  row by row, the hanging bulk-grid code the audit found and removed, and the system requirements
+  (bindings, browser APIs, limits, timeouts) it depends on.
 - **`new_requirements.md`** — the modular CMS/payment/account notes and KV schema plus the
   SEO overlap, ring uploads, layer/rotation and Graphics-dropdown requirements (§6);
   the README, userflow and system rules describe the verified current behavior.

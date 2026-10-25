@@ -152,12 +152,6 @@ export const APP_JS = `
 		);
 
 
-	const stickerSelectEl =
-		document.getElementById(
-			"sticker-select"
-		);
-
-
 	/*
 	 * Title overlay settings.
 	 *
@@ -227,250 +221,6 @@ export const APP_JS = `
 				titleFontEl.value
 			] ||
 			TITLE_FONTS.oswald
-		);
-
-	}
-
-
-	/*
-	 * Sticker geometry, in canvas pixels.
-	 *
-	 * The rectangle is a fixed size and
-	 * sits flush in the bottom right
-	 * corner (RIGHT_GAP 0, BOTTOM_GAP 0).
-	 *
-	 * EXCEED_RIGHT pushes it past the
-	 * right edge so the corner is fully
-	 * covered.
-	 *
-	 * The sticker is square cornered, so
-	 * RADIUS stays 0.
-	 *
-	 * The emoji and text inside are scaled
-	 * down automatically to fit the part of
-	 * the rectangle that is on screen.
-	 */
-
-	const STICKER_HEIGHT =
-		150;
-
-	/*
-	 * The sticker box must never be
-	 * taller than this, so it does not
-	 * look stretched when the video is
-	 * viewed in fullscreen.
-	 */
-	const STICKER_MAX_HEIGHT =
-		150;
-
-
-	const STICKER_WIDTH =
-		435;
-
-
-	const STICKER_RIGHT_GAP =
-		0;
-
-
-	const STICKER_BOTTOM_GAP =
-		0;
-
-
-	const STICKER_EXCEED_RIGHT =
-		40;
-
-
-	const STICKER_RADIUS =
-		0;
-
-
-	const STICKER_PADDING =
-		17;
-
-
-	const STICKER_GAP =
-		20;
-
-
-	const STICKER_ICON_GAP =
-		4;
-
-
-	const STICKER_EMOJI_SIZE =
-		33;
-
-
-	const STICKER_TEXT_SIZE =
-		16;
-
-
-	const STICKER_TEXT_MIN =
-		14;
-
-
-	const STICKER_TEXT_MAX =
-		16;
-
-
-	/*
-	 * Colour emoji need their own font
-	 * stack, otherwise they can render as
-	 * empty boxes.
-	 */
-
-	const STICKER_EMOJI_FONT =
-		"'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Segoe UI Symbol', sans-serif";
-
-	/*
-	 * The sticker icon artwork,
-	 * embedded as data URIs
-	 * (offline-safe): the icons
-	 * are identical on every
-	 * machine, no network
-	 * needed.
-	 */
-	const STICKER_EMOJI_DATA =
-		{
-			"1f525": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAAh1BMVEVHcEz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz0kAz/zE3/zE3/zE3/zE3/zE3/zE3/zE3/zE39wkL/zE3/zE3/zE3/zE30kAz/zE36ri33nxz+yEn+xUX5qij8vT32mxj9wUH3oyD1mBT6sjH1lBD7tjX8uTmQeifTAAAAHXRSTlMAMEBQv++PEM+A359gryBwzxDvv4CPUK9gIN9gMOUtXcUAAAKrSURBVHjarZfZkoIwEEWDLEkAcXfWDpu78//fN4OMqdAkJFCeJy3LI919OwJxJAtm5DUkENGXiGYAof8SUwwAERkPxV+K4I+AjvawoFdbAxtrYpAQBDiacB1c06SG+RiPBxpRAC2cuDMHgMQkgszZkz2a0W/bP4GzaAENuKsg8dwra0hJBx8kiXuIG2K8bJLQVaQbjwcKM3cRLo7KVlsTEGX9ti56Hnso/Vg3H5bSRsNDkFgCkIUJEklXwAATm0UBcPWNDaMn7UwimiyicUfkTxZxtIoxaLEnMkQ/YqstMHUIb6I/UcRw7Gegw7q1nkyxq2jR/b7X6UjiXBpeWj9SK4OQujcbzZz9h6i30jSEQRg+B2mnjtBzXZE5Pgd9mcbW1JbuMbDA8aw4/n3GOceao21oi2euLBdwqvLb4NDiZ9NgmFqIMscinDkX0VH8cToaSwtcRVA2pvJs2JCFDFYGFg7iQXtNOLteKEUULNxbUXlBlyQ9rqXlouWgFkcf18ABJohEAQoB5/MQpokOYEQfSJS/H/HkMrzFAW5uAR0qKaqHj14OHa7ijAIp+RneYh9UzkLkaPqSExjwSS9IlxI19SgUwMB/QBnu7E1p/Ela0Aeo1+iELkRDjj2aJBXK6+iZc+NeFYoHieqD5i6XqRfUUNa3pu93gcjV4Rb9/4JUM6GqFH2uarrumlvNUB49w1Sdc1Nza8JlZRZqNRRF/z+FxnI9nUy10rGYEoVUzsxGlefXSj0NUs0zVCVGUelulbKm32IkTaczgvCniXzSI5oiioiG+XjR3PCoP1ZkenSny3GeJSUGVm9jPG8rYmbn7tmRQfZrN816Tyx8bFw8mw9i5/3Tpvl8J06stuvBqraUOPO1NM78i4zje7fUWHbfZAKr/XazlI7Ndj8UnF+YwEpCshNBaAAAAABJRU5ErkJggg==",
-			"2764": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAAM1BMVEVHcEzdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkTdLkQVM82yAAAAEHRSTlMAIN+fzzBAEO+/j3Bgr1CAS8Xz9AAAAV5JREFUeF7l2M2OgzAMhdGbEOK4/N33f9rRMMISamgF9m7O1tKnNgmtAv6Vsdbx4dykSRt3bZlSb74cc7X5u7nwRFecrMqTMqOnZr7RClOVb7LNjbzY9To6V3PBiRReKPJ9bjA2Xipina42wkjmB0Ws05UFh8KPloUflaOz0WnDLtEt4ZfSTQFgZIARwMAAA4DGAA2oDFGxMcSGhSEWKEMoCkMUMAgaQ7SwNQoLxZ2jlSFWJIZIUQ9t5M/IzAAzAGEAAYCFbgt+rXRbsct0yvgzByz1ThpdGg4TXSaY7Fwhs3q3zKjzf9+kxodawsnkXWmj7i/mOkxN8KbygYqOjbdt6Bp404A+KbylCC5Idne+XyX6Vwd/yTrXJXfHSu6OlZwdI8WxXyei/Eh7nQdnfMANc+OFNuOWsbCrjLhJXhe38/tqvnpf4P1QL8FTSWk0waOqvSXxqgM5VEQQwb/2A80o0l7lU88FAAAAAElFTkSuQmCC",
-			"1f44d": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAAk1BMVEVHcEz/217/217/217/217/217/217/217/217/217/217/217ulUf/217/217ulUfulUf/217ulUf/217ulUf3uFP4v1X7zFnwnEnzqU78zVnulUfvm0nwn0rulUfulUf/217ulUf7ylj3uFP0r1Dzq07+1138zlr5wVXwnkrvmUjxokvyp036xVf1tFH4vFT90lstgPVGAAAAIHRSTlMAcGDfIBCfQL+Az6/v7zAQMFDfj4CAUN+fcO9Qv99gcEnxpdkAAAIGSURBVHherZbZkpswEEUFFiC8zTj7nsu6eJ3//7oA5VQUpLbVJZ1HHk5JfbtbCIokzlUaSeFLssNM7iuKcCf1FCn8JQ8lggwl2oQSQYYSRaFEKpQIwUSJh2gNjcxDBJ29x6ghUI0yaOz8Z9Y//hQa7z1EK4TpbIlA6cehQttAYxWqi1Sg8LEJlBnWXm2to/I7cTYj+SuERqk8etYWBzijIvnwjeWQSsqzBo9dbC/0ChRlPRQ6V9yxmGQKkrpYUhLDmMRrcDxFpw2RcRiKyyw461TW/RDjMadR07RkdEYzk4yeY0snZzxjFOUoqkFj7A2KbroZVb6qhPPNMKdEHvYzISLSP/alSXUcRR/dRW/Hgmb74i5C/8DzKoKITt8kQ9TOV2sqkwugGKLbqBneQCDdRc0ouoAidhedRxFIcp7IfrOuqdvIXVRNpaZSaPaMhpzXkdnatynNn5w+uhY03zkinEjPb0GIeMM2fBWUiF7+dbXk1kGxRO3k6WFFEiL2rj1wRRXd1/4n6s9Nd+DXyP4oSP/U5o8/RJg+2r7yROjspu0vwRS1VlH9Sejs4Vika/k/7fJ3Hs+ZDlRa+1pnA/7rb/4b8VubFonIZUUO5gI+dguRyNIVHjKYQ9JP102ESZY+Wf/FcNaYd+YXYWW/Zu7a7Yuwk9D5tRbTO30+3IvVnxaaD//O8wc9hoFwgKeolwAAAABJRU5ErkJggg==",
-			"1f514": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAAM1BMVEVHcEz/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDP/rDPIzIGKAAAAEXRSTlMAIJ/v/zAQQK+/j89ggHDfUC2EKUAAAAEoSURBVHgB7dgFcugwDARQJ1qzA/e/7IcyryyV23cAGUbaZByYZRVA1iU4RcEFicFlEVwR355W3FiDh+CGBIeEO1xXjTvsl5QL7inZVqbikTpfKjU8qaXJOh3P6MnSz/fN93gSvECS/VzG0zUQLahkULouqKCqfUOGLRUolEAtILQTPKAy1JlI8LzsUOmBgdLnK5TUKU1EdV8T+ecWGiC0M7JBaaOjprTq4tEfklBTNba/tXeo7ZrAdsd2woTE29HfkgcmHGxD/i2lA1OOxOfMNW8R0yI5mO9wFQaVX5D1miKMMv/km34CTpidPGEtmSswE5Kwep+80AGzgyeRKZV2gYns4VX8wgMfX6iSXFUb5IOo13FH97+Mwf82tvSb/ZA61KgAUOn9/AVW2in/wdtp3QAAAABJRU5ErkJggg==",
-			"1f3ac": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAMAAABiM0N1AAAArlBMVEVHcEw/cSM/cSM/cSM/cSMpLzMpLzMpLzPM1t3M1t0/cSM/cSPM1t0/cSMpLzPM1t3M1t0/cSM/cSM/cSMpLzMpLzMpLzPM1t3M1t0pLzPM1t3M1t0/cSNES08/cSMpLzMpLzPM1t3M1t0/cSM9REhSWV7M1t0pLzNfZ2xqcnc/cSMpLzPM1t0zOT6tt73CzNKPl51mbnM9REh7g4hSWV6ZoqijrLO4wchITlOFjZPVvWfCAAAAKnRSTlMAgEBQv0C/gL+AEI/P748Q75+vcM8QUEAw769w379gr3BQjyCAgJ8wMJ/qDCaiAAABkElEQVR42u3UW0/CQBQE4AUFWgQKKqKgYuvdXVquXv7/H5Mim9mUbs7S0xeTzutpvpAZWsHL9WTcj0QJiNqmw0EavtdXOkFRpNWUcq6QsCiSxpSioogpHVvSyPe+YWSlwBlJn05mVil0Q3TiA2njVlLjCUi+NIt1SUSxC+UoBdQ6P45SaEPQp5sUZYtNLBsjc5knvWgjCPfrFJDu/DDYI1EHzyXLY6RmqyF03g9boCUgSM95Y0hAjFzJIyXPH4m8DKVc0ZIdQS6d/i12BCXl9PmZgZrPdgQlERujWCJDy8bOCErKl9wRlLRLTE1Ml4RlCIQsSUv98YRC6JJupg9vgpneFnkVJaQl02Q/0WuJ0DfPgGaJ9QNG3wDh3T38wNE3E1oqMyuJULcMtFFGvvD+u90ArZWZhUScboBi22eEvgFiTg+IOT0g5vSAmNMDYk4PiDk9IN70gGof/JxWUAVVUAVV0P+C6iVA5ynULgG6EGkGfKi9gx67XKcm/nLPdAZC54T1m84E0q7dFlS6g3oK/AJJbHdxh9vlLAAAAABJRU5ErkJggg=="
-		};
-
-
-	/*
-	 * Every sticker carries a fire as
-	 * its first icon and a heart as
-	 * its last icon.
-	 */
-	const STICKER_FIRE =
-		"\u{1F525}";
-
-
-	const STICKER_HEART =
-		"\u2764\uFE0F";
-
-
-	/*
-	 * The sticker's icon string: fire
-	 * first, the preset's own emoji in
-	 * the middle, heart at the end.
-	 * Presets that already start with
-	 * a fire or end with a heart are
-	 * not doubled.
-	 */
-	function stickerEmojiString(
-		sticker
-	) {
-
-		let mid =
-			sticker.emoji;
-
-
-		if (
-			mid.indexOf(
-				STICKER_FIRE
-			) === 0
-		) {
-
-			mid =
-				mid.slice(
-					STICKER_FIRE.length
-				);
-
-		}
-
-
-		let icons =
-			STICKER_FIRE +
-				mid;
-
-
-		if (
-			sticker.emoji.indexOf(
-				STICKER_HEART
-			) !==
-				sticker.emoji.length -
-					STICKER_HEART.length
-		) {
-
-			icons =
-				icons +
-				STICKER_HEART;
-
-		}
-
-
-		return icons;
-
-	}
-
-
-	/*
-	 * The five sticker presets.
-	 *
-	 * Each one is an emoji plus a short
-	 * label drawn on a white sticker.
-	 */
-
-	const STICKER_PRESETS = {
-
-		none:
-			null,
-
-		like: {
-			emoji:
-				"\u{1F44D}",
-			text:
-				"Like"
-		},
-
-		love: {
-			emoji:
-				"\u{2764}\u{FE0F}",
-			text:
-				"Love it"
-		},
-
-		subscribe: {
-			emoji:
-				"\u{1F514}",
-			text:
-				"Subscribe"
-		},
-
-		"like-subscribe": {
-			emoji:
-				"\u{1F44D}\u{1F514}",
-			text:
-				"Like & Subscribe"
-		},
-
-		watch: {
-			emoji:
-				"\u{1F525}",
-			text:
-				"Watch Video"
-		},
-
-		"watch-like-subscribe": {
-			emoji:
-				"\u{1F525}\u{1F44D}\u{1F514}",
-			text:
-				"Watch, Like & Subscribe"
-		}
-
-	};
-
-
-	function getSticker() {
-
-		return (
-			STICKER_PRESETS[
-				stickerSelectEl.value
-			] ||
-			null
 		);
 
 	}
@@ -3676,987 +3426,6 @@ export const APP_JS = `
 
 
 	// =========================================================
-	// STICKER OVERLAY
-	// =========================================================
-
-	/*
-	 * Emoji artwork.
-	 *
-	 * Some systems have no colour emoji
-	 * font that canvas can use, which is
-	 * why the emoji showed in the page but
-	 * not in the video.
-	 *
-	 * The artwork is fetched as PNGs when
-	 * possible. If that fails the code
-	 * falls back to the system emoji font.
-	 */
-
-	let stickerEmojiImages =
-		null;
-
-
-	/*
-	 * Turns the emoji into the code points
-	 * used by the image file names.
-	 *
-	 * FE0F is the variation selector and
-	 * is not part of the file name.
-	 */
-
-	function emojiCodePoints(emoji) {
-
-		const points =
-			[];
-
-
-		for (
-			const character of emoji
-		) {
-
-			const point =
-				character.codePointAt(
-					0
-				);
-
-
-			if (
-				point !== 0xfe0f
-			) {
-
-				points.push(
-					point.toString(
-						16
-					)
-				);
-
-			}
-
-		}
-
-
-		return points;
-
-	}
-
-
-	function loadImage(src, timeoutMs) {
-
-		return new Promise(
-			(resolve, reject) => {
-
-				const image =
-					new Image();
-
-
-				/*
-				 * crossOrigin is required so the
-				 * canvas is not tainted, which
-				 * would make VideoFrame refuse
-				 * the frame.
-				 */
-
-				image.crossOrigin =
-					"anonymous";
-
-
-				const timer =
-					setTimeout(
-						() => {
-
-							reject(
-								new Error(
-									"Image timed out"
-								)
-							);
-
-						},
-						timeoutMs
-					);
-
-
-				image.onload =
-					() => {
-
-						clearTimeout(
-							timer
-						);
-
-						resolve(
-							image
-						);
-
-					};
-
-
-				image.onerror =
-					() => {
-
-						clearTimeout(
-							timer
-						);
-
-						reject(
-							new Error(
-								"Image failed"
-							)
-						);
-
-					};
-
-
-				image.src =
-					src;
-
-			}
-		);
-
-	}
-
-
-	async function loadStickerAssets() {
-
-		stickerEmojiImages =
-			null;
-
-
-		const sticker =
-			getSticker();
-
-
-		if (!sticker) {
-			return;
-		}
-
-
-		const points =
-			emojiCodePoints(
-				stickerEmojiString(
-					sticker
-				)
-			);
-
-
-		if (!points.length) {
-			return;
-		}
-
-
-		try {
-
-			const images =
-				await Promise.all(
-					points.map(
-						(point) =>
-							loadImage(
-								STICKER_EMOJI_DATA[point] ||
-								("https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.0.3/assets/72x72/" +
-									point +
-									".png"),
-								8000
-							)
-					)
-				);
-
-
-			/*
-			 * Drawing a cross-origin image
-			 * that did not send CORS headers
-			 * taints the canvas and
-			 * VideoFrame would then throw.
-			 *
-			 * This test fails loudly so the
-			 * fallback is used instead.
-			 */
-
-			for (
-				const image of images
-			) {
-
-				const probe =
-					document.createElement(
-						"canvas"
-					);
-
-
-				probe.width =
-					1;
-
-				probe.height =
-					1;
-
-
-				const probeCtx =
-					probe.getContext(
-						"2d"
-					);
-
-
-				probeCtx.drawImage(
-					image,
-					0,
-					0,
-					1,
-					1
-				);
-
-
-				probeCtx.getImageData(
-					0,
-					0,
-					1,
-					1
-				);
-
-			}
-
-
-			stickerEmojiImages =
-				images;
-
-		}
-		catch (error) {
-
-			console.warn(
-				"Emoji images unavailable, using the system emoji font.",
-				error
-			);
-
-
-			stickerEmojiImages =
-				null;
-
-		}
-
-	}
-
-
-	/*
-	 * Width the emoji takes up, either as
-	 * images or as text.
-	 */
-
-	function measureEmoji(
-		context,
-		emojiSize,
-		sticker
-	) {
-
-
-		const iconString =
-			stickerEmojiString(
-				sticker
-			);
-
-
-
-		const pointCount =
-			emojiCodePoints(
-				iconString
-			).length;
-
-
-
-		if (!pointCount) {
-
-
-
-			return 0;
-
-
-		}
-
-
-
-		if (stickerEmojiImages) {
-
-
-
-			return (
-				emojiSize * pointCount
-			) +
-			STICKER_ICON_GAP *
-				(pointCount - 1);
-
-
-		}
-
-
-
-		context.font =
-			emojiSize +
-			"px " +
-			STICKER_EMOJI_FONT;
-
-
-
-		let width =
-			0;
-
-
-
-		for (
-			const point of
-				emojiCodePoints(
-					iconString
-				)
-			) {
-
-
-			width +=
-				context.measureText(
-					String.fromCodePoint(
-						Number(
-							"0x" + point
-						)
-					)
-				).width +
-				STICKER_ICON_GAP;
-
-
-		}
-
-
-
-		return width - STICKER_ICON_GAP;
-
-
-	}
-
-
-	/*
-	 * Rectangle path.
-	 *
-	 * roundRect() is used when available,
-	 * with a manual fallback for older
-	 * browsers. Radius is 0 for the
-	 * sticker, so this is a plain
-	 * rectangle.
-	 */
-
-	function stickerPath(
-		context,
-		x,
-		y,
-		width,
-		height,
-		radius
-	) {
-
-		context.beginPath();
-
-
-		if (
-			context.roundRect &&
-			radius > 0
-		) {
-
-			context.roundRect(
-				x,
-				y,
-				width,
-				height,
-				radius
-			);
-
-
-			return;
-
-		}
-
-
-		context.rect(
-			x,
-			y,
-			width,
-			height
-		);
-
-
-		context.closePath();
-
-	}
-
-
-	/*
-	 * Draws the white rectangle in the
-	 * bottom right corner to cover a
-	 * watermark.
-	 *
-	 * Fixed size, square corners, flush
-	 * with the bottom and hanging past
-	 * the right edge.
-	 */
-
-	/*
-	 * Works out how to draw the sticker
-	 * label.
-	 *
-	 * One line when it fits, otherwise two
-	 * evenly balanced lines, so the text
-	 * stays readable inside a small box.
-	 */
-
-	function layoutLabel(
-
-		context,
-
-		text,
-
-		stack,
-
-		maxWidth,
-
-		maxHeight,
-
-		startSize
-
-	) {
-
-		context.font =
-			"bold " +
-			startSize +
-			"px " +
-			stack;
-
-
-		const singleWidth =
-			context.measureText(
-				text
-			).width;
-
-
-		if (
-			singleWidth <=
-				maxWidth ||
-			maxWidth <= 0
-		) {
-
-			return {
-
-				lines:
-					[text],
-
-				size:
-					startSize,
-
-				lineHeight:
-					startSize *
-					1.2
-
-			};
-
-		}
-
-
-		const words =
-			text.split(
-				" "
-			);
-
-
-		let best =
-			null;
-
-
-		for (
-			let i = 1;
-			i < words.length;
-			i++
-		) {
-
-			const first =
-				words
-					.slice(0, i)
-					.join(" ");
-
-
-			const second =
-				words
-					.slice(i)
-					.join(" ");
-
-
-			const difference =
-				Math.abs(
-					first.length -
-						second.length
-				);
-
-
-			if (
-				!best ||
-				difference <
-					best.difference
-			) {
-
-				best = {
-
-					lines:
-						[
-							first,
-							second
-						],
-
-					difference:
-						difference
-
-				};
-
-			}
-
-		}
-
-
-		/*
-		 * A single word cannot be split, so
-		 * it is simply scaled down.
-		 */
-
-		if (!best) {
-
-			const size =
-				startSize *
-				(maxWidth /
-					singleWidth);
-
-
-			return {
-
-				lines:
-					[text],
-
-				size:
-					size,
-
-				lineHeight:
-					size *
-					1.2
-
-			};
-
-		}
-
-
-		context.font =
-			"bold " +
-			startSize +
-			"px " +
-			stack;
-
-
-		const widest =
-			Math.max(
-				context.measureText(
-					best.lines[0]
-				).width,
-				context.measureText(
-					best.lines[1]
-				).width
-			);
-
-
-		/*
-		 * Fit the width first, then make
-		 * sure both lines still fit the
-		 * height of the box.
-		 */
-
-		let size =
-			startSize *
-			(maxWidth /
-				widest);
-
-
-		size =
-			Math.min(
-				size,
-				maxHeight /
-					2 /
-					1.2
-			);
-
-
-		return {
-
-			lines:
-				best.lines,
-
-			size:
-				size,
-
-			lineHeight:
-				size *
-				1.2
-
-		};
-
-	}
-
-
-	function drawSticker(
-		context,
-		width,
-		height
-	) {
-
-		const sticker =
-			getSticker();
-
-
-		if (!sticker) {
-			return;
-		}
-
-
-		context.save();
-
-
-		const boxWidth =
-			STICKER_WIDTH;
-
-
-		/*
-		 * The box is always exactly one
-		 * fifth of the video height (min
-		 * and max are the same), so it
-		 * keeps the same share of the
-		 * frame at every quality.
-		 */
-		const boxHeight =
-			Math.round(
-				height / 5
-			);
-
-
-		/*
-		 * Flush to the bottom, and pushed
-		 * STICKER_EXCEED_RIGHT pixels past
-		 * the right edge so the corner is
-		 * fully covered.
-		 */
-
-		const x =
-			width -
-			boxWidth +
-			STICKER_EXCEED_RIGHT;
-
-
-		const y =
-			height -
-			STICKER_BOTTOM_GAP -
-			boxHeight;
-
-
-		// =================================================
-		// WHITE RECTANGLE
-		// =================================================
-
-		context.fillStyle =
-			"#ffffff";
-
-
-		stickerPath(
-			context,
-			x,
-			y,
-			boxWidth,
-			boxHeight,
-			STICKER_RADIUS
-		);
-
-
-		context.fill();
-
-
-		// =================================================
-		// FIT THE CONTENT INSIDE
-		// =================================================
-
-		/*
-		 * Only the part of the rectangle
-		 * that is on screen can hold the
-		 * emoji and the text.
-		 */
-
-		const visibleWidth =
-			boxWidth -
-			STICKER_EXCEED_RIGHT;
-
-
-		let padding =
-			STICKER_PADDING;
-
-
-		let gap =
-			STICKER_GAP;
-
-
-		let emojiSize =
-			STICKER_EMOJI_SIZE;
-
-
-		let textSize =
-			STICKER_TEXT_SIZE;
-
-
-		context.font =
-			"bold " +
-			textSize +
-			"px " +
-			getTitleFont().stack;
-
-
-		let textWidth =
-			context.measureText(
-				sticker.text
-			).width;
-
-
-		let emojiWidth =
-			measureEmoji(
-				context,
-				emojiSize,
-				sticker
-			);
-
-
-		const maxContent =
-			visibleWidth -
-			padding *
-				2;
-
-
-		/*
-		 * The icons keep their fixed size;
-		 * the label wraps or shrinks instead
-		 * of squeezing the icons.
-		 */
-
-
-		/*
-		 * Everything left over is for the
-		 * text.
-		 */
-
-		const textBudget =
-			Math.max(
-				0,
-				maxContent -
-					STICKER_EXCEED_RIGHT -
-					emojiWidth -
-					gap
-			);
-
-
-		const label =
-			layoutLabel(
-				context,
-				sticker.text,
-				getTitleFont().stack,
-				textBudget,
-				boxHeight -
-					padding *
-						2,
-				textSize
-			);
-
-
-
-		/*
-		 * The label font is clamped:
-		 * never below 14px, never above
-		 * 16px.
-		 */
-
-
-		label.size =
-			Math.max(
-				STICKER_TEXT_MIN,
-				Math.min(
-					STICKER_TEXT_MAX,
-					label.size
-				)
-			);
-
-
-		// =================================================
-		// EMOJI AND TEXT
-		// =================================================
-
-		context.textAlign =
-			"left";
-
-
-		context.textBaseline =
-			"middle";
-
-
-		const middleY =
-			y +
-			boxHeight /
-				2;
-
-
-		let cursor =
-			x +
-			padding;
-
-
-		if (stickerEmojiImages) {
-
-			for (
-				const image of stickerEmojiImages
-			) {
-
-				context.drawImage(
-					image,
-					cursor,
-					middleY -
-						emojiSize /
-							2,
-					emojiSize,
-					emojiSize
-				);
-
-
-				cursor +=
-					emojiSize +
-						STICKER_ICON_GAP;
-
-			}
-
-		}
-		else {
-
-			context.font =
-				emojiSize +
-				"px " +
-				STICKER_EMOJI_FONT;
-
-
-			context.fillStyle =
-				"#111111";
-
-
-
-			let iconCursor =
-				cursor;
-
-
-
-			for (
-				const point of
-					emojiCodePoints(
-						stickerEmojiString(
-							sticker
-						)
-					)
-			) {
-
-
-				const icon =
-					String.fromCodePoint(
-						Number(
-							"0x" + point
-						)
-					);
-
-
-
-				context.fillText(
-					icon,
-					iconCursor,
-					middleY
-				);
-
-
-
-				iconCursor +=
-					context.measureText(
-						icon
-					).width +
-					STICKER_ICON_GAP;
-
-
-			}
-
-
-
-			cursor =
-				iconCursor;
-
-		}
-
-
-		cursor +=
-			gap;
-
-
-		context.fillStyle =
-			"#111111";
-
-
-		context.font =
-			"bold " +
-			label.size +
-			"px " +
-			getTitleFont().stack;
-
-
-		/*
-		 * The text lines are centred inside
-		 * the room left by the icons: from
-		 * just after the icons to the visible
-		 * right edge of the box.
-		 */
-		context.textAlign =
-			"center";
-
-		const textLeft =
-			cursor;
-
-		const textRight =
-			x +
-			boxWidth -
-				STICKER_EXCEED_RIGHT -
-				padding;
-
-		const textCenter =
-			(textLeft +
-				textRight) /
-				2;
-
-		const startY =
-			middleY -
-			(label.lines.length -
-				1) *
-				label.lineHeight /
-				2;
-
-
-		label.lines.forEach(
-			(line, index) => {
-
-				context.fillText(
-					line,
-					textCenter,
-					startY +
-						index *
-							label.lineHeight
-				);
-
-			}
-		);
-
-
-		context.restore();
-
-	}
-
-
-
-	// =========================================================
 	// GIF DECODER + FRAME COMPOSITOR
 	// =========================================================
 
@@ -6164,6 +4933,17 @@ export const APP_JS = `
 	let videoProjects =
 		[];
 
+	/*
+	 * Exposed for tests / debugging: the live project list, same array
+	 * (like window.__BATCH_ROWS for the quick-batch table).
+	 */
+	if (typeof window !== "undefined") {
+
+		window.__VIDEO_PROJECTS =
+			videoProjects;
+
+	}
+
 	let generating =
 		false;
 
@@ -6380,6 +5160,402 @@ export const APP_JS = `
 
 	}
 
+	/*
+	 * =========================================================
+	 * DELETE VIDEO (the header button of every accordion)
+	 * =========================================================
+	 *
+	 * Every lookup in this studio is positional -
+	 * videoProjects[n - 1], #va-title-<n>, the batch counters -
+	 * so a gap in the stack would silently point the wrong
+	 * video's title, gallery or script at a row. Deleting
+	 * therefore renumbers: the removed project's DOM node and
+	 * object URLs go away, the other projects keep their files,
+	 * audio, script and status, and every surviving accordion is
+	 * rebuilt as Video 1..N with the state it already had.
+	 *
+	 * The per-video walkthrough / voiceover windows are transient
+	 * UI, so they are closed instead of renumbered.
+	 */
+
+	/* Everything the accordion's inputs hold right now. */
+	function captureVideoAccordionState(n) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return null;
+		}
+
+		const value = (id) => {
+
+			const el =
+				document.getElementById(id);
+
+			return el ? el.value : "";
+
+		};
+
+		const box =
+			document.getElementById(
+				"va-script-box-" + n
+			);
+
+		const keywords =
+			document.getElementById(
+				"va-script-keywords-" + n
+			);
+
+		const status =
+			document.getElementById(
+				"va-script-status-" + n
+			);
+
+		const body =
+			document.getElementById(
+				"va-body-" + n
+			);
+
+		return {
+			project: project,
+			title: value("va-title-" + n),
+			font: value("va-font-" + n),
+			color: value("va-color-" + n),
+			quality: value("va-quality-" + n),
+			topic: value("va-script-topic-" + n),
+			minutes: value("va-script-minutes-" + n),
+			speed: value("va-script-speed-" + n),
+			keywordsHTML: keywords ? keywords.innerHTML : "",
+			keywordsHidden: !keywords || keywords.style.display === "none",
+			scriptBoxOpen: !!box && box.style.display !== "none",
+			statusText: status ? status.textContent : "",
+			bodyOpen: !body || body.style.display !== "none"
+		};
+
+	}
+
+	/* Rebuilds one accordion at its NEW position from a capture. */
+	function restoreVideoAccordionState(n, state) {
+
+		const project =
+			state.project;
+
+		if (!project) {
+			return;
+		}
+
+		project.n =
+			n;
+
+		project.name =
+			"Video " + n;
+
+		const acc =
+			document.createElement(
+				"div"
+			);
+
+		acc.className =
+			"video-accordion";
+
+		acc.id =
+			"video-" + n;
+
+		acc.innerHTML =
+			videoAccordionHTML(
+				n
+			);
+
+		const stack =
+			document.getElementById(
+				"video-accordions"
+			);
+
+		if (!stack) {
+			return;
+		}
+
+		stack.appendChild(
+			acc
+		);
+
+		project.el =
+			acc;
+
+		const files =
+			document.getElementById(
+				"va-file-" + n
+			);
+
+		if (files) {
+			files.addEventListener(
+				"change",
+				(event) =>
+					onVideoFiles(
+						n,
+						event
+					)
+			);
+		}
+
+		const audioInput =
+			document.getElementById(
+				"va-audio-" + n
+			);
+
+		if (audioInput) {
+			audioInput.addEventListener(
+				"change",
+				(event) =>
+					onVideoAudio(
+						n,
+						event
+					)
+			);
+		}
+
+		const set = (id, value) => {
+
+			const el =
+				document.getElementById(id);
+
+			if (el) {
+				el.value = value;
+			}
+
+		};
+
+		set("va-title-" + n, state.title);
+		set("va-font-" + n, state.font || "oswald");
+		set("va-color-" + n, state.color || "white");
+		set("va-quality-" + n, state.quality || "balanced");
+		set("va-script-topic-" + n, state.topic);
+		set("va-script-minutes-" + n, state.minutes || "1");
+		set("va-script-speed-" + n, state.speed || "medium");
+
+		/* The gallery is rebuilt from the files the project kept. */
+		for (const asset of project.assets) {
+
+			asset.card =
+				null;
+
+			try {
+				buildVaCard(
+					n,
+					asset
+				);
+			}
+			catch (cardError) {
+				console.warn(
+					"Video " + n + ": could not restore an asset card.",
+					cardError
+				);
+			}
+
+		}
+
+		if (project.audioFile) {
+
+			const line =
+				document.getElementById(
+					"va-audio-line-" + n
+				);
+
+			if (line) {
+				line.textContent =
+					"\ud83c\udfb5 " + project.audioFile.name;
+			}
+
+		}
+
+		const keywords =
+			document.getElementById(
+				"va-script-keywords-" + n
+			);
+
+		if (keywords && state.keywordsHTML) {
+			keywords.innerHTML =
+				state.keywordsHTML;
+			keywords.style.display =
+				state.keywordsHidden ? "none" : "";
+		}
+
+		const box =
+			document.getElementById(
+				"va-script-box-" + n
+			);
+
+		if (box && project.script) {
+			box.textContent =
+				project.script;
+		}
+
+		const status =
+			document.getElementById(
+				"va-script-status-" + n
+			);
+
+		if (status && state.statusText) {
+			status.textContent =
+				state.statusText;
+		}
+
+		setScriptBoxState(
+			n,
+			!!project.script && state.scriptBoxOpen
+		);
+
+		const body =
+			document.getElementById(
+				"va-body-" + n
+			);
+
+		if (body && !state.bodyOpen) {
+			body.style.display =
+				"none";
+
+			const arrow =
+				document.getElementById(
+					"va-arrow-" + n
+				);
+
+			if (arrow) {
+				arrow.textContent =
+					"\u25b6";
+			}
+		}
+
+		updateVideoStatus(
+			n
+		);
+
+		syncVoiceoverButton(
+			n
+		);
+
+	}
+
+	/* Closes the transient per-video windows (they are not renumbered). */
+	function closeVideoModals(n) {
+
+		for (const id of ["seo-walkthrough-modal-", "voiceover-modal-"]) {
+
+			const modal =
+				document.getElementById(id + n);
+
+			if (modal) {
+
+				if (typeof closeModal === "function") {
+					closeModal(modal);
+				}
+				else if (modal.parentNode) {
+					modal.parentNode.removeChild(modal);
+				}
+
+			}
+
+		}
+
+	}
+
+	/*
+	 * Removes Video n, then renumbers everything after it so the
+	 * stack is always Video 1..N.
+	 */
+	function deleteVideoAccordion(n) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		const assetCount =
+			project.assets.length;
+
+		const message =
+			"Delete " + project.name + "?" +
+			(assetCount
+				? " Its " + assetCount + " image/GIF/MP4 file(s), MP3 and script will be removed."
+				: " Its MP3 and script will be removed.");
+
+		if (typeof confirm === "function" && !confirm(message)) {
+			return;
+		}
+
+		const total =
+			videoProjects.length;
+
+		/* Snapshot the survivors before the array changes. */
+		const survivors = [];
+
+		for (let i = 1; i <= total; i++) {
+
+			if (i !== n) {
+
+				const state =
+					captureVideoAccordionState(i);
+
+				if (state) {
+					survivors.push(state);
+				}
+
+			}
+
+		}
+
+		/*
+		 * Detach every surviving accordion: the rebuild below creates the
+		 * whole stack again with the new numbers, so the old nodes must
+		 * not stay behind (that would leave two Video 1 nodes).
+		 */
+		for (const state of survivors) {
+
+			if (state.project.el && state.project.el.parentNode) {
+				state.project.el.parentNode.removeChild(state.project.el);
+			}
+
+		}
+
+		/* Free this video's object URLs - nothing else points at them. */
+		for (const asset of project.assets) {
+
+			try {
+				URL.revokeObjectURL(asset.url);
+			}
+			catch (revokeError) { }
+
+		}
+
+		for (let i = n; i <= total; i++) {
+			closeVideoModals(i);
+		}
+
+		videoProjects.splice(
+			n - 1,
+			1
+		);
+
+		if (project.el && project.el.parentNode) {
+			project.el.parentNode.removeChild(project.el);
+		}
+
+		/* Rebuild the stack as 1..N, in order. */
+		for (let index = 0; index < survivors.length; index++) {
+			restoreVideoAccordionState(
+				index + 1,
+				survivors[index]
+			);
+		}
+
+		if (typeof renderBatchTable === "function") {
+			renderBatchTable();
+		}
+
+	}
+
 	function clickVaFiles(n) {
 
 		const uploadBtn =
@@ -6419,15 +5595,6 @@ export const APP_JS = `
 	 * Static option lists, copied from
 	 * the main panels.
 	 */
-	const STICKER_OPTIONS =
-		'<option value="none" selected>None</option>' +
-		'<option value="like">\ud83d\udc4d Like</option>' +
-		'<option value="love">\u2764\ufe0f Love it</option>' +
-		'<option value="subscribe">\ud83d\udd14 Subscribe</option>' +
-		'<option value="like-subscribe">\ud83d\udc4d\ud83d\udd14 Like &amp; Subscribe</option>' +
-		'<option value="watch">\ud83c\udfac Watch Video</option>' +
-		'<option value="watch-like-subscribe">\ud83c\udfac\ud83d\udc4d\ud83d\udd14 Watch, Like &amp; Subscribe</option>';
-
 	const QUALITY_OPTIONS =
 		'<option value="low">480p \u00b7 Light (1.2 Mbps)</option>' +
 		'<option value="balanced" selected>720p \u00b7 Balanced (2.5 Mbps)</option>' +
@@ -6451,7 +5618,7 @@ export const APP_JS = `
 			'<div class="va-header">' +
 			'<span class="va-title">\ud83c\udfac Video ' + n + '</span>' +
 			'<span class="va-status" id="va-status-' + n + '">empty</span>' +
-			'<button type="button" class="va-api-btn" onclick="apiRenderVideo(' + n + ')" title="Send all of this video\\'s elements to the render API">\u2601\ufe0f API</button>' +
+			'<button type="button" class="va-delete-btn" id="va-delete-' + n + '" onclick="deleteVideoAccordion(' + n + ')" title="Delete this video with its images, MP4s, audio and script">\ud83d\uddd1\ufe0f Delete Video</button>' +
 			'<span class="va-summary" id="va-summary-' + n + '"></span>' +
 			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">\u25bc</button>' +
 			'</div>' +
@@ -6501,10 +5668,6 @@ export const APP_JS = `
 				'<label class="quality-select">Font <select id="va-font-' + n + '">' + FONT_OPTIONS + '</select></label>' +
 				'<label class="quality-select">Colour <select id="va-color-' + n + '">' + COLOR_OPTIONS + '</select></label>' +
 				'</div>' +
-				'</div>' +
-				'<div class="va-section">' +
-				'<div class="va-section-title">Sticker (bottom right)</div>' +
-				'<select id="va-sticker-' + n + '" class="quality-select">' + STICKER_OPTIONS + '</select>' +
 				'</div>' +
 				'<div class="va-section">' +
 				'<div class="va-section-title">Quality</div>' +
@@ -10430,10 +9593,6 @@ export const APP_JS = `
 				document.getElementById(
 					"title-color"
 				).value,
-			sticker:
-				document.getElementById(
-					"sticker-select"
-				).value,
 			quality:
 				document.getElementById(
 					"quality-select"
@@ -10519,13 +9678,6 @@ export const APP_JS = `
 				).value =
 					document.getElementById(
 						"va-color-" + n
-					).value;
-
-				document.getElementById(
-					"sticker-select"
-				).value =
-					document.getElementById(
-						"va-sticker-" + n
 					).value;
 
 				document.getElementById(
@@ -10681,11 +9833,6 @@ export const APP_JS = `
 			"title-color"
 		).value =
 			saved.color;
-
-		document.getElementById(
-			"sticker-select"
-		).value =
-			saved.sticker;
 
 		document.getElementById(
 			"quality-select"
@@ -13336,10 +12483,6 @@ export const APP_JS = `
 					document.getElementById(
 						"va-color-" + n
 					).value,
-				sticker:
-					document.getElementById(
-						"va-sticker-" + n
-					).value,
 				quality:
 					document.getElementById(
 						"va-quality-" + n
@@ -13725,10 +12868,6 @@ export const APP_JS = `
 				document.getElementById(
 					"title-color"
 				).value,
-			sticker:
-				document.getElementById(
-					"sticker-select"
-				).value,
 			quality:
 				document.getElementById(
 					"quality-select"
@@ -13782,13 +12921,6 @@ export const APP_JS = `
 			).value =
 				document.getElementById(
 					"va-color-" + n
-				).value;
-
-			document.getElementById(
-				"sticker-select"
-			).value =
-				document.getElementById(
-					"va-sticker-" + n
 				).value;
 
 			document.getElementById(
@@ -13901,11 +13033,6 @@ export const APP_JS = `
 				"title-color"
 			).value =
 				saved.color;
-
-			document.getElementById(
-				"sticker-select"
-			).value =
-				saved.sticker;
 
 			document.getElementById(
 				"quality-select"
@@ -14182,12 +13309,6 @@ export const APP_JS = `
 			).value =
 				p.color ||
 				"white";
-
-			document.getElementById(
-				"sticker-select"
-			).value =
-				p.sticker ||
-				"none";
 
 			document.getElementById(
 				"quality-select"
@@ -15685,11 +14806,17 @@ export const APP_JS = `
 						() => ({})
 					);
 
+			/*
+			 * ONE set is enough to continue: the worker answers
+			 * partial: true with a single validated set when the
+			 * second planner run could not produce a different one.
+			 * Only a reply with no set at all is a failure.
+			 */
 			if (
 				!response.ok ||
 				!data.success ||
 				!Array.isArray(data.sets) ||
-				data.sets.length !== 2
+				data.sets.length < 1
 			) {
 
 				throw new Error(
@@ -15701,6 +14828,11 @@ export const APP_JS = `
 
 			project.seoSets =
 				data.sets;
+
+			project._seoPlanWarning =
+				data.partial && data.warning
+					? String(data.warning)
+					: "";
 
 			/* 3. Sets arrived: (re-)open THIS video's modal even if
 			 * the user closed it while generation was running. Other
@@ -15717,7 +14849,16 @@ export const APP_JS = `
 
 			if (statusEl) {
 				statusEl.textContent =
-					"Two SEO keyword sets are ready \\u2014 pick one in the walkthrough.";
+					project.seoSets.length > 1
+						? "Two SEO keyword sets are ready \\u2014 pick one in the walkthrough."
+						: "One SEO keyword set is ready \\u2014 pick it in the walkthrough.";
+			}
+
+			if (project._seoPlanWarning) {
+				setSeoWalkthroughError(
+					n,
+					project._seoPlanWarning
+				);
 			}
 
 		}
@@ -17702,18 +16843,14 @@ export const APP_JS = `
 
 
 		/*
-		 * The title font and the sticker
-		 * artwork have to be ready before
-		 * the first frame is drawn.
+		 * The title font has to be ready
+		 * before the first frame is drawn.
 		 */
 
 		await loadTitleFont();
 
 
 		await loadCaptionFont();
-
-
-		await loadStickerAssets();
 
 
 		/*
@@ -18644,17 +17781,6 @@ export const APP_JS = `
 
 					drawTitle(
 						ctx
-					);
-
-
-					// =========================================
-					// STICKER OVERLAY
-					// =========================================
-
-					drawSticker(
-						ctx,
-						WIDTH,
-						HEIGHT
 					);
 
 
