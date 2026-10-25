@@ -49,8 +49,12 @@ export const IMAGE_HEIGHT = 576;
 export const IMAGE_NEGATIVE_PROMPT =
 	"text, words, letters, writing, script, kanji, Chinese characters, Japanese characters, hiragana, katakana, CJK characters, subtitles, captions, signs, billboards, logos, watermarks, typography, numbers";
 
-/* How long one prompt LLM call may take before the batch gives up. */
-export const IMAGE_PROMPT_TIMEOUT_MS = 90000;
+/*
+ * How long one prompt LLM call may take before the batch gives up. The writer
+ * now produces three rich paragraphs per scene, so this is roughly double the
+ * one-sentence budget and stays under the browser's own request timeout.
+ */
+export const IMAGE_PROMPT_TIMEOUT_MS = 150000;
 
 type AiEnv = {
 	AI?: {
@@ -199,13 +203,23 @@ export async function runImageModel(
 	return { bytes, mime: isPng ? "image/png" : "image/jpeg" };
 }
 
-/* Sanitises one prompt the same way for every entry point. */
+/*
+ * One batch prompt sent to SDXL. The studio's scene prompts are three-paragraph
+ * descriptions, so paragraph breaks are kept (the image model reads them as
+ * sentence boundaries) while everything else is normalised to single spaces.
+ * The cap is generous on purpose: SDXL pays attention to the first ~77 tokens,
+ * and the extra paragraphs act as the style/quality guard for the whole frame.
+ */
+export const IMAGE_PROMPT_MAX_CHARS = 2600;
+
 export function normalizeBatchPrompt(value: unknown): string {
 	return String(value ?? "")
-		.replace(/[\u0000-\u001F\u007F]+/g, " ")
-		.replace(/\s+/g, " ")
+		.replace(/\r\n/g, "\n")
+		.replace(/[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F]+/g, " ")
+		.replace(/[ \t]{2,}/g, " ")
+		.replace(/\n{3,}/g, "\n\n")
 		.trim()
-		.slice(0, 600);
+		.slice(0, IMAGE_PROMPT_MAX_CHARS);
 }
 
 function sanitizePrompts(raw: unknown): string[] | { error: string } {

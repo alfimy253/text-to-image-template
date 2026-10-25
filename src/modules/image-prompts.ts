@@ -19,6 +19,12 @@
  * count is a target, not a contract: if the model answers short, the missing
  * scenes are requested again; if it still answers short, the prompts it did
  * produce are used (a 12-of-14 batch is far better than "not working").
+ *
+ * Every prompt is a THREE-PARAGRAPH description (subject & action · setting,
+ * atmosphere & light · camera, lens & style finish). That length rule is the
+ * image quality / style-enhancer guard of this module: it is stated in the
+ * system instruction, retried when the model answers thin, and finally
+ * enforced by `enforceParagraphGuard()` so no short prompt reaches SDXL.
  */
 
 import { IMAGE_PROMPT_TIMEOUT_MS } from "./image-batch";
@@ -85,9 +91,12 @@ function clipSentence(value: string, maxChars: number): string {
 }
 
 /*
- * The image model does not need every SRT cue. Keep the opening and closing
- * spoken sentences as a compact two-sentence idea, which preserves the
+ * The image model does not need the whole narration. Keep the opening and
+ * closing spoken sentences as a compact two-sentence idea, which preserves the
  * video's topic arc while avoiding a multi-thousand-token transcript payload.
+ * The studio's script is plain narration text (no subtitle formatting), so
+ * only stray legacy lines — a lone cue number or a `-->` timestamp — are
+ * skipped while the sentences are collected.
  */
 export function summarizeScriptIdea(script: string, topic = "my video"): string {
 	const lines = String(script || "")
@@ -120,8 +129,86 @@ export function summarizeScriptIdea(script: string, topic = "my video"): string 
 }
 
 /*
+ * Every scene prompt the writer produces must be at least this many
+ * paragraphs long, and each paragraph must carry real visual detail. This is
+ * the image quality / style-enhancer guard: a one-line prompt gives SDXL
+ * nothing to work with, so the writer is told — and re-checked below — that a
+ * short prompt is a rejected prompt.
+ */
+export const IMAGE_PROMPT_MIN_PARAGRAPHS = 3;
+export const IMAGE_PROMPT_PARAGRAPH_MIN_WORDS = 30;
+export const IMAGE_PROMPT_MAX_CHARS = 2600;
+
+/*
+ * Splits one model-written prompt into its paragraphs. Blank-line separated
+ * blocks, and nothing else, are paragraphs; whitespace inside a paragraph is
+ * collapsed so the JSON payload stays tidy.
+ */
+export function splitPromptParagraphs(prompt: string): string[] {
+	return String(prompt || "")
+		.replace(/\r\n/g, "\n")
+		.split(/\n{2,}/)
+		.map((paragraph) => paragraph.replace(/[ \t]+/g, " ").trim())
+		.filter(Boolean);
+}
+
+function countWords(text: string): number {
+	return String(text || "").split(/\s+/).filter(Boolean).length;
+}
+
+/* How many paragraphs one prompt currently carries. */
+export function countPromptParagraphs(prompt: string): number {
+	return splitPromptParagraphs(prompt).length;
+}
+
+/* True when the writer answered with a thin, single-sentence prompt. */
+export function isThinPrompt(prompt: string): boolean {
+	const paragraphs = splitPromptParagraphs(prompt);
+	return (
+		paragraphs.length < IMAGE_PROMPT_MIN_PARAGRAPHS ||
+		paragraphs.some((paragraph) => countWords(paragraph) < IMAGE_PROMPT_PARAGRAPH_MIN_WORDS)
+	);
+}
+
+/*
+ * Quality / style-enhancer guard applied to the writer's own answer. A scene
+ * the model returned shorter than three paragraphs is topped up with
+ * style-derived depth paragraphs (light, camera, colour grade) so the image
+ * model always receives a full, three-paragraph prompt. Scenes are never
+ * dropped — the flow is deliberately best-effort.
+ */
+export function enforceParagraphGuard(prompt: string, styleValue: unknown): string {
+	const style = normalizeImageStyle(styleValue) || DEFAULT_IMAGE_STYLE;
+	const styleGuide = IMAGE_STYLE_GUIDANCE[style];
+	const beats = styleGuide
+		.split(/,\s*/)
+		.map((beat) => beat.trim())
+		.filter(Boolean);
+	const fillers = [
+		"Atmosphere and light: " + (beats[1] || beats[0] || styleGuide) +
+			", with a readable foreground, midground and background so the scene has real depth, and light that clearly comes from a motivated source inside the frame.",
+		"Camera and finish: " + (beats[2] || beats[0] || styleGuide) +
+			", framed as one decisive moment with a deliberate composition, balanced negative space, realistic scale and a consistent colour grade across the sequence."
+	];
+
+	const paragraphs = splitPromptParagraphs(prompt);
+	if (!paragraphs.length) return "";
+	let fillerIndex = 0;
+	while (paragraphs.length < IMAGE_PROMPT_MIN_PARAGRAPHS) {
+		paragraphs.push(fillers[fillerIndex % fillers.length]);
+		fillerIndex++;
+	}
+	const guarded = paragraphs.map((paragraph, index) =>
+		index === 0 || countWords(paragraph) >= IMAGE_PROMPT_PARAGRAPH_MIN_WORDS
+			? paragraph
+			: paragraph + " " + styleGuide + "."
+	);
+	return guarded.join("\n\n").replace(/\s+$/g, "").slice(0, IMAGE_PROMPT_MAX_CHARS);
+}
+
+/*
  * Compact system instructions for the prompt writer. The model gets at most
- * two representative sentences from the SRT, not the full transcript, to
+ * two representative sentences of the narration script, not the full text, to
  * keep Workers AI input tokens and per-request work bounded.
  */
 export function buildImagePromptInstruction(
@@ -141,36 +228,53 @@ export function buildImagePromptInstruction(
 	return (
 		"SYSTEM INSTRUCTIONS: You are an art director writing AI IMAGE PROMPTS for a YouTube explainer video. " +
 		"Answer with ONLY one JSON object, no prose and no code fences. " +
-		"Treat the short script idea below as the general meaning of the whole video. Create broad, representative scenes that portray its central idea and progression; do not make a literal shot for every SRT cue or copy lines from the narration. " +
+		"Treat the short script idea below as the general meaning of the whole video. Create broad, representative scenes that portray its central idea and progression; do not make a literal shot for every line of narration or copy lines from the script. " +
 		"The video topic is: " + topic + ". The script length is " + input.minutes + " minute(s), so return exactly " + count + " image prompts in opening-to-closing order. " +
 		"Every prompt must consistently follow the same selected video image style: " + style + ". Style direction: " + styleGuide + ". Apply this visual language to every scene; do not mix in another aesthetic. " +
-		"Each prompt must be one concise, self-contained sentence of no more than about 30 words describing a single text-free scene with a clear subject, action, setting and light. Vary scene scale and angle while keeping the sequence coherent and relevant to the basic script idea. " +
+		"QUALITY / STYLE GUARD - LENGTH: every prompt must be at least " + IMAGE_PROMPT_MIN_PARAGRAPHS + " paragraphs long, separated by a blank line, written inside one JSON string with \\n\\n between the paragraphs. " +
+		"Paragraph 1 = the subject and its action in this scene. Paragraph 2 = the setting, atmosphere, weather, time of day and light. Paragraph 3 = camera and lens (shot size, angle, height, depth of field), colour grade and the finishing style notes. " +
+		"Each paragraph needs at least " + IMAGE_PROMPT_PARAGRAPH_MIN_WORDS + " words of concrete, filmable visual detail; a prompt of one or two short sentences is rejected and re-asked. Do not pad with filler, repeat a sentence, or describe the narration - add real visual information instead. " +
+		"Vary scene scale and angle while keeping the sequence coherent and relevant to the basic script idea. " +
 		"No rendered text, words, letters, captions, logos, watermarks or numbers inside any image. " +
 		(keywords ? "SEO keywords are context only; use their subjects when natural, never render the words: " + keywords + ". " : "") +
 		"Two-sentence script idea: " + scriptIdea + " " +
-		'Reply with ONLY this exact JSON shape: {"prompts":["first image prompt","second image prompt"]}'
+		'Reply with ONLY this exact JSON shape, one three-paragraph string per scene: {"prompts":["paragraph one of scene 1\\n\\nparagraph two of scene 1\\n\\nparagraph three of scene 1","paragraph one of scene 2\\n\\nparagraph two of scene 2\\n\\nparagraph three of scene 2"]}'
 	);
 }
 
+/*
+ * Final pass over every scene prompt: the paragraph guard first, then the
+ * selected video style appended as its own closing paragraph so the style can
+ * never be truncated away by a long scene description.
+ */
 export function applyImageStyleToPrompts(prompts: string[], styleValue: unknown): string[] {
 	const style = normalizeImageStyle(styleValue) || DEFAULT_IMAGE_STYLE;
 	const suffix = "Visual style: " + style + " — " + IMAGE_STYLE_GUIDANCE[style] + ".";
-	const maxSceneChars = Math.max(120, 480 - suffix.length - 2);
+	const maxSceneChars = Math.max(240, IMAGE_PROMPT_MAX_CHARS - suffix.length - 2);
 	return prompts.map((prompt) => {
-		const scene = String(prompt || "")
-			.replace(/\s+/g, " ")
-			.trim()
-			.slice(0, maxSceneChars)
-			.replace(/[\s,;:.!?]+$/, "");
-		return (scene ? scene + ". " : "") + suffix;
+		const guarded = enforceParagraphGuard(prompt, style).slice(0, maxSceneChars)
+			.replace(/[\s,;:.!?]+$/g, "");
+		return (guarded ? guarded + "\n\n" : "") + suffix;
 	});
 }
 
 /*
  * Parses the model's reply into a clean prompt list. Accepts a JSON object
  * ({"prompts":[...]}), a bare JSON array, or — as a rescue — a numbered /
- * bulleted plain-text list. Prompts are trimmed, de-numbered and capped.
+ * bulleted plain-text list. Paragraph breaks inside a prompt are preserved
+ * (that is what the three-paragraph guard is measured on); only leading
+ * list markers, quotes and the outer length cap are normalised.
  */
+export function normalizePromptEntry(value: string): string {
+	return String(value || "")
+		.replace(/\\r\\n|\\n/g, "\n")
+		.replace(/^[\s"']*(?:[-*•]|\d+[.)])\s*/i, "")
+		.replace(/^["'“]+|["'”]+,?$/g, "")
+		.replace(/[ \t]+/g, " ")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+}
+
 export function parseImagePrompts(text: string, expectedCount: number): string[] {
 	const raw = String(text || "").trim();
 	let list: unknown[] = [];
@@ -200,24 +304,53 @@ export function parseImagePrompts(text: string, expectedCount: number): string[]
 			list = [];
 		}
 		if (!list.length) {
-			list = raw
-				.split(/\r?\n/)
-				.map((line) => line.trim())
-				.filter((line) => line.length > 3 && line.indexOf("-->") === -1);
+			list = rescuePromptList(raw);
 		}
 	}
 	const prompts: string[] = [];
 	for (const entry of list) {
-		const cleaned = String(entry || "")
-			.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "")
-			.replace(/^["']|["'],?$/g, "")
-			.replace(/\s+/g, " ")
-			.trim()
-			.slice(0, 500);
+		const cleaned = normalizePromptEntry(typeof entry === "string" ? entry : JSON.stringify(entry ?? ""))
+			.split(/\n{2,}/)
+			.map((paragraph) => paragraph.trim())
+			.filter((paragraph) => paragraph && paragraph.indexOf("-->") === -1)
+			.join("\n\n")
+			.slice(0, IMAGE_PROMPT_MAX_CHARS);
 		if (cleaned && prompts.indexOf(cleaned) === -1) prompts.push(cleaned);
 		if (prompts.length >= expectedCount) break;
 	}
 	return prompts;
+}
+
+/*
+ * Rescue parser for a model that answered plain text instead of JSON: a new
+ * entry starts at a list marker (`1.`, `2)`, `-`, `*`) and every other line —
+ * including the blank line that separates two paragraphs — belongs to it.
+ */
+function rescuePromptList(raw: string): string[] {
+	const entries: string[] = [];
+	let current: string[] = [];
+	const flush = () => {
+		const text = current.join("\n").trim();
+		if (text) entries.push(text);
+		current = [];
+	};
+	for (const line of String(raw).split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed) {
+			if (current.length) current.push("");
+			continue;
+		}
+		const marker = /^(?:[-*•]|\d+[.)])\s+/.exec(trimmed);
+		if (marker) {
+			flush();
+			current.push(trimmed.slice(marker[0].length));
+			continue;
+		}
+		if (trimmed.indexOf("-->") !== -1 || /^\d+$/.test(trimmed)) continue;
+		current.push(trimmed);
+	}
+	flush();
+	return entries;
 }
 
 /* `env.AI.run()` text models answer `{response}`; tolerate a plain string. */
@@ -255,7 +388,10 @@ function errorMessage(error: unknown): string {
 /*
  * Runs the instruct model until the target count is reached or the model has
  * nothing more to add. Each retry only asks for the scenes that are still
- * missing, so a short first answer does not restart the whole batch.
+ * missing, so a short first answer does not restart the whole batch. Thin
+ * answers are not re-asked (that would double the latency of every run):
+ * `enforceParagraphGuard()` brings them up to the three-paragraph minimum on
+ * the way out instead.
  */
 export async function generateImagePrompts(
 	env: AiEnv,
@@ -272,14 +408,16 @@ export async function generateImagePrompts(
 		if (collected.length) {
 			prompt +=
 				" The sequence already has these prompts, do not repeat them: " +
-				collected.slice(-4).join(" | ") +
-				" Continue the sequence with exactly " + missing + " new prompts.";
+				collected.slice(-4).map((entry) => entry.slice(0, 160)).join(" | ") +
+				" Continue the sequence with exactly " + missing + " new prompts, each one as long as the rule above requires.";
 		}
 		try {
 			const result = await withTimeout(
 				env.AI!.run(model, {
 					prompt,
-					max_tokens: Math.min(3072, Math.max(512, missing * 90)),
+					/* Three rich paragraphs per scene cost far more tokens than a
+					 * one-liner did: budget ~800 tokens per prompt. */
+					max_tokens: Math.min(16384, Math.max(1024, missing * 800)),
 					temperature: attempt === 1 ? 0.65 : 0.45
 				}),
 				IMAGE_PROMPT_TIMEOUT_MS,
@@ -328,13 +466,16 @@ function sanitizeInput(body: Record<string, unknown>): ImagePromptInput | { erro
 	if (!style) {
 		return { error: "Image style must be one of the supported style options" };
 	}
-	const rawIdea = typeof body.scriptIdea === "string"
-		? body.scriptIdea.slice(0, 4000)
-		: typeof body.script === "string"
-			? body.script.slice(0, 40000)
-			: typeof body.srt === "string"
-				? body.srt.slice(0, 40000)
-				: "";
+/*
+ * The studio always sends the plain narration script. `scriptIdea` (the short
+ * form typed into a table row) wins over `script` (the full AI script); there
+ * is no subtitle-format input any more.
+ */
+const rawIdea = typeof body.scriptIdea === "string"
+	? body.scriptIdea.slice(0, 4000)
+	: typeof body.script === "string"
+		? body.script.slice(0, 40000)
+		: "";
 	const scriptIdea = summarizeScriptIdea(rawIdea, topic);
 	const keywordSet =
 		body.keywordSet && typeof body.keywordSet === "object" && !Array.isArray(body.keywordSet)

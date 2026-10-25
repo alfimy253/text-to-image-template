@@ -2,7 +2,8 @@
 
 A creator landing page and video studio served by one Cloudflare Worker. The studio runs
 **entirely in the browser**: turn images, GIFs, MP4 clips and an MP3 into a finished MP4 with a
-title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voiceover.
+title, sticker, timestamp captions written from a plain narration script and a MeloTTS
+voiceover.
 
 > The repository started life as Cloudflare's `text-to-image-template`; the only part of the
 > original that remains is the Workers AI image route. The README below describes **this**
@@ -21,8 +22,9 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   the File System Access API; other browsers build it in memory.
 - **AI on demand.** Stable Diffusion XL images per video panel (`/image/gen`), an **SEO explainer
   script** (`/api/script`: the AI first plans 1 long-tail keyword, exactly 4 short keywords, a
-  title carrying one short keyword and at least one heading carrying one, then writes an SRT
-  script that *says* the long-tail keyword at least once and each short keyword at least twice —
+  title carrying one short keyword and at least one heading carrying one, then writes a plain
+  narration script that *says* the long-tail keyword at least once and each short keyword at least
+  twice —
   extra uses allowed, every rule enforced server-side), and a MeloTTS
   voiceover (`/api/voiceover`) with a free fallback TTS engine.
 - **Generate SEO Script walkthrough.** Pressing **✨ Generate SEO Script** disables that video's
@@ -40,6 +42,18 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   batch respects the video's **25-still cap** (only the free slots are requested), refunds failed
   scenes, and always re-enables the upload/script controls. See `system-rules.md` RULE 24 and
   `bug-fix-session-241.md`.
+- **Quick Batch table.** The studio's **Table** view is a spreadsheet of up to **10** rows —
+  Script (plain text you can paste), Style, Minutes — with **＋ Add row** and
+  **✦ Generate (N)**. Generate runs one row at a time (voiceover → prompts → batch images → slides
+  → animation), a row that fails is marked failed on its own line, and **Preview Here** /
+  **Export Video** only become buttons once that row has all four parts. Export reuses the studio's
+  own in-browser WebCodecs renderer and downloads `YouTubeVibeStudio_Row<N>_<slug>.mp4`; nothing is
+  posted to a render endpoint. See `system-rules.md` RULE 25.
+- **Optional local render app.** `render-app/` (also shipped as `render-app-tts.zip`) turns a script
+  of up to **20,000 characters** into one MP3 by driving a **free, no-login** online TTS site with
+  Playwright, choosing between exactly two voices — **one male, one female** — behind a hardcoded
+  key. It is a separate Node process, not a Worker route: see `render-app/README.md` and
+  `system-rules.md` RULE 26.
 - **Template scene controls.** Graphic configuration has no Shapes & stickers heading/grid;
   **Delete element** sits beside **＋ Text / ＋ Graphic**, and the layer buttons match the neutral
   top-right **Pause** style without moving.
@@ -89,11 +103,12 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
   skins. All of them are applied server-side so there is no flash.
   Aerial retains the legacy `strata` API/storage value, so saved selections still work.
   See `THIRD_PARTY_NOTICES.md` for the Aerial background attribution.
-- **Two views, one state.** A sticky top bar switches between the **Bulk grid** — a read-only
-  index of every video in the project (title, prompt, scene counts, MP3 length, state, **Open ↗**)
-  — and the **Editor**, a *Build your video* accordion card (65% of the row, single-column
-  sections inside) beside a sticky preview monitor that takes 35% — the same split in every theme.
-  The grid reads the same project array the engine renders; it has no bulk operations, and the
+- **Two views, one state.** A sticky top bar switches between the **Bulk grid** (`#view-table`,
+  labelled "Quick batch table" inside the card — see `system-rules.md` RULE 25) and the **Editor**,
+  a *Build your video* accordion card (65% of the row, single-column sections inside) beside a
+  sticky preview monitor that takes 35% — the same split in every theme. The table keeps its own
+  list of up to 10 script rows and drives the very same render path as the Editor; the accordion
+  counters it shares (`N of 10 videos`, `N in queue`) are refreshed by the same function, and the
   view choice is memory-only. There is deliberately **no timeline**.
 - **Large accordion controls.** In every theme, buttons inside each **Video N** accordion use the
   Upload Image proportions (`12px 24px` padding, 1rem type, at least 48px high/wide). Neo
@@ -135,7 +150,7 @@ title, sticker, timestamp captions, AI-written SRT subtitles and a MeloTTS voice
 | Assets per video | 25 images · 5 GIFs · 5 MP4s (60 s each) |
 | Slide timing | 9 s per image/GIF; MP4 clips play in full; the list repeats to cover the MP3 |
 | Captions | 10 rows, 40 characters each; last caption capped at 10 s on screen |
-| Script | 1-6 minutes, `super fast` / `fast` / `medium` / `slow`, valid SRT required |
+| Script | 1-6 minutes, `super fast` / `fast` / `medium` / `slow`; plain narration text — no SRT, no timestamps needed |
 | SEO keywords | exactly 1 long-tail (no word/character length rule, said **at least once**) + exactly 4 short keywords (≤3 words, each said **at least twice**); **minimums only — extra uses are allowed and never rejected**; short/long-tail overlap allowed, shared uses count for both; one short in the AI title (≤70 chars), one in a heading |
 | Ring template images | 5–7 decoded uploads, required before Download MP4 or Add to Video; separate from the normal two background photos |
 | Element rotation / layers | 0–360°, 1° steps; layer buttons move the selected text/graphic one step, never behind the background |
@@ -161,26 +176,26 @@ the strings that carry the rules (the full inventory, with the constant each one
 | Where | Hint |
 | --- | --- |
 | Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords said at least 2× each · minimums only, extra uses are allowed · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` |
-| ✨ **Generate SEO Script** button | tooltip: *AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the SRT script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.* |
+| ✨ **Generate SEO Script** button | tooltip: *AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the plain narration script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.* |
 | SEO plan chips (after a successful run) | Title row · Headings row · `long-tail keyword — must be said at least 1×` · `short keyword — must be said at least 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading`, each keyword chip showing the measured count, e.g. `coffee brewing 2×` (a count above the minimum is valid) |
 | Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the modal explains the selected editor's motion controls and reminds users the exported clip is silent |
 | Template element inspector | `+ Front layer` / `- Back Layer`, `Layer N of M`, `Rotate degrees` + live `N°` readout (0–360°) |
 | Ring template, bottom accordion | `Ring images · N / 7 (min 5)`; choose 5–7 images together; inline errors preserve previous images |
 | Video accordion, **AI Images** | `2 images per submit · 480px landscape` (also the status line for failures) |
-| 🎙 **Generate Voiceover** | tooltip: *Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
+| 🎙 **Generate Voiceover** | tooltip: *Speak the script to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
 | ☁️ **API** button | tooltip: *Send all of this video's elements to the render API* |
 | Main panel notes | slideshow repeats to cover the track · captions sit 4/7 up from the bottom, 17px Bookman, last one capped at 10 s · sticker is a 435 × 150 white rectangle hanging 40 px past the right edge |
 | Onboarding | `Click ＋ Add Video above, then press Generate.` |
-| Bulk grid / editor heads | `N videos · read-only index` · `N of 10 videos` · `N in queue` (or `idle`) · empty state `No videos yet — press ＋ Add Video to start…` |
+| Bulk grid (batch table) / editor heads | `One row — one video` → `N rows · M with a script` (`#batch-note`) · `N of 10 videos` (`#concept-count`) · `idle` / `N in queue` / `table generating` (`#preview-state`) · empty state `No rows yet — press ＋ Add Row, paste a script, pick a style and press ✨ Generate.` (`#batch-empty`) |
 | Settings page, Appearance | `Current theme: Night Lab.` · `Preview only — press Save theme to apply it for everyone.` · `Saved — reload the studio page to see the new theme.` |
-| Blocking alerts | only for hard failures and cap breaches (e.g. `You can add at most 25 images (jpg, png, jpeg).`); the AI script instead reports `Script failed: <error>` in its status line so a retry can start immediately |
+| Blocking alerts | only for hard failures and cap breaches (e.g. `You can add at most 25 images (jpg, png, jpeg).`); the AI script instead reports `Script failed after 3 attempts: <error>` in its status line (two retries happen first, silently) so a retry can start immediately |
 
 Status lines (`#va-status-N`, `#va-script-status-N`, `#va-ai-status-N`) are the normal progress
 channel; the script line ends with `Script ready — N lines (<speed> speech, <minutes> min) · SEO:
 1 long-tail (≥1×) + 4 short keywords (≥2× each) · title + N heading(s)`.
 
 **Keyword-frequency rule (minimum-only).** The long-tail keyword must appear **at least once**
-in the spoken SRT and each of the four short keywords **at least twice**. There is no maximum:
+in the spoken script and each of the four short keywords **at least twice**. There is no maximum:
 a keyword said three or four times is accepted and never triggers a retry. Repetition is counted
 on the spoken dialogue only (cue numbers, timestamps, title and headings do not count), and a
 short keyword nested inside a long-tail occurrence counts for both roles. The server returns
@@ -237,7 +252,7 @@ skin covers the whole site.
 | `GET /{slug}` | Public CMS page after all built-in routes; one flat non-reserved slug, otherwise `404` |
 | `GET /image/:i` | Workers AI demo image (unmetered, index into `prompts[]`) |
 | `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` for a cold anonymous request when KV is bound, `429` at the limit, `X-Credit-*` headers on success |
-| `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated SRT (with keyword counts); accepts a user-selected `keywordSet` from `/api/seo-plan`, which is re-validated and skips the planner |
+| `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated **plain-text** script (`{script, format:"plain"}` — no `srt` key is returned) plus keyword counts; accepts a user-selected `keywordSet` from `/api/seo-plan`, which is re-validated and skips the planner |
 | `POST /api/seo-plan` | Two different validated SEO keyword sets (title + headings + 1 long-tail + 4 shorts each) for a topic, for the walkthrough's Select step |
 | `POST /api/image-prompts` | Synchronous scene prompts: `200 {prompts, count, expectedCount, style, minutes}` (count 10/14/20 by script length 1 / 2–3 / 4–6 min, in the chosen image style; short answers are topped up); `400` invalid input, `502` model failure, `503` no AI binding. The old `GET`/`DELETE /api/image-prompts/:id` job URL answers `410` |
 | `POST /api/image-batch` | One request, every image: `{prompts: string[]}` (≤20) → `application/x-ndjson` with `start`/`tick`/`image`/`done` events. Renders in parallel at 1024×576, 1 image credit per prompt up front (account or `/free` guest allowance) refunded for failures; `401` anonymous, `429` no credits, `400` invalid prompts |
@@ -267,7 +282,8 @@ skin covers the whole site.
   invariants and restrictions behind each of them (RULE 7 = the SEO script, RULE 18 = the
   inventory of every user-visible hint: tooltips, notes, placeholders and alerts, RULE 19 =
   the seven themes and where the choice is stored, RULE 22 = the studio shell and its two views,
-  RULE 23 = CMS, payments and the account dashboard).
+  RULE 23 = CMS, payments and the account dashboard, RULE 25 = the Quick Batch table,
+  RULE 26 = the local render app).
 - **`new_requirements.md`** — the modular CMS/payment/account notes and KV schema plus the
   SEO overlap, ring uploads, layer/rotation and Graphics-dropdown requirements (§6);
   the README, userflow and system rules describe the verified current behavior.
@@ -284,9 +300,15 @@ skin covers the whole site.
   read-only bulk grid, hidden legacy panels, no timeline) and the four extra skins ported from
   the uploaded `video_bulk_production` reference, with the 44-check DOM harness and the 36-check
   route harness.
+- **`bug-fix-session-242.md`** — Bug Fix Session #242: plain-text scripts (SRT removed from the
+  whole path), the three-paragraph prompt guard, script retry + stacking modals, the Quick Batch
+  table's Preview/Export unlock rule, and the new `render-app/`.
+- **`render-app/README.md`** — the standalone script → MP3 helper: how to run it, its two API
+  routes, the 20,000-character cap, its two voices and how to retarget a host.
 - **`seo-walkthrough-session-requirements.md`** — the SEO walkthrough record: original
-  requirements and audit snapshot plus the 2026-10-24 fix follow-up. Current regression
-  verification is **45 passing tests**, including Worker-route and jsdom gallery-flow coverage;
+  requirements and audit snapshot plus the 2026-10-24 fix follow-up. Its recorded regression
+  verification was **45 passing tests** (the suite is **64** as of 2026-10-25), including
+  Worker-route and jsdom gallery-flow coverage;
   the original Register A/B findings are marked as historical where this follow-up resolves them.
 
 ## Notes for contributors

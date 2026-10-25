@@ -35,7 +35,7 @@ A single-page **browser-side video studio** served by one Cloudflare Worker.
 | Page + all UI code | Worker (`GET /`) | Serves one ~700 KB HTML string (landing, studio, CSS + JS inlined) |
 | Video rendering | **The user's browser** (WebCodecs `VideoEncoder`/`AudioEncoder` + `mp4-muxer`) | Draws Ken-Burns slides, overlays, captions, subtitles and muxes an MP4 |
 | AI images | Workers AI `@cf/stabilityai/stable-diffusion-xl-base-1.0` | `/image/:i` (demo prompts) and `/image/gen?prompt=` (per-video AI panel) |
-| AI script (SRT) | Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8`, **two stages** | `/api/script` — stage 1 plans the SEO keywords plus the explainer title and headings, stage 2 writes the SRT around them |
+| AI script (plain narration) | Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8`, **two stages** | `/api/script` — stage 1 plans the SEO keywords plus the explainer title and headings, stage 2 writes the script around them and the server hands back validated **plain text** (`format:"plain"`) |
 | Voiceover | Workers AI `@cf/myshell-ai/melotts` + free fallback TTS | `/api/voiceover`, proxied `/tts` |
 | Accounts | KV namespace `KV_BINDING` | `/api/session`, `/api/login`, `/api/signup`, `/api/logout` (unlimited accounts, `email:<address>` uniqueness index) |
 | CMS pages | KV `config:cms_pages` + shared theme shell | Up to 8 public flat pages; settings-only writes, public reads and top/footer links |
@@ -85,7 +85,7 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | `/api/cms/pages` | GET | none | Public saved pages and `maxPages:8`; empty without KV |
 | `/api/config/cms` | GET / POST / DELETE | `pw` + KV | List / create or update (optional `id`) / delete; max 8, duplicate slug `409` |
 | `/api/config/cms/delete` | POST | `pw` body + KV | Delete by page `id` or `slug`; releases a page slot |
-| `/api/script` | POST | none | `{success:true,srt}` / `400` / `500` / `503` |
+| `/api/script` | POST | none | `{success:true,script,format:"plain",title,headings,keywords,lines,words,durationMs,minutes,model}` / `400` / `500` / `503` |
 | `/api/voiceover` | POST | none | audio bytes (`attachment`, `audio/mpeg` or `audio/wav`) / `400` / `500` / `503` |
 | `/tts?text=&lang=` | GET | none | Proxied audio (`audio/mpeg`), max 2 000 chars |
 | `/api/render` | POST | none, **needs KV** | `{jobId}` / `{status:"busy"}` / `413` / `503` |
@@ -117,7 +117,7 @@ User opens /
    │    3. wire the legacy panels: MP3 upload, title, sticker, captions, quality, gallery upload
    │    4. initVideoStudio() → hides every .audio-panel, .controls and #gallery
    │                          moves #render-btn into #action-bar as "🎬 Generate Videos"
-   │    5. bindStudioShell() → paints the Bulk grid, wires #view-switch and [data-open]
+   │    5. bindStudioShell() → bindBatchTable() then paints #view-table, wires #view-switch
    │                          (the Editor is the boot view; the choice is memory-only)
    │    6. bindLandingActions(); initAuth() → GET /api/session
    │
@@ -345,8 +345,8 @@ accordion = header + body
             │           topic, minutes 1-6, speech speed, ✨ Generate SEO Script,
             │           SEO plan chips (title + headings + long-tail + 4 shorts,
             │            each keyword with its measured ×),
-            │           collapsible SRT box (220 px), ⬇ Download .srt,
-            │           🎙 Generate Voiceover (hidden until an SRT exists, then
+            │           collapsible plain-script box (220 px),
+            │           🎙 Generate Voiceover (hidden until a script exists, then
             │            revealed + enabled by syncVoiceoverButton())
             ├ Images / MP4s — upload + template link + collapsible gallery
             │           note: "Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)"
@@ -477,7 +477,9 @@ speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
   │      3 failures → 500 "SEO keywords invalid (<reason>) - try again"
   │                  (status line shows "Script failed: SEO keywords invalid (…) - try again")
   │
-  ├─ STAGE 2  SRT writer (same model, 2048–4096 tokens by duration, temp 0.65 / 0.4 retry) — an EXPLAINER script
+  ├─ STAGE 2  script writer (same model, 2048–4096 tokens by duration, temp 0.65 / 0.4 retry) — an EXPLAINER script
+  │      (the model still answers in SRT internally: cue timing is what makes validation and the
+  │       per-cue keyword audit possible; SRT never leaves the server — see "payload" below)
   │      prompt = basePrompt ("professional video script writer for EXPLAINER videos … ONLY
   │      valid SRT") + a hard-coded SEO brief that REDUNDANTLY restates every rule: the
   │      explainer title and the headings (structure only, never altered or spoken), the
@@ -493,22 +495,27 @@ speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
   │      exact number of uses still missing; keywords already at their minimum are marked KEEP
   │      3 failures → 500 "Script output invalid (<reason>) - try again"
   │
-  ├─ success → project.srt + project.seoTitle + project.seoHeadings stored
+  ├─ payload → plainScriptFromCues(check.cues) renders the validated cues as prose paragraphs
+  │            (4 sentences per paragraph, a blank line between) →
+  │            {success, script, format:"plain", ...} — there is no srt key, and a body that
+  │            still posts srt is converted by plainScriptFromSrt()
+  │
+  ├─ success → project.script + project.scriptDurationMs + project.seoTitle + project.seoHeadings stored
   │            the video title input #va-title-N is autofilled with title.slice(0,70)
   │              when it is still empty (the input's maxlength is 70)
-  │            #va-script-box-N filled with the SRT;
+  │            #va-script-box-N filled with the plain script;
   │            SEO plan chips rendered in #va-script-keywords-N (escapeHTML'd):
   │              Title     [Easy Home Coffee Brewing: A Beginner Guide]
   │              Headings  [How does home coffee brewing work?] [What does an espresso setup cost?]
   │              Long-tail [easy home coffee brewing 2×]
   │              Short     [coffee brewing 2×] [home barista 2×] [espresso setup 2×] [morning routine 2×]
-  │            SRT box + ⬇ Download .srt become visible; 🎙 Generate Voiceover revealed + enabled
-  │            (syncVoiceoverButton(): the button ships hidden and only appears once project.srt exists)
+  │            the script box becomes visible; 🎙 Generate Voiceover revealed + enabled
+  │            (syncVoiceoverButton(): the button ships hidden and only appears once project.script exists)
   │            status line: "Script ready — N lines (medium speech, 1 min) · SEO: 1 long-tail (≥1×) +
   │                          4 short keywords (≥2× each) · title + 2 headings"
   │
   └─ failure → status line "Script failed: <error>"  (no alert)
-               the previous SRT, chips and download button stay on screen
+               the previous script and chips stay on screen
 ```
 
 Hints in this flow (inventory: `system-rules.md` RULE 18): the section hint line, the
@@ -522,10 +529,10 @@ Hints in this flow (inventory: `system-rules.md` RULE 18): the section hint line
 ### 4.3 Voiceover
 
 ```
-[🎙 Generate Voiceover]  (accordion, hidden until project.srt exists — then revealed + enabled)
-   ▼ modal (id voiceover-modal)
+[🎙 Generate Voiceover]  (accordion, hidden until project.script exists — then revealed + enabled)
+   ▼ modal (id voiceover-modal-<n>, stacked by the modal stack — see §12)
      Voice select: "English (en)"    ← fixed + disabled in the UI
-     textarea: read-only spoken text = SRT with cue numbers/timestamps stripped
+     textarea: read-only spoken text = the plain script
      [🎧 Generate Voiceover (MP3)] → POST /api/voiceover {text, lang:"en"}
         server: strip control chars → collapse whitespace → cap 8 000 chars
                 (never splitting a surrogate pair) → normalise — – … ' ' " " NBSP
@@ -535,7 +542,8 @@ Hints in this flow (inventory: `system-rules.md` RULE 18): the section hint line
                 → detect container per chunk; merge (WAV → rebuilt RIFF header)
         → browser downloads YouTubeVibeStudio_<Title>_voiceover.mp3|.wav
         → user must upload that file as the video's MP3 track manually
-     [📝 Apply Subtitles to Video] → parse SRT cues into project.subtitles (toggle on/off)
+     [📝 Apply Subtitles to Video] → buildScriptCues(script, audioMs) derives cues from the plain
+        script (sentence split, 84-char wrap, 1 200 ms floor) into project.subtitles (toggle on/off)
         status: "Subtitles applied (N cues) — shown below the caption"
 ```
 
@@ -728,10 +736,10 @@ Four full-page tabs
 | Image index out of range | `/image/:i` | `400 {success:false,error:"Invalid image index"}` |
 | Empty prompt | `/image/gen` | `400 "Missing prompt"` |
 | Model error | `/image/:i`, `/image/gen` | `500` with the model's message |
-| Keyword plan not valid JSON / not exactly 1 long-tail + 4 shorts / title or heading rule violated | stage-1 planner | up to 3 attempts, then `500 "SEO keywords invalid (<reason>) - try again"` — the SRT writer is never called |
+| Keyword plan not valid JSON / not exactly 1 long-tail + 4 shorts / title or heading rule violated | stage-1 planner | up to 3 attempts, then `500 "SEO keywords invalid (<reason>) - try again"` — the script writer is never called |
 | Short keyword said fewer than twice (minimum 2 uses) | server `keywordUsageError()` on the spoken text | counts as invalid → retried with the exact reason; after 3 attempts `500 "Script output invalid (<reason>) - try again"`. **More** than twice is valid. |
 | Long-tail keyword never said (minimum 1 use) | server `keywordUsageError()` | same as above. **Two or more** uses are valid — there is no maximum. |
-| Script output not parseable SRT | server `validateSrt()` | up to 3 attempts, then `500 "Script output invalid (<reason>) - try again"` |
+| Script output not parseable SRT (internal cue format) | server `validateSrt()` | up to 3 attempts, then `500 "Script output invalid (<reason>) - try again"`; the client ends with `Script failed after 3 attempts: <reason>` |
 | Script shorter than 10 s or longer than minutes+1.5 s | server `validateSrt()` | counts as invalid → retried |
 | MeloTTS `AiError 3043` | `/api/voiceover` | 3 retries/chunk → free fallback engine → else `500 "TTS failed (chunk i of n): …"` |
 | MeloTTS returns WAV instead of MP3 | `/api/voiceover` | container detected by magic bytes, merged as WAV (`audio/wav`) |
@@ -795,7 +803,7 @@ Four full-page tabs
 Sign in → `+ Add Video` → drop 3 images, an MP3 and a title → in the first block,
 **Generate SEO Script With AI** (2 min, fast): the AI plans 1 long-tail keyword (said at least
 once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, and
-writes the SRT around them; the chips under the button show the whole SEO plan with each
+writes the plain narration script around them; the chips under the button show the whole SEO plan with each
 keyword's measured count, and an empty video title is autofilled from the AI title → apply subtitles → optionally generate a voiceover and upload it as the audio track →
 press **🎬 Generate Videos** → the browser decodes everything, encodes audio then video,
 draws Ken-Burns slides with title/sticker/captions/subtitles, muxes an MP4 and saves it to disk →
@@ -837,28 +845,25 @@ The studio page is one state behind two views. Nothing is duplicated: both read 
   client storage).
 - Both buttons carry `aria-selected`; the active one has `.active`.
 
-**The Bulk grid**
+**The Bulk grid — superseded by §16 (Bug Fix Session #242)**
 
-- One row per `videoProjects[i]`: `01` · title (+ the first 64 characters of that video's AI
-  image prompt, or “No prompt yet”) · scene counts (`3 img · 1 GIF · 2 MP4`, or `—`) · audio
-  (`MP3 1:42`, or `—`) · state badge · **Open ↗**.
-- Title = the live `#va-title-N` field, falling back to `Video N`; prompt = `#va-ai-prompt-N`.
-- The card head shows `N videos · read-only index`; the editor card head shows `N of 10 videos`;
-  the preview card head shows `N in queue` (or `idle`).
-- **No bulk operations.** No checkboxes, no duplicate/delete/export/search — the reference's
-  toolbar is not ported.
-- **Open ↗** → `focusVideoInEditor(n)`: switch to the Editor, expand `#va-body-N`, set
-  `#va-arrow-N` to ▼ and scroll that accordion into view.
-- Empty state: `No videos yet — press ＋ Add Video to start, then open it here or in the Editor.`
+The list-view row described below (title + prompt excerpt + scene counts + audio + state badge +
+**Open ↗**, all read from `videoProjects`) is **gone**: `#view-table` is now the editable
+**Quick batch table** with its own rows, documented in **§16**. What did *not* change is the shell
+around it:
 
-**Keeping the two views in sync**
-
-- A delegated `input` listener on `#video-accordions` re-renders the grid when a
-  `#va-title-N` or `#va-ai-prompt-N` changes.
-- `updateVideoStatus(n)` re-renders it after every status change, so a render started in the
-  Editor is visible in the grid.
+- The switch keeps working exactly as before: `[data-layout]` → `setStudioLayout(name)`,
+  `aria-selected` + `.active` on the two buttons, memory-only choice, Editor as the boot view.
+- `renderBatchTable()` still refreshes the two editor counters at the end of every paint, and
+  `updateVideoStatus(n)` still calls it after a status change, so `#concept-count`
+  (`N of 10 videos`) and `#preview-state` (`idle` / `N in queue` / `table generating`) agree with
+  the accordions.
+- Because a batch row has no matching accordion, the per-row **Open ↗** jump
+  (`focusVideoInEditor(n)`) and the delegated `input` listener that kept the old grid in sync with
+  `#va-title-N` / `#va-ai-prompt-N` were removed instead of being left dangling - see the register
+  in `bug-audit.md`.
 - Uploads, AI images, scripts and voiceovers are unchanged — they all still happen in the
-  accordion (Flow 1), and the grid simply reflects their results.
+  accordion (Flow 1).
 
 **What was deliberately not ported** from the uploaded reference: the timeline dock, the left
 rail, the metric strip, the in-bar theme picker, and the preview monitor's hero image, scene
@@ -967,13 +972,15 @@ See `new_requirements.md` §6 for acceptance criteria, source-file mappings and 
    Split Composition, Dream Glow** or **Pop Comic**, then presses **Generate Script & Images**.
    The selection is retained if the modal is closed and reopened.
 4. The modal closes and the script section shows a loading animation while
-   `POST /api/script` writes the SRT from the selected set (the planner is skipped; the set is
-   re-validated server-side). The finished script appears in the script box exactly as before,
-   with the SEO plan chips, Download .srt and Generate Voiceover.
+   `POST /api/script` writes the plain script from the selected set (the planner is skipped; the set
+   is re-validated server-side). The finished script appears in the script box with the SEO plan
+   chips and Generate Voiceover - there is no subtitle file to download, and the box can be edited
+   or replaced with anything typed by hand. A failure retries up to **3 attempts** and ends with
+   `Script failed after 3 attempts: <reason>`, restoring the box and both buttons.
 5. With the script shown, the browser makes **one** `POST /api/image-prompts` request and the
    response body already contains the finished prompts — there is no job URL and nothing to
    poll. The prompt writer receives a compact idea made from the opening and closing spoken
-   sentences rather than the full SRT, and is instructed to create concise, broad representative
+   sentences rather than the whole script, and is instructed to create concise, broad representative
    scenes that convey the script's central idea without a literal cue-by-cue retelling. It
    applies the selected style consistently to every prompt. Counts follow script length: **10**
    for 1 minute, **14** for 2–3 minutes, and **20** for 4–6 minutes; a short answer is topped up
@@ -1032,11 +1039,15 @@ section in the accordion.
    in-flight request.
 3. Prompt-poll error/404 paths do not destroy the dynamic URL and leave the
    gallery watcher running; DELETE's response status is never checked.
-4. A failed script regeneration leaves the spinner in the SRT box instead of
-   the previous script (§4.2's "previous SRT stays on screen" no longer holds
-   for the box), while Download/Voiceover remain usable mid-request.
+4. A failed script regeneration leaves the spinner in the script box instead of
+   the previous script (§4.2's "previous script stays on screen" did not hold
+   for the box), while Voiceover remained usable mid-request - **fixed in Session
+   #242**: the box is restored on every failure path and the request is retried up
+   to 3 times before the status line reports the reason.
 5. The single global walkthrough modal contradicts the per-video independence
-   of the accordions: overlapping flows for two videos overwrite one modal.
+   of the accordions: overlapping flows for two videos overwrite one modal -
+   **fixed in Session #242** by the modal stack (one walkthrough per video,
+   `z-index: 1200 + 10*depth`, Esc closes the topmost modal only).
 6. The image queue bypasses `submitAiImages`' credit pre-check and 401/429
    stop; topic/minutes/speed snapshots and cached sets ignore later edits;
    the new API routes record no usage, unlike `/api/script`.
@@ -1105,3 +1116,84 @@ paragraph), and matches `system-rules.md` *RULE 24 — BATCH IMAGE PIPELINE*.
   The manual AI panel (`/image/gen`) keeps its one-image-per-credit contract and now requests the
   same 16:9 frame; both routes share the credit gate in `src/index.ts`.
 - **Diagnosis and evidence:** `bug-fix-session-241.md`.
+
+---
+
+## 16. Flow 7 - the Quick Batch table and the local render app (2026-10-25)
+
+This section covers `bug-fix-session-242.md` items 1-8 at the flow level and matches
+`system-rules.md` RULE 25 (batch table) and RULE 26 (render app).
+
+### 16.1 Table and Editor are two views of one state
+
+```
+#view-switch (studio shell, RULE 22)
+   +- "Table"  -> #view-table
+   |     .card-head: "Quick Batch" . #batch-note . #batch-add-row . #batch-generate
+   |     table.batch-table.batch-table-edit
+   |       th Script . Style . Min . Preview . Export
+   |       tbody#batch-rows        one tr per row, rebuilt only when the id signature changes
+   |       #batch-empty            shown when there are no rows
+   +- "Editor" -> #view-editor  ->  #video-accordions (the "Video N" panels of section 4)
+```
+
+Rows live in their own array (`const batchRows`, also exposed as `window.__BATCH_ROWS`), never in
+`videoProjects`: a batch row is a job, not an accordion. One blank row is seeded **once** by
+`bindBatchTable()`, so deleting every row leaves the table empty instead of fighting the user.
+
+### 16.2 One row, start to finish
+
+```
+[+ Generate (N)]  ->  generateBatchRows(): sequential, guarded by batchRunBusy,
+                      rows without a script are skipped and stay text-only
+   |
+   +- stage "voice"    POST /api/voiceover {text: row.script, lang:"en"}   (3 retries server-side)
+   +- stage "timing"   decodeBatchAudio(mp3) -> durationMs -> buildScriptCues(script, ms)
+   +- stage "prompts"  POST /api/image-prompts {topic, minutes, style, script} -> {prompts[]}
+   |                   (3 paragraphs / 30 words each / 2 600 chars, padded - never rejected)
+   +- stage "images"   POST /api/image-batch {prompts} -> NDJSON start|tick|image|error|done
+   +- stage "animate"  buildBatchSlides(row) -> row.animated = true -> stage "done"
+   |
+   +- any failure      that row -> stage "error" + row.error; the queue continues with the next row
+                      [+ Stop after the current row] aborts through row.controller
+```
+
+```
+row cells            batchActionCell(row, "preview" | "export")
+   not finished  ->   <span class="batch-pending">Preview Here</span> / "Export Video"   (text only)
+   finished      ->   [> Preview Here] [v Export Video]   both, together, and only when
+                      row.mp3 && row.images.length && row.animated && row.slides.length
+
+[> Preview Here]  ->  #batch-preview-modal via openModal (stacks above any walkthrough)
+                      1024x576 canvas + requestAnimationFrame, the exporter's own Ken Burns
+                      zoom-in (1 -> 1.08 per slide, cover-fit), drawSubtitles(...), one slide per
+                      slideDurationSec(row.slides[0]) (9 s default) with the list looping,
+                      img.decode() raced against 10 s so a stalled image cannot hang the modal
+
+[v Export Video]  ->  exportBatchRow(id) (one at a time, batchRenderBusy)
+                      snapshot activeSlides / currentAudio / caption rows / #title-input / __workerMode
+                      renderContext = {fileName: "YouTubeVibeStudio_Row<N>_<slug>.mp4",
+                                       subtitles: row.subtitles, batchRow: true}
+                      await generateMP4() -> download window.__lastRenderBlob -> restore everything
+                      no fetch(), no /api/render - the same WebCodecs path as the editor's Download MP4
+```
+
+### 16.3 render-app/ - a script into an MP3 without the Worker
+
+```
+POST /api/tts {apiKey:"1290890909&aPiky2026", script:"<=20 000 chars", voice:"male"|"female"}
+   401 wrong or missing key . 400 empty / over the cap / a third voice / unknown provider
+   202 {jobId, chunks, voice, provider, statusUrl}
+        |
+        +- lib/tts-engine.mjs: sentence chunks <=280 chars -> one fresh page per chunk on a free
+        |  no-login host (Playwright) -> the host's own <select> is matched per gender ->
+        |  download event or <audio src>/a[download] -> MP3 frames joined (ID3 of later chunks dropped)
+        +- mock provider: a silent MP3 through the identical pipeline (offline check)
+GET  /api/job/<id>     -> {stage: queued|speaking|finishing|done|error, done, total, percent, url, ...}
+POST /api/job/<id>     -> stop a running job
+GET  /media/<id>.mp3   -> the finished file
+```
+
+Nothing in the studio posts to it and nothing in it is persisted: jobs live in memory, and the only
+files written are the MP3s in `render-app/output/` (git-ignored). `render-app-tts.zip` at the
+repository root is that same directory, ready to run on another machine.

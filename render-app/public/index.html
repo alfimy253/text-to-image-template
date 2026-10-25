@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Render App — Script to Voiceover MP3</title>
+	<link rel="stylesheet" href="/styles.css">
+</head>
+
+<body>
+
+	<main class="wrap">
+
+		<header class="head">
+			<h1>Script → MP3</h1>
+			<p class="sub">
+				Paste up to <b>20,000</b> characters of narration, pick a voice, and the app
+				speaks it into one MP3 using a free online text-to-speech engine (no login,
+				no account, no API bill).
+			</p>
+		</header>
+
+		<form id="tts-form" class="card">
+
+			<label class="field">
+				<span class="label">Script</span>
+				<textarea
+					id="script"
+					name="script"
+					rows="14"
+					maxlength="20000"
+					spellcheck="false"
+					placeholder="Paste the narration script here — plain text, exactly as it should be spoken."></textarea>
+				<span class="count"><span id="count">0</span> / 20,000 characters · <span id="chunks">0</span> chunk(s)</span>
+			</label>
+
+			<fieldset class="field voices">
+				<legend class="label">Voice</legend>
+
+				<label class="voice">
+					<input type="radio" name="voice" value="male" checked>
+					<span>Male voice</span>
+					<small>one fixed male narrator</small>
+				</label>
+
+				<label class="voice">
+					<input type="radio" name="voice" value="female">
+					<span>Female voice</span>
+					<small>one fixed female narrator</small>
+				</label>
+			</fieldset>
+
+			<div class="actions">
+				<button type="submit" id="go">🎧 Generate MP3</button>
+				<button type="button" id="stop" class="ghost" hidden>Stop</button>
+			</div>
+
+			<div id="status" class="status" role="status">Idle.</div>
+
+			<div class="bar" aria-hidden="true"><div id="fill" class="fill"></div></div>
+
+			<div id="result" class="result" hidden>
+				<audio id="player" controls></audio>
+				<a id="download" class="download" download>⬇ Download MP3</a>
+				<span id="meta" class="meta"></span>
+			</div>
+
+		</form>
+
+		<section class="card keys">
+			<h2>Call it from another app</h2>
+			<pre><code>POST /api/tts
+Content-Type: application/json
+
+{ "apiKey": "1290890909&amp;aPiky2026",
+  "script": "&lt;up to 20000 characters&gt;",
+  "voice": "male" | "female" }
+
+→ { "jobId": "…", "chunks": 12, "statusUrl": "/api/job/…" }
+→ GET /api/job/&lt;id&gt;  { stage, done, total, percent, url }</code></pre>
+		</section>
+
+	</main>
+
+	<script src="/app.js"></script>
+
+</body>
+
+</html>

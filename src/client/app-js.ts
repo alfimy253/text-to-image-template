@@ -1,7 +1,9 @@
 /*
  * APP_JS — the main YouTube Vibe Studio client script
- * (MODULES 1-8: video projects, gallery, queue, AI panel,
- * SRT script, voiceover, render engine).
+ * (MODULES 1-9: video projects, gallery, queue, AI panel,
+ * quick-batch table, plain narration script, voiceover and the
+ * client-side render engine. The AI script is plain spoken text
+ * end to end: no subtitle format exists anywhere in this file.
  *
  * __PROMPTS_JSON__ is replaced by page.ts with
  * JSON.stringify(prompts) — the only server-side
@@ -511,7 +513,7 @@ export const APP_JS = `
 
 
 	/*
-	 * Subtitles (SRT script) are
+	 * Subtitles (the plain script) are
 	 * drawn below the caption, at
 	 * 1/3 of the height up from the
 	 * bottom.
@@ -1010,7 +1012,7 @@ export const APP_JS = `
 
 
 	/*
-	 * Draws the active SRT subtitle
+	 * Draws the active script subtitle
 	 * onto the current frame.
 	 *
 	 * Position: centred horizontally,
@@ -6116,11 +6118,18 @@ export const APP_JS = `
 	 *   MODULE 7: api-render      (POST /api/render with all of a
 	 *                              video's elements; background-worker
 	 *                              mode for the current-day settings route)
-	 *   MODULE 8: script-srt      (AI script generation -> SRT with
-	 *                              timestamps; INSTRUCT model;
-	 *                              minutes 1-6 + speech speed; the
-	 *                              gallery + SRT box are scroll areas
-	 *                              with wide arrow toggle buttons)
+	 *   MODULE 8: script          (AI script generation -> plain
+	 *                              narration text; INSTRUCT model;
+	 *                              minutes 1-6 + speech speed; two
+	 *                              client retries before the
+	 *                              accordion reports an error
+	 *   MODULE 8a: modal-stack    (one walkthrough / voiceover
+	 *                              window per video, stacked, never
+	 *                              swapped out of a pending choice)
+	 *   MODULE 1c: batch-table    (the table layout: script + style +
+	 *                              minutes per row, one Generate, then
+	 *                              Preview / Export on every finished
+	 *                              row)
 	 *
 	 * Each module only talks to the others through the
 	 * videoProjects array and the small shared functions, so a
@@ -6456,14 +6465,13 @@ export const APP_JS = `
 				'<label class="quality-select">Minutes <select id="va-script-minutes-' + n + '"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>' +
 				'<label class="quality-select">Speech <select id="va-script-speed-' + n + '"><option value="super fast">Super fast</option><option value="fast">Fast</option><option value="medium" selected>Medium</option><option value="slow">Slow</option></select></label>' +
 				'</div>' +
-				'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px" title="AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the SRT script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.">\u2728 Generate SEO Script</button>' +
+				'<button type="button" class="upload-btn small" id="va-script-btn-' + n + '" onclick="generateScript(' + n + ')" style="margin-top:4px" title="AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the plain narration script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule. The script is saved as spoken text \u2014 no subtitle formatting \u2014 so the voiceover can read it as it is.">\u2728 Generate SEO Script</button>' +
 				'<span class="va-note" id="va-script-status-' + n + '"></span>' +
 				'<div class="va-seo-keywords" id="va-script-keywords-' + n + '" style="display:none"></div>' +
-				'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the script (SRT)">\u25bc Script (SRT)</button>' +
+				'<button type="button" class="va-scroll-toggle" id="va-script-toggle-' + n + '" onclick="toggleScriptBox(' + n + ')" style="display:none" title="Show / hide the narration script">\u25bc Script</button>' +
 				'<div class="va-script-box" id="va-script-box-' + n + '" style="display:none"></div>' +
 				'<div class="va-row va-script-actions">' +
-				'<button type="button" class="upload-btn small" id="va-script-dl-' + n + '" onclick="downloadSrt(' + n + ')" style="display:none">\u2b07 Download .srt</button>' +
-				'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled style="display:none" title="Speak the script (SRT) to MP3 with MeloTTS (English) + apply it as subtitles">\ud83c\udf99 Generate Voiceover</button>' +
+				'<button type="button" class="upload-btn small" id="va-voice-btn-' + n + '" onclick="openVoiceoverModal(' + n + ')" disabled style="display:none" title="Speak the narration script to MP3 with MeloTTS (English) + apply it as subtitles">\ud83c\udf99 Generate Voiceover</button>' +
 				'</div>' +
 				'</div>' +
 				'<div class="va-section">' +
@@ -6684,12 +6692,14 @@ export const APP_JS = `
 	}
 
 	// =========================================================
-	// MODULE 1b: studio shell (Bug Fix Session #240)
+	// MODULE 1b: studio shell (Bug Fix Session #240, table view
+	//             rewritten by Session #242)
 	//
-	// Two views over the same state:
-	//   Bulk grid  read-only index of the videos in this
-	//              project (no bulk operations)
-	//   Editor     the Video N accordions + preview canvas
+	// Two views over one shell, switched by [data-layout]:
+	//   Bulk grid  #view-table - the quick batch table (its own
+	//              rows, MODULE 1c; RULE 25)
+	//   Editor     #view-editor - the Video N accordions beside
+	//              the preview canvas
 	//
 	// The choice lives in memory only: RULE 15 forbids client
 	// storage, so a reload always starts in the Editor.
@@ -6768,88 +6778,418 @@ export const APP_JS = `
 
 	}
 
-	function batchScenes(project) {
+	// =========================================================
+	// MODULE 1c: quick-batch table (the studio's "table layout")
+	//
+	// One row = one video, produced entirely from the row itself:
+	//
+	//   column 1  the script (plain narration text, typed or pasted)
+	//   column 2  the video image style - the SAME ten options the
+	//             script modal offers, in the same order
+	//   column 3  the minimum length in minutes
+	//   column 4  "Preview Here" while the row works, then a live
+	//             Preview button
+	//   column 5  "Export Video" while the row works, then a live
+	//             Export button
+	//
+	// The \u2726 Generate button at the TOP RIGHT of the table runs every
+	// row that has a script. A row without one is skipped. Missing
+	// inputs fall back to their defaults: 1 minute and Cinematic Film.
+	//
+	// A row is finished when all four steps are through - the spoken
+	// MP3, the AI images, and the animation that stitches them - and
+	// only then do Preview and Export enable, always together.
+	//
+	// Rows are deliberately independent of the "Video N" accordions:
+	// nothing here reads or writes videoProjects, so the quick table
+	// is a fast lane and the accordions stay the detailed editor.
+	// =========================================================
 
-		const counts =
-			videoCounts(
-				project
-			);
+	const BATCH_ROW_LIMIT =
+		VIDEO_MAX_VIDEOS;
 
-		const parts =
-			[];
+	const BATCH_MIN_MINUTES =
+		1;
 
-		if (counts.stills > 0) {
+	const BATCH_MAX_MINUTES =
+		6;
 
-			parts.push(
-				counts.stills +
-					" img"
-			);
+	/* The row stays usable if the LLM or the image batch is slow. */
+	const BATCH_REQUEST_TIMEOUT_MS =
+		240000;
 
-		}
+	/* Never let a stalled image decode hold the row open. */
+	const BATCH_SLIDE_DECODE_MS =
+		10000;
 
-		if (counts.gifs > 0) {
+	const batchRows = [];
 
-			parts.push(
-				counts.gifs +
-					" GIF"
-			);
+	let batchRowSeq =
+		0;
 
-		}
+	let batchRunBusy =
+		false;
 
-		if (counts.clips > 0) {
+	let batchRenderBusy =
+		false;
 
-			parts.push(
-				counts.clips +
-					" MP4"
-			);
+	let batchPreview =
+		null;
 
-		}
+	let batchTableBound =
+		false;
 
-		return parts.length
-			? parts.join(
-					" \u00b7 "
-			  )
-			: "\u2014";
+	/* true once the first blank row has been offered. */
+	let batchTableSeeded =
+		false;
+
+	const BATCH_STAGE_LABELS = {
+		empty: "Waiting for a script",
+		ready: "Ready \u2014 press \u2726 Generate",
+		queued: "Queued",
+		voice: "Speaking the script (MP3)",
+		timing: "Measuring the narration",
+		prompts: "Writing the image prompts",
+		images: "Rendering the AI images",
+		animate: "Animating the slides",
+		done: "Finished",
+		error: "Stopped"
+	};
+
+	function createBatchRow(seed) {
+
+		batchRowSeq += 1;
+
+		return Object.assign(
+			{
+				id: batchRowSeq,
+				script: "",
+				style:
+					(typeof DEFAULT_SEO_IMAGE_STYLE === "string" && DEFAULT_SEO_IMAGE_STYLE) ||
+					"Cinematic Film",
+				minutes:
+					BATCH_MIN_MINUTES,
+				stage:
+					"empty",
+				detail:
+					"",
+				error:
+					"",
+				mp3:
+					null,
+				mp3Url:
+					"",
+				audio:
+					null,
+				prompts:
+					[],
+				images:
+					[],
+				objectUrls:
+					[],
+				slides:
+					[],
+				subtitles:
+					[],
+				animated:
+					false,
+				startedAt:
+					0,
+				finishedAt:
+					0
+			},
+			seed || {}
+		);
 
 	}
 
-	function batchPrompt(n) {
+	function getBatchRow(id) {
 
-		const box =
-			document.getElementById(
-				"va-ai-prompt-" + n
-			);
+		for (const row of batchRows) {
 
-		const typed =
-			box && box.value
-				? box.value.trim().replace(/\\s+/g, " ")
-				: "";
-
-		if (!typed) {
-
-			return "No prompt yet";
+			if (String(row.id) === String(id)) {
+				return row;
+			}
 
 		}
 
-		return typed.length > 64
-			? typed.slice(0, 64) + "\u2026"
-			: typed;
+		return null;
 
 	}
 
-	function batchTitle(n, project) {
+	function batchRowHasScript(row) {
 
-		const input =
-			document.getElementById(
-				"va-title-" + n
+		return !!(
+			row &&
+			String(row.script || "").trim()
+		);
+
+	}
+
+	/* mp3 + AI images + animation - the one definition of "finished". */
+	function batchRowFinished(row) {
+
+		return !!(
+			row &&
+			row.mp3 &&
+			row.images.length &&
+			row.animated &&
+			row.slides.length
+		);
+
+	}
+
+	function addBatchRow(seed) {
+
+		if (
+			batchRows.length >=
+			BATCH_ROW_LIMIT
+		) {
+
+			showRequiredModal([
+				"The quick batch table holds " +
+				BATCH_ROW_LIMIT +
+				" rows - finish or remove one first."
+			]);
+
+			return null;
+
+		}
+
+		const row =
+			createBatchRow(seed);
+
+		batchRows.push(row);
+
+		renderBatchTable();
+
+		return row;
+
+	}
+
+	function revokeBatchRow(row) {
+
+		if (!row) {
+			return;
+		}
+
+		for (const url of row.objectUrls || []) {
+
+			try {
+				URL.revokeObjectURL(url);
+			}
+			catch (revokeError) { }
+
+		}
+
+		row.objectUrls = [];
+
+	}
+
+	function removeBatchRow(id) {
+
+		let index =
+			-1;
+
+		for (let i = 0; i < batchRows.length; i++) {
+
+			if (String(batchRows[i].id) === String(id)) {
+				index = i;
+				break;
+			}
+
+		}
+
+		if (index < 0) {
+			return;
+		}
+
+		revokeBatchRow(
+			batchRows[index]
+		);
+
+		batchRows.splice(index, 1);
+
+		if (!batchRows.length) {
+			closeBatchPreview();
+		}
+
+		renderBatchTable();
+
+	}
+
+	function batchStyleOptionsHTML(selected) {
+
+		const styles =
+			(typeof SEO_IMAGE_STYLES === "object" && Array.isArray(SEO_IMAGE_STYLES) && SEO_IMAGE_STYLES.length)
+				? SEO_IMAGE_STYLES
+				: ["Cinematic Film"];
+
+		return styles
+			.map(function (style) {
+
+				const value =
+					typeof style === "string"
+						? style
+						: (style && style.name) || "";
+
+				if (!value) {
+					return "";
+				}
+
+				return (
+					'<option value="' +
+					value +
+					'"' +
+					(value === selected ? " selected" : "") +
+					">" +
+					escapeHTML(value) +
+					"</option>"
+				);
+
+			})
+			.join("");
+
+	}
+
+	function batchStatusText(row) {
+
+		if (row.stage === "error") {
+
+			return "\u26a0 " + (row.error || row.detail || "Generation failed");
+
+		}
+
+		const label =
+			BATCH_STAGE_LABELS[row.stage] ||
+			row.stage;
+
+		return row.detail
+			? label + " \u00b7 " + row.detail
+			: label;
+
+	}
+
+	function batchActionCell(row, kind) {
+
+		if (!batchRowFinished(row)) {
+
+			/* Not finished: plain text, no button, nothing to press. */
+			return (
+				'<span class="batch-pending">' +
+				(kind === "preview"
+					? "Preview Here"
+					: "Export Video") +
+				"</span>"
 			);
 
-		const typed =
-			input && input.value
-				? input.value.trim()
-				: "";
+		}
 
-		return typed || project.name;
+		if (kind === "preview") {
+
+			return (
+				'<button type="button" class="upload-btn small batch-live" data-batch-action="preview" data-batch-row="' +
+				row.id +
+				'">\u25b6 Preview</button>'
+			);
+
+		}
+
+		return (
+			'<button type="button" class="upload-btn small batch-live" data-batch-action="export" data-batch-row="' +
+			row.id +
+			'">\u2b07 Export Video</button>'
+		);
+
+	}
+
+	function batchRowHTML(row, index) {
+
+		const minutes =
+			Number(row.minutes) > 0
+				? Number(row.minutes)
+				: BATCH_MIN_MINUTES;
+
+		const script =
+			String(row.script || "").replace(/</g, "&lt;");
+
+		return (
+			'<tr data-batch-row="' + row.id + '">' +
+				'<td class="batch-cell batch-cell-script">' +
+					'<div class="batch-row-head">' +
+						'<span class="batch-row-no">' + String(index).padStart(2, "0") + "</span>" +
+						'<button type="button" class="batch-row-del" data-batch-action="remove" data-batch-row="' + row.id + '" title="Remove this row">\u2715</button>' +
+					"</div>" +
+					'<textarea class="batch-script-input" data-batch-field="script" rows="5" spellcheck="false" aria-label="Script for row ' + index + '" placeholder="Paste or type the narration script for this row\u2026">' + script + "</textarea>" +
+					'<div class="batch-row-status" data-batch-slot="status" data-stage="' + escapeHTML(row.stage) + '">' + escapeHTML(batchStatusText(row)) + "</div>" +
+				"</td>" +
+				'<td class="batch-cell batch-cell-style">' +
+					'<select class="batch-style-select" data-batch-field="style" aria-label="Video image style for row ' + index + '" title="Same ten styles as the script modal">' +
+						batchStyleOptionsHTML(row.style) +
+					"</select>" +
+					'<div class="batch-row-sub">used for every AI image in this row</div>' +
+				"</td>" +
+				'<td class="batch-cell batch-cell-min">' +
+					'<input type="number" class="batch-minutes-input" data-batch-field="minutes" min="' + BATCH_MIN_MINUTES + '" max="' + BATCH_MAX_MINUTES + '" step="1" value="' + minutes + '" aria-label="Minimum length in minutes for row ' + index + '">' +
+					'<div class="batch-row-sub">min</div>' +
+				"</td>" +
+				'<td class="batch-cell batch-cell-action" data-batch-slot="preview">' +
+					batchActionCell(row, "preview") +
+				"</td>" +
+				'<td class="batch-cell batch-cell-action" data-batch-slot="export">' +
+					batchActionCell(row, "export") +
+				"</td>" +
+			"</tr>"
+		);
+
+	}
+
+	function batchTableSignature() {
+
+		return batchRows
+			.map(function (row) {
+				return row.id;
+			})
+			.join(",");
+
+	}
+
+	function refreshBatchRowCells() {
+
+		for (const row of batchRows) {
+
+			const status =
+				document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="status"]');
+
+			if (status) {
+
+				status.textContent =
+					batchStatusText(row);
+
+				status.setAttribute(
+					"data-stage",
+					row.stage
+				);
+
+			}
+
+			for (const kind of ["preview", "export"]) {
+
+				const cell =
+					document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="' + kind + '"]');
+
+				if (cell) {
+
+					/* Both cells are rewritten from the same flag, so they
+					 * can only ever change - and enable - together. */
+					cell.innerHTML =
+						batchActionCell(row, kind);
+
+				}
+
+			}
+
+		}
 
 	}
 
@@ -6866,49 +7206,90 @@ export const APP_JS = `
 
 		}
 
+		/*
+		 * The table starts with one blank row to type into - but only
+		 * the first time. After that an empty table stays empty, so a
+		 * user can remove every row without the table fighting back.
+		 */
+		if (
+			!batchRows.length &&
+			!batchTableSeeded
+		) {
+
+			batchTableSeeded =
+				true;
+
+			batchRows.push(
+				createBatchRow()
+			);
+
+		}
+
+		const signature =
+			batchTableSignature();
+
+		if (
+			body.getAttribute("data-batch-signature") !==
+			signature
+		) {
+
+			body.innerHTML =
+				batchRows
+					.map(function (row, index) {
+						return batchRowHTML(row, index + 1);
+					})
+					.join("");
+
+			body.setAttribute(
+				"data-batch-signature",
+				signature
+			);
+
+		}
+		else {
+
+			/* Rows already exist - never rebuild the DOM a user is typing in. */
+			refreshBatchRowCells();
+
+		}
+
+		updateBatchToolbar();
+
 		const empty =
 			document.getElementById(
 				"batch-empty"
 			);
 
-		const note =
+		if (empty) {
+
+			empty.hidden =
+				batchRows.length > 0;
+
+		}
+
+		const addRow =
 			document.getElementById(
-				"batch-note"
+				"batch-add-row"
 			);
 
+		if (addRow) {
+
+			addRow.disabled =
+				batchRows.length >=
+				BATCH_ROW_LIMIT;
+
+		}
+
+		/* The editor counters keep counting the accordions. */
 		const conceptCount =
 			document.getElementById(
 				"concept-count"
 			);
 
-		const total =
-			videoProjects.length;
-
-		if (empty) {
-
-			empty.hidden =
-				total > 0;
-
-		}
-
-		if (note) {
-
-			note.textContent =
-				total
-					? total +
-						" video" +
-						(total === 1
-							? ""
-							: "s") +
-						" \u00b7 read-only index"
-					: "Every video in this project";
-
-		}
-
 		if (conceptCount) {
 
 			conceptCount.textContent =
-				total +
+				videoProjects.length +
 				" of " +
 				VIDEO_MAX_VIDEOS +
 				" videos";
@@ -6923,140 +7304,1815 @@ export const APP_JS = `
 		if (previewState) {
 
 			previewState.textContent =
-				total
-					? total +
-						" in queue"
-					: "idle";
+				batchRunBusy
+					? "table generating"
+					: videoProjects.length
+						? videoProjects.length + " in queue"
+						: "idle";
 
 		}
 
-		const rows =
-			[];
+	}
 
-		videoProjects.forEach(
-			(project, index) => {
+	function setBatchStage(
+		row,
+		stage,
+		detail
+	) {
 
-				const n =
-					index + 1;
+		row.stage =
+			stage;
 
-				const audio =
-					project.audioFile
-						? "MP3" +
-							(project.audio
-								? " " +
-									formatSeconds(
-										project.audio.duration
-									)
-								: "")
-						: "\u2014";
+		row.detail =
+			detail || "";
 
-				rows.push(
-					'<tr data-video="' + n + '">' +
-						'<td class="batch-index">' +
-							String(n).padStart(2, "0") +
-						"</td>" +
-						"<td>" +
-							'<div class="batch-title">' +
-								escapeHTML(
-									batchTitle(n, project)
-								) +
-							"</div>" +
-							'<div class="batch-sub">' +
-								escapeHTML(
-									batchPrompt(n)
-								) +
-							"</div>" +
-						"</td>" +
-						"<td>" +
-							batchScenes(project) +
-						"</td>" +
-						"<td>" +
-							audio +
-						"</td>" +
-						"<td>" +
-							'<span class="batch-badge" data-state="' +
-								escapeHTML(
-									project.status
-								) +
-								'">' +
-								escapeHTML(
-									project.status
-								) +
-							"</span>" +
-						"</td>" +
-						"<td>" +
-							'<button type="button" class="batch-open" data-open="' +
-								n +
-								'">Open \u2197</button>' +
-						"</td>" +
-					"</tr>"
-				);
+		if (stage === "error") {
 
-			}
-		);
+			row.error =
+				detail || row.error;
 
-		body.innerHTML =
-			rows.join("");
+		}
+
+		const status =
+			document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="status"]');
+
+		if (status) {
+
+			status.textContent =
+				batchStatusText(row);
+
+			status.setAttribute(
+				"data-stage",
+				row.stage
+			);
+
+		}
+
+		console.info("[batch-table] row " + row.id, {
+			stage: row.stage,
+			detail: row.detail,
+			mp3: !!row.mp3,
+			prompts: row.prompts.length,
+			images: row.images.length,
+			slides: row.slides.length
+		});
 
 	}
 
-	function focusVideoInEditor(n) {
+	/* fetch with a hard timeout + an abort handle per row. */
+	async function batchFetch(
+		row,
+		url,
+		init,
+		timeoutMs
+	) {
 
-		const accordion =
-			document.getElementById(
-				"video-" + n
+		const controller =
+			typeof AbortController !== "undefined"
+				? new AbortController()
+				: null;
+
+		row.controller =
+			controller;
+
+		const timer =
+			controller && typeof setTimeout === "function"
+				? setTimeout(function () {
+					try {
+						controller.abort();
+					}
+					catch (abortError) { }
+				}, timeoutMs || BATCH_REQUEST_TIMEOUT_MS)
+				: null;
+
+		try {
+
+			return await fetch(
+				url,
+				Object.assign(
+					{},
+					init,
+					controller ? { signal: controller.signal } : {}
+				)
 			);
 
-		if (!accordion) {
+		}
+		finally {
+
+			if (timer) {
+				clearTimeout(timer);
+			}
+
+			row.controller =
+				null;
+
+		}
+
+	}
+
+	/* Step 1: the script becomes the voiceover MP3 (worker-side chunked). */
+	async function requestBatchVoiceover(row) {
+
+		const response =
+			await batchFetch(
+				row,
+				"/api/voiceover",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json"
+					},
+					body:
+						JSON.stringify({
+							text: String(row.script || "").trim(),
+							lang: "en"
+						})
+				},
+				BATCH_REQUEST_TIMEOUT_MS
+			);
+
+		if (!response.ok) {
+
+			const data =
+				await response
+					.json()
+					.catch(function () { return {}; });
+
+			throw new Error(
+				(data && data.error) ||
+				("Voiceover failed (HTTP " + response.status + ")")
+			);
+
+		}
+
+		return await response.blob();
+
+	}
+
+	/* The MP3 gives the row its timing: length + subtitle spread. */
+	async function decodeBatchAudio(row, blob) {
+
+		try {
+
+			const context =
+				getAudioContext();
+
+			const decoded =
+				await context.decodeAudioData(
+					(await blob.arrayBuffer()).slice(0)
+				);
+
+			row.audio = {
+				name:
+					"Row" + row.id + "-voiceover.mp3",
+				duration:
+					decoded.duration,
+				buffer:
+					decoded,
+				url:
+					null
+			};
+
+			return Math.round(decoded.duration * 1000);
+
+		}
+		catch (decodeError) {
+
+			console.warn(
+				"[batch-table] the MP3 could not be decoded, timing falls back to the minutes setting",
+				decodeError
+			);
+
+			return 0;
+
+		}
+
+	}
+
+	/* Step 2: the script + the row's style become the scene prompts. */
+	async function requestBatchPrompts(row) {
+
+		const response =
+			await batchFetch(
+				row,
+				"/api/image-prompts",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json"
+					},
+					body:
+						JSON.stringify({
+							topic:
+								batchRowTopic(row),
+							minutes:
+								row.minutes,
+							style:
+								row.style,
+							script:
+								String(row.script || "").trim()
+						})
+				},
+				BATCH_REQUEST_TIMEOUT_MS
+			);
+
+		const data =
+			await response
+				.json()
+				.catch(function () { return {}; });
+
+		if (!response.ok || !data.success) {
+
+			throw new Error(
+				(data && data.error) ||
+				("Image prompts failed (HTTP " + response.status + ")")
+			);
+
+		}
+
+		const prompts =
+			Array.isArray(data.prompts)
+				? data.prompts.filter(function (prompt) {
+					return typeof prompt === "string" && prompt.trim().length > 0;
+				})
+				: [];
+
+		if (!prompts.length) {
+
+			throw new Error(
+				"The image-prompt model returned no scene prompts"
+			);
+
+		}
+
+		return prompts;
+
+	}
+
+	function batchRowTopic(row) {
+
+		const firstLine =
+			String(row.script || "")
+				.split(/\\n+/)
+				.map(function (line) { return line.trim(); })
+				.filter(Boolean)[0] || "";
+
+		return (
+			firstLine ||
+			"quick batch row " + row.id
+		).slice(0, 90);
+
+	}
+
+	/* Step 3: ONE batch request renders every prompt of the row. */
+	async function requestBatchImages(
+		row,
+		prompts
+	) {
+
+		const images =
+			[];
+
+		const response =
+			await batchFetch(
+				row,
+				"/api/image-batch",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"Accept": "application/x-ndjson"
+					},
+					body:
+						JSON.stringify({
+							prompts: prompts
+						})
+				},
+				BATCH_REQUEST_TIMEOUT_MS * 2
+			);
+
+		if (!response.ok) {
+
+			const data =
+				await response
+					.json()
+					.catch(function () { return {}; });
+
+			throw new Error(
+				(data && data.error) ||
+				("Image batch failed (HTTP " + response.status + ")")
+			);
+
+		}
+
+		const reader =
+			response.body && typeof response.body.getReader === "function"
+				? response.body.getReader()
+				: null;
+
+		if (!reader) {
+
+			throw new Error("This browser cannot read the image batch stream");
+
+		}
+
+		const decoder =
+			new TextDecoder();
+
+		let buffer =
+			"";
+
+		let failed =
+			0;
+
+		const handleEvent = function (event) {
+
+			if (!event || typeof event !== "object") {
+				return;
+			}
+
+			if (event.credits) {
+				applyCredits(event.credits);
+			}
+
+			if (
+				event.type === "image" &&
+				event.ok &&
+				event.data
+			) {
+
+				try {
+
+					const blob =
+						base64ImageBlob(event.data, event.mime);
+
+					const url =
+						URL.createObjectURL(blob);
+
+					row.objectUrls.push(url);
+
+					images.push({
+						blob: blob,
+						url: url,
+						index: Number(event.index) || images.length
+					});
+
+					setBatchStage(
+						row,
+						"images",
+						images.length + " of " + prompts.length + " done"
+					);
+
+				}
+				catch (imageError) {
+
+					failed++;
+
+					console.warn("[batch-table] one image was unusable", imageError);
+
+				}
+
+			}
+
+			if (event.type === "image" && !event.ok) {
+
+				failed++;
+
+			}
+
+		};
+
+		for (;;) {
+
+			const chunk =
+				await reader.read();
+
+			if (chunk.done) {
+				break;
+			}
+
+			buffer +=
+				decoder.decode(chunk.value, { stream: true });
+
+			let newlineIndex =
+				buffer.indexOf("\\n");
+
+			while (newlineIndex >= 0) {
+
+				const line =
+					buffer
+						.slice(0, newlineIndex)
+						.trim();
+
+				buffer =
+					buffer.slice(newlineIndex + 1);
+
+				if (line) {
+
+					try {
+						handleEvent(JSON.parse(line));
+					}
+					catch (parseError) { }
+
+				}
+
+				newlineIndex =
+					buffer.indexOf("\\n");
+
+			}
+
+		}
+
+		const tail =
+			(buffer + decoder.decode()).trim();
+
+		if (tail) {
+
+			try {
+				handleEvent(JSON.parse(tail));
+			}
+			catch (parseError) { }
+
+		}
+
+		if (!images.length) {
+
+			throw new Error(
+				"No image came out of the batch" +
+				(failed ? " (" + failed + " prompt(s) failed)" : "")
+			);
+
+		}
+
+		if (failed) {
+
+			console.warn("[batch-table] row " + row.id + " skipped " + failed + " failed image(s)");
+
+		}
+
+		refreshCredits();
+
+		return images;
+
+	}
+
+	/* play() is allowed to reject (autoplay policy) - the canvas keeps going. */
+	function batchPreviewPlay(audio) {
+
+		if (!audio || typeof audio.play !== "function") {
 
 			return;
 
 		}
 
-		setStudioLayout(
-			"editor"
-		);
+		try {
 
-		const body =
-			document.getElementById(
-				"va-body-" + n
+			const played =
+				audio.play();
+
+			if (played && typeof played.catch === "function") {
+
+				played.catch(function () { });
+
+			}
+
+		}
+		catch (playError) { }
+
+	}
+
+	/* Step 4: the animation - decoded <img> slides in play order. */
+	async function buildBatchSlides(row, images) {
+
+		const slides =
+			[];
+
+		for (let index = 0; index < images.length; index++) {
+
+			const img =
+				new Image();
+
+			img.src =
+				images[index].url;
+
+			try {
+
+				/*
+				 * decode() is what tells us the pixels are really there. A
+				 * browser without it is not failed on: the slide is kept and
+				 * the exporter's own draw call is where a broken image would
+				 * show up.
+				 */
+				if (typeof img.decode === "function") {
+
+					await Promise.race([
+						img.decode(),
+						new Promise(function (resolve) {
+
+							setTimeout(
+								resolve,
+								BATCH_SLIDE_DECODE_MS
+							);
+
+						})
+					]);
+
+				}
+
+			}
+			catch (loadError) {
+
+				console.warn("[batch-table] slide " + (index + 1) + " was skipped", loadError);
+
+				continue;
+
+			}
+
+			slides.push({
+				id:
+					"batch-" + row.id + "-img-" + index,
+				cardId:
+					"",
+				img:
+					img
+			});
+
+		}
+
+		if (!slides.length) {
+
+			throw new Error("None of the row's images could be prepared");
+
+		}
+
+		return slides;
+
+	}
+
+	async function runBatchRow(row) {
+
+		/* A re-run starts from a clean row. */
+		revokeBatchRow(row);
+
+		row.mp3 = null;
+		row.mp3Url = "";
+		row.audio = null;
+		row.prompts = [];
+		row.images = [];
+		row.slides = [];
+		row.subtitles = [];
+		row.animated = false;
+		row.error = "";
+		row.startedAt = Date.now();
+
+		setBatchStage(row, "voice", "Speaking " + String(row.script || "").trim().length + " characters");
+
+		try {
+
+			const blob =
+				await requestBatchVoiceover(row);
+
+			if (!blob || !blob.size) {
+
+				throw new Error(
+					"The voiceover model returned no audio"
+				);
+
+			}
+
+			row.mp3 =
+				blob;
+
+			row.mp3Url =
+				URL.createObjectURL(blob);
+
+			row.objectUrls.push(row.mp3Url);
+
+			setBatchStage(row, "timing");
+
+			const measuredMs =
+				await decodeBatchAudio(row, blob);
+
+			const spanMs =
+				measuredMs ||
+				Math.round(row.minutes * 60 * 1000);
+
+			/* Subtitles come from the same plain text the voice read. */
+			row.subtitles =
+				buildScriptCues(
+					row.script,
+					spanMs
+				);
+
+			setBatchStage(
+				row,
+				"prompts",
+				"for " + row.minutes + " min \u00b7 " + row.style
 			);
 
-		if (body) {
+			row.prompts =
+				await requestBatchPrompts(row);
 
-			body.style.display =
+			setBatchStage(
+				row,
+				"images",
+				"0 of " + row.prompts.length
+			);
+
+			row.images =
+				await requestBatchImages(
+					row,
+					row.prompts
+				);
+
+			setBatchStage(
+				row,
+				"animate",
+				row.images.length + " slides"
+			);
+
+			row.slides =
+				await buildBatchSlides(
+					row,
+					row.images
+				);
+
+			row.animated =
+				true;
+
+			row.finishedAt =
+				Date.now();
+
+			setBatchStage(
+				row,
+				"done",
+				row.slides.length + " slides \u00b7 " + formatSeconds(spanMs / 1000)
+			);
+
+			console.info("[batch-table] row " + row.id + " finished", {
+				ms: row.finishedAt - row.startedAt,
+				slides: row.slides.length,
+				durationMs: spanMs,
+				style: row.style
+			});
+
+		}
+		catch (rowError) {
+
+			const message =
+				rowError && rowError.message
+					? rowError.message
+					: String(rowError);
+
+			console.error("[batch-table] row " + row.id + " failed", message);
+
+			setBatchStage(
+				row,
+				"error",
+				message
+			);
+
+		}
+
+		refreshBatchRowCells();
+
+		return batchRowFinished(row);
+
+	}
+
+	async function generateBatchRows() {
+
+		if (batchRunBusy) {
+
+			return;
+
+		}
+
+		const targets =
+			batchRows.filter(batchRowHasScript);
+
+		if (!targets.length) {
+
+			showRequiredModal([
+				"No row has a script yet - type or paste one in column 1 first."
+			]);
+
+			return;
+
+		}
+
+		/*
+		 * Rows run one after another on purpose: every row speaks, draws
+		 * and animates with the same browser (and the same credit
+		 * budget), so a queue finishes each row - and unlocks its two
+		 * buttons - instead of stalling all ten at once.
+		 */
+		batchRunBusy =
+			true;
+
+		renderBatchTable();
+
+		let finished =
+			0;
+
+		for (const row of targets) {
+
+			if (!batchRunBusy) {
+				break;
+			}
+
+			if (await runBatchRow(row)) {
+
+				finished += 1;
+
+			}
+
+		}
+
+		batchRunBusy =
+			false;
+
+		renderBatchTable();
+
+		console.info("[batch-table] generate pass done", {
+			requested: targets.length,
+			finished: finished
+		});
+
+	}
+
+	function stopBatchRows() {
+
+		batchRunBusy =
+			false;
+
+		for (const row of batchRows) {
+
+			if (row.controller) {
+
+				try {
+					row.controller.abort();
+				}
+				catch (abortError) { }
+
+			}
+
+		}
+
+		renderBatchTable();
+
+	}
+
+	/* ---------------- the row preview player ---------------- */
+
+	function batchPreviewModalId() {
+		return "batch-preview-modal";
+	}
+
+	function closeBatchPreview() {
+
+		if (batchPreview) {
+
+			if (batchPreview.raf && typeof cancelAnimationFrame === "function") {
+
+				cancelAnimationFrame(
+					batchPreview.raf
+				);
+
+			}
+
+			if (batchPreview.audio) {
+
+				try {
+					batchPreview.audio.pause();
+				}
+				catch (pauseError) { }
+
+			}
+
+			batchPreview =
+				null;
+
+		}
+
+		closeModal(
+			document.getElementById(
+				batchPreviewModalId()
+			)
+		);
+
+	}
+
+	function openBatchPreview(id) {
+
+		const row =
+			getBatchRow(id);
+
+		if (!row) {
+			return;
+		}
+
+		if (!batchRowFinished(row)) {
+
+			setBatchStage(
+				row,
+				row.stage,
+				"Preview unlocks when the row is finished"
+			);
+
+			return;
+
+		}
+
+		closeBatchPreview();
+
+		const modal =
+			document.createElement(
+				"div"
+			);
+
+		modal.id =
+			batchPreviewModalId();
+
+		modal.className =
+			"modal-overlay batch-preview-overlay";
+
+		modal.setAttribute(
+			"data-dismiss",
+			"closeBatchPreview"
+		);
+
+		modal.innerHTML =
+			'<div class="modal-box batch-preview-box">' +
+				'<div class="modal-title">\u25b6 Preview \u2014 Row ' + escapeHTML(String(row.id)) + "</div>" +
+				'<canvas id="batch-preview-canvas" class="batch-preview-canvas" width="1024" height="576"></canvas>' +
+				'<div class="batch-preview-bar">' +
+					'<button type="button" class="upload-btn small" data-batch-preview="toggle">\u23f8 Pause</button>' +
+					'<button type="button" class="upload-btn small" data-batch-preview="restart">\u21ba Restart</button>' +
+					'<span class="va-note" id="batch-preview-time">0:00</span>' +
+				"</div>" +
+				'<div class="va-note batch-preview-note">The narration and the burned-in subtitles of this row, exactly as the export will paint them. Nothing is uploaded - the MP4 is only built when you press Export.</div>' +
+				'<div class="seo-wt-actions">' +
+					'<button type="button" class="upload-btn small" onclick="exportBatchRow(' + row.id + ')">\u2b07 Export Video</button>' +
+					'<button type="button" class="upload-btn small" data-batch-preview="close">\u2715 Close</button>' +
+				"</div>" +
+			"</div>";
+
+		openModal(
+			modal
+		);
+
+		const canvas =
+			modal.querySelector(
+				"#batch-preview-canvas"
+			);
+
+		const context =
+			canvas && typeof canvas.getContext === "function"
+				? canvas.getContext("2d")
+				: null;
+
+		const audio =
+			typeof Audio === "function"
+				? new Audio(row.mp3Url)
+				: null;
+
+		if (audio) {
+
+			audio.addEventListener(
+				"ended",
+				function () {
+
+					if (batchPreview) {
+						batchPreview.playing = false;
+					}
+
+				}
+			);
+
+		}
+
+		batchPreview = {
+			row: row,
+			modal: modal,
+			canvas: canvas,
+			context: context,
+			audio: audio,
+			playing: !!audio,
+			manualMs: 0,
+			raf: 0
+		};
+
+		if (audio) {
+
+			batchPreviewPlay(audio);
+
+		}
+
+		modal.addEventListener(
+			"click",
+			function (event) {
+
+				const target =
+					event.target && event.target.closest
+						? event.target.closest("[data-batch-preview]")
+						: null;
+
+				if (!target) {
+
+					/* A click on the dimmed backdrop puts the player away. */
+					if (event.target === modal) {
+
+						closeBatchPreview();
+
+					}
+
+					return;
+
+				}
+
+				const action =
+					target.getAttribute(
+						"data-batch-preview"
+					);
+
+				if (action === "toggle") {
+
+					batchPreviewToggle();
+
+					target.textContent =
+						batchPreview && batchPreview.playing
+							? "\u23f8 Pause"
+							: "\u25b6 Play";
+
+					return;
+
+				}
+
+				if (action === "restart") {
+
+					batchPreviewRestart();
+
+					return;
+
+				}
+
+				closeBatchPreview();
+
+			}
+		);
+
+		batchPreviewTick();
+
+	}
+
+	function batchPreviewTimeMs() {
+
+		if (
+			batchPreview &&
+			batchPreview.audio &&
+			Number.isFinite(batchPreview.audio.currentTime)
+		) {
+
+			return batchPreview.audio.currentTime * 1000;
+
+		}
+
+		return batchPreview
+			? batchPreview.manualMs
+			: 0;
+
+	}
+
+	function batchPreviewTick() {
+
+		if (!batchPreview) {
+			return;
+		}
+
+		const row =
+			batchPreview.row;
+
+		const context =
+			batchPreview.context;
+
+		if (context && row && row.slides.length) {
+
+			const width =
+				batchPreview.canvas.width || 1024;
+
+			const height =
+				batchPreview.canvas.height || 576;
+
+			const timestampMs =
+				batchPreviewTimeMs();
+
+			const slideSeconds =
+				typeof slideDurationSec === "function"
+					? Math.max(1, slideDurationSec(row.slides[0]) || 9)
+					: 9;
+
+			const totalSeconds =
+				row.slides.length * slideSeconds;
+
+			const loopMs =
+				totalSeconds * 1000;
+
+			const localMs =
+				loopMs > 0
+					? timestampMs % loopMs
+					: 0;
+
+			const index =
+				Math.min(
+					row.slides.length - 1,
+					Math.floor(localMs / (slideSeconds * 1000))
+				);
+
+			const slide =
+				row.slides[index];
+
+			/* The same Ken Burns move the exporter makes: slow zoom-in. */
+			const phase =
+				(localMs % (slideSeconds * 1000)) / (slideSeconds * 1000);
+
+			const zoom =
+				1 + 0.08 * phase;
+
+			context.fillStyle =
+				"#000000";
+
+			context.fillRect(
+				0,
+				0,
+				width,
+				height
+			);
+
+			if (
+				slide &&
+				slide.img &&
+				slide.img.naturalWidth
+			) {
+
+				const sourceWidth =
+					slide.img.naturalWidth;
+
+				const sourceHeight =
+					slide.img.naturalHeight;
+
+				const cover =
+					Math.max(
+						(width * zoom) / sourceWidth,
+						(height * zoom) / sourceHeight
+					);
+
+				const drawWidth =
+					sourceWidth * cover;
+
+				const drawHeight =
+					sourceHeight * cover;
+
+				context.drawImage(
+					slide.img,
+					(width - drawWidth) / 2,
+					(height - drawHeight) / 2,
+					drawWidth,
+					drawHeight
+				);
+
+			}
+
+			if (
+				row.subtitles &&
+				row.subtitles.length
+			) {
+
+				drawSubtitles(
+					context,
+					row.subtitles,
+					timestampMs,
+					width,
+					height
+				);
+
+			}
+
+			const timeEl =
+				document.getElementById(
+					"batch-preview-time"
+				);
+
+			if (timeEl) {
+
+				timeEl.textContent =
+					formatSeconds(timestampMs / 1000) +
+					" \u00b7 slide " +
+					(index + 1) +
+					"/" +
+					row.slides.length +
+					" \u00b7 " +
+					row.style;
+
+			}
+
+		}
+
+		if (batchPreview) {
+
+			batchPreview.raf =
+				typeof requestAnimationFrame === "function"
+					? requestAnimationFrame(batchPreviewTick)
+					: 0;
+
+			if (!batchPreview.playing) {
+
+				batchPreview.manualMs +=
+					33;
+
+			}
+
+		}
+
+	}
+
+	function batchPreviewToggle() {
+
+		if (!batchPreview || !batchPreview.audio) {
+			return;
+		}
+
+		if (batchPreview.playing) {
+
+			batchPreview.audio.pause();
+			batchPreview.playing = false;
+
+		}
+		else {
+
+			batchPreviewPlay(
+				batchPreview.audio
+			);
+
+			batchPreview.playing = true;
+
+		}
+
+	}
+
+	function batchPreviewRestart() {
+
+		if (!batchPreview) {
+			return;
+		}
+
+		if (batchPreview.audio) {
+
+			batchPreview.audio.currentTime = 0;
+
+		}
+
+		batchPreview.manualMs = 0;
+
+	}
+
+	/* ---------------- client-side export of one row ---------------- */
+
+	async function exportBatchRow(id) {
+
+		const row =
+			getBatchRow(id);
+
+		if (!row) {
+
+			return;
+
+		}
+
+		if (!batchRowFinished(row)) {
+
+			setBatchStage(
+				row,
+				row.stage,
+				"Export unlocks when the row is finished"
+			);
+
+			return;
+
+		}
+
+		if (batchRenderBusy) {
+
+			setBatchStage(
+				row,
+				"done",
+				"Another row is still being rendered"
+			);
+
+			return;
+
+		}
+
+		/*
+		 * The row borrows the shared renderer - the same hidden working
+		 * state the bulk queue uses - and gives it back afterwards. The
+		 * MP4 is written by this browser: nothing is uploaded and no
+		 * second machine is needed.
+		 */
+		batchRenderBusy =
+			true;
+
+		const saved = {
+			slides:
+				activeSlides.slice(),
+			audio:
+				currentAudio,
+			captions:
+				[],
+			title:
+				titleInputEl ? titleInputEl.value : "",
+			workerMode:
+				!!window.__workerMode
+		};
+
+		if (captionRowsEl) {
+
+			while (captionRowsEl.children.length) {
+
+				saved.captions.push(
+					captionRowsEl.children[0]
+				);
+
+				captionRowsEl.removeChild(
+					captionRowsEl.children[0]
+				);
+
+			}
+
+		}
+
+		const minutes =
+			Number(row.minutes) > 0
+				? Number(row.minutes)
+				: BATCH_MIN_MINUTES;
+
+		renderContext = {
+			fileName:
+				"YouTubeVibeStudio_Row" +
+				row.id +
+				"_" +
+				batchRowTopic(row).replace(/[^A-Za-z0-9]+/g, "").slice(0, 28) +
+				".mp4",
+			subtitles:
+				row.subtitles || [],
+			batchRow:
+				true
+		};
+
+		if (titleInputEl) {
+
+			/* The table has no title column: no overlay text. */
+			titleInputEl.value =
 				"";
 
 		}
 
-		const arrow =
-			document.getElementById(
-				"va-arrow-" + n
+		activeSlides.length =
+			0;
+
+		for (const slide of row.slides) {
+
+			activeSlides.push(
+				slide
 			);
-
-		if (arrow) {
-
-			arrow.textContent =
-				"\u25bc";
 
 		}
 
-		if (
-			accordion.scrollIntoView
-		) {
+		currentAudio =
+			row.audio;
 
-			accordion.scrollIntoView({
-				behavior:
-					"smooth",
-				block:
-					"start",
-			});
+		/* __workerMode keeps generateMP4 from auto-clicking its own link. */
+		window.__workerMode =
+			true;
+
+		setBatchStage(
+			row,
+			"animate",
+			"Rendering the MP4 in this browser"
+		);
+
+		try {
+
+			window.__lastRenderBlob =
+				null;
+
+			await generateMP4();
+
+			const blob =
+				window.__lastRenderBlob;
+
+			if (!blob) {
+
+				throw new Error(
+					"The renderer did not produce a file"
+				);
+
+			}
+
+			downloadBatchBlob(
+				renderContext.fileName,
+				blob
+			);
+
+			setBatchStage(
+				row,
+				"done",
+				"Exported \u00b7 " + Math.round(blob.size / 1024) + " KB"
+			);
+
+		}
+		catch (renderError) {
+
+			const message =
+				renderError && renderError.message
+					? renderError.message
+					: String(renderError);
+
+			console.error("[batch-table] row " + row.id + " export failed", message);
+
+			setBatchStage(
+				row,
+				"error",
+				"Export failed: " + message
+			);
+
+		}
+		finally {
+
+			activeSlides.length =
+				0;
+
+			for (const slide of saved.slides) {
+
+				activeSlides.push(
+					slide
+				);
+
+			}
+
+			currentAudio =
+				saved.audio;
+
+			if (titleInputEl) {
+
+				titleInputEl.value =
+					saved.title;
+
+			}
+
+			if (captionRowsEl) {
+
+				for (const node of saved.captions) {
+
+					captionRowsEl.appendChild(
+						node
+					);
+
+				}
+
+			}
+
+			window.__workerMode =
+				saved.workerMode;
+
+			renderContext =
+				null;
+
+			batchRenderBusy =
+				false;
+
+			const statusEl =
+				document.getElementById(
+					"status-text"
+				);
+
+			if (statusEl) {
+
+				statusEl.textContent =
+					"Quick batch table is idle";
+
+			}
+
+		}
+
+	}
+
+	function downloadBatchBlob(
+		fileName,
+		blob
+	) {
+
+		const url =
+			URL.createObjectURL(
+				blob
+			);
+
+		const a =
+			document.createElement(
+				"a"
+			);
+
+		a.href =
+			url;
+
+		a.download =
+			fileName;
+
+		document.body.appendChild(
+			a
+		);
+
+		a.click();
+
+		a.remove();
+
+		setTimeout(
+			function () {
+				URL.revokeObjectURL(url);
+			},
+			2000
+		);
+
+	}
+
+	/*
+	 * Everything the table needs is delegated on the two containers, so
+	 * rows added later are wired without re-binding: typing writes back
+	 * to the row's state, and the action buttons in the last two cells
+	 * are read from the row that owns them.
+	 */
+	function bindBatchTable() {
+
+		if (batchTableBound) {
+
+			return;
+
+		}
+
+		batchTableBound =
+			true;
+
+		const body =
+			document.getElementById(
+				"batch-rows"
+			);
+
+		if (body) {
+
+			body.addEventListener(
+				"input",
+				function (event) {
+
+					const target =
+						event.target;
+
+					if (!target || !target.getAttribute) {
+
+						return;
+
+					}
+
+					const field =
+						target.getAttribute(
+							"data-batch-field"
+						);
+
+					if (!field) {
+
+						return;
+
+					}
+
+					const tr =
+						target.closest
+							? target.closest("[data-batch-row]")
+							: null;
+
+					if (!tr) {
+
+						return;
+
+					}
+
+					const row =
+						getBatchRow(
+							tr.getAttribute(
+								"data-batch-row"
+							)
+						);
+
+					if (!row) {
+
+						return;
+
+					}
+
+					syncBatchRowInput(
+						row,
+						field,
+						target
+					);
+
+					if (field === "script") {
+
+						/*
+						 * An empty row waits, a filled row is ready: the
+						 * status line is the only thing that changes while
+						 * the user types, never the input itself.
+						 */
+						if (row.stage === "empty" || row.stage === "ready") {
+
+							row.stage =
+								batchRowHasScript(row)
+									? "ready"
+									: "empty";
+
+							const status =
+								tr.querySelector(
+									'[data-batch-slot="status"]'
+								);
+
+							if (status) {
+
+								status.textContent =
+									batchStatusText(row);
+
+								status.setAttribute(
+									"data-stage",
+									row.stage
+								);
+
+							}
+
+						}
+
+						updateBatchToolbar();
+
+					}
+
+				}
+			);
+
+			body.addEventListener(
+				"click",
+				function (event) {
+
+					const target =
+						event.target && event.target.closest
+							? event.target.closest("[data-batch-action]")
+							: null;
+
+					if (!target) {
+
+						return;
+
+					}
+
+					const action =
+						target.getAttribute(
+							"data-batch-action"
+						);
+
+					const row =
+						getBatchRow(
+							target.getAttribute(
+								"data-batch-row"
+							)
+						);
+
+					if (action === "remove") {
+
+						removeBatchRow(
+							row ? row.id : null
+						);
+
+						updateBatchToolbar();
+
+						return;
+
+					}
+
+					if (!row) {
+
+						return;
+
+					}
+
+					if (action === "preview") {
+
+						openBatchPreview(
+							row.id
+						);
+
+						return;
+
+					}
+
+					if (action === "export") {
+
+						exportBatchRow(
+							row.id
+						);
+
+					}
+
+				}
+			);
+
+		}
+
+		const generate =
+			document.getElementById(
+				"batch-generate"
+			);
+
+		if (generate) {
+
+			generate.addEventListener(
+				"click",
+				function () {
+
+					/*
+					 * Pressing it a second time stops the rows that have not
+					 * finished yet - the one control for a run that is taking
+					 * too long.
+					 */
+					if (batchRunBusy) {
+
+						stopBatchRows();
+
+						return;
+
+					}
+
+					generateBatchRows();
+
+				}
+			);
+
+		}
+
+		const addRow =
+			document.getElementById(
+				"batch-add-row"
+			);
+
+		if (addRow) {
+
+			addRow.addEventListener(
+				"click",
+				function () {
+
+					const row =
+						addBatchRow();
+
+					if (row) {
+
+						const input =
+							document.querySelector(
+								'[data-batch-row="' + row.id + '"] [data-batch-field="script"]'
+							);
+
+						if (input && input.focus) {
+
+							input.focus();
+
+						}
+
+					}
+
+				}
+			);
+
+		}
+
+	}
+
+	/* Exposed for tests / debugging: the live row list, same array. */
+	if (typeof window !== "undefined") {
+
+		window.__BATCH_ROWS =
+			batchRows;
+
+	}
+
+	/* The toolbar mirrors the rows: how many can be generated, and busy? */
+	function updateBatchToolbar() {
+
+		const runnable =
+			batchRows.filter(batchRowHasScript).length;
+
+		const generate =
+			document.getElementById(
+				"batch-generate"
+			);
+
+		if (generate) {
+
+			generate.disabled =
+				batchRunBusy ||
+				runnable === 0;
+
+			generate.textContent =
+				batchRunBusy
+					? "\u25a0 Stop after the current row"
+					: "\u2726 Generate" +
+						(runnable ? " (" + runnable + ")" : "");
+
+		}
+
+		const note =
+			document.getElementById(
+				"batch-note"
+			);
+
+		if (note) {
+
+			note.textContent =
+				batchRows.length +
+				" row" +
+				(batchRows.length === 1 ? "" : "s") +
+				" \u00b7 " +
+				runnable +
+				" with a script";
+
+		}
+
+	}
+
+	/* Reads the live inputs back into the row state (never the reverse). */
+	function syncBatchRowInput(
+		row,
+		field,
+		element
+	) {
+
+		if (!row || !element) {
+
+			return;
+
+		}
+
+		if (field === "script") {
+
+			row.script =
+				String(element.value || "");
+
+			return;
+
+		}
+
+		if (field === "style") {
+
+			row.style =
+				element.value ||
+				row.style;
+
+			return;
+
+		}
+
+		if (field === "minutes") {
+
+			const minutes =
+				Math.round(
+					Number(element.value) || 0
+				);
+
+			row.minutes =
+				minutes < BATCH_MIN_MINUTES
+					? BATCH_MIN_MINUTES
+					: minutes > BATCH_MAX_MINUTES
+						? BATCH_MAX_MINUTES
+						: minutes;
+
+			if (Number(element.value) !== minutes) {
+
+				element.value =
+					String(row.minutes);
+
+			}
+
+			return;
 
 		}
 
 	}
 
 	function bindStudioShell() {
+
+		/* The quick-batch table is part of the shell: bound once, here. */
+		bindBatchTable();
 
 		const buttons =
 			document.querySelectorAll(
@@ -7073,80 +9129,6 @@ export const APP_JS = `
 							"data-layout"
 						)
 					)
-			);
-
-		}
-
-		const rows =
-			document.getElementById(
-				"batch-rows"
-			);
-
-		if (rows) {
-
-			rows.addEventListener(
-				"click",
-				(event) => {
-
-					const target =
-						event.target.closest(
-							"[data-open]"
-						);
-
-					if (!target) {
-
-						return;
-
-					}
-
-					focusVideoInEditor(
-						Number(
-							target.getAttribute(
-								"data-open"
-							)
-						)
-					);
-
-				}
-			);
-
-		}
-
-		/*
-		 * A title typed in the Editor updates the grid row.
-		 * Delegated, so accordions created later are covered.
-		 */
-
-		const stack =
-			document.getElementById(
-				"video-accordions"
-			);
-
-		if (stack) {
-
-			stack.addEventListener(
-				"input",
-				(event) => {
-
-					const target =
-						event.target;
-
-					if (
-						target &&
-						target.id &&
-						(target.id.indexOf(
-							"va-title-"
-						) === 0 ||
-							target.id.indexOf(
-								"va-ai-prompt-"
-							) === 0)
-					) {
-
-						renderBatchTable();
-
-					}
-
-				}
 			);
 
 		}
@@ -9487,7 +11469,7 @@ export const APP_JS = `
 			"keydown",
 			(event) => {
 				if (
-					e.key === "Escape" &&
+					event.key === "Escape" &&
 					overlay.style.display === "flex"
 				) {
 					hideAuthOverlay();
@@ -12218,7 +14200,6 @@ export const APP_JS = `
 
 			(
 				p.captions ||
-			ns ||
 				[]
 			).forEach(
 				(c) => {
@@ -12538,14 +14519,22 @@ export const APP_JS = `
 	}
 
 	// =========================================================
-	// MODULE 8: script-srt
-	// (AI script generation -> SRT with timestamps. The server
-	//  route /api/script uses an INSTRUCT model on Workers AI,
-	//  set in the SCRIPT_MODEL constant - the old free
-	//  llama-3.1-8b-instruct was deprecated by Cloudflare on
-	//  2026-05-30, so it is now the cheap llama-3.1-8b-instruct-
-	//  fp8 instruct model. Minutes 1-6 + speech speed:
-	//  super fast / fast / medium / slow.)
+	// =========================================================
+	// MODULE 8: script (plain narration text)
+	// (AI script generation. The server route /api/script uses
+	//  an INSTRUCT model on Workers AI, set in the SCRIPT_MODEL
+	//  constant - the old free llama-3.1-8b-instruct was
+	//  deprecated by Cloudflare on 2026-05-30, so it is now the
+	//  cheap llama-3.1-8b-instruct-fp8 instruct model. Minutes
+	//  1-6 + speech speed: super fast / fast / medium / slow.)
+	//
+	// WHAT THE CLIENT HOLDS: plain spoken text only. The
+	// worker uses cue timings internally to prove the script
+	// fits the requested minutes, then sends the sentences.
+	// There is deliberately no subtitle format anywhere in the
+	// browser - the voiceover model would read cue numbers and
+	// "-->" timestamps out loud, so no code here parses or
+	// renders one either.
 	// =========================================================
 
 	function setScriptBoxState(
@@ -12557,7 +14546,7 @@ export const APP_JS = `
 			videoProjects[n - 1];
 
 		const hasScript =
-			!!(project && project.srt);
+			!!(project && project.script);
 
 		const box =
 			document.getElementById(
@@ -12569,22 +14558,12 @@ export const APP_JS = `
 				"va-script-toggle-" + n
 			);
 
-		const dl =
-			document.getElementById(
-				"va-script-dl-" + n
-			);
-
 		const showBox =
 			hasScript && !!open;
 
 		if (box) {
 			box.style.display =
 				showBox ? "" : "none";
-		}
-
-		if (dl) {
-			dl.style.display =
-				hasScript ? "" : "none";
 		}
 
 		if (toggle) {
@@ -12595,7 +14574,7 @@ export const APP_JS = `
 				(showBox
 					? "\u25b2 "
 					: "\u25bc ") +
-				"Script (SRT)";
+				"Script";
 		}
 
 	}
@@ -12626,7 +14605,7 @@ export const APP_JS = `
 
 	/*
 	 * The voiceover speaks the generated
-	 * script (SRT), so its button stays
+	 * narration script, so its button stays
 	 * HIDDEN while the video has no script
 	 * and is revealed + enabled as soon as
 	 * one has been generated.
@@ -12647,7 +14626,7 @@ export const APP_JS = `
 		}
 
 		const hasScript =
-			!!(project && project.srt);
+			!!(project && project.script);
 
 		btn.style.display =
 			hasScript ? "" : "none";
@@ -12856,10 +14835,12 @@ export const APP_JS = `
 	//      keeps running in the background and the modal
 	//      re-opens by itself when the two sets arrive.
 	//   2. The user clicks Select on one set, then enters the
-	//      video image style. With both chosen the modal closes,
-	//      the script section shows a loading animation and
-	//      POST /api/script writes the SRT from the selected set
-	//      (runSeoScriptRequest keeps the existing SRT display).
+	//      video image style. With both chosen the walkthrough
+	//      moves to its "writing" panel, the script section shows
+	//      a loading animation and POST /api/script writes the
+	//      plain narration script from the selected set (two
+	//      automatic retries on failure before the accordion
+	//      reports the error — see runSeoScriptRequest).
 	//   3. Once the script is shown, POST /api/image-prompts runs
 	//      the prompt LLM INSIDE the request and answers with the
 	//      finished prompt list (style suffix included). There is
@@ -12873,6 +14854,109 @@ export const APP_JS = `
 	//      flow: counters are reported and the "Upload Image, GIF
 	//      or MP4" button is re-enabled.
 	// =========================================================
+
+	/*
+	 * ---------------------------------------------------------
+	 * MODAL STACK (shared by the walkthrough + voiceover modals)
+	 *
+	 * More than one video can be mid-walkthrough at the same
+	 * time, so a modal is never a single shared element any
+	 * more: every modal is registered here, gets its own
+	 * z-index above the one before it, and is closed only by its
+	 * own video. A modal that still owes the user a choice (a
+	 * keyword set or a video image style) refuses to be hidden by
+	 * Escape, so a click in another accordion can never lose it.
+	 * ---------------------------------------------------------
+	 */
+
+	const MODAL_BASE_Z_INDEX = 1200;
+
+	const modalStack = [];
+
+	function modalBringToFront(modal) {
+
+		if (!modal) {
+			return;
+		}
+
+		const position = modalStack.indexOf(modal);
+
+		if (position !== -1) {
+			modalStack.splice(position, 1);
+		}
+
+		modalStack.push(modal);
+
+		modal.style.zIndex =
+			String(MODAL_BASE_Z_INDEX + (modalStack.length - 1) * 10);
+
+	}
+
+	function openModal(modal) {
+
+		if (!modal) {
+			return;
+		}
+
+		if (modal.parentNode !== document.body) {
+			document.body.appendChild(modal);
+		}
+
+		modalBringToFront(modal);
+
+		modal.style.display = "flex";
+
+	}
+
+	function closeModal(modal) {
+
+		if (!modal) {
+			return;
+		}
+
+		const position = modalStack.indexOf(modal);
+
+		if (position !== -1) {
+			modalStack.splice(position, 1);
+		}
+
+		if (modal.parentNode) {
+			modal.parentNode.removeChild(modal);
+		}
+
+	}
+
+	function topModal() {
+		return modalStack.length ? modalStack[modalStack.length - 1] : null;
+	}
+
+	/* The walkthrough keeps a choice pending until style + set are both in. */
+	function modalBlocksEscape(modal) {
+		return modal && modal.getAttribute("data-await-choice") === "1";
+	}
+
+	document.addEventListener(
+		"keydown",
+		(event) => {
+
+			if (event.key !== "Escape") {
+				return;
+			}
+
+			const modal = topModal();
+
+			if (!modal || modalBlocksEscape(modal)) {
+				return;
+			}
+
+			const dismiss = modal.getAttribute("data-dismiss");
+
+			if (dismiss && typeof window[dismiss] === "function") {
+				window[dismiss]();
+			}
+
+		}
+	);
 
 	const SEO_IMAGE_STYLES = [
 		"Cinematic Film",
@@ -12993,7 +15077,7 @@ export const APP_JS = `
 			);
 
 			if (
-				!(project && project.srt)
+				!(project && project.script)
 			) {
 
 				box.style.display =
@@ -13008,12 +15092,106 @@ export const APP_JS = `
 
 	}
 
+	/*
+	 * ONE walkthrough per video: 'seo-walkthrough-modal-<n>'.
+	 * Every element inside it is suffixed the same way, so two
+	 * videos can be mid-walkthrough together without either one
+	 * stealing, replacing or closing the other's modal — the old
+	 * shared '#seo-walkthrough-modal' could only ever hold the
+	 * last video that pressed the button, which threw away a
+	 * style choice that had not been confirmed yet.
+	 */
+
+	function seoWalkthroughModalId(n) {
+		return "seo-walkthrough-modal-" + n;
+	}
+
+	function getSeoWalkthrough(n) {
+		return document.getElementById(seoWalkthroughModalId(n));
+	}
+
+	/* One element inside this video's walkthrough. */
+	function seoWtEl(n, name) {
+		return document.getElementById(name + "-" + n);
+	}
+
+	function setSeoWalkthroughChoicePending(
+		n,
+		pending
+	) {
+
+		const modal =
+			getSeoWalkthrough(n);
+
+		if (modal) {
+			modal.setAttribute(
+				"data-await-choice",
+				pending ? "1" : "0"
+			);
+		}
+
+	}
+
+	/* Writes (or clears) the red line at the bottom of one walkthrough. */
+	function setSeoWalkthroughError(
+		n,
+		message
+	) {
+
+		const slot =
+			seoWtEl(
+				n,
+				"seo-wt-error"
+			);
+
+		if (!slot) {
+			return;
+		}
+
+		slot.textContent =
+			message || "";
+
+	}
+
+	/* Mirrors the accordion status line into the open walkthrough. */
+	function setSeoWalkthroughScriptStatus(
+		n,
+		message
+	) {
+
+		const slot =
+			seoWtEl(
+				n,
+				"seo-wt-script-status"
+			);
+
+		if (slot) {
+			slot.textContent =
+				message || "";
+		}
+
+	}
+
 	function ensureSeoWalkthrough(
 		n
 	) {
 
-		closeSeoWalkthrough();
+		/*
+		 * Already open for THIS video: bring it to the front
+		 * instead of rebuilding it, so an unconfirmed keyword
+		 * set / style selection survives another press.
+		 */
+		const existing =
+			getSeoWalkthrough(n);
+
+		if (existing) {
+			modalBringToFront(existing);
+			existing.style.display = "flex";
+			return existing;
+		}
+
 		const project = videoProjects[n - 1];
+
 		const selectedStyle = project && SEO_IMAGE_STYLES.indexOf(project.videoImageStyle) !== -1
 			? project.videoImageStyle
 			: DEFAULT_SEO_IMAGE_STYLE;
@@ -13024,10 +15202,15 @@ export const APP_JS = `
 			);
 
 		modal.id =
-			"seo-walkthrough-modal";
+			seoWalkthroughModalId(n);
 
 		modal.className =
 			"modal-overlay";
+
+		modal.setAttribute(
+			"data-dismiss",
+			"closeSeoWalkthroughTop"
+		);
 
 		modal.innerHTML =
 			'<div class="modal-box seo-wt-box">' +
@@ -13036,35 +15219,44 @@ export const APP_JS = `
 			'<span class="seo-wt-step" data-step="plan">1 \\u00b7 SEO plan</span>' +
 			'<span class="seo-wt-step" data-step="sets">2 \\u00b7 Choose a keyword set</span>' +
 			'<span class="seo-wt-step" data-step="style">3 \\u00b7 Video image style</span>' +
+			'<span class="seo-wt-step" data-step="script">4 \\u00b7 Script + images</span>' +
 			'</div>' +
-			'<div id="seo-wt-loading">' +
-			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>AI is planning two SEO keyword sets for <b id="seo-wt-topic"></b>\\u2026</span></div>' +
-			'<span class="va-note">You can close this walkthrough \\u2014 the SEO plan keeps generating in the background and this modal will re-open when the two sets are ready. The Upload Image, GIF or MP4 button stays disabled until the generated images are in the gallery.</span>' +
+			'<div id="seo-wt-loading-' + n + '">' +
+			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>AI is planning two SEO keyword sets for <b id="seo-wt-topic-' + n + '"></b>\\u2026</span></div>' +
+			'<span class="va-note">You can close this window while you wait \\u2014 the SEO plan and the script keep generating in the background, the modal re-opens itself when there is something to choose, and the finished script lands in Video ' + n + ' \\u00b7 Script. The Upload Image, GIF or MP4 button stays disabled until the generated images are in the gallery.</span>' +
 			'</div>' +
-			'<div id="seo-wt-sets" style="display:none">' +
-			'<div class="va-note">Pick the keyword set that best targets your script topic. The script will say its long-tail keyword at least once and each short keyword at least twice.</div>' +
-			'<div class="seo-wt-sets" id="seo-wt-sets-list"></div>' +
+			'<div id="seo-wt-sets-' + n + '" style="display:none">' +
+			'<div class="va-note">Pick the keyword set that best targets your script topic. The script will say its long-tail keyword at least once and each short keyword at least twice. This window stays open for you \\u2014 other videos keep their own windows.</div>' +
+			'<div class="seo-wt-sets" id="seo-wt-sets-list-' + n + '"></div>' +
 			'</div>' +
-			'<div id="seo-wt-style" style="display:none">' +
-			'<div id="seo-wt-selected"></div>' +
-			'<label class="seo-wt-style-label" for="seo-wt-style-select">Video image style (used consistently for every AI-generated image)</label>' +
-			'<select id="seo-wt-style-select" aria-describedby="seo-wt-style-note">' + seoImageStyleOptionsHTML(selectedStyle) + '</select>' +
-			'<span class="va-note" id="seo-wt-style-note">Choose one visual style. The model will create broad scenes from the script idea, using this style consistently. Image count follows script length: 10 for 1 minute, 14 for 2\\u20133 minutes, 20 for 4\\u20136 minutes.</span>' +
+			'<div id="seo-wt-style-' + n + '" style="display:none">' +
+			'<div id="seo-wt-selected-' + n + '"></div>' +
+			'<label class="seo-wt-style-label" for="seo-wt-style-select-' + n + '">Video image style (used consistently for every AI-generated image)</label>' +
+			'<select id="seo-wt-style-select-' + n + '" aria-describedby="seo-wt-style-note-' + n + '">' + seoImageStyleOptionsHTML(selectedStyle) + '</select>' +
+			'<span class="va-note" id="seo-wt-style-note-' + n + '">Choose one visual style. The model will create broad scenes from the script idea, using this style consistently. Image count follows script length: 10 for 1 minute, 14 for 2\\u20133 minutes, 20 for 4\\u20136 minutes. Every scene prompt is written as three paragraphs of visual detail, so each image is fully art-directed instead of a one-line guess.</span>' +
+			'<span class="va-note">Nothing is lost if you close this window after pressing Generate: the script and its images keep running in the background for Video ' + n + '.</span>' +
 			'<div class="seo-wt-actions">' +
 			'<button type="button" class="upload-btn" onclick="confirmSeoStyleAndGenerate(' + n + ')">\\u2728 Generate Script &amp; Images</button>' +
-			'<button type="button" class="upload-btn" onclick="showSeoWalkthroughStep(\\'sets\\')">\\u2190 Back to keyword sets</button>' +
+			'<button type="button" class="upload-btn" onclick="showSeoWalkthroughStep(' + n + ', &quot;sets&quot;)">\\u2190 Back to keyword sets</button>' +
 			'</div>' +
 			'</div>' +
-			'<div class="seo-wt-error" id="seo-wt-error"></div>' +
+			'<div id="seo-wt-script-' + n + '" style="display:none">' +
+			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>Writing the Video ' + n + ' narration script from the selected keyword set\\u2026</span></div>' +
+			'<span class="va-note"><b>You can close this window while you wait for the SEO script.</b> Closing only hides this window \\u2014 it does not cancel anything. The script keeps generating, the plain narration text appears in Video ' + n + ' \\u00b7 Script, and the AI images start by themselves right after. Press \\u2728 Generate SEO Script again to bring this window back.</span>' +
+			'<span class="va-note" id="seo-wt-script-status-' + n + '">Waiting for the script\\u2026</span>' +
+			'</div>' +
+			'<div class="seo-wt-error" id="seo-wt-error-' + n + '"></div>' +
 			'<div class="seo-wt-actions">' +
-			'<button type="button" class="upload-btn" onclick="closeSeoWalkthrough()">\\u2715 Close</button>' +
+			'<button type="button" class="upload-btn" onclick="closeSeoWalkthrough(' + n + ')">\\u2715 Close</button>' +
 			'</div>' +
 			'</div>';
 
-		document.body.appendChild(
+		openModal(
 			modal
 		);
-		const styleSelect = modal.querySelector("#seo-wt-style-select");
+
+		const styleSelect = modal.querySelector("#seo-wt-style-select-" + n);
+
 		if (styleSelect && project) {
 			styleSelect.addEventListener("change", function () {
 				project.videoImageStyle = styleSelect.value;
@@ -13075,42 +15267,62 @@ export const APP_JS = `
 
 	}
 
-	function closeSeoWalkthrough() {
+	/* Removes ONLY this video's walkthrough. */
+	function closeSeoWalkthrough(n) {
 
 		const modal =
-			document.getElementById(
-				"seo-walkthrough-modal"
-			);
+			typeof n === "number"
+				? getSeoWalkthrough(n)
+				: topModal();
 
-		if (modal) {
-			modal.remove();
+		if (!modal) {
+			return;
 		}
+
+		if (typeof n === "number") {
+			const project = videoProjects[n - 1];
+			/* A pending choice is a real loss: say so, keep the modal. */
+			if (project && project._seoChoicePending) {
+				setSeoWalkthroughChoicePending(
+					n,
+					false
+				);
+				if (project._seoPlanBusy || project._imageFlowActive) {
+					project._seoChoicePending = false;
+				}
+			}
+		}
+
+		closeModal(
+			modal
+		);
 
 	}
 
-	function hideSeoWalkthrough() {
+	/* Escape / the stack dismisses only the front window, never a video's
+	 * walkthrough that is still waiting for the user's style choice. */
+	function closeSeoWalkthroughTop() {
 
-		/* Close without cancelling: background work keeps running. */
 		const modal =
-			document.getElementById(
-				"seo-walkthrough-modal"
-			);
+			topModal();
 
-		if (modal) {
-			modal.style.display =
-				"none";
+		if (!modal || modalBlocksEscape(modal)) {
+			return;
 		}
+
+		closeModal(
+			modal
+		);
 
 	}
 
-	function showSeoWalkthrough() {
+	function showSeoWalkthrough(n) {
 
 		const modal =
-			document.getElementById(
-				"seo-walkthrough-modal"
-			);
+			getSeoWalkthrough(n);
 
 		if (modal) {
+			modalBringToFront(modal);
 			modal.style.display =
 				"flex";
 		}
@@ -13118,13 +15330,22 @@ export const APP_JS = `
 	}
 
 	function showSeoWalkthroughStep(
+		n,
 		step
 	) {
+
+		const modal =
+			getSeoWalkthrough(n);
+
+		if (!modal) {
+			return;
+		}
 
 		const panels = {
 			plan: "seo-wt-loading",
 			sets: "seo-wt-sets",
-			style: "seo-wt-style"
+			style: "seo-wt-style",
+			script: "seo-wt-script"
 		};
 
 		for (
@@ -13132,7 +15353,8 @@ export const APP_JS = `
 		) {
 
 			const panel =
-				document.getElementById(
+				seoWtEl(
+					n,
 					panels[key]
 				);
 
@@ -13145,7 +15367,7 @@ export const APP_JS = `
 
 		}
 
-		document.querySelectorAll(
+		modal.querySelectorAll(
 			".seo-wt-step"
 		).forEach(
 			(chip) => {
@@ -13156,6 +15378,22 @@ export const APP_JS = `
 				);
 
 			}
+		);
+
+		/* A style / set the user has not confirmed yet = unclosable by Escape. */
+		const choicePending =
+			step === "sets" || step === "style";
+
+		const project =
+			videoProjects[n - 1];
+
+		if (project) {
+			project._seoChoicePending = choicePending;
+		}
+
+		setSeoWalkthroughChoicePending(
+			n,
+			choicePending
 		);
 
 	}
@@ -13224,7 +15462,8 @@ export const APP_JS = `
 			videoProjects[n - 1];
 
 		const list =
-			document.getElementById(
+			seoWtEl(
+				n,
 				"seo-wt-sets-list"
 			);
 
@@ -13275,7 +15514,9 @@ export const APP_JS = `
 			project._seoPlanBusy ||
 			project._imageFlowActive
 		) {
-			showSeoWalkthrough();
+			/* Stack it on top of any other video's window. */
+			ensureSeoWalkthrough(n);
+			showSeoWalkthrough(n);
 			return;
 		}
 
@@ -13285,7 +15526,8 @@ export const APP_JS = `
 			ensureSeoWalkthrough(n);
 
 			const selectedSlot =
-				document.getElementById(
+				seoWtEl(
+					n,
 					"seo-wt-selected"
 				);
 
@@ -13297,7 +15539,8 @@ export const APP_JS = `
 					);
 			}
 
-			showSeoWalkthroughStep("style");
+			showSeoWalkthroughStep(n, "style");
+			showSeoWalkthrough(n);
 			return;
 
 		}
@@ -13311,7 +15554,8 @@ export const APP_JS = `
 
 			ensureSeoWalkthrough(n);
 			renderSeoPlanSets(n);
-			showSeoWalkthroughStep("sets");
+			showSeoWalkthroughStep(n, "sets");
+			showSeoWalkthrough(n);
 			return;
 
 		}
@@ -13399,7 +15643,7 @@ export const APP_JS = `
 
 		const topicSlot =
 			modal.querySelector(
-				"#seo-wt-topic"
+				"#seo-wt-topic-" + n
 			);
 
 		if (topicSlot) {
@@ -13407,7 +15651,7 @@ export const APP_JS = `
 				topic;
 		}
 
-		showSeoWalkthroughStep("plan");
+		showSeoWalkthroughStep(n, "plan");
 
 		if (statusEl) {
 			statusEl.textContent =
@@ -13458,17 +15702,15 @@ export const APP_JS = `
 			project.seoSets =
 				data.sets;
 
-			/* 3. Sets arrived: (re-)open the modal even if the
-			 * user closed it while generation was running. */
-			if (
-				!document.getElementById("seo-walkthrough-modal")
-			) {
-				ensureSeoWalkthrough(n);
-			}
+			/* 3. Sets arrived: (re-)open THIS video's modal even if
+			 * the user closed it while generation was running. Other
+			 * videos' windows are left exactly as they were. */
+			ensureSeoWalkthrough(n);
 
+			setSeoWalkthroughError(n, "");
 			renderSeoPlanSets(n);
-			showSeoWalkthroughStep("sets");
-			showSeoWalkthrough();
+			showSeoWalkthroughStep(n, "sets");
+			showSeoWalkthrough(n);
 			/* The modal can be closed while waiting for a choice; keep the
 			 * per-video trigger available so cached sets/style can reopen it. */
 			if (btn) btn.disabled = false;
@@ -13491,8 +15733,6 @@ export const APP_JS = `
 			project.seoSets =
 				null;
 
-			closeSeoWalkthrough();
-
 			setVaUploadEnabled(
 				n,
 				true
@@ -13502,11 +15742,19 @@ export const APP_JS = `
 				btn.disabled = false;
 			}
 
+			const planMessage =
+				"SEO plan failed: " +
+				(planError.message || planError);
+
 			if (statusEl) {
 				statusEl.textContent =
-					"SEO plan failed: " +
-					(planError.message || planError);
+					planMessage;
 			}
+
+			/* Keep the window, say what happened, offer the retry. */
+			ensureSeoWalkthrough(n);
+			showSeoWalkthroughStep(n, "plan");
+			setSeoWalkthroughError(n, planMessage);
 
 		}
 		finally {
@@ -13538,7 +15786,8 @@ export const APP_JS = `
 			project.seoSets[idx];
 
 		const selected =
-			document.getElementById(
+			seoWtEl(
+				n,
 				"seo-wt-selected"
 			);
 
@@ -13552,10 +15801,11 @@ export const APP_JS = `
 
 		}
 
-		showSeoWalkthroughStep("style");
+		showSeoWalkthroughStep(n, "style");
 
 		const styleSelect =
-			document.getElementById(
+			seoWtEl(
+				n,
 				"seo-wt-style-select"
 			);
 
@@ -13577,7 +15827,8 @@ export const APP_JS = `
 		}
 
 		const styleSelect =
-			document.getElementById(
+			seoWtEl(
+				n,
 				"seo-wt-style-select"
 			);
 
@@ -13585,7 +15836,19 @@ export const APP_JS = `
 			(styleSelect && styleSelect.value) ||
 			DEFAULT_SEO_IMAGE_STYLE;
 
-		closeSeoWalkthrough();
+		/*
+		 * Both choices are in: the window is no longer waiting on
+		 * the user, so Escape / Close may dismiss it. It is moved
+		 * to the "writing" panel rather than removed, because that
+		 * panel is where the user is told they can walk away while
+		 * the SEO script is generated.
+		 */
+		setSeoWalkthroughError(n, "");
+		showSeoWalkthroughStep(n, "script");
+		setSeoWalkthroughScriptStatus(
+			n,
+			"Writing the script \u2014 you can close this window, nothing is cancelled."
+		);
 
 		/* The script section shows its loading animation while
 		 * runSeoScriptRequest awaits the AI script. */
@@ -13622,6 +15885,13 @@ export const APP_JS = `
 			return;
 
 		}
+
+		/*
+		 * The script is on screen: this video's window is no longer
+		 * needed, and closing it here only ever touches Video N —
+		 * other videos keep their own walkthroughs open.
+		 */
+		closeSeoWalkthrough(n);
 
 		/* The script is shown: start the image-prompt job. */
 		startImagePromptFlow(n);
@@ -13715,7 +15985,7 @@ export const APP_JS = `
 						topic: project._seoTopic || "my video",
 						minutes: project._seoMinutes || 1,
 						style: style,
-						script: project.srt || "",
+						script: project.script || "",
 						keywordSet: project.selectedSeoSet || null
 					})
 				},
@@ -14073,6 +16343,269 @@ export const APP_JS = `
 		});
 	}
 
+	/*
+	 * A failed /api/script is retried TWICE more by the browser before
+	 * the video accordion shows an error: three attempts in total
+	 * (1 + SCRIPT_RETRY_LIMIT retries). The worker already re-asks its
+	 * own model output up to three times, so what these retries cover is
+	 * the transient part a user actually notices - a cold Workers AI
+	 * container, a gateway 5xx, a dropped connection. The status line in
+	 * the accordion reports each retry, and the error text only appears
+	 * once the last attempt has failed, so a self-healing run never looks
+	 * like a failure.
+	 */
+	const SCRIPT_RETRY_LIMIT =
+		2;
+
+	async function requestSeoScriptOnce(
+		n,
+		topic,
+		minutes,
+		speed
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		const response =
+			await fetch(
+				"/api/script",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type":
+							"application/json"
+					},
+					body:
+						JSON.stringify(
+							{
+								topic: topic,
+								minutes: minutes,
+								speed: speed,
+								keywordSet:
+									project && project.selectedSeoSet
+										? project.selectedSeoSet
+										: undefined
+							}
+						)
+				}
+			);
+
+		const data =
+			await response
+				.json()
+				.catch(
+					() => ({})
+				);
+
+		/*
+		 * 'script' is plain narration text - the worker never sends
+		 * subtitle formatting to the browser, so there is nothing to
+		 * strip here.
+		 */
+		if (
+			!response.ok ||
+			!data.success ||
+			!data.script
+		) {
+
+			throw new Error(
+				(data && data.error) ||
+				("HTTP " +
+					response.status)
+			);
+
+		}
+
+		return data;
+
+	}
+
+	/*
+	 * Puts one finished script on the video: the text in the Script box,
+	 * the SEO plan under it, the AI title in the (empty) title input, and
+	 * fresh timings for burned-in subtitles if that video is using them.
+	 */
+	function applySeoScript(
+		n,
+		data,
+		options
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (!project) {
+			return;
+		}
+
+		const minutes =
+			(options && options.minutes) || 1;
+
+		const speed =
+			(options && options.speed) || "medium";
+
+		const script =
+			String(data.script || "").trim();
+
+		project.script =
+			script;
+
+		/* The worker verified the spoken span; keep it for subtitle timing. */
+		project.scriptDurationMs =
+			Number(data.durationMs) > 0
+				? Number(data.durationMs)
+				: Math.round(minutes * 60 * 1000);
+
+		if (
+			project.subtitles &&
+			project.subtitles.length
+		) {
+			project.subtitles =
+				buildScriptCues(
+					script,
+					project.audio && project.audio.duration
+						? project.audio.duration * 1000
+						: project.scriptDurationMs
+				);
+		}
+
+		/*
+		 * Keep the verified SEO plan on
+		 * the project, and offer the AI
+		 * title when the video title
+		 * input is still empty - the
+		 * title is <=70 chars (the
+		 * input maxlength) and carries
+		 * one of the short keywords.
+		 */
+		project.seoTitle =
+			(data && data.title) || "";
+
+		project.seoHeadings =
+			data && Array.isArray(data.headings)
+				? data.headings
+				: [];
+
+		const titleEl =
+			document.getElementById(
+				"va-title-" + n
+			);
+
+		if (
+			titleEl &&
+			!titleEl.value.trim() &&
+			project.seoTitle
+		) {
+
+			titleEl.value =
+				project.seoTitle.slice(0, 70);
+
+		}
+
+		renderSeoKeywords(
+			n,
+			data
+		);
+
+		const box =
+			document.getElementById(
+				"va-script-box-" + n
+			);
+
+		if (box) {
+			box.textContent = script;
+		}
+
+		/*
+		 * The script now exists:
+		 * reveal + enable the
+		 * voiceover button (hidden
+		 * until a script exists).
+		 */
+		syncVoiceoverButton(n);
+
+		showScriptBox(n);
+
+		const lineCount =
+			script
+				.split(/\\n+/)
+				.filter(
+					(line) =>
+						line.trim() !== ""
+				)
+				.length;
+
+		const wordCount =
+			script
+				.split(/\\s+/)
+				.filter(Boolean)
+				.length;
+
+		/*
+		 * The SEO counts are minimums
+		 * (1 long-tail at least 1x,
+		 * exactly 4 short keywords at
+		 * least 2x each) - show what
+		 * the worker verified, plus the
+		 * title/headings the AI planned.
+		 */
+		const shortCount =
+			data.keywords &&
+			Array.isArray(data.keywords.short)
+				? data.keywords.short.length
+				: 0;
+
+		const headingCount =
+			Array.isArray(data.headings)
+				? data.headings.length
+				: 0;
+
+		const statusEl =
+			document.getElementById(
+				"va-script-status-" + n
+			);
+
+		const readyLine =
+			"Script ready \u2014 " +
+			wordCount +
+			" words in " +
+			lineCount +
+			" paragraph" +
+			(lineCount === 1 ? "" : "s") +
+			" (" +
+			speed +
+			" speech, " +
+			minutes +
+			" min) \u00b7 SEO: 1 long-tail (\u22651\u00d7) + " +
+			shortCount +
+			" short keywords (\u22652\u00d7 each) \u00b7 title + " +
+			headingCount +
+			" heading" +
+			(headingCount === 1 ? "" : "s");
+
+		if (statusEl) {
+			statusEl.textContent =
+				readyLine;
+		}
+
+		setSeoWalkthroughScriptStatus(
+			n,
+			readyLine
+		);
+
+		console.info("[script-seo] ok", {
+			videoIndex: n,
+			model: data.model || null,
+			title: project.seoTitle,
+			headings: project.seoHeadings,
+			keywords: data.keywords || null,
+			words: wordCount,
+			paragraphs: lineCount
+		});
+
+	}
+
 	async function runSeoScriptRequest(
 		n,
 		topic,
@@ -14084,7 +16617,7 @@ export const APP_JS = `
 			videoProjects[n - 1];
 
 		if (!project) {
-			return;
+			return false;
 		}
 
 		const btn =
@@ -14097,32 +16630,15 @@ export const APP_JS = `
 				"va-script-status-" + n
 			);
 
-		const topicEl =
-			document.getElementById(
-				"va-script-topic-" + n
-			);
-
-		const titleEl =
-			document.getElementById(
-				"va-title-" + n
-			);
-
-		const minutesEl =
-			document.getElementById(
-				"va-script-minutes-" + n
-			);
-
-		const speedEl =
-			document.getElementById(
-				"va-script-speed-" + n
-			);
-
 		if (!btn) {
-			return;
+			return false;
 		}
 
 		let scriptSucceeded =
 			false;
+
+		let lastError =
+			null;
 
 		btn.disabled = true;
 
@@ -14137,191 +16653,113 @@ export const APP_JS = `
 		}
 
 		const scriptStartedAt = Date.now();
+
 		console.info("[script-seo] request", {
 			videoIndex: n,
 			topic: topic,
 			minutes: minutes,
-			speed: speed
+			speed: speed,
+			attempts: SCRIPT_RETRY_LIMIT + 1
 		});
 
 		try {
 
-			const response =
-				await fetch(
-					"/api/script",
-					{
-						method: "POST",
-						headers: {
-							"Content-Type":
-								"application/json"
-						},
-						body:
-							JSON.stringify(
-								{
-									topic: topic,
-									minutes: minutes,
-									speed: speed,
-									keywordSet:
-										project.selectedSeoSet ||
-										undefined
-								}
-							)
-					}
-				);
+			for (
+				let attempt = 1;
+				attempt <= SCRIPT_RETRY_LIMIT + 1;
+				attempt++
+			) {
 
-			const data =
-				await response
-					.json()
-					.catch(
-						() => ({})
+				try {
+
+					const data =
+						await requestSeoScriptOnce(
+							n,
+							topic,
+							minutes,
+							speed
+						);
+
+					applySeoScript(
+						n,
+						data,
+						{
+							minutes: minutes,
+							speed: speed
+						}
 					);
 
-			if (
-				!response.ok ||
-				!data.success ||
-				!data.srt
-			) {
+					scriptSucceeded =
+						true;
 
-				throw new Error(
-					(data && data.error) ||
-					("HTTP " +
-						response.status)
+					lastError =
+						null;
+
+					break;
+
+				}
+				catch (err) {
+
+					lastError =
+						err;
+
+					console.warn("[script-seo] attempt failed", {
+						videoIndex: n,
+						attempt: attempt,
+						ms: Date.now() - scriptStartedAt,
+						error: (err && err.message) || String(err)
+					});
+
+					if (attempt <= SCRIPT_RETRY_LIMIT) {
+						/* Not an error yet - the browser is retrying. */
+						const retryLine =
+							"Script generation failed \u2014 retrying (" +
+							attempt +
+							" of " +
+							SCRIPT_RETRY_LIMIT +
+							")\u2026";
+
+						if (statusEl) {
+							statusEl.textContent =
+								retryLine;
+						}
+
+						setSeoWalkthroughScriptStatus(
+							n,
+							retryLine
+						);
+					}
+
+				}
+
+			}
+
+			if (lastError) {
+
+				/* Every attempt failed: now the UI may show the error. */
+				const failureLine =
+					"Script failed after " +
+					(SCRIPT_RETRY_LIMIT + 1) +
+					" attempts: " +
+					(lastError.message || lastError);
+
+				if (statusEl) {
+					statusEl.textContent =
+						failureLine;
+				}
+
+				setSeoWalkthroughError(
+					n,
+					failureLine
 				);
 
-			}
+				console.error("[script-seo] failed", {
+					videoIndex: n,
+					ms: Date.now() - scriptStartedAt,
+					attempts: SCRIPT_RETRY_LIMIT + 1,
+					error: (lastError && lastError.message) || String(lastError)
+				});
 
-			project.srt = data.srt;
-
-			if (
-				project.subtitles &&
-				project.subtitles.length
-			) {
-				project.subtitles =
-					parseSrtCues(data.srt);
-			}
-
-			/*
-			 * Keep the verified SEO plan on
-			 * the project, and offer the AI
-			 * title when the video title
-			 * input is still empty - the
-			 * title is <=70 chars (the
-			 * input maxlength) and carries
-			 * one of the short keywords.
-			 */
-			project.seoTitle =
-				(data && data.title) || "";
-
-			project.seoHeadings =
-				data && Array.isArray(data.headings)
-					? data.headings
-					: [];
-
-			if (
-				titleEl &&
-				!titleEl.value.trim() &&
-				project.seoTitle
-			) {
-
-				titleEl.value =
-					project.seoTitle.slice(0, 70);
-
-			}
-
-			renderSeoKeywords(
-				n,
-				data
-			);
-
-			const box =
-				document.getElementById(
-					"va-script-box-" + n
-				);
-
-			if (box) {
-				box.textContent = data.srt;
-			}
-
-			/*
-			 * The script now exists:
-			 * reveal + enable the
-			 * voiceover button (hidden
-			 * until an SRT exists).
-			 */
-			syncVoiceoverButton(n);
-
-			showScriptBox(n);
-
-			const lineCount =
-				data.srt
-					.split(/\\r?\\n/)
-					.filter(
-						(line) =>
-							line.trim() !== ""
-					)
-					.length;
-
-			/*
-			 * The SEO counts are minimums
-			 * (1 long-tail at least 1x,
-			 * exactly 4 short keywords at
-			 * least 2x each) - show what
-			 * the worker verified, plus the
-			 * title/headings the AI planned.
-			 */
-			const shortCount =
-				data.keywords &&
-				Array.isArray(data.keywords.short)
-					? data.keywords.short.length
-					: 0;
-
-			const headingCount =
-				Array.isArray(data.headings)
-					? data.headings.length
-					: 0;
-
-			console.info("[script-seo] ok", {
-				videoIndex: n,
-				ms: Date.now() - scriptStartedAt,
-				model: data.model || null,
-				title: project.seoTitle,
-				headings: project.seoHeadings,
-				keywords: data.keywords || null,
-				lineCount: lineCount
-			});
-
-			if (statusEl) {
-				statusEl.textContent =
-					"Script ready \u2014 " +
-					lineCount +
-					" lines (" +
-					speed +
-					" speech, " +
-					minutes +
-					" min) \u00b7 SEO: 1 long-tail (\u22651\u00d7) + " +
-					shortCount +
-					" short keywords (\u22652\u00d7 each) \u00b7 title + " +
-					headingCount +
-					" heading" +
-					(headingCount === 1 ? "" : "s");
-			}
-
-			scriptSucceeded =
-				true;
-
-		}
-		catch (err) {
-
-			console.warn("[script-seo] failed", {
-				videoIndex: n,
-				ms: Date.now() - scriptStartedAt,
-				error: (err && err.message) || String(err)
-			});
-
-			if (statusEl) {
-				statusEl.textContent =
-					"Script failed: " +
-					(err.message || err);
 			}
 
 		}
@@ -14344,295 +16782,206 @@ export const APP_JS = `
 
 	}
 
-	function downloadSrt(n) {
-
-		const project =
-			videoProjects[n - 1];
-
-		if (
-			!project ||
-			!project.srt
-		) {
-
-			return;
-
-		}
-
-		const titleEl =
-			document.getElementById(
-				"va-title-" + n
-			);
-
-		const title =
-			titleEl
-				? titleEl.value.trim()
-				: "";
-
-		const fileName =
-			"YouTubeVibeStudio_" +
-			(title ||
-				"Video" + n).replace(
-					/[^A-Za-z0-9]+/g,
-					""
-				) +
-			".srt";
-
-		const blob =
-			new Blob(
-				[project.srt],
-				{ type: "text/plain" }
-			);
-
-		const url =
-			URL.createObjectURL(blob);
-
-		const a =
-			document.createElement("a");
-
-		a.href = url;
-		a.download = fileName;
-
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-
-		URL.revokeObjectURL(url);
-
-	}
-
 	// =========================================================
 	// MODULE 9: voiceover + subtitles
-	// (voice: MeloTTS via /api/voiceover -> MP3; the SRT
-	//  script becomes spoken audio + burned-in subtitles
-	//  drawn BELOW the caption, at 1/3 of the height up
-	//  from the bottom)
+	// (voice: MeloTTS via /api/voiceover -> MP3. The script is
+	//  spoken EXACTLY as written: plain narration sentences, so
+	//  there is no subtitle parsing anywhere in this module —
+	//  a TTS model reads cue numbers and "-->" arrows out loud.
+	//  Burned-in subtitles are built from the same sentences and
+	//  drawn BELOW the caption, at 1/3 of the height up from the
+	//  bottom.)
 	// =========================================================
 
-	function srtTimeToMs(str) {
+	/*
+	 * One sentence per subtitle. The script arrives as plain text, so
+	 * cues are made here: sentences are collected, split to caption
+	 * width, and spread over the known span (the MP3 length once the
+	 * voiceover exists, otherwise the length the worker verified).
+	 * Timing is proportional to character count, so a long sentence
+	 * stays on screen longer than "Yes." does.
+	 */
+	const SUBTITLE_MAX_CHARS =
+		84;
 
-		const parts =
-			String(str).trim().split(":");
+	const SUBTITLE_MIN_MS =
+		1200;
 
-		if (parts.length !== 3) {
-			return 0;
-		}
+	function splitScriptSentences(script) {
 
-		const hours =
-			Number(parts[0]) || 0;
-
-		const minutes =
-			Number(parts[1]) || 0;
-
-		const secParts =
-			parts[2].split(",");
-
-		const seconds =
-			Number(secParts[0]) || 0;
-
-		const millis =
-			Number(secParts[1] || 0) || 0;
-
-		return (
-			((hours * 60 + minutes) * 60 + seconds) *
-			1000 +
-			millis
-		);
+		return String(script || "")
+			.replace(/\\s+/g, " ")
+			.split(/(?<=[.!?])\\s+/)
+			.map((sentence) => sentence.trim())
+			.filter(Boolean);
 
 	}
 
-	/*
-	 * Parses SRT text into cues:
-	 * [{startMs, endMs, text}]
-	 */
-	function parseSrtCues(srt) {
-
-		const cues =
-			[];
-
-		const lines =
-			String(srt).split(
-				/\\r?\\n/
-			);
-
-		let current =
-			null;
-
-		for (
-			let i = 0;
-			i < lines.length;
-			i++
-		) {
-
-			const line =
-				lines[i].trim();
-
-			if (!line) {
-				if (
-					current &&
-					current.endMs > current.startMs &&
-					current.text
-				) {
-					current = null;
-				}
-				continue;
-			}
-
-			let nextNonEmpty = "";
-			for (let j = i + 1; j < lines.length; j++) {
-				const cand = lines[j].trim();
-				if (cand) {
-					nextNonEmpty = cand;
-					break;
-				}
-			}
-
-			if (
-				/^\\d+$/.test(line) &&
-				nextNonEmpty.indexOf("-->") !== -1
-			) {
-
-				current = {
-					startMs: 0,
-					endMs: 0,
-					text: ""
-				};
-
-				cues.push(current);
-
-				continue;
-
-			}
-
-			if (
-				line.indexOf(
-					"-->"
-				) !== -1
-			) {
-
-				if (!current) {
-
-					current = {
-						startMs: 0,
-						endMs: 0,
-						text: ""
-					};
-
-					cues.push(current);
-
-				}
-
-				const parts =
-					line.split(
-						"-->"
-					);
-
-				current.startMs =
-					srtTimeToMs(
-						parts[0]
-					);
-
-				current.endMs =
-					srtTimeToMs(
-						parts[1]
-					);
-
-				continue;
-
-			}
-
-			if (current) {
-
-				current.text =
-					current.text
-						? current.text +
-							" " +
-							line
-						: line;
-
-			}
-
-		}
-
-		return cues.filter(
-			(cue) =>
-				cue.text &&
-				cue.endMs >
-					cue.startMs
-		);
-
-	}
-
-	/*
-	 * The spoken script: the SRT with cue
-	 * numbers + timestamps removed (only
-	 * the words are spoken).
-	 */
-	function spokenScriptFromSrt(srt) {
+	function wrapSubtitle(text, maxChars) {
 
 		const words =
-			[];
+			String(text || "").split(/\\s+/).filter(Boolean);
 
-		const lines =
-			String(srt).split(
-				/\\r?\\n/
-			);
+		const lines = [];
 
-		for (
-			let i = 0;
-			i < lines.length;
-			i++
-		) {
+		let line = "";
 
-			const line =
-				lines[i].trim();
+		for (const word of words) {
 
 			if (!line) {
+				line = word;
 				continue;
 			}
 
-			let nextSpeechLine = "";
-			for (let j = i + 1; j < lines.length; j++) {
-				const cand = lines[j].trim();
-				if (cand) {
-					nextSpeechLine = cand;
-					break;
-				}
-			}
-
-			if (
-				/^\\d+$/.test(line) &&
-				nextSpeechLine.indexOf("-->") !== -1
-			) {
+			if ((line + " " + word).length <= maxChars) {
+				line += " " + word;
 				continue;
 			}
 
-			if (
-				line.indexOf(
-					"-->"
-				) !== -1
-			) {
-
-				continue;
-
-			}
-
-			words.push(line);
+			lines.push(line);
+			line = word;
 
 		}
 
-		return words.join(" ");
+		if (line) {
+			lines.push(line);
+		}
+
+		return lines.join("\\n");
 
 	}
 
-							function closeVoiceoverModal() {
+	/* Length of a generated voiceover blob, when the browser can decode it. */
+	async function measureBlobMs(blob) {
 
-		const modal =
-			document.getElementById(
-				"voiceover-modal"
+		try {
+
+			const context =
+				getAudioContext();
+
+			const decoded =
+				await context.decodeAudioData(
+					await blob.arrayBuffer()
+				);
+
+			return Math.round(
+				decoded.duration * 1000
 			);
 
-		if (modal) {
-			modal.remove();
+		}
+		catch (measureError) {
+
+			console.warn(
+				"[voiceover] could not measure the MP3",
+				measureError
+			);
+
+			return 0;
+
+		}
+
+	}
+
+	function buildScriptCues(
+		script,
+		totalMs
+	) {
+
+		const span =
+			Number.isFinite(Number(totalMs)) && Number(totalMs) > 0
+				? Number(totalMs)
+				: 0;
+
+		const sentences =
+			splitScriptSentences(script)
+				.map((sentence) => wrapSubtitle(sentence, SUBTITLE_MAX_CHARS))
+				.filter(Boolean);
+
+		if (!sentences.length || !span) {
+			return [];
+		}
+
+		const weights =
+			sentences.map((text) => Math.max(8, text.replace(/\\s+/g, " ").trim().length));
+
+		const weightTotal =
+			weights.reduce((sum, weight) => sum + weight, 0);
+
+		/* Every cue keeps a readable floor; longer lines keep their share. */
+		const minimum =
+			SUBTITLE_MIN_MS * sentences.length;
+
+		const scaled =
+			span <= minimum
+				? weights.map(() => span / sentences.length)
+				: weights.map(
+					(weight) =>
+						SUBTITLE_MIN_MS +
+						(span - minimum) * (weight / weightTotal)
+				);
+
+		const cues = [];
+
+		let cursor = 0;
+
+		for (let index = 0; index < sentences.length; index++) {
+
+			const startMs =
+				Math.round(cursor);
+
+			cursor +=
+				scaled[index];
+
+			const endMs =
+				index === sentences.length - 1
+					? Math.max(startMs + SUBTITLE_MIN_MS, Math.round(span))
+					: Math.round(cursor);
+
+			cues.push({
+				startMs: startMs,
+				endMs: endMs,
+				text: sentences[index]
+			});
+
+		}
+
+		return cues;
+
+	}
+
+	/*
+	 * One voiceover window per video, registered in the same stack as the
+	 * walkthrough, so voicing Video 2 can never evict Video 1's window (and
+	 * a walkthrough that still waits for a style choice stays put).
+	 */
+	function voiceoverModalId(n) {
+		return "voiceover-modal-" + n;
+	}
+
+	function getVoiceoverModal(n) {
+		return document.getElementById(voiceoverModalId(n));
+	}
+
+	function closeVoiceoverModal(n) {
+
+		const modal =
+			typeof n === "number"
+				? getVoiceoverModal(n)
+				: topModal();
+
+		closeModal(
+			modal
+		);
+
+	}
+
+	function closeVoiceoverModalTop() {
+
+		const modal =
+			topModal();
+
+		if (modal && !modalBlocksEscape(modal)) {
+			closeModal(modal);
 		}
 
 	}
@@ -14649,20 +16998,26 @@ export const APP_JS = `
 		}
 
 		/*
-			* The accordion button only
-			* enables once the script
-			* (SRT) box has text, so the
-			* modal always has a script
-			* to speak.
-			*/
+		 * The accordion button only
+		 * enables once the script box
+		 * has text, so the modal always
+		 * has a script to speak.
+		 */
 
-		if (!project.srt) {
+		if (!project.script) {
 
 			return;
 
 		}
 
-		closeVoiceoverModal();
+		const existing =
+			getVoiceoverModal(n);
+
+		if (existing) {
+			modalBringToFront(existing);
+			existing.style.display = "flex";
+			return existing;
+		}
 
 		const modal =
 			document.createElement(
@@ -14670,47 +17025,61 @@ export const APP_JS = `
 			);
 
 		modal.id =
-			"voiceover-modal";
+			voiceoverModalId(n);
 
 		modal.className =
 			"modal-overlay";
 
+		modal.setAttribute(
+			"data-dismiss",
+			"closeVoiceoverModalTop"
+		);
+
 		modal.innerHTML =
 			'<div class="modal-box">' +
 			'<div class="modal-title">\ud83c\udf99 Voiceover (MP3) \u2014 Video ' + n + '</div>' +
-			'<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks the script as an English MP3 (one fixed voice). The MP3 can be uploaded as this video\\'s audio track.</div>' +
-			'<label class="quality-select voiceover-voice-label">Voice <select id="voiceover-voice" disabled title="Always English">' +
+			'<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks this video\\'s script exactly as written \\u2014 plain narration sentences, never a subtitle format \\u2014 into an English MP3 (one fixed voice). The MP3 can be uploaded as this video\\'s audio track.</div>' +
+			'<label class="quality-select voiceover-voice-label">Voice <select id="voiceover-voice-' + n + '" disabled title="Always English">' +
 			'<option value="en" selected>English (en)</option>' +
 			'</select></label>' +
 			'<div class="voiceover-label">Script (spoken into the MP3)</div>' +
-			'<textarea id="voiceover-text" class="voiceover-textarea" rows="8" readonly disabled></textarea>' +
+			'<textarea id="voiceover-text-' + n + '" class="voiceover-textarea" rows="8" readonly disabled></textarea>' +
 			'<div class="voiceover-actions">' +
-			'<button type="button" class="upload-btn small" id="voiceover-gen" onclick="generateVoiceover(' + n + ')">\ud83c\udfa7 Generate Voiceover (MP3)</button>' +
-			'<button type="button" class="upload-btn small" id="voiceover-subtitles" onclick="toggleSubtitles(' + n + ')">' +
+			'<button type="button" class="upload-btn small" id="voiceover-gen-' + n + '" onclick="generateVoiceover(' + n + ')">\ud83c\udfa7 Generate Voiceover (MP3)</button>' +
+			'<button type="button" class="upload-btn small" id="voiceover-subtitles-' + n + '" onclick="toggleSubtitles(' + n + ')">' +
 			(project.subtitles && project.subtitles.length
 				? "\u2705 Subtitles ON \u2014 click to turn off"
 				: "\ud83d\udcdd Apply Subtitles to Video") +
 			'</button>' +
 			'</div>' +
-			'<span class="va-note" id="voiceover-status"></span>' +
-			'<button type="button" class="upload-btn small" onclick="closeVoiceoverModal()">\u2715 Close</button>' +
+			'<span class="va-note" id="voiceover-status-' + n + '"></span>' +
+			'<button type="button" class="upload-btn small" onclick="closeVoiceoverModal(' + n + ')">\u2715 Close</button>' +
 			'</div>';
 
-		document.body.appendChild(
+		openModal(
 			modal
 		);
 
 		const area =
 			modal.querySelector(
-				"#voiceover-text"
+				"#voiceover-text-" + n
 			);
 
-		area.value =
-			spokenScriptFromSrt(
-				project.srt
-			);
+		if (area) {
+
+			/*
+			 * The script IS the spoken text: it is handed to the
+			 * voice as-is, with nothing parsed out of it.
+			 */
+			area.value =
+				project.script;
+
+		}
+
+		return modal;
 
 	}
+
 	async function generateVoiceover(
 		n
 	) {
@@ -14726,18 +17095,22 @@ export const APP_JS = `
 
 		const genBtn =
 			document.getElementById(
-				"voiceover-gen"
+				"voiceover-gen-" + n
 			);
 
 		const statusEl =
 			document.getElementById(
-				"voiceover-status"
+				"voiceover-status-" + n
 			);
 
 		const voiceSel =
 			document.getElementById(
-				"voiceover-voice"
+				"voiceover-voice-" + n
 			);
+
+		if (!genBtn) {
+			return;
+		}
 
 		genBtn.disabled = true;
 
@@ -14746,10 +17119,13 @@ export const APP_JS = `
 
 		try {
 
+			/*
+			 * What the voice gets is the script box contents verbatim:
+			 * the AI script is plain narration text, so there is no
+			 * subtitle format to strip and nothing to misread.
+			 */
 			const text =
-				spokenScriptFromSrt(
-					project.srt
-				);
+				String(project.script || "").trim();
 
 			if (!text) {
 
@@ -14864,8 +17240,29 @@ export const APP_JS = `
 			project.voiceoverFile =
 				blob;
 
+			/*
+			 * The MP3 is now the truth about how long this video is, so
+			 * any subtitle track already applied is re-timed against it
+			 * instead of the worker's estimate. Same sentences, real
+			 * durations.
+			 */
+			if (
+				project.subtitles &&
+				project.subtitles.length
+			) {
+				project.subtitles =
+					buildScriptCues(
+						text,
+						(await measureBlobMs(blob)) ||
+						project.scriptDurationMs
+					);
+			}
+
 			statusEl.textContent =
-				"Voiceover MP3 saved \u2014 upload it as the audio track";
+				"Voiceover MP3 saved \u2014 upload it as the audio track" +
+				(project.subtitles && project.subtitles.length
+					? " (subtitles re-timed to the MP3)"
+					: "");
 
 		}
 		catch (err) {
@@ -14884,14 +17281,17 @@ export const APP_JS = `
 	}
 
 	/*
-	 * Toggle the SRT script as
+	 * Toggle the narration script as
 	 * burned-in subtitles for this
-	 * video: drawn below the
-	 * caption, at 1/3 of the
-	 * height up from the bottom,
-	 * for every export. Click
-	 * again to turn them off.
-	 * The modal stays open.
+	 * video: one sentence per cue,
+	 * drawn below the caption, at 1/3
+	 * of the height up from the bottom,
+	 * for every export. Click again to
+	 * turn them off. The modal stays
+	 * open. Nothing here parses a
+	 * subtitle file - the cues are made
+	 * from the plain script and spread
+	 * over the real audio length.
 	 */
 	function toggleSubtitles(n) {
 
@@ -14900,7 +17300,7 @@ export const APP_JS = `
 
 		if (
 			!project ||
-			!project.srt
+			!project.script
 		) {
 
 			return;
@@ -14909,12 +17309,12 @@ export const APP_JS = `
 
 		const statusEl =
 			document.getElementById(
-				"voiceover-status"
+				"voiceover-status-" + n
 			);
 
 		const subBtn =
 			document.getElementById(
-				"voiceover-subtitles"
+				"voiceover-subtitles-" + n
 			);
 
 		const scriptStatus =
@@ -14961,8 +17361,11 @@ export const APP_JS = `
 		}
 
 		const cues =
-			parseSrtCues(
-				project.srt
+			buildScriptCues(
+				project.script,
+				project.audio && project.audio.duration
+					? project.audio.duration * 1000
+					: project.scriptDurationMs
 			);
 
 		if (!cues.length) {
@@ -14970,7 +17373,7 @@ export const APP_JS = `
 			if (statusEl) {
 
 				statusEl.textContent =
-					"No subtitle cues found in the script";
+					"No sentences found in the script";
 
 			}
 
@@ -15231,7 +17634,7 @@ export const APP_JS = `
 			getCaptions();
 
 		/*
-		 * Subtitles (the applied SRT
+		 * Subtitles (the applied plain
 		 * script) come from the render
 		 * context, if any.
 		 */
@@ -16283,7 +18686,7 @@ export const APP_JS = `
 
 
 					/*
-					 * SRT subtitles: below the
+					 * Script subtitles: below the
 					 * caption, 1/3 up from the
 					 * bottom.
 					 */

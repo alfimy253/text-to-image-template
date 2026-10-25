@@ -1,9 +1,11 @@
 # New Modular Requirements & Architecture (`new_requirements.md`)
 
-**Last Updated:** 2026-10-23  
-**Scope:** SEO overlap rules and template-editor controls (see §6), Modular Payment Screenshot Upload, `/account` & `/upgrade` Flows, Configurable Local Payment Gateway, Full-Page Dynamic Site Configuration, Admin Payment Verification (`paid_user` Upgrade), and Basic Flat CMS (Max 8 Pages).
+**Last Updated:** 2026-10-25  
+**Scope:** plain narration scripts, the image-prompt quality guard, the Quick Batch table and the local render app (see §7); SEO overlap rules and template-editor controls (see §6); Modular Payment Screenshot Upload, `/account` & `/upgrade` Flows, Configurable Local Payment Gateway, Full-Page Dynamic Site Configuration, Admin Payment Verification (`paid_user` Upgrade), and Basic Flat CMS (Max 8 Pages).
 
-**Latest request:** [SEO overlap/no long-tail length rule, 5–7 ring-image uploads, removal of the design accordion, layer/rotation controls, and the Graphics dropdown](#seo-template-requirements) — full requirements and acceptance criteria in §6.
+**Latest request:** [SRT removed from the script path, a paragraph-based prompt guard, script retry + stacked modals, an editable Quick Batch table whose Preview/Export unlock together, and a key-gated free-TTS render app](#script-batch-render-requirements) — full requirements and acceptance criteria in §7.
+
+**Previous request:** [SEO overlap/no long-tail length rule, 5–7 ring-image uploads, removal of the design accordion, layer/rotation controls, and the Graphics dropdown](#seo-template-requirements) — full requirements and acceptance criteria in §6.
 
 ---
 
@@ -272,6 +274,7 @@ This revision supersedes earlier descriptions of mutually exclusive short/long-t
 ### Verification & scope
 
 - `npm test`: **32 passing tests** covering SEO API/validator behavior and DOM/canvas-transform tests, including image
+  *(count as of the 2026-10-23 revision; the suite has grown since — see the §7 verification line for the current number)*,
   boundaries, decode errors/races, URL cleanup, persistent edits, all object renderers, layer
   hit-testing, rotation and both render actions. Test codecs are stubbed; the render loop is real.
 - `npx wrangler deploy --dry-run`: production Worker bundle builds successfully.
@@ -281,3 +284,111 @@ This revision supersedes earlier descriptions of mutually exclusive short/long-t
 - Live Cloudflare AI availability was **not** exercised; `e2e/index.ts` uses a mock model. The
   full `npm run check` is still blocked by 36 pre-existing `src/index.ts` type errors, not by these
   changes. No deployment, KV migration or new production endpoint is required by this revision.
+
+---
+
+## 7. Script, Batch Table & Render App Requirements — 2026-10-25
+
+<a id="script-batch-render-requirements"></a>
+
+Source: the eight items of **Bug Fix Session #242** (`bug-fix-session-242.md`). Implemented and
+covered by tests; the rules they follow are `system-rules.md` RULE 7 (script payload), RULE 24
+(prompts/batch images), RULE 25 (batch table) and RULE 26 (render app).
+
+### Requirement 12 — The script is plain narration text, end to end
+
+- `POST /api/script` returns `script` (prose paragraphs), `format:"plain"`, the SEO metadata and the
+  measured keyword counts. It **must not** return an `srt` field; a body that still posts `srt` is
+  converted, not rejected.
+- Cue timing stays the server's internal validation format (`validateSrt()` → `plainScriptFromCues()`), so
+  no keyword, overlap or duration rule is relaxed by the change.
+- The accordion shows a collapsible plain script box; there is no "Download .srt" control, no
+  "Script (SRT)" label, no `parseSrtCues`/`srtTimeToMs` helper and no SRT wording in any tooltip.
+  Subtitles for the render are **derived** from the script and the decoded audio length.
+- **Acceptance:** `tests/seo-walkthrough.test.mjs` sees `script.script` + `format === "plain"` +
+  `script.srt === undefined`; `tests/quick-batch-table.test.mjs` greps the shipped client for the
+  removed SRT surface and asserts `plainScriptFromSrt` conversion.
+
+### Requirement 13 — Image prompts are guarded by paragraphs, not lines
+
+- A usable prompt is **≥ 3 paragraphs** of **≥ 30 words** each, capped at
+  `IMAGE_PROMPT_MAX_CHARS = 2600`; the guard **pads** a thin answer with style-neutral paragraphs
+  and never rejects it, and the model's own text always stays as paragraph 1.
+- `applyImageStyleToPrompts` runs the guard first, then adds one closing "Visual style: …"
+  paragraph; a truncated JSON array is rescued rather than dropped. `/api/image-batch` shares the
+  same cap and preserves paragraph breaks.
+- **Acceptance:** the paragraph-guard cases in `tests/image-prompts.test.mjs` and the "3-paragraph
+  guard" test, including "a full prompt is returned untouched".
+
+### Requirement 14 — One modal per video, stacked
+
+- `MODAL_BASE_Z_INDEX = 1200`, +10 per stack level; ids `seo-walkthrough-modal-<n>` and
+  `voiceover-modal-<n>`; `Esc` closes the topmost modal only; a `sets`/`style` step carries
+  `data-await-choice="1"` and cannot be dismissed by an outside click.
+- **Acceptance:** two walkthroughs can be open for two videos at once and neither result lands in
+  the other accordion (`tests/seo-walkthrough.test.mjs`, stacking assertions in
+  `tests/quick-batch-table.test.mjs`).
+
+### Requirement 15 — A failed script retries and reports
+
+- Three attempts per step (`SCRIPT_RETRY_LIMIT = 2`), a mid-flight
+  `Script failed (<reason>); retrying (N of 2)...` line, a terminal
+  `Script failed after 3 attempts: <reason>`; the script box, status line and both buttons are
+  restored on **every** path, and no `alert()` is introduced.
+- **Acceptance:** the retry test in `tests/quick-batch-table.test.mjs` (3 attempts, then the copy) —
+  the flow never requires a page reload.
+
+### Requirement 16 — The Quick Batch table is an editor
+
+- `#view-table` holds a table with **Script / Style / Min / Preview / Export** columns,
+  `＋ Add Row` (10 rows max), `#batch-generate` and a live `#batch-note`
+  (`N rows · M with a script`); rows are their own state and are never mirrored into
+  `videoProjects`. Typing must not be interrupted by a re-render.
+- **Acceptance:** `tests/quick-batch-table.test.mjs` builds the table from `PAGE_HTML` and runs one
+  whole Generate against mocked routes, asserting the finished row's state, per-row error isolation
+  and the `#batch-note` count.
+
+### Requirement 17 — Preview and Export unlock together, in the browser
+
+- `batchRowFinished(row) = row.mp3 && row.images.length && row.animated && row.slides.length` is the
+  only gate; before it both cells are text (`Preview Here`, `Export Video`), after it both are
+  buttons. Preview plays the row's slides + subtitles; export snapshots the editor, points
+  `renderContext` at the row and `await generateMP4()`, downloading
+  `YouTubeVibeStudio_Row<N>_<slug>.mp4`.
+- No render job is created: the export path contains no `fetch(` and the studio never calls
+  `/api/render` for a batch row.
+- **Acceptance:** the unlock test (both cells become buttons together, scriptless rows stay
+  text-only) and the "export never POSTs /api/render" test.
+
+### Requirement 18 — `render-app/`: a 20,000-character script into one MP3, for free
+
+- A standalone Node app (`render-app/`, shipped as `render-app-tts.zip`): `POST /api/tts` with
+  `{apiKey:"1290890909&aPiky2026", script, voice:"male"|"female"}` —
+  **401** without the key, **400** for an empty script, a script over 20,000 characters, a third
+  voice or an unknown provider; `GET /api/job/:id` reports `{stage, done, total, percent, url}`;
+  the MP3 is served from `output/`.
+- TTS comes from a **free, no-login** site driven by Playwright (no account, no vendor key);
+  exactly **one male and one female** voice, chosen from the host's own option labels (the male
+  matcher must not be satisfiable by the word "female"); chunks of ≤ 280 characters are joined into
+  one MP3.
+- A `mock` provider renders offline through the same pipeline, so the wiring is testable without a
+  browser; nothing is persisted except the finished MP3s, and nothing in the studio calls the app.
+- **Acceptance:** `cd render-app && node selftest.mjs` (31 checks, 401/400 paths included) and
+  `tests/render-app-tts.test.mjs` (5 checks) in the repo suite.
+
+### Requirement 19 — Documentation follows the code
+
+- `README.md`, `userflow.md` (§16), `system-rules.md` (RULE 7 · 8 · 18 · 22 · 24 · new 25 · new 26)
+  and this file describe the plain-script payload, the paragraph guard, the batch table and the
+  render app; `render-app/README.md` documents the helper itself. No document may still promise an
+  SRT download, a 25-still cap inside the table flow, or a server render for a batch row.
+
+### Verification for §7
+
+- `npm test` — **64 passing tests** (59 studio + 5 render-app), including the jsdom batch-table
+  pipeline and the render-app contract checks.
+- `npx wrangler deploy --dry-run` — the Worker bundle builds with `env.KV_BINDING` and `env.AI`; no
+  new binding or secret is needed by these changes.
+- `cd render-app && npm run check` — syntax checks + 31 self-test assertions, no network required.
+- Not exercised here: the live free-TTS browser path (no Chromium, no route to the hosts) and a real
+  Cloudflare AI call; both are operator-side checks listed in `render-app/README.md` §5.

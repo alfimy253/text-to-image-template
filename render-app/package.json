@@ -1,0 +1,19 @@
+{
+	"name": "render-app-tts",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Script -> MP3 render helper: up to 20,000 characters, one male and one female voice, spoken by a free no-login online TTS site driven with Playwright.",
+	"scripts": {
+		"start": "node server.mjs",
+		"offline": "TTS_PROVIDER=mock node server.mjs",
+		"check": "node --check server.mjs && node --check lib/tts-engine.mjs && node --check public/app.js && node selftest.mjs",
+		"browser": "npx playwright install chromium"
+	},
+	"dependencies": {
+		"playwright": "^1.49.1"
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}

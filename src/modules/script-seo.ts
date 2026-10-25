@@ -6,6 +6,17 @@
  * matching, non-corrupting SRT cue parsing, stateful cue-level retry feedback,
  * and comprehensive `[script]` structured observability logs.
  *
+ * OUTPUT FORMAT — PLAIN NARRATION TEXT, NEVER SUBTITLES.
+ * The writer model still answers with timestamped cues because that is what
+ * makes the "stay under N minutes" rule machine-checkable, but the cue numbers
+ * and `-->` timestamps are an INTERNAL working format only: `validateSrt`
+ * checks them, `plainScriptFromCues()` immediately turns the verified cues into
+ * the spoken sentences, and only that plain text leaves the worker as
+ * `{ success, script, … }`. The studio displays it in the Script box, the
+ * voiceover model speaks it verbatim (MeloTTS understands plain sentences and
+ * nothing else — subtitle formatting used to be read out as words), and no
+ * client code parses a timestamp any more.
+ *
  * KEYWORD FREQUENCY RULE (2026-10-24, canonical): the long-tail keyword must
  * appear AT LEAST ONCE in the spoken SRT and each of the four short keywords
  * must appear AT LEAST TWICE. There is no maximum — extra uses are valid and
@@ -454,6 +465,41 @@ export function validateSrt(text: string, minutes: number): SrtValidationResult 
 		strippedLeadingLines,
 		strippedTrailingLines
 	};
+}
+
+/*
+ * The plain narration script the studio shows and the voiceover speaks.
+ *
+ * `validateSrt` has already done its job by the time this runs — it used the
+ * cue timings to prove the script fits the requested minutes — so the numbers
+ * and timestamps are dropped here rather than shipped to the browser. Cues are
+ * joined into sentences and grouped into readable paragraphs (4 cues each);
+ * nothing else is rewritten, so the keyword counts the worker verified are
+ * exactly the words the user sees.
+ */
+export function plainScriptFromCues(cues: ParsedSrtCue[] | undefined, cuesPerParagraph = 4): string {
+	const cueList = Array.isArray(cues) ? cues : [];
+	const sentences = cueList
+		.map((cue) => String(cue.text || "").replace(/\s+/g, " ").trim())
+		.filter(Boolean);
+	if (!sentences.length) return "";
+
+	/* One sentence per cue keeps the paragraphs speaking-length sized. */
+	const perBlock = Math.max(1, Math.floor(cuesPerParagraph));
+	const paragraphs: string[] = [];
+	for (let index = 0; index < sentences.length; index += perBlock) {
+		paragraphs.push(sentences.slice(index, index + perBlock).join(" "));
+	}
+	return paragraphs.join("\n\n").trim();
+}
+
+/* Same conversion, starting from already-validated SRT text (used by callers
+ * that only hold the string, e.g. tests and the retry coach). */
+export function plainScriptFromSrt(srt: string): string {
+	const parsed = validateSrt(String(srt || ""), 0);
+	const cues = parsed.cues || [];
+	if (cues.length) return plainScriptFromCues(cues);
+	return srtSpokenText(String(srt || "")).replace(/\s+/g, " ").trim();
 }
 
 /*
@@ -1458,6 +1504,9 @@ export async function handleSeoScriptGeneration(
 			const check = validateSrt(rawSrt, minutes);
 			const spokenText =
 				check.ok && check.srt ? srtSpokenText(check.srt) : "";
+			/* What the browser is actually given: the spoken sentences only. */
+			const plainScript =
+				check.ok && check.cues ? plainScriptFromCues(check.cues) : "";
 			const spokenWordCount = spokenText
 				? spokenText.split(/\s+/).filter(Boolean).length
 				: 0;
@@ -1471,7 +1520,7 @@ export async function handleSeoScriptGeneration(
 				: check.error || "invalid SRT";
 			const attemptMs = Date.now() - attemptT0;
 
-			if (!problem && check.srt) {
+			if (!problem && check.srt && plainScript) {
 				const keywords = {
 					longTail: {
 						keyword: keywordSet.longTail,
@@ -1502,7 +1551,7 @@ export async function handleSeoScriptGeneration(
 					attempt,
 					ms: attemptMs,
 					totalMs,
-					srtChars: check.srt.length,
+					scriptChars: plainScript.length,
 					cueCount: check.cues ? check.cues.length : 0,
 					endMs: check.endMs,
 					spokenWords: spokenWordCount,
@@ -1517,12 +1566,25 @@ export async function handleSeoScriptGeneration(
 					)
 				});
 
+				/*
+				 * The client receives PLAIN narration text only (see the
+				 * OUTPUT FORMAT note at the top of this file): the Script box
+				 * shows it, the voiceover speaks it verbatim, and no subtitle
+				 * formatting crosses the wire. `durationMs` is the verified
+				 * cue span, kept so the UI can state the script length
+				 * without parsing anything.
+				 */
 				const okPayload: Record<string, unknown> = {
 					success: true,
-					srt: check.srt,
+					script: plainScript,
+					format: "plain",
 					title: keywordSet.title,
 					headings: keywordSet.headings,
 					keywords,
+					lines: check.cues ? check.cues.length : 0,
+					words: spokenWordCount,
+					durationMs: check.endMs || 0,
+					minutes: minutes,
 					model: scriptModel
 				};
 				if (debugRequested) {
