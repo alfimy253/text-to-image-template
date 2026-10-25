@@ -147,10 +147,12 @@ payload with zero behaviour, so it is now gone.
 
 ### 3.4 Behavioural requirements
 
-1. **Three rows at a time** (`BATCH_RUN_CONCURRENCY = 3`), so a table of ten scripts is not ten
-   serial pipelines while still letting each finished row unlock its own two buttons. A lane takes
-   the next pending row as soon as it frees up. (Session #211 replaced the original one-row-at-a-time
-   loop, which made every table feel sequential.)
+1. **Three rows at a time + pipelined advancement** (`BATCH_RUN_CONCURRENCY = 3`, Session #248).
+   Initial processing starts up to 3 rows simultaneously. When any running row moves in the pipeline
+   to the next step of processing (specifically `images` / image generation), `startUnprocessedRows()`
+   starts the next unprocessed row from the queue immediately. The 4th and subsequent rows do not
+   wait for earlier rows to reach `done`; all scripted rows process through the pipeline without
+   requiring the user to click Generate again.
 1a. **A finished row is never processed again.** The queue is
    `batchRowPending(row)` = has a script **and** `!batchRowFinished(row)` **and** `!row.running`, so
    rows whose Preview/Export buttons are already live are skipped; with nothing pending the table

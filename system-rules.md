@@ -66,6 +66,16 @@
 > it renders) can be deleted from its saved-page pill **or** from the editor's **Delete This
 > Page** button. Session record: `bug-fix-session-244.md`.
 >
+> **Session #248 (2026-10-26): quick batch table staggered pipeline execution.**
+> When 4 or more rows have scripts and Generate is clicked, the table starts up to
+> `BATCH_RUN_CONCURRENCY = 3` rows simultaneously in the early pipeline steps (voice, timing,
+> prompts). As soon as any running row moves to the next step of processing (stage `images` /
+> image generation), `startUnprocessedRows(activeRow)` starts the next unprocessed row from the
+> queue immediately, filling the vacated early-pipeline slot instead of waiting for the first three
+> rows to completely finish the whole pipeline (`done`). Concurrency in the early stages remains
+> strictly bounded by 3, while subsequent rows process without requiring the user to press Generate
+> again. Session record: `bug-fix-session-248.md`.
+>
 > **Current SEO/template revision (2026-10-23):** short/long-tail overlap is allowed with shared
 > counts; long-tail keywords have no word/character length rule. RULE 13 now has one scene gallery,
 > animated objects in Graphics, working layer/rotation controls and required 5–7 ring uploads.
@@ -1937,13 +1947,17 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   `POST /api/image-batch {prompts, resolution, orientation}` (NDJSON) →
   `buildBatchSlides` → `animated = true`. `BATCH_REQUEST_TIMEOUT_MS = 240000` bounds each request
   and `BATCH_SLIDE_DECODE_MS = 10000` bounds each `img.decode()`.
-- **Three rows at a time.** `generateBatchRows()` builds the pending queue
-  (`batchRowPending(row)` = has a script **and** `!batchRowFinished(row)` **and** `!row.running`),
-  starts `BATCH_RUN_CONCURRENCY = 3` lanes (fewer when the queue is shorter) behind one
-  `batchRunBusy` flag, and every lane pulls the next pending row when its own row finishes. Each
-  row keeps its own controller/object URLs, so three voiceover → prompts → batch → slide pipelines
-  overlap instead of running in series. A finished row unlocks its buttons without waiting for the
-  rest of the table.
+- **Three rows at a time + staggered pipeline execution (Session #248).** `generateBatchRows()`
+  builds the pending queue (`batchRowPending(row)` = has a script **and** `!batchRowFinished(row)`
+  **and** `!row.running`), starts up to `BATCH_RUN_CONCURRENCY = 3` rows simultaneously in the
+  early pipeline steps (`voice`, `timing`, `prompts`) behind one `batchRunBusy` flag. When any
+  active row moves to the next step of processing (stage `images` / image generation),
+  `startUnprocessedRows(activeRow)` starts the next unprocessed row from the queue immediately.
+  Thus, 4th and subsequent rows do not wait for earlier rows to completely finish the whole
+  pipeline (`done` through images and slides); early-stage concurrency stays bounded at 3, and all
+  scripted rows run to completion without requiring a second click of Generate. Each row keeps its
+  own controller/object URLs, and a finished row unlocks its buttons without waiting for the rest
+  of the table.
 - **A finished row is never generated again.** Because the queue is built from
   `batchRowPending()`, pressing ✦ Generate again skips every row whose Preview/Export buttons are
   already live: its MP3, images and slides are in memory, so re-running it would re-bill the

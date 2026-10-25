@@ -6125,6 +6125,20 @@ export const APP_JS = `
 	let batchTableSeeded =
 		false;
 
+	/*
+	 * Session #248: queue and in-flight tracking for staggered pipeline execution.
+	 * When a row moves to image generation, an unprocessed row from batchQueue
+	 * is started without waiting for earlier rows to reach 'done'.
+	 */
+	let batchQueue =
+		[];
+
+	const batchActivePromises =
+		new Set();
+
+	let batchFinishedCount =
+		0;
+
 	const BATCH_STAGE_LABELS = {
 		empty: "Waiting for a script",
 		ready: "Ready \u2014 press \u2726 Generate",
@@ -6156,7 +6170,9 @@ export const APP_JS = `
 				orientation:
 					BATCH_DEFAULT_ORIENTATION,
 				stage:
-					"empty",
+					(seed && seed.script && String(seed.script).trim())
+						? "ready"
+						: "empty",
 				detail:
 					"",
 				error:
@@ -6178,6 +6194,8 @@ export const APP_JS = `
 				subtitles:
 					[],
 				animated:
+					false,
+				running:
 					false,
 				startedAt:
 					0,
@@ -6295,6 +6313,11 @@ export const APP_JS = `
 		);
 
 		batchRows.splice(index, 1);
+
+		batchQueue =
+			batchQueue.filter(function (r) {
+				return String(r.id) !== String(id);
+			});
 
 		if (!batchRows.length) {
 			closeBatchPreview();
@@ -6686,6 +6709,17 @@ export const APP_JS = `
 					stage,
 					detail
 				);
+
+				/*
+				 * Session #248: when a row moves to the next step of processing
+				 * (ex. image generation), start unprocessed rows so later rows
+				 * do not wait for earlier rows to reach 'done'.
+				 */
+				if (stage === "images") {
+
+					startUnprocessedRows(row);
+
+				}
 
 			}
 			else {
@@ -7766,6 +7800,13 @@ export const APP_JS = `
 					}
 				);
 
+			/*
+			 * Session #248: row moves to the next step of processing
+			 * (image generation). Start unprocessed rows so they do not
+			 * wait for earlier rows to completely finish the pipeline.
+			 */
+			startUnprocessedRows(row);
+
 			row.images =
 				await batchRunStep(
 					row,
@@ -7900,80 +7941,43 @@ export const APP_JS = `
 		}
 
 		/*
-		 * Three rows at a time (BATCH_RUN_CONCURRENCY). Each row owns its
-		 * own state, abort handle and gallery, so three pipelines can run
-		 * side by side: the browser awaits three fetches at once instead of
-		 * one, and a finished row unlocks its buttons without waiting for
-		 * the rest of the table. Lanes pull from one shared queue, so the
-		 * next pending row starts the moment a lane frees up.
+		 * Session #248: Three rows process simultaneously in the early pipeline
+		 * (BATCH_RUN_CONCURRENCY = 3). When a running row moves to the next step
+		 * of processing (stage 'images' / image generation), startUnprocessedRows()
+		 * starts the next unprocessed row from batchQueue immediately, so the
+		 * 4th and subsequent rows start processing early steps without waiting
+		 * for earlier rows to reach 'done'.
 		 */
 		batchRunBusy =
 			true;
 
-		renderBatchTable();
-
-		const queue =
+		batchQueue =
 			targets.slice();
 
-		let finished =
+		batchFinishedCount =
 			0;
 
-		const laneCount =
+		batchActivePromises.clear();
+
+		renderBatchTable();
+
+		const initialConcurrency =
 			Math.max(
 				1,
-				Math.min(BATCH_RUN_CONCURRENCY, queue.length)
+				Math.min(BATCH_RUN_CONCURRENCY, targets.length)
 			);
 
-		const lane = async function () {
+		/* Start the first wave of rows (up to 3) */
+		startUnprocessedRows();
 
-			while (batchRunBusy && queue.length) {
+		/* Await all active row pipelines and their queued successors */
+		while (batchActivePromises.size > 0) {
 
-				const row =
-					queue.shift();
-
-				if (!row || row.running) {
-					continue;
-				}
-
-				row.running =
-					true;
-
-				try {
-
-					if (await runBatchRow(row)) {
-
-						finished += 1;
-
-					}
-
-				}
-				finally {
-
-					/*
-					 * A failed row is pending again (its cells stay
-					 * text-only), so the next Generate retries it.
-					 */
-					row.running =
-						false;
-
-				}
-
-			}
-
-		};
-
-		const lanes =
-			[];
-
-		for (let index = 0; index < laneCount; index++) {
-
-			lanes.push(
-				lane()
+			await Promise.all(
+				Array.from(batchActivePromises)
 			);
 
 		}
-
-		await Promise.all(lanes);
 
 		batchRunBusy =
 			false;
@@ -7982,16 +7986,139 @@ export const APP_JS = `
 
 		console.info("[batch-table] generate pass done", {
 			requested: targets.length,
-			finished: finished,
-			concurrency: laneCount
+			finished: batchFinishedCount,
+			concurrency: initialConcurrency
 		});
 
 	}
+
+	/*
+	 * Session #248: start unprocessed rows when a row moves to the next step
+	 * of processing (ex. image generation) or when early pipeline capacity opens.
+	 *
+	 * Rule: up to BATCH_RUN_CONCURRENCY (3) rows can process in the early pipeline
+	 * steps (voice, timing, prompts) simultaneously. When a row moves to the next
+	 * step of processing (stage 'images' / image generation, or beyond), it vacates
+	 * its early-pipeline slot. startUnprocessedRows() pulls the next unprocessed
+	 * row from the queue so 4th and subsequent rows start processing early steps
+	 * instead of waiting for the first 3 rows to completely finish the entire
+	 * pipeline (images + animate).
+	 */
+	function startUnprocessedRows(activeRow) {
+
+		if (!batchRunBusy) {
+
+			return;
+
+		}
+
+		/* If batchQueue is empty but a run is active, harvest any newly-added pending rows */
+		if (!batchQueue.length) {
+
+			const unqueued =
+				batchRows.filter(function (r) {
+					return batchRowPending(r);
+				});
+
+			if (unqueued.length) {
+				batchQueue.push.apply(batchQueue, unqueued);
+			}
+
+		}
+
+		/*
+		 * How many rows are currently in early pipeline steps?
+		 * A row is in early pipeline if it is running and has NOT moved to
+		 * 'images', 'animate' or 'done'.
+		 * If activeRow is passed (indicating it is currently transitioning to
+		 * the next step of processing, e.g. image generation), it is excluded
+		 * from earlyCount.
+		 */
+		const earlyCount =
+			batchRows.filter(function (r) {
+
+				if (!r || !r.running) {
+					return false;
+				}
+
+				if (activeRow && String(r.id) === String(activeRow.id)) {
+					return false;
+				}
+
+				return (
+					r.stage !== "images" &&
+					r.stage !== "animate" &&
+					r.stage !== "done"
+				);
+
+			}).length;
+
+		const availableSlots =
+			Math.max(
+				0,
+				BATCH_RUN_CONCURRENCY - earlyCount
+			);
+
+		for (let i = 0; i < availableSlots; i++) {
+
+			if (!batchQueue.length || !batchRunBusy) {
+				break;
+			}
+
+			const row =
+				batchQueue.shift();
+
+			if (!row || row.running || batchRowFinished(row)) {
+				continue;
+			}
+
+			row.running =
+				true;
+
+			const promise = (async function (targetRow) {
+
+				try {
+
+					if (await runBatchRow(targetRow)) {
+
+						batchFinishedCount += 1;
+
+					}
+
+				}
+				finally {
+
+					targetRow.running =
+						false;
+
+					batchActivePromises.delete(promise);
+
+					/*
+					 * When a row completes or exits, check if any remaining
+					 * unprocessed rows can be started.
+					 */
+					startUnprocessedRows();
+
+				}
+
+			})(row);
+
+			batchActivePromises.add(promise);
+
+		}
+
+	}
+
+	const startUnprocessedBatchRows =
+		startUnprocessedRows;
 
 	function stopBatchRows() {
 
 		batchRunBusy =
 			false;
+
+		batchQueue =
+			[];
 
 		for (const row of batchRows) {
 
@@ -9030,6 +9157,13 @@ export const APP_JS = `
 		window.__BATCH_RETRY =
 			batchRetryPolicy;
 
+		/* Session #248: pipeline queue advancement hook */
+		window.startUnprocessedRows =
+			startUnprocessedRows;
+
+		window.startUnprocessedBatchRows =
+			startUnprocessedBatchRows;
+
 	}
 
 	/* The toolbar mirrors the rows: how many can be generated, and busy? */
@@ -9046,8 +9180,9 @@ export const APP_JS = `
 		if (generate) {
 
 			generate.disabled =
-				batchRunBusy ||
-				runnable === 0;
+				batchRunBusy
+					? false
+					: runnable === 0;
 
 			generate.textContent =
 				batchRunBusy
