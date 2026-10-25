@@ -147,10 +147,12 @@ payload with zero behaviour, so it is now gone.
 
 ### 3.4 Behavioural requirements
 
-1. **Three rows at a time** (`BATCH_RUN_CONCURRENCY = 3`), so a table of ten scripts is not ten
-   serial pipelines while still letting each finished row unlock its own two buttons. A lane takes
-   the next pending row as soon as it frees up. (Session #211 replaced the original one-row-at-a-time
-   loop, which made every table feel sequential.)
+1. **Three rows at a time + pipelined advancement** (`BATCH_RUN_CONCURRENCY = 3`, Session #248).
+   Initial processing starts up to 3 rows simultaneously. When any running row moves in the pipeline
+   to the next step of processing (specifically `images` / image generation), `startUnprocessedRows()`
+   starts the next unprocessed row from the queue immediately. The 4th and subsequent rows do not
+   wait for earlier rows to reach `done`; all scripted rows process through the pipeline without
+   requiring the user to click Generate again.
 1a. **A finished row is never processed again.** The queue is
    `batchRowPending(row)` = has a script **and** `!batchRowFinished(row)` **and** `!row.running`, so
    rows whose Preview/Export buttons are already live are skipped; with nothing pending the table
@@ -174,7 +176,8 @@ payload with zero behaviour, so it is now gone.
 | Suite | Guards |
 | --- | --- |
 | `tests/quick-batch-table.test.mjs` | editable rows, three-lane generate, the finished-row skip, the resolution/orientation payloads (client + worker frame maths), per-row failure isolation, Preview+Export unlock together, export is client-side (`no /api/render`) |
-| `tests/studio-ui-session-243.test.mjs` (new) | no sticker section / no API button / Delete Video present; delete renumbers the accordion stack and keeps state; CSS proportions; **no `.bulk-*` selectors left** |
-| `tests/seo-plan-resilience.test.mjs` (new) | planner retry/fallback/partial-plan contract (see `script-keyword-retry-debug.md`) |
+| `tests/studio-ui-session-243.test.mjs` | no sticker section / no API button / Delete Video present; delete renumbers the accordion stack and keeps state; CSS proportions; **no `.bulk-*` selectors left** |
+| `tests/seo-plan-resilience.test.mjs` | planner retry/fallback/partial-plan contract (see `script-keyword-retry-debug.md`) |
+| `tests/session-248.test.mjs` | staggered pipelining queue advancement, 5-row voiceover concurrency cap, stop semantics, single row completion to `done`, no infinite re-queueing of failed rows |
 
-`npm test` → **79 tests, 79 pass** (4 cases added by the Session #211 second pass).
+`npm test` → **95 tests, 95 pass**.
