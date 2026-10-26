@@ -166,8 +166,25 @@ export default {
 
 		// Capability negotiation is non-billable. Old clients keep legacy routes.
 		if (request.method === "GET" && url.pathname === "/api/pipeline-capabilities") {
+			/*
+			 * Additive fields only: `version` stays 261, so an older client
+			 * ignores what it does not know and a newer client degrades to
+			 * the documented 3-per-row behaviour when a field is missing.
+			 *
+			 * imageChunks = how many 3-scene prompt batches the browser may
+			 * keep rendering at the same time. 2 means a single row no
+			 * longer waits for its slowest three images before starting the
+			 * next three.
+			 *
+			 * imageSlots = how many binary /api/image requests one tab may
+			 * keep in flight (the documented adaptive default is 3). The
+			 * per-row 3-per-3 s server pacing, the shared load governor and
+			 * the 20-image ceiling are unchanged: this only stops the
+			 * browser from being the narrowest pipe when three batch rows
+			 * render at once.
+			 */
 			return new Response(JSON.stringify({ version: 261, binaryImages: true, chunkVoiceover: true,
-				singleAttemptScript: true, compactPrompts: true }), {
+				singleAttemptScript: true, compactPrompts: true, imageChunks: 2, imageSlots: 6 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});
 		}
@@ -508,11 +525,25 @@ export default {
 										)
 									);
 								}, IMAGE_ATTEMPT_TIMEOUT_MS);
-								runImageModel(
-									env,
-									prompt +
-										", 16:9 landscape, a completely text-free image"
-								).then(
+							runImageModel(
+								env,
+								prompt +
+									", 16:9 landscape, a completely text-free image",
+								{
+									/*
+									 * Bug fix (image throughput): the
+									 * browser's signal was never
+									 * forwarded, so a cancelled or
+									 * closed request kept its shared
+									 * image-queue slot - and the paid
+									 * inference - alive for up to
+									 * IMAGE_ATTEMPT_TIMEOUT_MS while
+									 * everyone else waited behind it.
+									 * The batch route already did this.
+									 */
+									signal: request.signal
+								}
+							).then(
 									(val) => {
 										clearTimeout(timer);
 										resolve(val);

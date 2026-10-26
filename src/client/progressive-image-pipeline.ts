@@ -86,27 +86,64 @@ async function runProgressiveImagePipeline(options) {
 			function (error) { return { error }; });
 	}
 	if (!total) return prompts;
+	/*
+	 * How many 3-scene chunks may be rendering at the same time.
+	 *
+	 * The default (1) is the historical, fully serialized contract: one
+	 * chunk renders, the next prompt batch is requested while it does, and
+	 * the next chunk only starts once the previous one is done. With three
+	 * images per chunk that made a ten-scene row wait for its slowest image
+	 * four times over, because the browser never had more than three
+	 * image requests in flight.
+	 *
+	 * The studio opts into 2 when the Worker advertises \`imageChunks\`, so a
+	 * row keeps up to six images in flight and no longer idles between
+	 * chunks. Prompt batches still stay at three scenes (the server's
+	 * \`batch.count <= 3\` contract), offsets still advance by the accepted
+	 * count, retries still never re-render a paid batch, and every
+	 * already-started image is still drained before an error surfaces.
+	 */
+	const parallel = Math.max(1, Math.min(4, Math.floor(Number(options.parallelRenders) || 1)));
+	const rendering = [];
+	async function drainRenders() {
+		while (rendering.length) {
+			const done = await rendering.shift();
+			if (done.error && !renderFailure) {
+				renderFailure = done.error;
+				if (options.cancelPrompts) options.cancelPrompts();
+			}
+		}
+	}
 	let batch = await requestNext(0);
 	while (batch && batch.length) {
 		check();
 		const offset = prompts.length;
 		prompts.push.apply(prompts, batch);
 		if (options.onPrompts) options.onPrompts(prompts.slice());
-		// Only one render and one lookahead prompt request per video/row.
-		const rendering = settle(options.render(batch, offset));
+		rendering.push(settle(options.render(batch, offset)));
 		const next = prompts.length < total ? settle(requestNext(prompts.length)) : Promise.resolve({ value: null });
-		const rendered = await rendering;
-		if (rendered.error) {
-			renderFailure = rendered.error;
-			if (options.cancelPrompts) options.cancelPrompts();
+		if (rendering.length >= parallel) {
+			const finished = await rendering.shift();
+			if (finished.error && !renderFailure) {
+				renderFailure = finished.error;
+				if (options.cancelPrompts) options.cancelPrompts();
+			}
 		}
 		const requested = await next;
 		check();
-		if (rendered.error) throw rendered.error;
+		if (renderFailure) {
+			await drainRenders();
+			throw renderFailure;
+		}
 		// Already-started images are fully drained before a later prompt error surfaces.
-		if (requested.error) throw requested.error;
+		if (requested.error) {
+			await drainRenders();
+			throw requested.error;
+		}
 		batch = requested.value;
 	}
+	await drainRenders();
+	if (renderFailure) throw renderFailure;
 	return prompts;
 }
 `;
