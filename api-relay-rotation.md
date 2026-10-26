@@ -147,6 +147,36 @@ Limits: request body ≤ **512 KiB**, result ≤ **24 MiB**, model slug must mat
 * Everything lives in isolate memory. It is a load-shedding heuristic, not a quota — no Durable
   Object, no migration, no new KV key beyond `config:relay`.
 
+## 4b. The provider layer above the pool (bug fix #271)
+
+Bug fix #271 added a second instruction-model provider, so a Cloudflare call is now the *inner*
+half of a two-level rotation:
+
+```
+instruct call → provider rotation (cloudflare ⟷ openrouter) → worker-pool rotation (this Worker ⟷ backups)
+```
+
+* `openrouter` calls never touch the pool: they are one HTTPS request to `openrouter.ai` from the
+  Worker that received the studio call, and spend no Workers AI neurons.
+* `cloudflare` calls use everything in this document unchanged.
+* Only instruct models enter the provider layer; images and TTS stay on Workers AI and still use
+  the pool exactly as described above.
+* A `POST /api/relay/ai` compute call stays single-hop in **both** directions: it executes the raw
+  binding and is never relayed again, and it is never forwarded to OpenRouter.
+
+Details: `bug-fix-session-271.md` and `system-rules.md` RULE 34.
+
+## 4c. Defects found and fixed in this layer (audit, bug fix #271)
+
+| Defect | Fix |
+| --- | --- |
+| Random pool ids reset every member's circuit history on each 20 s cache rebuild | ids are derived from the URL (`worker:<url>`) |
+| `/api/relay/pool` could block on probes | probes are parallel, 5 s bounded, run in `ctx.waitUntil` when available, and never delay a generation |
+| CORS granted a cross-origin read to any `Origin` + any ticket string | the HMAC ticket **and** the path are verified before the header is added |
+| Browser rotation dropped the query string of `/image/gen` / `/tts` | the wrapper rotates `pathname + search` |
+| A rotated request could be re-relayed back to the primary | `preferLocal`: a request carrying a ticket executes locally |
+| Background-worker tab could hang forever on a stalled renderer | `withWorkerDeadline()` (15 min) reports the job failed and resumes polling |
+
 ## 5. Configuration
 
 Stored in KV `config:relay`, edited in **General & Themes → API Rotation & Backup Worker Pool**:

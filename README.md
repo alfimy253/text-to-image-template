@@ -62,6 +62,15 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   automatic failover back to the primary, and an optional browser mode that rotates the whole AI
   request with a signed, path-scoped ticket. Accounts, sessions, credits, payments, CMS and render
   jobs never leave the primary Worker. See [api-relay-rotation.md](api-relay-rotation.md).
+- **Two instruct-model providers, rotated.** The SEO planner, the script writer, the
+  scene-prompt writer and the raw `POST /api/llm/generate` API can run the instruct model on
+  **Cloudflare Workers AI** or on **OpenRouter** (`meta-llama/llama-3.3-8b-instruct:free` by
+  default). This rotation sits *above* the backup-worker rotation: choosing Cloudflare still
+  spreads the call across every registered backup, while OpenRouter spends no Workers AI neurons
+  at all. A failed provider falls through to the other one, a rejected key opens a 60 s → 10 min
+  circuit, and image/voiceover models never leave Workers AI. The settings page configures the
+  weights, the model slug, the timeout and the API key, and reports each provider's health. See
+  [bug-fix-session-271.md](bug-fix-session-271.md).
 - **Local usage record.** Bug fix #261 counts today's delivered images, scripts, voiceovers and
   MP4 exports in this browser (`localStorage` per tab + a two-day counts cookie) and shows them in
   the credits popover with a clear button. It is display/history only: records are editable and
@@ -272,6 +281,16 @@ Optional environment variables for API rotation (no new binding is required):
 - `RELAY_ENABLED=false` — keep one deployment out of the pool (it still serves its own traffic).
 - `RELAY_WORKERS=https://a.workers.dev,https://b.workers.dev` — pool members without a KV write.
 
+Optional environment variables for the instruct-model providers (bug fix #271):
+
+- `OPENROUTER_API_KEY` — the OpenRouter key (`npx wrangler secret put OPENROUTER_API_KEY`).
+  Preferred over the key saved on the settings page. **No key is compiled into the source** — with
+  no key the OpenRouter half of the rotation is skipped, every instruct call stays on Workers AI,
+  and the admin card says so.
+- `OPENROUTER_MODEL` — override the model slug (default
+  `meta-llama/llama-3.3-8b-instruct:free`).
+- `OPENROUTER_ENABLED=false` — keep one deployment on Workers AI only.
+
 The settings page is password-gated and uses **`/{current-day}/config/uvxyz`**, where
 `{current-day}` is the unpadded day of month (1–31) in **Asia/Taipei**. For example, on
 2026-10-16 the URL is **`/16/config/uvxyz`**; it changes at midnight Asia/Taipei. The old bare
@@ -325,6 +344,9 @@ skin covers the whole site.
 | `GET /api/relay/status` · `GET /api/relay/config` · `GET /api/relay/ping` | Pool + health + probe results / current rotation policy / "relay-capable deployment" probe |
 | `POST /api/relay/config` · `POST /api/relay/test` | Save the rotation policy / force a fresh probe of every backup — both need the settings password |
 | `POST /api/relay/ai` | Worker-to-worker inference hop: one model call, HMAC-token authenticated, never relayed again |
+| `POST /api/llm/generate` | Raw instruct-model API (`{prompt,maxTokens?,temperature?,systemPrompt?,provider?}`) → `{text,provider,model,ms}`; signed-in or `/free` guest, `401`/`400`/`413`/`502`; rotates Cloudflare ⟷ OpenRouter unless `provider` is given |
+| `GET /api/llm/status` · `GET`/`POST /api/llm/config` | Provider health, model, key source (metadata only) / rotation policy (POST needs the settings password; the key is write-only) |
+| `POST /api/llm/test` | Settings password; sends one tiny prompt to OpenRouter and Cloudflare and returns each result with timings |
 | `GET`/`POST /api/config/theme` | Current UI theme / set it (`default`, `strata`, `stellar`, `nightlab`, `paper`, `swiss`, `neo`); the GET is open, the POST needs the settings password |
 | `GET`/`POST /api/config/users` | Accounts with email, plan label + today's usage (legacy rows are healed with their email + plan on read) / set `usertype` (`free`, `paid_user`), reset counters — both need the settings password |
 | `GET`/`POST /api/config/ipcredits` | Guest credits table (masked IP, usage, remaining) / delete one IP row (reset) — both need the settings password |
@@ -354,6 +376,10 @@ skin covers the whole site.
   the README, userflow and system rules describe the verified current behavior.
 - **`kv-scale-test.md`** — measured KV behaviour (operations per request, list-page caps,
   free-tier allowance maths) with the reproduction commands.
+- **`bug-fix-session-271.md`** — Session #271: the worker-mode (headless API + background-worker
+  tab) system and user flows, the hang/defect audit of the #265 rotation (six defects, all fixed),
+  the OpenRouter instruct provider and its rotation above the worker pool, the raw
+  `POST /api/llm/generate` API, configuration, runbook and verification.
 - **`api-relay-rotation.md`** — Session #265: the backup-worker pool, the
   `POST /api/relay/ai` wire protocol, rotation strategies, health/circuit breaking, browser
   rotation and its ticket/CORS rules, configuration, runbook and limits.

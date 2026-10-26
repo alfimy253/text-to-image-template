@@ -49,10 +49,17 @@ import {
 	handleRelayRoutes,
 	invalidateRelayCache,
 	relayPreflightResponse,
+	relayRuntimeOf,
 	relayTicketIdentity,
 	RELAY_TICKET_HEADER,
 	withRelayedAi
 } from "./modules/api-relay";
+import {
+	handleLlmRoutes,
+	promptFromAiInput,
+	readLlmConfig,
+	runOpenRouterCompletion
+} from "./modules/llm-openrouter";
 
 /*
  * =============================================================
@@ -847,6 +854,43 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			return relayResponse;
 		}
 
+		/* =====================================================
+		 * LLM PROVIDER ROTATION ADMIN ROUTES (bug fix #271)
+		 *
+		 * GET  /api/llm/status   providers, model, key source, health
+		 * GET  /api/llm/config   rotation policy (the key is never echoed)
+		 * POST /api/llm/config   save the policy (settings password)
+		 * POST /api/llm/test     probe OpenRouter and/or Cloudflare now
+		 *
+		 * The user-facing raw call (`POST /api/llm/generate`) lives with the
+		 * other AI routes below, because it is billed and authenticated.
+		 * ===================================================== */
+
+		const llmResponse =
+			await handleLlmRoutes(
+				request,
+				url,
+				baseEnv,
+				{
+					configPassword: CONFIG_PASSWORD,
+					/* Runs through the rotation runtime, so the probe also
+					   exercises the backup-worker pool. */
+					cloudflareProbe: async (probePrompt: string) => {
+						const result: any = await env.AI.run(
+							SCRIPT_MODEL,
+							{ prompt: probePrompt, max_tokens: 64, temperature: 0.2 }
+						);
+						return result && typeof result.response === "string"
+							? result.response
+							: JSON.stringify(result || "");
+					}
+				}
+			);
+
+		if (llmResponse) {
+			return llmResponse;
+		}
+
 		// INSTRUCT model for the
 		// narration script. The old
 		// FREE llama-3.1-8b-instruct
@@ -1292,6 +1336,236 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			return handleRemovedImagePromptJobRoute(
 				imagePromptJobMatch[1]
 			);
+
+		}
+
+		/* =====================================================
+		 * RAW INSTRUCT-MODEL API (bug fix #271)
+		 *
+		 * POST /api/llm/generate  {prompt, maxTokens?, temperature?,
+		 *                          systemPrompt?, provider?}
+		 *   -> {success, text, provider, model, ms}
+		 *
+		 * This is the second version of the AI API the studio's own text
+		 * routes use: the SAME single model + prompt contract, answered by
+		 * whichever provider the rotation picked (Cloudflare Workers AI or
+		 * OpenRouter). `provider` may force one of them; without it the
+		 * rotation decides, so an external caller gets the same spreading
+		 * the studio does.
+		 *
+		 * Auth follows the studio: a signed-in account, or the `yvs_free`
+		 * guest cookie when KV is bound (401 otherwise). Scripts are
+		 * unlimited on every plan, so the call does not consume an image
+		 * credit - it only records the same `scripts` usage counter.
+		 * ===================================================== */
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/llm/generate"
+		) {
+
+			const llmUser =
+				env && env.KV_BINDING
+					? await creditSessionUser(request, baseEnv)
+					: null;
+			const llmGuest =
+				!llmUser && hasFreemiumCookie(request);
+
+			if (
+				env &&
+				env.KV_BINDING &&
+				!llmUser &&
+				!llmGuest
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Sign in or open /free to use the LLM API"
+					},
+					401
+				);
+
+			}
+
+			const llmBody: any =
+				await request.json().catch(() => null);
+
+			if (!llmBody || typeof llmBody !== "object" || Array.isArray(llmBody)) {
+				return json({ success: false, error: "Expected a JSON object" }, 400);
+			}
+
+			const llmSettings = await readLlmConfig(baseEnv);
+			const llmPrompt = promptFromAiInput(llmBody).trim();
+
+			if (!llmPrompt) {
+				return json({ success: false, error: "Missing prompt" }, 400);
+			}
+
+			if (llmPrompt.length > llmSettings.maxPromptChars) {
+				return json(
+					{
+						success: false,
+						error:
+							"Prompt too long (max " +
+							llmSettings.maxPromptChars +
+							" chars)"
+					},
+					413
+				);
+			}
+
+			const forced = String(llmBody.provider || "").trim().toLowerCase();
+			if (forced && forced !== "cloudflare" && forced !== "openrouter") {
+				return json(
+					{ success: false, error: "Provider must be cloudflare or openrouter" },
+					400
+				);
+			}
+
+			const startedAt = Date.now();
+
+			try {
+
+				if (forced === "openrouter") {
+					/* One provider, explicitly. */
+					const result = await runOpenRouterCompletion({
+						env: baseEnv,
+						config: llmSettings,
+						prompt: llmPrompt,
+						maxTokens: Number(llmBody.maxTokens ?? llmBody.max_tokens) || undefined,
+						temperature: Number(llmBody.temperature) || undefined,
+						systemPrompt:
+							typeof llmBody.systemPrompt === "string"
+								? llmBody.systemPrompt
+								: undefined,
+						signal: request.signal
+					});
+					return json({
+						success: true,
+						text: result.text,
+						provider: "openrouter",
+						model: result.model,
+						ms: result.ms
+					});
+				}
+
+				if (forced === "cloudflare") {
+					/* Bypass the provider rotation but stay in the Worker pool. */
+					const result: any = await env.AI.run(
+						SCRIPT_MODEL,
+						{
+							prompt: llmPrompt,
+							max_tokens:
+								Math.min(
+									Number(llmBody.maxTokens ?? llmBody.max_tokens) || 1024,
+									8192
+								),
+							temperature:
+								Number.isFinite(Number(llmBody.temperature))
+									? Number(llmBody.temperature)
+									: 0.7
+						}
+					);
+					const text =
+						result && typeof result.response === "string"
+							? result.response
+							: typeof result === "string"
+								? result
+								: "";
+					return json({
+						success: true,
+						text,
+						provider: "cloudflare",
+						model: SCRIPT_MODEL,
+						ms: Date.now() - startedAt
+					});
+				}
+
+				/* No explicit provider: the same rotation the studio uses. */
+				const result: any = await env.AI.run(
+					SCRIPT_MODEL,
+					{
+						prompt: llmPrompt,
+						max_tokens:
+							Math.min(
+								Number(llmBody.maxTokens ?? llmBody.max_tokens) || 1024,
+								8192
+							),
+						temperature:
+							Number.isFinite(Number(llmBody.temperature))
+								? Number(llmBody.temperature)
+								: 0.7
+					}
+				);
+				const text =
+					result && typeof result.response === "string"
+						? result.response
+						: typeof result === "string"
+							? result
+							: "";
+				const runtime = relayRuntimeOf(env);
+				return json({
+					success: true,
+					text,
+					provider:
+						result && result.provider
+							? String(result.provider)
+							: "cloudflare",
+					model:
+						result && result.model
+							? String(result.model)
+							: SCRIPT_MODEL,
+					ms: Date.now() - startedAt,
+					rotation: runtime ? runtime.stats() : undefined
+				});
+
+			}
+			catch (error) {
+
+				return json(
+					{
+						success: false,
+						error:
+							error instanceof Error
+								? error.message
+								: String(error)
+					},
+					502
+				);
+
+			}
+			finally {
+
+				/* Usage is informational and never blocks the call. */
+				try {
+
+					if (env && env.KV_BINDING) {
+
+						if (llmUser) {
+							await creditConsume(
+								env,
+								llmUser.username,
+								llmUser.usertype,
+								"scripts"
+							);
+						}
+						else if (llmGuest) {
+							await guestCreditConsume(
+								env,
+								await guestCreditIdentity(request),
+								"scripts"
+							);
+						}
+
+					}
+
+				}
+				catch (usageError) {
+					/* best effort */
+				}
+
+			}
 
 		}
 

@@ -101,6 +101,10 @@ There is no server-side video encoder and no FFmpeg anywhere in the codebase.
 | `/api/relay/test` | POST | `pw` body field | fresh probe of every registered backup |
 | `/api/relay/ping` | GET | none | `{app, relay:1, capabilities}` — a relay-capable deployment |
 | `/api/relay/ai` | POST | `x-yvs-relay-token` (HMAC, 120 s, bound to model + body digest) | one model call executed locally; `json`/`binary` result; never relays again |
+| `/api/llm/generate` | POST | session cookie or `yvs_free=1` when KV is bound | `{success,text,provider,model,ms[,rotation]}`; `400` bad body/prompt/provider, `401` anonymous, `413` prompt too long, `502` both providers failed. Rotates Cloudflare ⟷ OpenRouter; `provider` forces one |
+| `/api/llm/status` | GET | none | provider list with state/model/health, `openRouter.{model,keySource,keyTail,keyConfigured}` |
+| `/api/llm/config` | GET / POST | GET: none · POST: `pw` body field | rotation policy (`config:llm`); the key is write-only (only `keyTail` is ever returned) |
+| `/api/llm/test` | POST | `pw` body field | one tiny prompt to OpenRouter and/or Cloudflare with timings |
 | `/api/config/users?pw=` | GET | `pw` query param | up to 50 accounts with `usertype`, `plan`, used and remaining credits / `403` / `503` |
 | `/api/config/users` | POST | `pw` body field | sets `usertype` (`free` / `paid_user`), optional `resetCredits` / `400` / `403` / `404` / `503` |
 | `/api/config/ipcredits?pw=` | GET | `pw` query param | up to 50 guest rows: masked IP, hash, used, remaining, `updatedAt` / `403` / `503` |
@@ -740,7 +744,9 @@ Seven full-page tabs (the credits were split into their own pages in Bug Fix Ses
   1. General & Themes
      seven theme cards + Save Theme; registered worker URLs; API Rotation & Backup Worker Pool
      (enable rotation, strategy, this Worker's weight, max endpoints, timeout, browser rotation,
-     live per-member health, Refresh Status, Test Endpoints Now); Background Worker Mode
+     live per-member health, Refresh Status, Test Endpoints Now); LLM Providers & OpenRouter
+     (provider rotation, model slug, weights, timeout, max tokens, system prompt, write-only API
+     key, Refresh, Test Providers); Background Worker Mode
      background mode polls /api/worker/poll and renders queued jobs until Stop/tab close
   2. Guest Credits by IP
      GET /api/config/ipcredits lists today's masked IPs with used/left on the guest plan
@@ -798,6 +804,44 @@ Two rotations exist, in this order:
 
 ---
 
+### Flow 4c — "worker mode": the deployment used without a front end
+
+Two shapes share that name. Both are first-class and neither is required for the other.
+
+**A. Headless API deployment (no browser at all).** The Worker only ever answers HTTP API calls
+from a script, another service or `curl`. Nothing renders, so:
+
+- the same route table applies; HTML routes (`/`, `/studio`, `/free`, `/{day}/config/uvxyz`, CMS)
+  are still served but simply never consumed;
+- there is no cookie jar: the caller sends `Cookie: yvs_session=<token>` after
+  `POST /api/login`, or `Cookie: yvs_free=1` to act as a guest. `POST /api/llm/generate` uses
+  exactly that rule (`401` without it when KV is bound);
+- there is no `Origin` header, so the relay CORS layer stays inert and no preflight is needed;
+- nothing polls `/api/worker/poll`, so a job created by `POST /api/render` stays `queued` until an
+  operator starts a worker tab (B) or their own poller;
+- the AI call chain is identical:
+  `route → withRelayedAi() → provider rotation (cloudflare ⟷ openrouter) → worker-pool rotation
+  (this Worker ⟷ backups) → env.AI.run()`.
+
+**B. Background worker tab (an operator with a browser).**
+
+```
+operator → GET /{day}/config/uvxyz → unlock (POST /api/config/verify)
+  → General & Themes → Background Worker Mode → "Start Worker"
+      loop every 3 s while idle:  GET /api/worker/poll
+        job → window.workerRunJob(job)        (WebCodecs H.264 + AAC, local, free)
+               → POST /api/worker/deliver?job=<id>
+               → on error: POST /api/worker/failed?job=<id> {error}
+               → 15 min deadline (#271): report failed, resume polling
+  → the same tab supervises:  worker URLs · API rotation · LLM providers
+```
+
+Rotation never touches the queue: `/api/render*` and `/api/worker/*` are always local, so a
+background tab cannot be handed a job by a backup Worker. Everything on that tab that *is* AI
+(`/api/script`, `/api/image-prompts`, …) keeps rotating exactly as in the studio.
+
+---
+
 ## 8. Failure & edge-path matrix (as implemented)
 
 | Situation | Detected by | User-visible behaviour |
@@ -831,6 +875,14 @@ Two rotations exist, in this order:
 | Browser rotation without a ticket | `/api/relay/pool` | `clientRotation:false` → every request stays on the primary origin |
 | Cross-origin AI request without a ticket | `applyRelayCors` | no `Access-Control-Allow-Origin`; the browser cannot read the response |
 | Rotation disabled (`enabled:false`) | model call | every call runs locally, backups are untouched |
+| No OpenRouter key configured | `resolveOpenRouterKey()` | `keyConfigured:false`; the rotation resolves to Cloudflare only, nothing fails |
+| OpenRouter key rejected / model retired | `runOpenRouterCompletion` | `OpenRouter API error 401/404` → circuit opens 60 s → 10 min; the call falls back to Cloudflare (visible as `last error` + `cooling` in the admin card) |
+| OpenRouter answers an empty completion | same | treated as a provider failure → Cloudflare answers |
+| Both providers fail | `createRelayRuntime().run()` | the last provider error is surfaced; `/api/llm/generate` answers `502` |
+| `provider` in `/api/llm/generate` is not cloudflare/openrouter | route | `400 "Provider must be cloudflare or openrouter"` |
+| Prompt longer than `maxPromptChars` (40 000) | `/api/llm/generate` | `413` |
+| An image or TTS model | `isInstructModel()` | never leaves Workers AI, even with `provider: "openrouter"` |
+| Renderer never settles (worker tab) | `withWorkerDeadline()` | job reported `failed` after 15 min; polling resumes (was: tab stuck `busy` forever) |
 | Worker died mid-render | `/api/worker/poll` | jobs stuck `running` > 10 min → `failed "worker timed out"` |
 | Delivered MP4 empty | `/api/worker/deliver` | `400 "Empty file"` |
 | Output blob missing when polling | `/api/render/:id` | `500 "Output file missing"` |
@@ -866,6 +918,7 @@ Two rotations exist, in this order:
 | Auth UI | MODULE 6 (`buildAuthOverlay()`, `submitAuth()`, `initAuth()`) |
 | Render API + worker | MODULE 7 (`collectVideoPayload()`, `apiRenderVideo()`, `renderVideoLocally()`, `workerRunJob()`) |
 | API rotation across backups | `src/modules/api-relay.ts` (pool, strategies, health/circuit breaker, tokens/tickets, `POST /api/relay/ai`, status/config/test routes, CORS) + `src/client/api-rotation.ts` (wrapped `window.fetch`, pool refresh, ticket header, failover) |
+| Instruct provider rotation | `src/modules/llm-openrouter.ts` (policy, key resolution, `runOpenRouterCompletion`, provider ordering + circuit, `/api/llm/*` admin routes) — wired into `createRelayRuntime()`; the raw API is `POST /api/llm/generate` in `src/index.ts` |
 | Script / subtitles / voiceover | MODULE 8-9 (`renderSeoKeywords()`, `generateScript()`, `openVoiceoverModal()`, `generateVoiceover()`, `toggleSubtitles()`) — the accordion markup puts the SEO section first in `.va-left` (`videoAccordionHTML()`) |
 | Render engine | `generateMP4()`; audio helper `encodeAudioTrack()`; GIF frame decoder `buildGifSlideFrames()` |
 | Template composer | `src/client/template-composer-js.ts` (`drawScene()`, `exportMP4()`, `addTemplateToVideo()`, `openTemplateModal()`), `src/client/template-scene-editor.ts` (Interactive gallery/editor), `src/client/template-ring-carousel.ts` (scene 15 renderer, image loading and controls), `src/client/reel-scene-assets.ts` (bundled backdrops), `src/client/template-shape-animations.ts` (13 non-particle animated Graphics element renderers) |

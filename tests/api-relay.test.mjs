@@ -59,6 +59,7 @@ import {
 } from "../src/modules/api-relay.ts";
 import { JSDOM } from "jsdom";
 
+import { invalidateLlmCache, resetLlmHealth } from "../src/modules/llm-openrouter.ts";
 import { API_ROTATION_JS } from "../src/client/api-rotation.ts";
 import { CONFIG_PAGE_SCRIPT } from "../src/client/config-page-js.ts";
 import { createHTML } from "../src/page.ts";
@@ -117,6 +118,18 @@ function config(overrides = {}) {
 function resetIsolate() {
 	invalidateRelayCache();
 	resetRelayHealth();
+	invalidateLlmCache();
+	resetLlmHealth();
+}
+
+/*
+ * Bug fix #271 adds a provider rotation above the pool rotation: an instruct
+ * model can now also be answered by OpenRouter. The pool tests below are about
+ * the Worker pool only, so they pin the provider to Cloudflare.
+ */
+function cloudflareOnly(kv) {
+	kv.store.set("config:llm", JSON.stringify({ provider: "cloudflare" }));
+	return kv;
 }
 
 async function seedWorkers(env, urls) {
@@ -301,7 +314,7 @@ test("a registered backup receives the model call; the primary binding is not us
 				return { response: "local" };
 			}
 		},
-		KV_BINDING: makeKv({ "config:workers": JSON.stringify(["https://backup.test"]) })
+		KV_BINDING: cloudflareOnly(makeKv({ "config:workers": JSON.stringify(["https://backup.test"]) }))
 	};
 	const seen = [];
 	const fetchImpl = async (url, init) => {
@@ -352,9 +365,9 @@ test("a backup failure fails over to the next member and finally to local", asyn
 				return { response: "local-answer" };
 			}
 		},
-		KV_BINDING: makeKv({
+		KV_BINDING: cloudflareOnly(makeKv({
 			"config:workers": JSON.stringify(["https://dead.test", "https://alive.test"])
-		}),
+		})),
 		RELAY_SECRET: "failover-secret"
 	};
 	const attempted = [];
@@ -381,7 +394,7 @@ test("a backup failure fails over to the next member and finally to local", asyn
 				return { response: "local-answer" };
 			}
 		},
-		KV_BINDING: makeKv({ "config:workers": JSON.stringify(["https://dead.test"]) })
+		KV_BINDING: cloudflareOnly(makeKv({ "config:workers": JSON.stringify(["https://dead.test"]) }))
 	};
 	const runtime2 = createRelayRuntime(env2, requestFor("/api/script"), {
 		fetchImpl: async (url) => {
@@ -1115,9 +1128,9 @@ test("a relayed call is never relayed a second time (no A -> B -> A loop)", asyn
 	const envA = {
 		RELAY_SECRET: "loop-secret",
 		AI: { run: async () => PNG },
-		KV_BINDING: makeKv({
+		KV_BINDING: cloudflareOnly(makeKv({
 			"config:workers": JSON.stringify(["https://backup.test"])
-		})
+		}))
 	};
 	let hops = 0;
 	const realFetch = globalThis.fetch;
@@ -1255,11 +1268,11 @@ test("a request that was rotated here runs its inference locally", async () => {
 	resetIsolate();
 	const env = {
 		AI: { run: async () => ({ response: "served-here" }) },
-		KV_BINDING: makeKv({
+		KV_BINDING: cloudflareOnly(makeKv({
 			"config:workers": JSON.stringify(["https://peer.test"]),
 			/* Weight 0 would send the call to the peer without preferLocal. */
 			"config:relay": JSON.stringify({ strategy: "weighted", localWeight: 0 })
-		})
+		}))
 	};
 	/* Control: without preferLocal the weighted policy sends the call away. */
 	let peerContacted = 0;

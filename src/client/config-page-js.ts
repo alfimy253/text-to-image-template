@@ -398,6 +398,28 @@ export const CONFIG_PAGE_SCRIPT = `
 	.cfg-relay-state.offline { background: rgba(239,68,68,0.16); color: #f87171; }
 	.cfg-relay-hint { margin-top: 10px; font-size: 0.78rem; color: #9ca3af; line-height: 1.5; }
 
+	/* LLM provider rotation (bug fix #271) */
+	.cfg-llm-card textarea.cfg-input {
+		min-height: 84px;
+		resize: vertical;
+		font-family: inherit;
+		line-height: 1.45;
+	}
+	.cfg-llm-providers { display: grid; gap: 8px; margin-top: 12px; }
+	.cfg-llm-provider {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+		padding: 9px 11px;
+		border: 1px solid #252f42;
+		border-radius: 8px;
+		background: #0d1118;
+		font-size: 0.82rem;
+	}
+	.cfg-llm-provider code { color: #e5e7eb; }
+	.cfg-llm-provider .cfg-llm-meta { color: #9ca3af; font-size: 0.76rem; }
+
 	/* Accounts Credits: one row per account, email + plan detail */
 	.cfg-user-row {
 		align-items: flex-start;
@@ -922,6 +944,62 @@ export const CONFIG_PAGE_SCRIPT = `
 						'<p class="cfg-relay-hint">Set the same <code>RELAY_SECRET</code> environment variable on every Worker in the pool so relay tokens cannot be forged. Without it the built-in fallback secret is used (reported below).</p>' +
 					'</div>' +
 
+					/* LLM PROVIDER ROTATION (bug fix #271) */
+					'<div class="cfg-card cfg-llm-card" style="margin-top:20px;" id="cfg-llm-card">' +
+						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+							'<div>' +
+								'<h2>LLM Providers &amp; OpenRouter</h2>' +
+								'<p class="cfg-sub" style="margin-bottom:0;">The instruct model behind the SEO plan, the script writer, the scene-prompt writer and <code>POST /api/llm/generate</code> can run on <strong>Cloudflare Workers AI</strong> or on <strong>OpenRouter</strong>. This rotation sits above the Worker pool above: choosing Cloudflare still spreads the call across every backup Worker, while OpenRouter spends no Workers AI neurons at all. Image and voiceover models always stay on Workers AI.</p>' +
+							'</div>' +
+							'<button type="button" class="cfg-btn" id="cfg-llm-refresh">Refresh</button>' +
+						'</div>' +
+						'<div class="cfg-relay-grid">' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-llm-provider">Provider rotation</label>' +
+								'<select class="cfg-input" id="cfg-llm-provider">' +
+									'<option value="rotate">Rotate Cloudflare ⟷ OpenRouter</option>' +
+									'<option value="cloudflare">Cloudflare Workers AI only</option>' +
+									'<option value="openrouter">OpenRouter only (falls back to Cloudflare)</option>' +
+								'</select>' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-llm-model">OpenRouter model</label>' +
+								'<input class="cfg-input" id="cfg-llm-model" type="text" placeholder="meta-llama/llama-3.3-8b-instruct:free" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-llm-cf-weight">Cloudflare weight</label>' +
+								'<input class="cfg-input" id="cfg-llm-cf-weight" type="number" min="0" max="10" step="1" value="1" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-llm-or-weight">OpenRouter weight</label>' +
+								'<input class="cfg-input" id="cfg-llm-or-weight" type="number" min="0" max="10" step="1" value="1" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-llm-timeout">OpenRouter timeout (seconds)</label>' +
+								'<input class="cfg-input" id="cfg-llm-timeout" type="number" min="5" max="240" step="5" value="90" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-llm-max-tokens">Max tokens</label>' +
+								'<input class="cfg-input" id="cfg-llm-max-tokens" type="number" min="128" max="32768" step="128" value="4096" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-llm-key">OpenRouter API key</label>' +
+								'<input class="cfg-input" id="cfg-llm-key" type="password" autocomplete="off" placeholder="leave empty to keep the stored key / use OPENROUTER_API_KEY" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-llm-system">System prompt</label>' +
+								'<textarea class="cfg-input" id="cfg-llm-system" placeholder="You are a helpful AI assistant. Follow the user&#39;s instructions."></textarea>' +
+							'</div>' +
+						'</div>' +
+						'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">' +
+							'<button type="button" class="cfg-btn cfg-btn-primary" id="cfg-llm-save">Save LLM Settings</button>' +
+							'<button type="button" class="cfg-btn" id="cfg-llm-test">Test Providers</button>' +
+						'</div>' +
+						'<div class="cfg-msg" id="cfg-llm-msg"></div>' +
+						'<div class="cfg-llm-providers" id="cfg-llm-providers"></div>' +
+						'<p class="cfg-relay-hint">The key is stored in KV <code>config:llm</code> and is never echoed back (only its last six characters). Set <code>OPENROUTER_API_KEY</code> on the Worker instead to keep the key out of KV entirely — the environment key wins over a stored one.</p>' +
+					'</div>' +
+
 				'</section>' +
 
 				/* TAB 2: GUEST CREDITS BY IP (its own page, session #244) */
@@ -1170,7 +1248,7 @@ export const CONFIG_PAGE_SCRIPT = `
 			if (panel) panel.classList.toggle("active", id === tabName);
 		});
 		if (unlockedPw) {
-			if (tabName === "general") { loadRelayConfig(); loadRelayStatus(false); }
+			if (tabName === "general") { loadRelayConfig(); loadRelayStatus(false); loadLlmConfig(); loadLlmStatus(); }
 			if (tabName === "guests") loadGuests();
 			if (tabName === "plans") loadCreditUsers();
 			if (tabName === "accounts") loadCreditUsers();
@@ -1455,10 +1533,187 @@ export const CONFIG_PAGE_SCRIPT = `
 			});
 	});
 
+	// --- LLM PROVIDER ROTATION (bug fix #271, src/modules/llm-openrouter.ts) ---
+	/*
+	 * Cloudflare <-> OpenRouter for the instruct model. The policy lives in the
+	 * config:llm KV key; the API key is write-only here (the server reports its
+	 * source and last six characters only).
+	 */
+	function llmMsg(text, kind) {
+		var el = document.getElementById("cfg-llm-msg");
+		if (!el) return;
+		el.className = "cfg-msg" + (kind ? " " + kind : "");
+		el.textContent = text || "";
+	}
+
+	function renderLlmProviders(data) {
+		var box = document.getElementById("cfg-llm-providers");
+		if (!box) return;
+		var providers = (data && data.providers) || [];
+		box.innerHTML = "";
+		providers.forEach(function(p) {
+			var row = document.createElement("div");
+			row.className = "cfg-llm-provider";
+			var state = p.state || "ready";
+			var meta = [];
+			if (p.model) meta.push("model: " + p.model);
+			if (p.successes !== undefined) meta.push("served " + p.successes + "/" + p.failures);
+			if (p.ewmaMs) meta.push("avg " + Math.round(p.ewmaMs) + " ms");
+			if (p.keySource) meta.push("key: " + p.keySource + " \u2026" + (p.keyTail || ""));
+			if (p.lastError) meta.push("last error: " + p.lastError);
+			row.innerHTML =
+				'<span class="cfg-relay-state ' + esc(state) + '">' + esc(state) + '</span>' +
+				'<code>' + esc(p.label || p.id) + '</code>' +
+				'<span class="cfg-llm-meta">' + esc(meta.join(" \u00b7 ")) + '</span>';
+			box.appendChild(row);
+		});
+		if (data && data.openRouter && data.openRouter.keyConfigured === false) {
+			var warn = document.createElement("div");
+			warn.className = "cfg-relay-hint";
+			warn.style.color = "#fbbf24";
+			warn.textContent = "No OpenRouter key configured: every instruct call runs on Workers AI for now. Save a key below, or run: wrangler secret put OPENROUTER_API_KEY";
+			box.appendChild(warn);
+		}
+	}
+
+	function loadLlmConfig() {
+		fetch("/api/llm/config", { credentials: "same-origin" })
+			.then(function(r) { return r.ok ? r.json() : null; })
+			.then(function(d) {
+				if (!d || !d.config) return;
+				var set = function(id, value) { var el = document.getElementById(id); if (el) el.value = value; };
+				set("cfg-llm-provider", d.config.provider || "rotate");
+				set("cfg-llm-model", d.config.model || "");
+				set("cfg-llm-cf-weight", String(d.config.cloudflareWeight == null ? 1 : d.config.cloudflareWeight));
+				set("cfg-llm-or-weight", String(d.config.openrouterWeight == null ? 1 : d.config.openrouterWeight));
+				set("cfg-llm-timeout", String(Math.round((d.config.timeoutMs || 90000) / 1000)));
+				set("cfg-llm-max-tokens", String(d.config.maxTokensCap || 4096));
+				set("cfg-llm-system", d.config.systemPrompt || "");
+				var key = document.getElementById("cfg-llm-key");
+				if (key) {
+					key.value = "";
+					key.placeholder = d.hasStoredKey
+						? "A key is stored (\u2026" + (d.keyTail || "") + "). Leave empty to keep it."
+						: "sk-or-... (empty = environment key or built-in fallback)";
+				}
+			})
+			.catch(function() {});
+	}
+
+	function loadLlmStatus() {
+		fetch("/api/llm/status", { credentials: "same-origin" })
+			.then(function(r) { return r.ok ? r.json() : null; })
+			.then(function(d) {
+				if (!d) { llmMsg("Could not read the LLM provider status.", "err"); return; }
+				renderLlmProviders(d);
+			})
+			.catch(function() { llmMsg("Network error while reading LLM status.", "err"); });
+	}
+
+	document.getElementById("cfg-llm-refresh").addEventListener("click", function() {
+		loadLlmConfig();
+		loadLlmStatus();
+	});
+
+	document.getElementById("cfg-llm-test").addEventListener("click", function() {
+		var btn = document.getElementById("cfg-llm-test");
+		btn.disabled = true;
+		llmMsg("Asking both providers for one sentence\u2026");
+		fetch("/api/llm/test", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pw: unlockedPw }),
+			credentials: "same-origin"
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				btn.disabled = false;
+				if (!res.ok || !res.body || !res.body.success) {
+					llmMsg((res.body && res.body.error) || "Provider test failed.", "err");
+					return;
+				}
+				var lines = (res.body.results || []).map(function(r) {
+					if (r.ok) return (r.provider || "?") + ": OK in " + r.ms + " ms [" + (r.preview || "") + "]";
+					return (r.provider || "?") + ": FAILED " + (r.error || "");
+				});
+				llmMsg(lines.join("  |  "), (res.body.results || []).every(function(r) { return r.ok; }) ? "ok" : "err");
+				loadLlmStatus();
+			})
+			.catch(function() {
+				btn.disabled = false;
+				llmMsg("Network error while testing providers.", "err");
+			});
+	});
+
+	document.getElementById("cfg-llm-save").addEventListener("click", function() {
+		var btn = document.getElementById("cfg-llm-save");
+		btn.disabled = true;
+		llmMsg("Saving LLM settings\u2026");
+		var payload = {
+			pw: unlockedPw,
+			enabled: true,
+			provider: document.getElementById("cfg-llm-provider").value,
+			model: document.getElementById("cfg-llm-model").value.trim(),
+			cloudflareWeight: Number(document.getElementById("cfg-llm-cf-weight").value),
+			openrouterWeight: Number(document.getElementById("cfg-llm-or-weight").value),
+			timeoutMs: Number(document.getElementById("cfg-llm-timeout").value) * 1000,
+			maxTokensCap: Number(document.getElementById("cfg-llm-max-tokens").value),
+			systemPrompt: document.getElementById("cfg-llm-system").value
+		};
+		var key = document.getElementById("cfg-llm-key").value.trim();
+		if (key) payload.apiKey = key;
+		fetch("/api/llm/config", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(payload),
+			credentials: "same-origin"
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				btn.disabled = false;
+				if (res.ok && res.body && res.body.success) {
+					llmMsg("Saved. New instruct-model calls use this rotation immediately.", "ok");
+					loadLlmConfig();
+					loadLlmStatus();
+				} else {
+					llmMsg((res.body && res.body.error) || "Failed to save LLM settings.", "err");
+				}
+			})
+			.catch(function() {
+				btn.disabled = false;
+				llmMsg("Network error.", "err");
+			});
+	});
+
 	// Background Worker polling loop (/api/worker/poll + window.workerRunJob + /api/worker/failed)
 	var workerActive = false;
 	var workerBusy = false;
 	var workerTimer = null;
+	/* A job must not own this tab forever (bug fix #271). */
+	var WORKER_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+
+	function withWorkerDeadline(promise, ms, job) {
+		return new Promise(function(resolve, reject) {
+			var settled = false;
+			var timer = setTimeout(function() {
+				if (settled) return;
+				settled = true;
+				reject(new Error("Render of " + ((job && (job.name || job.id)) || "job") +
+					" did not finish within " + Math.round(ms / 60000) + " min"));
+			}, ms);
+			Promise.resolve(promise).then(function(value) {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolve(value);
+			}, function(error) {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				reject(error);
+			});
+		});
+	}
 
 	function wlog(line) {
 		var el = document.getElementById("cfg-worker-log");
@@ -1490,7 +1745,13 @@ export const CONFIG_PAGE_SCRIPT = `
 						if (typeof window.workerRunJob !== "function") {
 							throw new Error("Studio renderer not ready yet");
 						}
-						await window.workerRunJob(data.job);
+						/*
+						 * #271: a renderer that never settles used to leave the tab
+						 * "busy" forever, so this worker stopped polling and every later
+						 * job sat in the queue. The wait is now bounded; a job that
+						 * exceeds it is reported failed so another worker can take it.
+						 */
+						await withWorkerDeadline(window.workerRunJob(data.job), WORKER_JOB_TIMEOUT_MS, data.job);
 						wlog("Delivered job " + data.job.id);
 					} catch (jobErr) {
 						var emsg = (jobErr && jobErr.message) ? jobErr.message : String(jobErr);
@@ -2393,6 +2654,8 @@ export const CONFIG_PAGE_SCRIPT = `
 					loadWorkersList();
 					loadRelayConfig();
 					loadRelayStatus(false);
+					loadLlmConfig();
+					loadLlmStatus();
 					loadCreditUsers();
 					loadGuests();
 					loadGatewayConfig();

@@ -63,6 +63,15 @@
  */
 
 import { classifyImageFailure } from "./image-load";
+import {
+	isInstructModel,
+	orderLlmProviders,
+	promptFromAiInput,
+	readLlmConfig,
+	resolveOpenRouterKey,
+	runOpenRouterCompletion,
+	type LlmConfig
+} from "./llm-openrouter";
 
 /* =============================================================
  * CONSTANTS
@@ -263,17 +272,6 @@ function normalizedOrigin(url: string): string {
 	}
 }
 
-function randomId(): string {
-	try {
-		const bytes = crypto.getRandomValues(new Uint8Array(6));
-		return Array.from(bytes)
-			.map((b) => b.toString(16).padStart(2, "0"))
-			.join("");
-	} catch {
-		return Math.random().toString(16).slice(2, 14);
-	}
-}
-
 function toHex(bytes: Uint8Array): string {
 	let out = "";
 	for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, "0");
@@ -441,8 +439,14 @@ export async function resolveRelayPool(
 		const origin = normalizedOrigin(url);
 		if (!origin || seen.has(origin)) continue;
 		seen.add(origin);
+		/*
+		 * The id is derived from the URL, not random: health and circuit state
+		 * are keyed by it, and a random id lost every member's history each
+		 * time the 20 s pool cache was rebuilt (so a broken backup looked
+		 * healthy again every 20 s and was retried forever).
+		 */
 		pool.push({
-			id: "worker-" + (pool.length) + "-" + randomId(),
+			id: "worker:" + url,
 			url,
 			local: false,
 			label: origin.replace(/^https?:\/\//, "")
@@ -989,7 +993,15 @@ export interface RelayRuntime {
  * that never touches `env.AI` costs zero KV reads and zero network calls.
  */
 export function createRelayRuntime(env: any, request?: Request, options: RelayRuntimeOptions = {}): RelayRuntime {
-	const stats = { relayed: 0, local: 0, failedOver: 0, endpoints: [] as string[] };
+	const stats = {
+		relayed: 0,
+		local: 0,
+		failedOver: 0,
+		openrouter: 0,
+		cloudflare: 0,
+		providerFallback: 0,
+		endpoints: [] as string[]
+	};
 	const selfOrigin = options.selfOrigin || (request ? new URL(request.url).origin : "");
 	let configPromise: Promise<RelayConfig> | null = null;
 	let poolPromise: Promise<RelayPoolEntry[]> | null = null;
@@ -1003,11 +1015,14 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 		return poolPromise;
 	};
 
-	async function run(model: string, input: Record<string, unknown> = {}): Promise<unknown> {
-		if (typeof model !== "string" || !RELAY_MODEL_PATTERN.test(model)) {
-			throw new Error("Invalid model slug");
-		}
-
+	/*
+	 * The Workers AI path: this Worker plus every backup in the pool
+	 * (bug fix #265). This is the "cloudflare" half of the provider rotation.
+	 */
+	async function runViaWorkersAi(
+		model: string,
+		input: Record<string, unknown> = {}
+	): Promise<unknown> {
 		const settings = await config();
 		const members = await pool();
 
@@ -1088,11 +1103,93 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 		throw lastError instanceof Error ? lastError : new Error("All API relay endpoints failed");
 	}
 
+	/*
+	 * The provider rotation (bug fix #271).
+	 *
+	 * Instruct models are the only calls that can go to OpenRouter; image and
+	 * TTS slugs always stay on Workers AI. Order comes from `config:llm`
+	 * ("rotate" | "cloudflare" | "openrouter"), each provider is tried once,
+	 * and a transient failure on one provider falls through to the other, so a
+	 * bad key or a closed circuit never breaks a script.
+	 */
+	async function run(model: string, input: Record<string, unknown> = {}): Promise<unknown> {
+		if (typeof model !== "string" || !RELAY_MODEL_PATTERN.test(model)) {
+			throw new Error("Invalid model slug");
+		}
+
+		let llm: LlmConfig | null = null;
+		if (isInstructModel(model)) {
+			try {
+				llm = await readLlmConfig(env);
+			} catch {
+				llm = null;
+			}
+		}
+
+		if (!llm || !llm.enabled || llm.provider === "cloudflare") {
+			stats.cloudflare += 1;
+			return runViaWorkersAi(model, input);
+		}
+
+		/* Without a key the OpenRouter half is skipped, not attempted. */
+		const keyInfo = await resolveOpenRouterKey(env, llm).catch(() => null);
+		const providers = orderLlmProviders(llm, Date.now(), Math.random, !!keyInfo && keyInfo.configured);
+		let lastError: unknown = null;
+		for (let index = 0; index < providers.length; index++) {
+			const provider = providers[index];
+			try {
+				if (provider === "openrouter") {
+					const prompt = promptFromAiInput(input);
+					if (!prompt.trim()) throw new Error("OpenRouter call needs a prompt");
+					const result = await runOpenRouterCompletion({
+						env,
+						config: llm,
+						prompt,
+						maxTokens: Number(input.max_tokens) || undefined,
+						temperature: Number(input.temperature) || undefined,
+						signal: request ? request.signal : undefined,
+						fetchImpl: options.fetchImpl,
+						now: options.now
+					});
+					stats.openrouter += 1;
+					if (index > 0) stats.providerFallback += 1;
+					/* Same shape as env.AI.run(), so aiText() and the validators
+					   are oblivious to which provider answered. */
+					return {
+						response: result.text,
+						provider: "openrouter",
+						model: result.model,
+						ms: result.ms
+					};
+				}
+				const value = await runViaWorkersAi(model, input);
+				stats.cloudflare += 1;
+				if (index > 0) stats.providerFallback += 1;
+				return value;
+			} catch (error) {
+				lastError = error;
+				if (error instanceof Error && error.name === "AbortError") throw error;
+				if (!isTransientRelayFailure(error)) throw error;
+				continue;
+			}
+		}
+
+		throw lastError instanceof Error ? lastError : new Error("All LLM providers failed");
+	}
+
 	return {
 		ai: { run },
 		config,
 		pool,
-		stats: () => ({ relayed: stats.relayed, local: stats.local, failedOver: stats.failedOver, endpoints: stats.endpoints.slice() })
+		stats: () => ({
+			relayed: stats.relayed,
+			local: stats.local,
+			failedOver: stats.failedOver,
+			openrouter: stats.openrouter,
+			cloudflare: stats.cloudflare,
+			providerFallback: stats.providerFallback,
+			endpoints: stats.endpoints.slice()
+		})
 	};
 }
 
@@ -1272,7 +1369,7 @@ export async function probeRelayEndpoint(
 
 	const fetchImpl = options.fetchImpl || fetch;
 	const controller = typeof AbortController === "function" ? new AbortController() : null;
-	const timer = setTimeout(() => controller?.abort(), 8000);
+	const timer = setTimeout(() => controller?.abort(), 5000);
 	const startedAt = Date.now();
 	let result: PingCacheEntry;
 	try {
