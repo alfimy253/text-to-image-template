@@ -39,13 +39,14 @@ function mockAudioResponse(): Uint8Array {
 function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 	const prompt = String(input?.prompt || "");
 
-	// Image-prompt jobs: exactly N prompts in the requested style.
+	// Progressive image prompts: honor the absolute scene range as well as count/style.
 	if (prompt.includes("AI IMAGE PROMPTS")) {
 		const count = Number((prompt.match(/exactly (\d+) image prompts/) || [])[1] || 10);
 		const style = (prompt.match(/video image style: ([^.]+)\./) || [])[1] || "cinematic";
+		const offset = Number((prompt.match(/SEQUENCE: write scenes (\d+)/) || [])[1] || 1) - 1;
 		return {
 			response: JSON.stringify({
-				prompts: Array.from({ length: count }, (_, i) => `Scene ${i + 1} of the explainer video, ${style}`)
+				prompts: Array.from({ length: count }, (_, i) => `Scene ${offset + i + 1} of the explainer video, ${style}`)
 			})
 		};
 	}
@@ -143,7 +144,7 @@ function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 	return { response: srt };
 }
 
-const env = {
+export const mockEnv = {
 	AI: {
 		run: async (model: string, input: Record<string, unknown>) => {
 			const m = String(model || "");
@@ -160,6 +161,6 @@ const env = {
 
 export default {
 	fetch(request: Request): Promise<Response> {
-		return worker.fetch(request, env);
+		return worker.fetch(request, mockEnv);
 	}
 };

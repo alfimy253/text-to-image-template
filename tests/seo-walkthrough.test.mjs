@@ -285,10 +285,11 @@ function makeBatchHarness(w, calls, options = {}) {
 		if (path === "/api/seo-plan") return jsonResponse({ success: true, sets: [setA, setB] });
 		if (path === "/api/script") return jsonResponse({ success: true, script: sentences.join(" "), format: "plain", title: setA.title, headings: setA.headings, keywords: { longTail: setA.longTail, short: setA.short }, words: sentences.join(" ").split(/\s+/).length, durationMs: sentences.length * 4000, minutes: 1 });
 		if (path === "/api/image-prompts" && method === "POST") {
-			const count = options.promptCount === undefined ? 10 : options.promptCount;
+			const batch = JSON.parse(opts.body).batch || { offset: 0, count: 10 };
+			const count = Math.min(batch.count, options.promptCount === undefined ? 10 : options.promptCount);
 			return jsonResponse({
 				success: true,
-				prompts: Array.from({ length: count }, (_, i) => "Scene " + (i + 1) + ", a calm home yoga practice. Visual style: Pop Comic"),
+				prompts: Array.from({ length: count }, (_, i) => "Scene " + (batch.offset + i + 1) + ", a calm home yoga practice. Visual style: Pop Comic"),
 				count,
 				expectedCount: 10,
 				style: "Pop Comic",
@@ -333,7 +334,7 @@ async function drainFlow(w, timeoutMs = 1000) {
 	return w.document.getElementById("va-ai-status-1").textContent;
 }
 
-test("client flow renders every prompted image through ONE batch request and never polls", async (t) => {
+test("client flow renders progressive batches of three and never polls", async (t) => {
 	const calls = [];
 	const { dom, w } = makeClient();
 	t.after(() => dom.window.close());
@@ -357,11 +358,11 @@ test("client flow renders every prompted image through ONE batch request and nev
 	assert.equal(gallery1.length, 10);
 	assert.equal(w.document.querySelectorAll("#va-gallery-2 > .va-card").length, 0);
 
-	/* Exactly one prompt POST and one batch POST: no job URL, no polling. */
-	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 1);
+	/* Four bounded batches: no job URL, no polling. */
+	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 4);
 	const batchCalls = calls.filter((call) => call.path === "/api/image-batch");
-	assert.equal(batchCalls.length, 1);
-	assert.equal(JSON.parse(batchCalls[0].body).prompts.length, 10);
+	assert.equal(batchCalls.length, 4);
+	assert.deepEqual(batchCalls.map((call) => JSON.parse(call.body).prompts.length), [3, 3, 3, 1]);
 	assert.equal(calls.filter((call) => call.method === "GET" && call.path.startsWith("/api/image-prompts/")).length, 0);
 	assert.equal(calls.filter((call) => call.method === "DELETE").length, 0);
 	assert.equal(calls.filter((call) => call.path.startsWith("/image/gen?")).length, 0);
@@ -409,7 +410,7 @@ test("client flow respects the 25-still cap, reports partial success and re-enab
 
 	assert.equal(w.document.getElementById("va-upload-btn-1").disabled, false);
 	assert.equal(w.document.getElementById("va-script-btn-1").disabled, false);
-	assert.match(status, /1 of 10 prompted image\(s\) added/);
+	assert.match(status, /1 image\(s\) in the gallery/);
 });
 
 test("client flow reports a prompt-generation failure and never starts a batch", async (t) => {
@@ -425,7 +426,7 @@ test("client flow reports a prompt-generation failure and never starts a batch",
 	w.selectSeoKeywordSet(1, 0);
 	await w.confirmSeoStyleAndGenerate(1);
 
-	const status = await drainFlow(w);
+	const status = await drainFlow(w, 4000);
 	assert.equal(calls.filter((call) => call.path === "/api/image-batch").length, 0);
 	assert.match(status, /Image prompts could not be generated/);
 	assert.equal(w.document.getElementById("va-upload-btn-1").disabled, false);
@@ -637,4 +638,49 @@ test("client walkthrough exposes the fixed style dropdown and the polling-free b
 
 	assert.ok(APP_CSS.includes("background: #ffffff"));
 	assert.ok(APP_CSS.includes('[id^="seo-wt-style-select"]'));
+});
+
+test("editor gallery receives first three images while next prompt request is still pending", async (t) => {
+	const calls = [];
+	const { dom, w } = makeClient();
+	t.after(() => dom.window.close());
+	makeBatchHarness(w, calls);
+	const baseFetch = w.fetch;
+	let release;
+	const gate = new Promise((resolve) => { release = resolve; });
+	let lookahead = false;
+	w.fetch = async (url, init = {}) => {
+		if (url === "/api/image-prompts" && JSON.parse(init.body).batch.offset === 3) {
+			lookahead = true;
+			await gate;
+		}
+		return baseFetch(url, init);
+	};
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	w.addVideoAccordion();
+	w.document.getElementById("va-script-topic-1").value = "Morning yoga";
+	await w.generateScript(1);
+	w.selectSeoKeywordSet(1, 0);
+	await w.confirmSeoStyleAndGenerate(1);
+	for (let i = 0; i < 100 && w.document.querySelectorAll("#va-gallery-1 > .va-card").length < 3; i++) {
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	assert.equal(lookahead, true);
+	assert.equal(w.document.querySelectorAll("#va-gallery-1 > .va-card").length, 3);
+	assert.equal(w.document.getElementById("va-upload-btn-1").disabled, true);
+	release();
+	assert.match(await drainFlow(w), /10 image\(s\) in the gallery/);
+});
+
+test("editor prompt timeout remains armed through JSON body consumption and normalizes raw abort wording", async (t) => {
+	const { dom, w } = makeClient();
+	t.after(() => dom.window.close());
+	const owner = {};
+	w.fetch = async (url, init) => ({ ok: true, json: () => new Promise((_, reject) => {
+		init.signal.addEventListener("abort", () => reject(Object.assign(new Error("signal is aborted without reason"),
+			{ name: "AbortError" })), { once: true });
+	}) });
+	await assert.rejects(w.seoFetchWithTimeout("/api/image-prompts", {}, 10, owner, "controller", (response) => response.json()),
+		(error) => error.name === "TimeoutError" && /timed out/.test(error.message) && !/signal|abort/.test(error.message));
+	assert.equal(owner.controller, null);
 });

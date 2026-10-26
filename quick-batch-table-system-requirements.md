@@ -7,6 +7,18 @@ stay in `system-rules.md` RULE 25 (quick batch table) and RULE 22 (two views, on
 re-verified against the code by the Session #211 second pass, which added the Resolution and
 Orientation columns, the three-lane run and the finished-row skip (`toberesolved.md` B1-B11).
 
+> **2026-10-26 / bug fix #261:** RULE 30 and
+> [the #261 report](bug-fix-session-261.md) supersede older transport/retry descriptions below.
+> Browser requests three prompts, renders them via bounded binary `/api/image` requests, and
+> keeps one prompt lookahead. It owns narration chunk scheduling/assembly, single-attempt script
+> retries, compact prompt context and adaptive/cross-tab scheduling. Chunk-mode voiceover is
+> not wrapped in legacy whole-step retries; images are never automatically replayed.
+> Feature-detected legacy-server and older-browser fallbacks remain. Today's delivered media is
+> also counted in browser localStorage and a two-day counts cookie for display only; that record
+> never authorizes a request. No Durable Object or migration is added, so existing KV quota
+> checks remain non-atomic/best-effort under concurrency.
+> Stop cancels all owned work; delivered images survive later failures. No persistent video jobs.
+
 ---
 
 ## 1. What the table is
@@ -58,8 +70,8 @@ shorten the backoff; `window.__BATCH_ROWS` remains the live row array.
 | --- | --- | --- |
 | `voice` | `POST /api/voiceover {text, lang:"en"}` | MP3 blob → `row.mp3`, `row.mp3Url` |
 | `timing` | `decodeBatchAudio(row, blob)` | `row.audio` (duration) + `row.subtitles` from the script |
-| `prompts` | `POST /api/image-prompts {topic, minutes, style, resolution, orientation, script}` | `row.prompts` — 10 / 14 / 20 prompts by length, each written for the row's frame |
-| `images` | `POST /api/image-batch {prompts, resolution, orientation}` (NDJSON stream) | `row.images` + one object URL per image, rendered at the row's frame |
+| `prompts` | `POST /api/image-prompts {topic, minutes, style, resolution, orientation, script, batch:{offset,count,attempt,previous}}` (count ≤3; repeated progressively) | `row.prompts` — 10 / 14 / 20 prompts by length, each written for the row's frame |
+| `images` | `POST /api/image {prompt, resolution, orientation}` (one binary image/job; bounded browser scheduling overlaps prompt lookahead; legacy NDJSON fallback) | `row.images` + one object URL per image, rendered at the row's frame |
 | `animate` | `buildBatchSlides(row)` | `row.slides`, `row.animated = true` |
 | `done` | — | `batchRowFinished(row)` true → Preview + Export unlock |
 | `retry` | any step | **Silent, in-row.** `batchRunStep()` retries the failed step up to `BATCH_STEP_ATTEMPTS` = 4 times (backoff 0.8 / 1.6 / 3.2 s, capped at `BATCH_RETRY_MAX_MS` = 4 s). Nothing about the failure reaches the screen: the row keeps its normal stage label and paints the editor's script-section animation (`.va-spinner` + `va-loading-pulse`). Object URLs made by the failed attempt are revoked before the retry. |

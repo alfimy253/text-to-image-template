@@ -1,0 +1,12 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "text-to-image-accounting-local-test",
+	"main": "e2e/accounting-index.ts",
+	"compatibility_date": "2025-10-08",
+	"kv_namespaces": [
+		{
+			"binding": "KV_BINDING",
+			"id": "local-accounting-test"
+		}
+	]
+}

@@ -35,6 +35,7 @@ import {
 } from "./modules/image-prompts";
 import {
 	handleImageBatch,
+	handleImageBinary,
 	IMAGE_ATTEMPT_TIMEOUT_MS,
 	type ImageModelResult,
 	runImageModel,
@@ -161,6 +162,13 @@ export default {
 		const url =
 			new URL(request.url);
 
+		// Capability negotiation is non-billable. Old clients keep legacy routes.
+		if (request.method === "GET" && url.pathname === "/api/pipeline-capabilities") {
+			return new Response(JSON.stringify({ version: 261, binaryImages: true, chunkVoiceover: true,
+				singleAttemptScript: true, compactPrompts: true }), {
+				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
+			});
+		}
 
 		// =====================================================
 		// MAIN APPLICATION
@@ -1028,7 +1036,7 @@ export default {
 
 		if (
 			request.method === "POST" &&
-			url.pathname === "/api/image-batch"
+			(url.pathname === "/api/image-batch" || url.pathname === "/api/image")
 		) {
 
 			const imageCredits =
@@ -1048,7 +1056,7 @@ export default {
 			 * access); otherwise every requested image costs one
 			 * credit up front and failures are refunded.
 			 */
-			return handleImageBatch(
+			return (url.pathname === "/api/image" ? handleImageBinary : handleImageBatch)(
 				request,
 				env,
 				imageCredits.open
@@ -3924,8 +3932,8 @@ function creditSummaryFor(
 
 /*
  * Counts one use of `kind`. A finite limit is enforced
- * atomically enough for KV (read, check, write); returning
- * allowed:false never increments.
+ * using existing KV read/check/write. This is NOT distributed-atomic;
+ * browser records are advisory only. Returning allowed:false never increments.
  */
 async function creditConsume(
 	env: any,
@@ -4651,7 +4659,8 @@ async function imageCreditHooks(
 
 		/*
 		 * A credits outage must not take image generation down
-		 * with it (same fail-open rule as before).
+		 * with it (same fail-open rule as before). Browser records
+		 * never authorize or deny a paid request.
 		 */
 		return { open: true };
 

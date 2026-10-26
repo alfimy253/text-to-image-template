@@ -503,6 +503,7 @@ export async function runImageModel(
 		height?: number;
 		seed?: number;
 		fallbackModels?: readonly string[];
+		signal?: AbortSignal;
 	} = {}
 ): Promise<ImageModelResult> {
 	if (!env || !env.AI) throw new Error("AI binding not configured");
@@ -540,6 +541,8 @@ export async function runImageModel(
 		return input;
 	};
 
+	const checkAbort = () => { if (options.signal?.aborted) throw createBatchAbortError(); };
+	checkAbort();
 	let primaryError: unknown = null;
 	try {
 		const raw = await env.AI.run(
@@ -551,6 +554,7 @@ export async function runImageModel(
 		primaryError = err;
 	}
 
+	checkAbort();
 	const safeDims = sdxlSafeDimensions(reqWidth, reqHeight);
 	if (safeDims.width !== reqWidth || safeDims.height !== reqHeight) {
 		try {
@@ -570,6 +574,7 @@ export async function runImageModel(
 			: options.fallbackModels;
 
 	for (const fbSlug of fallbacks) {
+		checkAbort();
 		if (!fbSlug || fbSlug === IMAGE_MODEL) continue;
 		try {
 			const fbInput: Record<string, unknown> =
@@ -676,6 +681,7 @@ async function generateOneWithRetry(
 		try {
 			const result = await withTimeout(
 				runImageModel(env, prompt, {
+					signal,
 					seed: Math.floor(Math.random() * 2147483647),
 					/* The row's own Resolution + Orientation columns. */
 					width: frame ? frame.width : IMAGE_WIDTH,
@@ -1077,4 +1083,41 @@ export async function handleImageBatch(
 			"X-Image-Batch-Requested": String(requested)
 		}
 	});
+}
+
+/** #261: single binary image; browser owns fan-out. Never replay on transport ambiguity. */
+export async function handleImageBinary(
+	request: Request, env: AiEnv, credits: ImageCreditHooks
+): Promise<Response> {
+	const body = await request.json().catch(() => null);
+	if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Expected a JSON object" }, 400);
+	if (!env?.AI) return json({ error: "AI binding not configured" }, 503);
+	const input = body as Record<string, unknown>;
+	const prompts = sanitizePrompts([input.prompt]);
+	const frame = sanitizeImageFrame(input);
+	if ("error" in prompts) return json({ error: prompts.error }, 400);
+	if ("error" in frame) return json({ error: frame.error }, 400);
+	if (request.signal.aborted) return json({ error: "Image request cancelled" }, 499);
+	let reservation;
+	try { reservation = await credits.consume(1); }
+	catch { return json({ error: "Credit authorization unavailable. Please retry later." }, 503); }
+	if (!reservation.allowed || reservation.granted < 1) {
+		return json({ error: reservation.error || "Daily image credits are exhausted", credits: reservation.summary }, 429);
+	}
+	try {
+		const outcome = await sharedImageTaskQueue.enqueue({
+			groupId: "binary-" + ++batchGroupSequence,
+			signal: request.signal,
+			execute: () => generateOneWithRetry(env, prompts[0], frame, request.signal)
+		});
+		if (!outcome.ok) throw new Error(outcome.error);
+		if (request.signal.aborted) throw createBatchAbortError();
+		return new Response(outcome.result.bytes as BodyInit, {
+			headers: { "Content-Type": outcome.result.mime, "Cache-Control": "no-store",
+				"X-Pipeline-Version": "261", "X-Image-Width": String(frame.width), "X-Image-Height": String(frame.height) }
+		});
+	} catch (error) {
+		const summary = await credits.refund(1);
+		return json({ error: request.signal.aborted ? "Image request cancelled" : errorMessage(error), credits: summary }, request.signal.aborted ? 499 : 502);
+	}
 }

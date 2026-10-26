@@ -7241,6 +7241,28 @@ export const APP_CSS = `
 			background: rgba(245, 158, 11, 0.2);
 		}
 
+		/* #261: local-only usage record controls */
+		.credit-local {
+			border-top: 0;
+			padding-top: 6px;
+		}
+
+		.credit-local-clear {
+			margin-top: 2px;
+			padding: 0;
+			border: 0;
+			background: none;
+			color: #6b7280;
+			font: inherit;
+			font-size: 0.68rem;
+			text-decoration: underline;
+			cursor: pointer;
+		}
+
+		.credit-local-clear:hover {
+			color: #9ca3af;
+		}
+
 		html[data-theme] .credit-signup {
 			border-color: var(--t-line-2);
 			background: var(--t-btn2-bg);

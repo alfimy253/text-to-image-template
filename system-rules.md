@@ -1863,7 +1863,7 @@ cites `kv-scale-test.md` §8, the last section of that document.
 4. `/image/gen` never sent `width`/`height`, so SDXL returned its default square image for a
    landscape gallery, and the route had no retry of its own.
 
-**The contract now**
+**The contract at that revision** (progressive client batching now superseded by RULE 29)
 
 | Route | Behaviour |
 | --- | --- |
@@ -2262,3 +2262,70 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   `tests/deep-debug-regressions.test.mjs` (6 deep-debug regression tests); `npm test` →
   **120/120** passing across all 12 test files; `npx wrangler deploy --dry-run` clean.
 
+
+
+## RULE 29 — Browser-managed progressive image pipeline (2026-10-26)
+
+This supersedes RULES 24/25/28 wherever they describe one full prompt request followed by one
+full-video image request, or automatic replay of an entire consumed image step. See
+[`progressive-image-pipeline-audit.md`](progressive-image-pipeline-audit.md) for diagnosis,
+resource implications, compatibility and rollout checks.
+
+- Both editor and Quick Batch use `runProgressiveImagePipeline`: request at most three prompts,
+  render that chunk while requesting the next, drain both, repeat. One lookahead only; totals
+  remain 10/14/20, capped by free editor gallery slots.
+- `POST /api/image-prompts` accepts optional `batch:{offset,count,attempt,previous}`. Batch mode
+  validates count 1–3 and the absolute range, makes **one** AI call with a **45 s** wait budget,
+  and returns `batch:{offset,requested,nextOffset}`. Browser request + JSON timeout is **60 s**;
+  up to two transient retries use the server-approved fallback. No nested server top-up/retries
+  in batch mode. Legacy calls without `batch` remain compatible.
+- Never replay a consumed image chunk automatically. Keep authoritative credits/refunds on the
+  Worker. Browser owns orchestration, decoding, object URLs, timing, slides and MP4 export;
+  Worker retains validation, AI access, metering and bounded streamed image work.
+- Stop/deletion/replacement cancels both request types. Prompt lookahead must not overwrite
+  the image stream's controller. Editor counters accumulate across chunks and finalization
+  restores controls after the whole flow, including partial/error exits.
+- Quick Batch translates chunk-local indices to absolute scene indices. Release the next row's
+  early-stage slot when the first image chunk starts. Later failures may produce a partial
+  slideshow from usable images; Stop is not partial success. Quiet-table error policy remains.
+- Small chunks bound per-request work, not fleet-wide CPU. Base64 encoding still costs Worker
+  CPU and wire bytes; AI wait is not CPU time. More HTTP/KV operations are the tradeoff. No
+  persistence/resume, no waitUntil prompt jobs, and no guarantee of cancelling AI inference
+  after a waiting-promise timeout. Production CPU/latency measurements remain necessary.
+
+
+## RULE 30 — Bug fix #261: browser offload and atomic credits (2026-10-26)
+
+This supersedes RULE 29 and earlier rules where they describe default NDJSON images,
+server-assembled voiceover or nested script retries. The three-prompts-first flow remains.
+Canonical implementation, limits, verification and rollout: [bug-fix-session-261.md](bug-fix-session-261.md).
+
+- Negotiate `/api/pipeline-capabilities` before generation. Binary `/api/image` returns one
+  image; browser schedules bounded individual requests, never automatically replays paid images.
+  Preserve legacy routes for missing capabilities, not as a replay after ambiguous paid work.
+- Browser owns narration splitting, chunk retry/voice passes and WAV/MP3 assembly; chunk mode
+  makes one allowlisted server inference per ≤400-character request. Do not wrap chunk-mode
+  voiceover in Quick Batch's legacy whole-step retry loop.
+- Selected-keyword `singleAttempt` script requests make one server writer call; browser owns
+  attempts 0–2. Browser compacts prompt context/ranges/dedup; server independently validates
+  content, keywords, frame, ranges and model allowlists. Never trust browser quota decisions.
+- Shared adaptive media lane (1–3) plus reserved control lane (1) prevents prompt starvation.
+  Cancel queued work before capacity checks; resolve live accordion identity in every callback,
+  including script error/finally cleanup. Track/revoke owned URLs and release bitmaps/buffers.
+- Web Locks/BroadcastChannel are ephemeral cooperation only. Missing APIs use per-tab scheduling;
+  missing Worker/Blob.arrayBuffer/AbortController use cooperative assembly/FileReader/logical
+  cancellation with finite deadlines. Modern JS/fetch baseline and export requirements remain.
+- Browser usage record: delivered images/scripts/voiceovers/MP4 exports are counted today in
+  `localStorage` (one key per tab, merged for display) plus a two-day counts-only cookie, with a
+  clear button in the credits popover. Store counts and kind/outcome markers only — never
+  prompts, narration, media, identity or session tokens. Storage/cookie failure falls back to
+  memory. The Worker must never read these records to grant, deny, refund or price work; they are
+  per-device, user-editable display history. `/api/credits` remains the server summary.
+- No Durable Object, database or wrangler migration is added by #261. Existing KV counters and
+  authentication remain the only server gate, and they are **not atomic**: concurrent requests
+  can over- or under-count, so quotas/summaries are best-effort. Never describe them as exact;
+  do not use the local record to paper over this or to create client-side denials. Exact paid
+  accounting would require a server-side serialization store and a separate, deliberate change.
+- No persistent video jobs or media in client storage. More HTTP requests/browser work cost
+  resources; do not claim production CPU savings without measurements. Timeouts cannot cancel
+  active provider inference or guarantee refunds for invisible delivery.

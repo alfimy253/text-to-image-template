@@ -1525,10 +1525,9 @@ export async function handleSeoScriptGeneration(
 	const reqId = makeReqId();
 	const startedAt = Date.now();
 
-	const body = (await request.json().catch(() => ({}))) as Record<
-		string,
-		unknown
-	>;
+	const rawBody = await request.json().catch(() => null);
+	if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return scriptJson({ error: "Expected a JSON object" }, 400);
+	const body = rawBody as Record<string, unknown>;
 	const debugRequested = Boolean(
 		body.debug === true || url.searchParams.get("debug") === "1"
 	);
@@ -1618,6 +1617,16 @@ export async function handleSeoScriptGeneration(
 		}
 		suppliedKeywordSet = suppliedCheck.data;
 	}
+
+	// #261: single-attempt requests require the validated walkthrough keyword set.
+	const singleAttempt = body.singleAttempt === true;
+	if (singleAttempt && (!suppliedKeywordSet || (body.attempt !== undefined &&
+		(!Number.isInteger(body.attempt) || Number(body.attempt) < 0 || Number(body.attempt) > 2)))) {
+		return scriptJson({ error: "Single-attempt scripts require a valid keyword set and attempt 0-2" }, 400);
+	}
+	const previousFailure = typeof body.previousFailure === "string" ? body.previousFailure.slice(0, 800) : "";
+	const writerModel = singleAttempt && Number(body.attempt) > 0
+		? (SEO_PLAN_FALLBACK_MODELS.find((slug) => slug !== scriptModel) || scriptModel) : scriptModel;
 
 	if (onValidated) {
 		try {
@@ -1883,11 +1892,12 @@ export async function handleSeoScriptGeneration(
 		let prevCheck: SrtValidationResult | null = null;
 		let prevAudit: KeywordAuditEntry[] | null = null;
 
-		for (let attempt = 1; attempt <= 3; attempt++) {
+		for (let attempt = 1; attempt <= (singleAttempt ? 1 : 3); attempt++) {
 			const attemptT0 = Date.now();
 			const writerTemp = attempt === 1 ? 0.65 : 0.4;
 			const prompt =
 				userPrompt +
+				(singleAttempt && previousFailure ? " Previous validation failure to correct: " + previousFailure : "") +
 				(attempt > 1
 					? buildPinpointRetryInstructions(lastError, prevCheck, prevAudit)
 					: "");
@@ -1906,7 +1916,7 @@ export async function handleSeoScriptGeneration(
 
 			try {
 				const result = await runAiCallWithTimeout(
-					env.AI.run(scriptModel, {
+					env.AI.run(writerModel, {
 						prompt,
 						max_tokens: writerMaxTokens,
 						temperature: writerTemp
@@ -2022,7 +2032,7 @@ export async function handleSeoScriptGeneration(
 					words: spokenWordCount,
 					durationMs: check.endMs || 0,
 					minutes: minutes,
-					model: scriptModel
+					model: writerModel
 				};
 				if (debugRequested) {
 					okPayload.debug = {
