@@ -1272,6 +1272,28 @@ compatible. Full analysis, limitations and rollout: `progressive-image-pipeline-
 `system-rules.md` RULE 29.
 
 
+## Bug fix #263 — a failed image chunk no longer ends the video (2026-10-26)
+
+The progressive flow above renders in chunks of three scenes. Before #263 each chunk was requested
+**once**: if all three scenes of chunk 2 hit a transient 5xx/overload, the chunk threw, the flow's
+stop reason was set, and `finalizeImagePromptFlow()` ended a 10-scene video with the **three images
+of chunk 1**. Now:
+
+1. `requestImageChunk()` retries a chunk **per scene** — only the scenes that failed, at most three
+   rounds, waiting the server's `retryAfterMs` hint or `min(800 * 2^(round-1), 15000)` ms. Delivered
+   scenes are never requested again, and `onImage(blob, index)` keeps the original scene index.
+2. `429`/`408` are retried (load answers); `400/401/403/404/422` and `retryable === false` are not.
+3. "The prompt model returned no new scene prompts" is a model answer, not a load failure: the video
+   keeps the images it already rendered and finishes instead of retrying the same request twice more.
+4. `POST /api/image-prompts` answers an overload with **`503` + `Retry-After`** and
+   `{kind:"overload", retryAfterMs, prompts:[]}` (other failures stay `502`), and feeds the shared
+   load governor, so a busy text fleet also slows the next image call.
+
+Unchanged: **3 images per 3 s per row**, **10,000 images/day** for every actor, the adaptive
+governor (start 3, ceiling 6) and the #261 transport/credit rules. Full record:
+`bug-fix-session-263.md` and RULE 32.
+
+
 ## Bug fix #261 — negotiated browser offload (2026-10-26)
 
 Supersedes the earlier default NDJSON/full-voiceover descriptions. See RULE 30 and

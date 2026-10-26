@@ -2387,3 +2387,52 @@ Canonical implementation, limits, verification and rollout: [bug-fix-session-261
   quota, and does not synchronise across isolates or PoPs. KV credit counters stay best-effort
   (RULE 30). If fleet-wide admission control becomes a requirement it needs a server-side
   serialized store as a separate, deliberate change.
+
+## RULE 32 — Bug fix #263: retry at chunk granularity, keep pacing and the daily ceiling exactly as they are (2026-10-26)
+
+> Added 2026-10-26. Full root-cause and verification record: `bug-fix-session-263.md`.
+> Supersedes nothing in RULE 31: pacing stays **3 images per 3 s per row**, credits stay
+> **10,000 images/day** for free, paid and guest, and the load governor is unchanged.
+
+- **A chunk of images is retried per scene, never as a whole.** `requestImageChunk()` in
+  `src/client/app-js.ts` is the ONLY way the browser asks for a chunk of binary images (Quick Batch
+  `requestBatchImages` and the editor `runBinaryEditorImages`). It must keep all four properties:
+  1. an already-delivered scene is never requested again (no duplicate gallery slot, no second
+     charge, no replay of an ambiguous paid image — RULE 30 / RULE 31);
+  2. only the failed scenes are retried, at most 3 rounds, each waiting the server's `retryAfterMs`
+     hint or `min(800 * 2^(round-1), 15000)` ms;
+  3. `onImage(blob, index)` and every returned result use the ORIGINAL prompt index, even for a
+     retried subset — gallery slots and scene numbers depend on it;
+  4. cancellation leaves holes reported as `AbortError` failures, never as successes.
+  Before #263 a chunk was requested exactly once, so one bad chunk ended a 10-scene video with the
+  three images of the first chunk. Do not "fix" that by removing the flow's stop guard: the guard
+  also covers the gallery limit and the idle timeout.
+- **Load answers are retried; user mistakes are not.** `429` and `408` are load answers and are
+  always retried; `400/401/403/404/422` and `error.retryable === false` are permanent and are never
+  retried. Never let a bare `status >= 400 && status < 500` test swallow `429`.
+- **A model answer is not a load failure.** "The image-prompt model returned no new scene prompts"
+  (a duplicate/short batch) is marked `retryable = false`: the video keeps the images it already
+  rendered and finishes, instead of spending two more inferences on the same request and then
+  failing. Only transport/load failures are retried.
+- **`POST /api/image-prompts` answers load like `POST /api/image`.** An overload signal from the
+  prompt model returns **`503` + `Retry-After`** with
+  `{success:false, code:"IMAGE_PROMPT_MODEL_FAILED", kind:"overload", retryAfterMs, prompts:[]}`;
+  every other failure stays `502`; an aborted request is `transient` and must not arm the governor.
+  The handler feeds `sharedImageLoadGovernor.observeFailure(error)` so a text-fleet overload also
+  slows the next image call. Validation is unchanged and still runs before any paid inference
+  (`batch.count` 1–3, `batch.attempt` 0–2, one inference per attempt) — a malformed body is a
+  `400`, never a `502`.
+- **The browser must carry the hint through.** Every prompt-chunk call site (`requestBatchPrompts`
+  compact and legacy branches, the editor `request`, and the legacy `/api/image-batch` fallback)
+  attaches `status`, `kind` and `retryAfterMs` to the thrown error, and
+  `runProgressiveImagePipeline()`'s `requestNext()` waits on them (bounded at 15 s) instead of the
+  old fixed `500 * (attempt + 1)` ms. Retry counts stay 3, matching the `batch.attempt 0-2`
+  contract — do not widen `batch.attempt` without changing `sanitizeInput()` in the same commit.
+- **Pacing constants are derived, not duplicated.** `IMAGE_BATCH_CONCURRENCY` and
+  `IMAGE_BATCH_WAVE_INTERVAL_MS` (`image-batch.ts`) read `DEFAULT_GROUP_IMAGE_CONCURRENCY` and
+  `DEFAULT_GROUP_WINDOW_MS` (`image-queue.ts`). Never reintroduce a second, independently editable
+  `3`: a per-request wave that disagrees with the queue's own group budget is how a row "finishes"
+  early. Values stay **3 images / 3000 ms**, with `IMAGE_BATCH_MIN_COOLDOWN_MS = 250`.
+- **No new limits.** #263 adds no quota, no counter and no rate window. The only image ceilings are
+  RULE 31's `IMAGE_DAILY_LIMIT = 10000` per day and the per-row 3-per-3 s pacing. The isolate-wide
+  brake remains the adaptive governor (start 3, ceiling 6, halved on overload, jittered backoff).

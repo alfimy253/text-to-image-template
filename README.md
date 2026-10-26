@@ -38,7 +38,12 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   of lookahead bounds buffering; there is no job URL, polling, or server-side video management.
   Totals remain **10 / 14 / 20** for 1 / 2–3 / 4–6 minutes. Each prompt request makes one model
   call (45 s budget); the browser retries transient prompt failures up to twice with a 60 s
-  request/body timeout. Paid images are never automatically replayed. **Bug fix #261** negotiates
+  request/body timeout, waiting the server's `Retry-After`/`retryAfterMs` hint (bounded at 15 s)
+  instead of a fixed 500 ms. Paid images are never automatically replayed. **Bug fix #263** retries
+  a failed image chunk **per scene** (only the scenes that failed, original indices, never a
+  delivered image), so one busy chunk no longer ends a 10-scene video after the first three
+  images; pacing stays **3 images per 3 s per row** and the ceiling stays **10,000 images/day**.
+  See [bug-fix-session-263.md](bug-fix-session-263.md). **Bug fix #261** negotiates
   binary per-image responses, browser voiceover chunk assembly, single-attempt script calls,
   compact prompts, adaptive scheduling and ephemeral cross-tab cooperation, with feature-detected
   older-browser fallbacks. Legacy NDJSON remains available. The **25-still cap**, refunds and

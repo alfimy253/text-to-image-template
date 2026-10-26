@@ -33,6 +33,7 @@
  */
 
 import { IMAGE_PROMPT_TIMEOUT_MS, imageFrameFor } from "./image-batch";
+import { sharedImageLoadGovernor } from "./image-load";
 
 export const IMAGE_STYLES = [
 	"Cinematic Film",
@@ -1033,13 +1034,52 @@ export async function handleGenerateImagePrompts(
 		});
 	} catch (error) {
 		const rawMessage = errorMessage(error);
-		const message = /abort|signal/i.test(rawMessage)
+		const interrupted = /abort|signal/i.test(rawMessage);
+		const message = interrupted
 			? "The scene prompt model request was interrupted. Please retry." : rawMessage;
+		/*
+		 * #263: an overloaded text fleet is a wait, not a dead end.
+		 *
+		 * The classification also feeds the SHARED governor, not just this
+		 * handler: the text fleet and the image fleet are the same account, so
+		 * a prompt-side overload is a real reason for the next image call to
+		 * wait too. `observeFailure` classifies and arms the isolate-wide
+		 * cooldown in one call, and answering 503 + Retry-After (plus the hint
+		 * in the body) is what lets the browser keep the video's
+		 * already-rendered images and continue the remaining scenes instead of
+		 * stopping after the first chunk of 3.
+		 */
+		const classification = interrupted
+			? { kind: "transient" as const, retryable: true, retryAfterMs: null, reason: "aborted" }
+			: sharedImageLoadGovernor.observeFailure(error);
+		const overload = classification.kind === "overload";
+		const hintMs =
+			classification.retryAfterMs ||
+			(overload ? sharedImageLoadGovernor.cooldownRemainingMs : 0);
+		const headers: Record<string, string> = {
+			"Content-Type": "application/json",
+			"Cache-Control": "no-store"
+		};
+		if (overload && hintMs > 0) {
+			headers["Retry-After"] = String(Math.max(1, Math.ceil(hintMs / 1000)));
+		}
 		console.error("[image-prompts] failed", {
 			ms: Date.now() - startedAt,
+			kind: classification.kind,
+			retryAfterMs: hintMs,
 			error: message
 		});
-		return json({ success: false, error: message, code: "IMAGE_PROMPT_MODEL_FAILED", prompts: [] }, 502);
+		return new Response(
+			JSON.stringify({
+				success: false,
+				error: message,
+				code: "IMAGE_PROMPT_MODEL_FAILED",
+				kind: classification.kind,
+				retryAfterMs: hintMs > 0 ? hintMs : 0,
+				prompts: []
+			}),
+			{ status: overload ? 503 : 502, headers }
+		);
 	}
 }
 

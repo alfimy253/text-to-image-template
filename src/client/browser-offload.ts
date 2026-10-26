@@ -13,7 +13,8 @@ function createStudioOffloadRuntime(win) {
 		/* Cap at 20 s: a stale hint must never freeze the studio. */
 		wait = Math.min(20000, Math.round(wait));
 		backoffUntil = Math.max(backoffUntil, Date.now() + wait); backoffMs = wait;
-		if (queue.length && !pumpTimer) pumpTimer = win.setTimeout(pump, wait);
+		/* #263: wake at least every 250 ms so Stop can reject queued media. */
+		if (queue.length && !pumpTimer) pumpTimer = win.setTimeout(pump, Math.min(wait, 250));
 		return wait;
 	}
 	function backoffRemaining() { var left = backoffUntil - Date.now(); return left > 0 ? left : 0; }
@@ -204,7 +205,12 @@ function createStudioOffloadRuntime(win) {
 		}
 		if (queue.length && !pumpTimer) {
 			var wait = backoffRemaining();
-			pumpTimer = win.setTimeout(pump, wait > 0 ? Math.max(50, wait) : 100);
+			/*
+			 * #263: never sleep a whole Retry-After here. A 20 s hold with no
+			 * re-check left a cancelled row looking "stuck generating"; polling
+			 * every 250 ms only costs a timer while jobs are actually queued.
+			 */
+			pumpTimer = win.setTimeout(pump, wait > 0 ? Math.max(50, Math.min(wait, 250)) : 100);
 		}
 	}
 	function schedule(work, options) {

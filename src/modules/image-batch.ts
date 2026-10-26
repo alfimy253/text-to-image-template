@@ -31,7 +31,9 @@ import {
 	EventLoopCpuSerializer,
 	ImageTaskQueue,
 	sharedImageTaskQueue,
-	DEFAULT_GLOBAL_IMAGE_CONCURRENCY
+	DEFAULT_GLOBAL_IMAGE_CONCURRENCY,
+	DEFAULT_GROUP_IMAGE_CONCURRENCY,
+	DEFAULT_GROUP_WINDOW_MS
 } from "./image-queue";
 
 import {
@@ -60,9 +62,17 @@ export const IMAGE_BATCH_MAX_PROMPTS = 20;
  * window (`IMAGE_BATCH_CONCURRENCY = 3` every `IMAGE_BATCH_WAVE_INTERVAL_MS = 3000` ms,
  * with at least `IMAGE_BATCH_MIN_COOLDOWN_MS` of breathing room between waves)
  * so neither the Worker isolate nor the browser decoder suffers CPU spikes.
+ * Server load (as opposed to per-row fairness) is handled by the adaptive
+ * governor in `image-load.ts`, never by widening or removing this wave.
  */
-export const IMAGE_BATCH_CONCURRENCY = 3;
-export const IMAGE_BATCH_WAVE_INTERVAL_MS = 3000;
+/*
+ * Session #263: the per-row wave is now *derived* from the queue's own group
+ * budget instead of being a second, independently editable 3. The two used to
+ * be able to drift apart (server pacing 3/3 s, `IMAGE_BATCH_*` saying something
+ * else), which is exactly the class of bug where a row "finishes" early.
+ */
+export const IMAGE_BATCH_CONCURRENCY = DEFAULT_GROUP_IMAGE_CONCURRENCY;
+export const IMAGE_BATCH_WAVE_INTERVAL_MS = DEFAULT_GROUP_WINDOW_MS;
 export const IMAGE_BATCH_MIN_COOLDOWN_MS = 250;
 
 /* Classifier-free guidance scale for 20-step SDXL base style & anatomy adherence. */

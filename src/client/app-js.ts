@@ -8183,7 +8183,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			const data = await response.json();
 			if (!response.ok || !data.success) {
 				const error = new Error(data.error || "Scene prompt request failed");
-				error.retryable = response.status >= 500 || response.status === 429 || response.ok; throw error;
+				error.retryable = response.status >= 500 || response.status === 429 || response.ok;
+				/* #263: keep the server's load answer so the retry can wait it out. */
+				error.status = response.status;
+				error.kind = data.kind || "";
+				error.retryAfterMs = Number(data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
+				throw error;
 			}
 			return data.prompts;
 		}
@@ -8290,6 +8295,136 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		return (error && error.message) || "Image generation failed";
 	}
 
+	/*
+	 * #263: a retry wait that Stop can cut short. A plain setTimeout would keep
+	 * the row "generating" for up to 15 s after the user pressed Stop, which is
+	 * indistinguishable from a hung flow.
+	 */
+	function pauseWhileActive(ms, owner) {
+		return new Promise(function (resolve) {
+			const until = Date.now() + ms;
+			(function step() {
+				if (owner && owner.isCancelled && owner.isCancelled()) return resolve();
+				const left = until - Date.now();
+				if (left <= 0) return resolve();
+				setTimeout(step, Math.min(250, left));
+			})();
+		});
+	}
+
+	/*
+	 * #263: one chunk of binary images with bounded, load-aware retries.
+	 *
+	 * Before this, a chunk was requested exactly once. When every scene in the
+	 * *second* chunk hit a transient 5xx/overload (a busy fleet), the chunk
+	 * failed, the flow's stop reason was set and the pipeline threw — so a
+	 * 10-scene video "finished" with the 3 images of the first chunk. Now:
+	 *
+	 *   - already-delivered scenes are never re-requested (no duplicates, no
+	 *     double billing, no replay of an ambiguous paid image);
+	 *   - only the failed scenes are asked again, up to a bounded number of rounds;
+	 *   - the wait honours the server's Retry-After hint, then falls back to
+	 *     exponential backoff, so a burst of rows does not retry in lockstep;
+	 *   - permanent answers (400/401/403/404/422) are not retried at all; 429,
+	 *     408 and every 5xx are load/transient answers and are retried.
+	 *
+	 * onImage(blob, index) still receives the ORIGINAL prompt index, even for
+	 * a retried subset, because gallery slots and scene numbers depend on it.
+	 */
+	async function requestImageChunk(prompts, frame, options) {
+		const owner = options || {};
+		const rounds = Math.max(1, Number(owner.attempts) || 3);
+		const results = new Array(prompts.length);
+		let pending = prompts.map(function (_, index) { return index; });
+		let hintMs = 0;
+
+		for (let round = 1; round <= rounds && pending.length; round++) {
+			if (owner.isCancelled && owner.isCancelled()) break;
+			const batch = pending.slice();
+			const perAttempt = {
+				isCancelled: owner.isCancelled,
+				priority: owner.priority,
+				setController: owner.setController,
+				clearController: owner.clearController,
+				onImage: function (blob, localIndex) {
+					const index = batch[localIndex];
+					if (typeof index !== "number") return;
+					if (owner.onImage) return owner.onImage(blob, index);
+				},
+				onError: function (error, localIndex) {
+					const index = batch[localIndex];
+					if (typeof index !== "number") return;
+					if (owner.onError) owner.onError(error, index);
+				}
+			};
+			let batchResults;
+			try {
+				batchResults = await studioOffload.images(
+					batch.map(function (index) { return prompts[index]; }),
+					frame || {},
+					perAttempt
+				);
+			} catch (roundError) {
+				/*
+				 * The media scheduler rejects (rather than resolving every scene)
+				 * when the flow is cancelled mid-round. That is a Stop, not a
+				 * transport failure: leave the round's scenes unset so they are
+				 * reported as cancellations below.
+				 */
+				const cancelled =
+					(roundError && roundError.name === "AbortError") ||
+					(owner.isCancelled && owner.isCancelled());
+				if (cancelled) break;
+				throw roundError;
+			}
+
+			const retry = [];
+			batchResults.forEach(function (result, slot) {
+				const index = batch[slot];
+				/* Report the scene index, not the slot inside this retry round. */
+				if (result) result.index = index;
+				if (result && result.ok) {
+					results[index] = result;
+					return;
+				}
+				const error = result && result.error;
+				const hint = error && Number(error.retryAfterMs) > 0 ? Number(error.retryAfterMs) : 0;
+				if (hint > hintMs) hintMs = hint;
+				const status = error && Number(error.status);
+				/*
+				 * Credits/auth/validation will not change on a retry, but 429 and
+				 * 408 are load answers ("come back in a moment") and must be
+				 * retried, which is why they are excluded here.
+				 */
+				const permanent =
+					(status >= 400 && status < 500 && status !== 429 && status !== 408) ||
+					(error && error.retryable === false);
+				if (permanent || round === rounds) {
+					results[index] = result || { ok: false, index: index, error: error };
+					return;
+				}
+				retry.push(index);
+			});
+
+			pending = retry;
+			if (!pending.length) break;
+			const backoff = Math.min(
+				Math.max(hintMs, 800 * Math.pow(2, round - 1)),
+				15000
+			);
+			await pauseWhileActive(backoff, owner);
+		}
+
+		/* Cancelled rounds leave holes: report them as failures, never as success. */
+		return prompts.map(function (_, index) {
+			if (results[index]) return results[index];
+			const cancelled = new Error("Image generation was cancelled");
+			cancelled.name = "AbortError";
+			cancelled.retryable = false;
+			return { ok: false, index: index, error: cancelled };
+		});
+	}
+
 	/* Step 3: one bounded image chunk through the shared browser stream queue. */
 	async function requestBatchImages(
 		row,
@@ -8297,7 +8432,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	) {
 		if ((await studioOffload.capabilities()).binaryImages) {
 			const images = [];
-			const results = await studioOffload.images(prompts, {
+			const results = await requestImageChunk(prompts, {
 				resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value
 			}, {
 				isCancelled: function () { return Boolean(row.stopRequested); },
@@ -8367,10 +8502,24 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 								}
 
-								throw new Error(
-									(data && data.error) ||
-									("Image batch failed (HTTP " + resp.status + ")")
-								);
+								const batchError =
+									new Error(
+										(data && data.error) ||
+										("Image batch failed (HTTP " + resp.status + ")")
+									);
+
+								batchError.status =
+									resp.status;
+
+								batchError.kind =
+									(data && data.kind) || "";
+
+								batchError.retryAfterMs =
+									Number(data && data.retryAfterMs) > 0
+										? Number(data.retryAfterMs)
+										: 0;
+
+								throw batchError;
 
 							}
 
@@ -10416,6 +10565,10 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		/* Session #248: pipeline queue advancement hook */
 		window.startUnprocessedRows =
 			startUnprocessedRows;
+
+		/* Session #263: the load-aware image chunk retrier (tests / debugging). */
+		window.__REQUEST_IMAGE_CHUNK =
+			requestImageChunk;
 
 		window.startUnprocessedBatchRows =
 			startUnprocessedBatchRows;
@@ -17868,6 +18021,10 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						if (!response.ok || !data.success) {
 							const error = new Error((data && data.error) || ("Scene prompt request failed (HTTP " + response.status + ")"));
 							error.retryable = response.status >= 500 || response.status === 429 || response.ok;
+							error.status = response.status;
+							/* #263: a load answer carries the wait the server wants. */
+							error.kind = (data && data.kind) || "";
+							error.retryAfterMs = Number(data && data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
 							throw error;
 						}
 						return data.prompts;
@@ -17902,7 +18059,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		const seq = typeof ownerFlowSeq === "number" ? ownerFlowSeq : project._imageFlowSeq;
 		const stale = function () { return Boolean(project._deleted || !project._imageFlowActive || project._imageFlowSeq !== seq); };
 		try {
-			const results = await studioOffload.images(prompts, {}, {
+			const results = await requestImageChunk(prompts, {}, {
 				isCancelled: stale,
 				priority: function () { return project.el && project.el.contains(document.activeElement) ? 2 : 0; },
 				setController: function (controller) { if (!stale()) project._imageBatchController = controller; else controller.abort(); },
