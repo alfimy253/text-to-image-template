@@ -5519,6 +5519,62 @@ export const APP_JS = `
 
 		}
 
+		/* Cancel any in-flight or queued AI flows for this deleted project first. */
+		project._deleted = true;
+		project._imageFlowActive = false;
+		project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
+
+		for (const ctrlKey of [
+			"_imageBatchController",
+			"_imagePromptCreateController",
+			"_seoPlanController"
+		]) {
+			if (project[ctrlKey]) {
+				try {
+					project[ctrlKey].abort();
+				}
+				catch (abortError) { }
+				project[ctrlKey] = null;
+			}
+		}
+
+		appImageStreamQueue.cancelMatching(function (meta) {
+			return Boolean(
+				meta &&
+				meta.kind === "editor-video" &&
+				(meta.project === project || meta.videoIndex === n)
+			);
+		}, "The video was deleted");
+
+		manualImageTaskQueue.cancelMatching(function (meta) {
+			return Boolean(
+				meta &&
+				meta.kind === "manual-ai" &&
+				(meta.project === project || meta.videoIndex === n)
+			);
+		}, "The video was deleted");
+
+		const aiResultsPanel =
+			document.getElementById("va-ai-results-" + n);
+
+		if (aiResultsPanel && aiResultsPanel.children) {
+			Array.from(aiResultsPanel.children).forEach(function (card) {
+				if (card && card._displayUrl) {
+					try {
+						URL.revokeObjectURL(card._displayUrl);
+					}
+					catch (revokeErr) { }
+				}
+			});
+		}
+
+		if (project.audio && project.audio.url) {
+			try {
+				URL.revokeObjectURL(project.audio.url);
+			}
+			catch (audioRevokeErr) { }
+		}
+
 		/* Free this video's object URLs - nothing else points at them. */
 		for (const asset of project.assets) {
 
@@ -5938,8 +5994,45 @@ export const APP_JS = `
 			renderBatchTable();
 
 		}
+		else {
+
+			const topGen =
+				document.getElementById(
+					"top-generate"
+				);
+
+			if (topGen) {
+
+				topGen.disabled =
+					!!generating;
+
+				topGen.textContent =
+					"\u2726 Generate";
+
+				topGen.title =
+					"Render and download the MP4";
+
+			}
+
+		}
 
 	}
+
+	const SEO_IMAGE_STYLES = [
+		"Cinematic Film",
+		"Editorial Magazine",
+		"Kinetic Typography",
+		"Neon Night",
+		"Minimalist",
+		"Retro Poster",
+		"Documentary",
+		"Split Composition",
+		"Dream Glow",
+		"Pop Comic"
+	];
+
+	const DEFAULT_SEO_IMAGE_STYLE =
+		"Cinematic Film";
 
 	// =========================================================
 	// MODULE 1c: quick-batch table (the studio's "table layout")
@@ -6029,6 +6122,656 @@ export const APP_JS = `
 	 */
 	const BATCH_STREAM_IDLE_TIMEOUT_MS =
 		90000;
+
+	/*
+	 * Never let a stalled WebAudio decode freeze a row on "Measuring the
+	 * narration": fall back to the row's minutes setting after 15 seconds.
+	 */
+	const BATCH_AUDIO_DECODE_MS =
+		15000;
+
+	/*
+	 * Node.js-style Event-Driven Non-Blocking Image Task Runtime:
+	 *   1. Single-threaded event-loop task queues (appImageStreamQueue and
+	 *      manualImageTaskQueue) dispatch async network I/O fairly in round-robin
+	 *      across active videos/rows without blocking the UI thread.
+	 *   2. Background Web Worker thread pool (decodeBase64ImageOffThread) offloads
+	 *      multi-megabyte base64-to-binary image decoding off the main thread
+	 *      with zero-copy Transferable ArrayBuffers, falling back to cooperative
+	 *      64 KB event-loop slices when Web Workers are unavailable.
+	 */
+	const BATCH_IMAGE_STREAM_CONCURRENCY =
+		3;
+
+	const CLIENT_DECODE_THREAD_POOL_SIZE =
+		3;
+
+	const CLIENT_WORKER_DECODE_MIN_CHARS =
+		16384;
+
+	function yieldClientEventLoop() {
+
+		return new Promise(function (resolve) {
+
+			setTimeout(resolve, 0);
+
+		});
+
+	}
+
+	function createEventDrivenTaskQueue(maxConcurrency) {
+
+		const limit =
+			Math.max(1, Number(maxConcurrency) || 3);
+
+		const lanes =
+			new Map();
+
+		const ring =
+			[];
+
+		let cursor =
+			0;
+
+		let active =
+			0;
+
+		let queued =
+			0;
+
+		let pumpScheduled =
+			false;
+
+		function makeAbortErr(msg) {
+
+			const err =
+				new Error(msg || "Image task aborted");
+
+			err.name =
+				"AbortError";
+
+			return err;
+
+		}
+
+		function cleanupLane(key) {
+
+			const lane =
+				lanes.get(key);
+
+			if (lane && lane.items.length === 0 && lane.active === 0) {
+
+				lanes.delete(key);
+
+				const idx =
+					ring.indexOf(key);
+
+				if (idx !== -1) {
+
+					ring.splice(idx, 1);
+
+					if (cursor >= ring.length) {
+						cursor = 0;
+					}
+
+				}
+
+			}
+
+		}
+
+		function schedulePump() {
+
+			if (pumpScheduled) {
+				return;
+			}
+
+			pumpScheduled =
+				true;
+
+			Promise.resolve().then(function () {
+
+				pumpScheduled =
+					false;
+
+				pump();
+
+			});
+
+		}
+
+		function pump() {
+
+			while (active < limit && queued > 0 && ring.length > 0) {
+
+				let dispatched =
+					false;
+
+				const len =
+					ring.length;
+
+				for (let step = 0; step < len; step++) {
+
+					const idx =
+						(cursor + step) % len;
+
+					const key =
+						ring[idx];
+
+					const lane =
+						lanes.get(key);
+
+					if (!lane || lane.items.length === 0) {
+						continue;
+					}
+
+					let item =
+						null;
+
+					while (lane.items.length > 0) {
+
+						const candidate =
+							lane.items.shift();
+
+						queued =
+							Math.max(0, queued - 1);
+
+						if (candidate.cleanupAbort) {
+							candidate.cleanupAbort();
+							candidate.cleanupAbort = null;
+						}
+
+						if (
+							candidate.cancelled ||
+							(candidate.isCancelled && candidate.isCancelled())
+						) {
+							candidate.cancelled = true;
+							candidate.reject(makeAbortErr("The row was stopped"));
+							continue;
+						}
+
+						item =
+							candidate;
+
+						break;
+
+					}
+
+					if (!item) {
+						cleanupLane(key);
+						break;
+					}
+
+					cursor =
+						(idx + 1) % Math.max(1, ring.length);
+
+					active += 1;
+					lane.active += 1;
+					dispatched = true;
+
+					(function (pickedKey, pickedLane, pickedItem) {
+
+						Promise.resolve()
+							.then(function () {
+								return pickedItem.run();
+							})
+							.then(
+								function (val) {
+									active = Math.max(0, active - 1);
+									pickedLane.active = Math.max(0, pickedLane.active - 1);
+									cleanupLane(pickedKey);
+									schedulePump();
+									pickedItem.resolve(val);
+								},
+								function (err) {
+									active = Math.max(0, active - 1);
+									pickedLane.active = Math.max(0, pickedLane.active - 1);
+									cleanupLane(pickedKey);
+									schedulePump();
+									pickedItem.reject(err);
+								}
+							);
+
+					})(key, lane, item);
+
+					break;
+
+				}
+
+				if (!dispatched) {
+					break;
+				}
+
+			}
+
+		}
+
+		function enqueue(groupKey, runFn, options) {
+
+			const opts =
+				options || {};
+
+			const signal =
+				opts.signal || null;
+
+			const isCancelled =
+				typeof opts.isCancelled === "function"
+					? opts.isCancelled
+					: function () {
+						return Boolean(signal && signal.aborted);
+					};
+
+			if (isCancelled()) {
+				return Promise.reject(makeAbortErr("The row was stopped"));
+			}
+
+			const key =
+				String(groupKey || "default");
+
+			return new Promise(function (resolve, reject) {
+
+				let lane =
+					lanes.get(key);
+
+				if (!lane) {
+					lane = { items: [], active: 0 };
+					lanes.set(key, lane);
+					ring.push(key);
+				}
+
+				const entry = {
+					run: runFn,
+					meta: opts.meta || null,
+					isCancelled: isCancelled,
+					cancelled: false,
+					cleanupAbort: null,
+					resolve: resolve,
+					reject: reject
+				};
+
+				lane.items.push(entry);
+				queued += 1;
+
+				if (signal && typeof signal.addEventListener === "function") {
+
+					const onAbort = function () {
+
+						if (entry.cancelled) {
+							return;
+						}
+
+						entry.cancelled =
+							true;
+
+						const pos =
+							lane.items.indexOf(entry);
+
+						if (pos !== -1) {
+							lane.items.splice(pos, 1);
+							queued = Math.max(0, queued - 1);
+						}
+
+						entry.cleanupAbort = null;
+						cleanupLane(key);
+						reject(makeAbortErr("The row was stopped"));
+						schedulePump();
+
+					};
+
+					signal.addEventListener("abort", onAbort, { once: true });
+
+					entry.cleanupAbort = function () {
+						signal.removeEventListener("abort", onAbort);
+					};
+
+				}
+
+				schedulePump();
+
+			});
+
+		}
+
+		function cancelMatching(predicate, message) {
+
+			for (const entryPair of Array.from(lanes.entries())) {
+
+				const key =
+					entryPair[0];
+
+				const lane =
+					entryPair[1];
+
+				const kept =
+					[];
+
+				for (let i = 0; i < lane.items.length; i++) {
+
+					const item =
+						lane.items[i];
+
+					if (predicate(item.meta, key)) {
+
+						item.cancelled = true;
+						queued = Math.max(0, queued - 1);
+						if (item.cleanupAbort) {
+							item.cleanupAbort();
+							item.cleanupAbort = null;
+						}
+						item.reject(makeAbortErr(message || "The row was stopped"));
+
+					}
+					else {
+
+						kept.push(item);
+
+					}
+
+				}
+
+				lane.items =
+					kept;
+
+				cleanupLane(key);
+
+			}
+
+			schedulePump();
+
+		}
+
+		return {
+			enqueue: enqueue,
+			cancelMatching: cancelMatching,
+			stats: function () {
+				return {
+					active: active,
+					queued: queued,
+					groups: lanes.size,
+					concurrency: limit
+				};
+			}
+		};
+
+	}
+
+	const appImageStreamQueue =
+		createEventDrivenTaskQueue(BATCH_IMAGE_STREAM_CONCURRENCY);
+
+	const manualImageTaskQueue =
+		createEventDrivenTaskQueue(3);
+
+	/*
+	 * Background Web Worker Thread Pool for base64 -> ArrayBuffer decoding
+	 * (mirrors Node's libuv thread pool offloading CPU-heavy buffer work off
+	 * the single main JS thread). Falls back automatically to non-blocking
+	 * 64 KB event-loop chunks when Worker is unavailable or CSP-restricted.
+	 */
+	const decodeWorkerPool = {
+		workers: [],
+		idle: [],
+		pendingJobs: new Map(),
+		waitQueue: [],
+		nextJobId: 1,
+		disabled: false
+	};
+
+	const DECODE_WORKER_SOURCE =
+		"self.onmessage = function(e) { " +
+		"var msg = e.data || {}; var id = msg.id; " +
+		"try { " +
+		"var cleaned = String(msg.base64 || '').replace(/^data:[^;]+;base64,/i, '').split(' ').join('').split(String.fromCharCode(10)).join('').split(String.fromCharCode(13)).join('').split(String.fromCharCode(9)).join(''); " +
+		"var bytes; " +
+		"if (typeof Uint8Array !== 'undefined' && typeof Uint8Array.fromBase64 === 'function') { " +
+		"bytes = Uint8Array.fromBase64(cleaned); " +
+		"} else { " +
+		"var bin = atob(cleaned); bytes = new Uint8Array(bin.length); " +
+		"for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); " +
+		"} " +
+		"var buf = bytes.buffer.byteLength === bytes.byteLength ? bytes.buffer : bytes.slice().buffer; " +
+		"self.postMessage({ id: id, ok: true, buffer: buf }, [buf]); " +
+		"} catch (err) { " +
+		"self.postMessage({ id: id, ok: false, error: String((err && err.message) || err) }); " +
+		"} };";
+
+	function pumpDecodeWorkerQueue() {
+
+		while (decodeWorkerPool.waitQueue.length > 0 && decodeWorkerPool.idle.length > 0) {
+
+			const worker =
+				decodeWorkerPool.idle.pop();
+
+			const job =
+				decodeWorkerPool.waitQueue.shift();
+
+			if (!worker || !job) {
+				continue;
+			}
+
+			decodeWorkerPool.pendingJobs.set(job.id, {
+				job: job,
+				worker: worker
+			});
+
+			try {
+				worker.postMessage({ id: job.id, base64: job.base64 });
+			}
+			catch (postErr) {
+				decodeWorkerPool.pendingJobs.delete(job.id);
+				decodeWorkerPool.disabled = true;
+				job.fallback();
+			}
+
+		}
+
+	}
+
+	function acquireDecodeWorker() {
+
+		if (
+			decodeWorkerPool.disabled ||
+			typeof Worker !== "function" ||
+			typeof Blob !== "function" ||
+			typeof URL === "undefined" ||
+			typeof URL.createObjectURL !== "function"
+		) {
+			return false;
+		}
+
+		if (decodeWorkerPool.idle.length > 0) {
+			return true;
+		}
+
+		if (decodeWorkerPool.workers.length >= CLIENT_DECODE_THREAD_POOL_SIZE) {
+			return true;
+		}
+
+		let scriptUrl =
+			"";
+
+		try {
+
+			scriptUrl =
+				URL.createObjectURL(
+					new Blob([DECODE_WORKER_SOURCE], { type: "application/javascript" })
+				);
+
+			const worker =
+				new Worker(scriptUrl);
+
+			if (typeof URL.revokeObjectURL === "function") {
+				try { URL.revokeObjectURL(scriptUrl); } catch (revokeErr) { }
+			}
+
+			worker.onmessage = function (ev) {
+
+				const data =
+					ev && ev.data ? ev.data : {};
+
+				const record =
+					decodeWorkerPool.pendingJobs.get(data.id);
+
+				if (!record) {
+					return;
+				}
+
+				decodeWorkerPool.pendingJobs.delete(data.id);
+				decodeWorkerPool.idle.push(worker);
+				pumpDecodeWorkerQueue();
+
+				if (data.ok && data.buffer) {
+					record.job.resolve(
+						new Blob([data.buffer], { type: record.job.mime || "image/png" })
+					);
+				}
+				else {
+					record.job.reject(new Error(data.error || "Image decode failed"));
+				}
+
+			};
+
+			worker.onerror = function () {
+
+				decodeWorkerPool.disabled = true;
+
+				for (const pair of Array.from(decodeWorkerPool.pendingJobs.entries())) {
+					if (pair[1].worker === worker) {
+						decodeWorkerPool.pendingJobs.delete(pair[0]);
+						pair[1].job.fallback();
+					}
+				}
+
+				while (decodeWorkerPool.waitQueue.length > 0) {
+					const queuedJob = decodeWorkerPool.waitQueue.shift();
+					if (queuedJob) queuedJob.fallback();
+				}
+
+			};
+
+			decodeWorkerPool.workers.push(worker);
+			decodeWorkerPool.idle.push(worker);
+			return true;
+
+		}
+		catch (spawnErr) {
+
+			if (scriptUrl && typeof URL.revokeObjectURL === "function") {
+				try { URL.revokeObjectURL(scriptUrl); } catch (revokeErr2) { }
+			}
+
+			decodeWorkerPool.disabled = true;
+			return false;
+
+		}
+
+	}
+
+	async function decodeBase64ChunkedOnEventLoop(cleaned, mime) {
+
+		if (!cleaned) {
+			return new Blob([new Uint8Array(0)], { type: mime || "image/png" });
+		}
+
+		if (
+			typeof Uint8Array !== "undefined" &&
+			typeof Uint8Array.fromBase64 === "function" &&
+			cleaned.length <= 65536
+		) {
+			return new Blob(
+				[Uint8Array.fromBase64(cleaned)],
+				{ type: mime || "image/png" }
+			);
+		}
+
+		/*
+		 * Slice on a multiple of 4 base64 chars (65536 chars = 48 KB decoded)
+		 * and yield back to the event loop between slices so the single JS
+		 * main thread never stalls on multi-megabyte images.
+		 */
+		const sliceChars =
+			65536;
+
+		const chunks =
+			[];
+
+		for (let offset = 0; offset < cleaned.length; offset += sliceChars) {
+
+			if (offset > 0) {
+				await yieldClientEventLoop();
+			}
+
+			const part =
+				cleaned.slice(offset, offset + sliceChars);
+
+			if (
+				typeof Uint8Array !== "undefined" &&
+				typeof Uint8Array.fromBase64 === "function"
+			) {
+				chunks.push(Uint8Array.fromBase64(part));
+			}
+			else {
+				const bin =
+					atob(part);
+				const arr =
+					new Uint8Array(bin.length);
+				for (let i = 0; i < bin.length; i++) {
+					arr[i] = bin.charCodeAt(i);
+				}
+				chunks.push(arr);
+			}
+
+		}
+
+		return new Blob(chunks, { type: mime || "image/png" });
+
+	}
+
+	function decodeBase64ImageOffThread(base64, mime) {
+
+		const cleaned =
+			String(base64 || "")
+				.replace(/^data:[^;]+;base64,/i, "")
+				.replace(/\\s+/g, "");
+
+		if (
+			cleaned.length >= CLIENT_WORKER_DECODE_MIN_CHARS &&
+			acquireDecodeWorker()
+		) {
+
+			return new Promise(function (resolve, reject) {
+
+				const id =
+					decodeWorkerPool.nextJobId++;
+
+				decodeWorkerPool.waitQueue.push({
+					id: id,
+					base64: cleaned,
+					mime: mime || "image/png",
+					resolve: resolve,
+					reject: reject,
+					fallback: function () {
+						decodeBase64ChunkedOnEventLoop(cleaned, mime).then(resolve, reject);
+					}
+				});
+
+				pumpDecodeWorkerQueue();
+
+			});
+
+		}
+
+		return decodeBase64ChunkedOnEventLoop(cleaned, mime);
+
+	}
+
+	if (typeof window !== "undefined") {
+		window.__IMAGE_TASK_RUNTIME = {
+			streamQueue: appImageStreamQueue,
+			manualQueue: manualImageTaskQueue,
+			decodeBase64ImageOffThread: decodeBase64ImageOffThread,
+			createEventDrivenTaskQueue: createEventDrivenTaskQueue
+		};
+	}
 
 	/*
 	 * The policy above, in one mutable object: batchRunStep reads it, and
@@ -7100,12 +7843,19 @@ export const APP_JS = `
 
 	}
 
-	/* fetch with a hard timeout + an abort handle per row. */
+	/*
+	 * fetch with a hard timeout + an abort handle per row.
+	 * When consumeResponse is passed, row.controller and the timeout stay
+	 * active while reading the response body (e.g. response.blob() or
+	 * response.json()) so stopping a row or hitting a stalled body download
+	 * aborts cleanly without a blind spot after HTTP headers arrive.
+	 */
 	async function batchFetch(
 		row,
 		url,
 		init,
-		timeoutMs
+		timeoutMs,
+		consumeResponse
 	) {
 
 		const controller =
@@ -7124,7 +7874,7 @@ export const APP_JS = `
 		let timedOut =
 			false;
 
-		const timer =
+		let timer =
 			controller && typeof setTimeout === "function"
 				? setTimeout(function () {
 					timedOut = true;
@@ -7135,16 +7885,30 @@ export const APP_JS = `
 				}, timeoutMs || BATCH_REQUEST_TIMEOUT_MS)
 				: null;
 
+		const clearHeaderTimer = function () {
+			if (timer) {
+				clearTimeout(timer);
+				timer = null;
+			}
+		};
+
 		try {
 
-			return await fetch(
-				url,
-				Object.assign(
-					{},
-					init,
-					controller ? { signal: controller.signal } : {}
-				)
-			);
+			const response =
+				await fetch(
+					url,
+					Object.assign(
+						{ credentials: "same-origin" },
+						init,
+						controller ? { signal: controller.signal } : {}
+					)
+				);
+
+			if (typeof consumeResponse === "function") {
+				return await consumeResponse(response, controller, clearHeaderTimer);
+			}
+
+			return response;
 
 		}
 		catch (fetchError) {
@@ -7185,12 +7949,12 @@ export const APP_JS = `
 		}
 		finally {
 
-			if (timer) {
-				clearTimeout(timer);
-			}
+			clearHeaderTimer();
 
-			row.controller =
-				null;
+			if (row.controller === controller) {
+				row.controller =
+					null;
+			}
 
 		}
 
@@ -7263,54 +8027,81 @@ export const APP_JS = `
 	/* Step 1: the script becomes the voiceover MP3 (worker-side chunked). */
 	async function requestBatchVoiceover(row) {
 
-		const response =
-			await batchFetch(
-				row,
-				"/api/voiceover",
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json"
-					},
-					body:
-						JSON.stringify({
-							text: String(row.script || "").trim(),
-							lang: "en"
-						})
+		return await batchFetch(
+			row,
+			"/api/voiceover",
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json"
 				},
-				BATCH_REQUEST_TIMEOUT_MS
-			);
+				body:
+					JSON.stringify({
+						text: String(row.script || "").trim(),
+						lang: "en"
+					})
+			},
+			BATCH_REQUEST_TIMEOUT_MS,
+			async function (response) {
 
-		if (!response.ok) {
+				if (!response.ok) {
 
-			const data =
-				await response
-					.json()
-					.catch(function () { return {}; });
+					const data =
+						await response
+							.json()
+							.catch(function () { return {}; });
 
-			throw new Error(
-				(data && data.error) ||
-				("Voiceover failed (HTTP " + response.status + ")")
-			);
+					throw new Error(
+						(data && data.error) ||
+						("Voiceover failed (HTTP " + response.status + ")")
+					);
 
-		}
+				}
 
-		return await response.blob();
+				return await response.blob();
+
+			}
+		);
 
 	}
 
 	/* The MP3 gives the row its timing: length + subtitle spread. */
 	async function decodeBatchAudio(row, blob) {
 
+		let timer =
+			null;
+
 		try {
 
 			const context =
 				getAudioContext();
 
+			if (
+				context &&
+				context.state === "suspended" &&
+				typeof context.resume === "function"
+			) {
+
+				try {
+					context.resume().catch(function () { });
+				}
+				catch (resumeError) { }
+
+			}
+
+			const audioBytes =
+				(await blob.arrayBuffer()).slice(0);
+
 			const decoded =
-				await context.decodeAudioData(
-					(await blob.arrayBuffer()).slice(0)
-				);
+				await Promise.race([
+					context.decodeAudioData(audioBytes),
+					new Promise(function (resolve, reject) {
+						timer =
+							setTimeout(function () {
+								reject(new Error("Audio decode timed out"));
+							}, BATCH_AUDIO_DECODE_MS);
+					})
+				]);
 
 			row.audio = {
 				name:
@@ -7336,75 +8127,84 @@ export const APP_JS = `
 			return 0;
 
 		}
+		finally {
+
+			if (timer) {
+				clearTimeout(timer);
+			}
+
+		}
 
 	}
 
 	/* Step 2: the script + the row's style become the scene prompts. */
 	async function requestBatchPrompts(row) {
 
-		const response =
-			await batchFetch(
-				row,
-				"/api/image-prompts",
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json"
-					},
-					body:
-						JSON.stringify({
-							topic:
-								batchRowTopic(row),
-							minutes:
-								row.minutes,
-							style:
-								row.style,
-								/*
-								 * Session #211: the frame the row asked for is
-								 * written into the prompts themselves, so every
-								 * scene is composed for that shape and size.
-								 */
-								resolution:
-									batchResolution(row.resolution),
-								orientation:
-									batchOrientation(row.orientation).value,
-							script:
-								String(row.script || "").trim()
-						})
+		return await batchFetch(
+			row,
+			"/api/image-prompts",
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json"
 				},
-				BATCH_REQUEST_TIMEOUT_MS
-			);
+				body:
+					JSON.stringify({
+						topic:
+							batchRowTopic(row),
+						minutes:
+							row.minutes,
+						style:
+							row.style,
+							/*
+							 * Session #211: the frame the row asked for is
+							 * written into the prompts themselves, so every
+							 * scene is composed for that shape and size.
+							 */
+							resolution:
+								batchResolution(row.resolution),
+							orientation:
+								batchOrientation(row.orientation).value,
+						script:
+							String(row.script || "").trim()
+					})
+			},
+			BATCH_REQUEST_TIMEOUT_MS,
+			async function (response) {
 
-		const data =
-			await response
-				.json()
-				.catch(function () { return {}; });
+				const data =
+					await response
+						.json()
+						.catch(function () { return {}; });
 
-		if (!response.ok || !data.success) {
+				if (!response.ok || !data.success) {
 
-			throw new Error(
-				(data && data.error) ||
-				("Image prompts failed (HTTP " + response.status + ")")
-			);
+					throw new Error(
+						(data && data.error) ||
+						("Image prompts failed (HTTP " + response.status + ")")
+					);
 
-		}
+				}
 
-		const prompts =
-			Array.isArray(data.prompts)
-				? data.prompts.filter(function (prompt) {
-					return typeof prompt === "string" && prompt.trim().length > 0;
-				})
-				: [];
+				const prompts =
+					Array.isArray(data.prompts)
+						? data.prompts.filter(function (prompt) {
+							return typeof prompt === "string" && prompt.trim().length > 0;
+						})
+						: [];
 
-		if (!prompts.length) {
+				if (!prompts.length) {
 
-			throw new Error(
-				"The image-prompt model returned no scene prompts"
-			);
+					throw new Error(
+						"The image-prompt model returned no scene prompts"
+					);
 
-		}
+				}
 
-		return prompts;
+				return prompts;
+
+			}
+		);
 
 	}
 
@@ -7423,207 +8223,338 @@ export const APP_JS = `
 
 	}
 
-	/* Step 3: ONE batch request renders every prompt of the row. */
+	/* Step 3: ONE batch request renders every prompt of the row via the event-driven queue. */
 	async function requestBatchImages(
 		row,
 		prompts
 	) {
 
-		const images =
-			[];
+		return appImageStreamQueue.enqueue(
+			"table-row-" + row.id,
+			async function () {
 
-		const response =
-			await batchFetch(
-				row,
-				"/api/image-batch",
-				{
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						"Accept": "application/x-ndjson"
-					},
-					body:
-						JSON.stringify({
-							prompts: prompts,
-							/* The same frame the prompts were written for. */
-							resolution:
-								batchResolution(row.resolution),
-							orientation:
-								batchOrientation(row.orientation).value
-						})
-				},
-				BATCH_REQUEST_TIMEOUT_MS * 2
-			);
+				const images =
+					[];
 
-		if (!response.ok) {
+				let fetchControllerRef =
+					null;
 
-			const data =
-				await response
-					.json()
-					.catch(function () { return {}; });
+				const response =
+					await batchFetch(
+						row,
+						"/api/image-batch",
+						{
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+								"Accept": "application/x-ndjson"
+							},
+							body:
+								JSON.stringify({
+									prompts: prompts,
+									/* The same frame the prompts were written for. */
+									resolution:
+										batchResolution(row.resolution),
+									orientation:
+										batchOrientation(row.orientation).value
+								})
+						},
+						BATCH_REQUEST_TIMEOUT_MS * 2,
+						async function (resp, fetchController, clearHeaderTimer) {
 
-			throw new Error(
-				(data && data.error) ||
-				("Image batch failed (HTTP " + response.status + ")")
-			);
+							if (!resp.ok) {
 
-		}
+								const data =
+									await resp
+										.json()
+										.catch(function () { return {}; });
 
-		const reader =
-			response.body && typeof response.body.getReader === "function"
-				? response.body.getReader()
-				: null;
+								if (data && data.credits) {
 
-		if (!reader) {
+									applyCredits(data.credits);
 
-			throw new Error("This browser cannot read the image batch stream");
+								}
 
-		}
+								throw new Error(
+									(data && data.error) ||
+									("Image batch failed (HTTP " + resp.status + ")")
+								);
 
-		const decoder =
-			new TextDecoder();
+							}
 
-		let buffer =
-			"";
+							/* Headers arrived: per-chunk batchReadChunk now owns idle timeouts. */
+							clearHeaderTimer();
+							fetchControllerRef = fetchController;
+							/* Preserve fetchController as row.controller across return until streamAbortHandle attaches. */
+							row.controller = {
+								abort: function () {
+									if (fetchController) {
+										try { fetchController.abort(); } catch (abortErr) { }
+									}
+								}
+							};
+							return resp;
 
-		let failed =
-			0;
+						}
+					);
 
-		const handleEvent = function (event) {
+				const reader =
+					response.body && typeof response.body.getReader === "function"
+						? response.body.getReader()
+						: null;
 
-			if (!event || typeof event !== "object") {
-				return;
-			}
+				if (!reader) {
 
-			if (event.credits) {
-				applyCredits(event.credits);
-			}
+					row.controller = null;
 
-			if (
-				event.type === "image" &&
-				event.ok &&
-				event.data
-			) {
+					throw new Error("This browser cannot read the image batch stream");
+
+				}
+
+				/*
+				 * Keep an abort handle attached while streaming the NDJSON body so
+				 * pressing "■ Stop generating" cancels both fetch and stream immediately.
+				 */
+				const streamAbortHandle = {
+					abort: function () {
+						if (fetchControllerRef) {
+							try {
+								fetchControllerRef.abort();
+							}
+							catch (fetchAbortError) { }
+						}
+						try {
+							if (reader && typeof reader.cancel === "function") {
+								reader.cancel().catch(function () { });
+							}
+						}
+						catch (cancelError) { }
+					}
+				};
+
+				row.controller =
+					streamAbortHandle;
+
+				const decoder =
+					new TextDecoder();
+
+				let buffer =
+					"";
+
+				let failed =
+					0;
+
+				let imageCommitChain =
+					Promise.resolve();
+
+				const handleEvent = function (event) {
+
+					if (!event || typeof event !== "object") {
+						return;
+					}
+
+					if (event.credits) {
+						applyCredits(event.credits);
+					}
+
+					if (
+						event.type === "image" &&
+						event.ok &&
+						event.data
+					) {
+
+						/*
+						 * Offload base64 decoding immediately onto the background
+						 * worker thread pool (or non-blocking event-loop chunks)
+						 * while network I/O continues reading the stream.
+						 */
+						const parsedIndex =
+							Number(event.index);
+
+						const decodeTask =
+							decodeBase64ImageOffThread(event.data, event.mime);
+
+						imageCommitChain = imageCommitChain.then(function () {
+
+							return decodeTask.then(
+								function (blob) {
+
+									if (row.stopRequested) {
+										return;
+									}
+
+									const url =
+										URL.createObjectURL(blob);
+
+									row.objectUrls.push(url);
+
+									images.push({
+										blob: blob,
+										url: url,
+										index: Number.isFinite(parsedIndex)
+											? parsedIndex
+											: images.length
+									});
+
+									setBatchStage(
+										row,
+										"images",
+										images.length + " of " + prompts.length + " done"
+									);
+
+								},
+								function (imageError) {
+
+									failed++;
+
+									console.warn("[batch-table] one image was unusable", imageError);
+
+								}
+							);
+
+						});
+
+					}
+
+					if (event.type === "image" && !event.ok) {
+
+						failed++;
+
+					}
+
+				};
 
 				try {
 
-					const blob =
-						base64ImageBlob(event.data, event.mime);
+					for (;;) {
 
-					const url =
-						URL.createObjectURL(blob);
+						if (row.stopRequested) {
 
-					row.objectUrls.push(url);
+							streamAbortHandle.abort();
 
-					images.push({
-						blob: blob,
-						url: url,
-						index: Number(event.index) || images.length
-					});
+							throw batchError(
+								"The row was stopped",
+								"AbortError"
+							);
 
-					setBatchStage(
-						row,
-						"images",
-						images.length + " of " + prompts.length + " done"
+						}
+
+						/*
+						 * Session #244: a stream that stops sending lines must not
+						 * hang the row open. Each read gets an idle budget; a stall
+						 * is a retryable timeout, so the step is retried quietly
+						 * instead of leaving the row "Rendering the AI images"
+						 * forever (or surfacing an abort message).
+						 */
+						const chunk =
+							await batchReadChunk(reader);
+
+						if (row.stopRequested) {
+
+							throw batchError(
+								"The row was stopped",
+								"AbortError"
+							);
+
+						}
+
+						if (chunk.done) {
+							break;
+						}
+
+						buffer +=
+							decoder.decode(chunk.value, { stream: true });
+
+						let newlineIndex =
+							buffer.indexOf("\\n");
+
+						while (newlineIndex >= 0) {
+
+							const line =
+								buffer
+									.slice(0, newlineIndex)
+									.trim();
+
+							buffer =
+								buffer.slice(newlineIndex + 1);
+
+							if (line) {
+
+								try {
+									handleEvent(JSON.parse(line));
+								}
+								catch (parseError) { }
+
+							}
+
+							newlineIndex =
+								buffer.indexOf("\\n");
+
+						}
+
+					}
+
+					const tail =
+						(buffer + decoder.decode()).trim();
+
+					if (tail) {
+
+						try {
+							handleEvent(JSON.parse(tail));
+						}
+						catch (parseError) { }
+
+					}
+
+					await imageCommitChain;
+
+				}
+				finally {
+
+					if (row.controller === streamAbortHandle) {
+
+						row.controller =
+							null;
+
+					}
+
+				}
+
+				if (row.stopRequested) {
+					throw batchError("The row was stopped", "AbortError");
+				}
+
+				if (!images.length) {
+
+					throw new Error(
+						"No image came out of the batch" +
+						(failed ? " (" + failed + " prompt(s) failed)" : "")
 					);
 
 				}
-				catch (imageError) {
 
-					failed++;
+				images.sort(function (a, b) {
+					return a.index - b.index;
+				});
 
-					console.warn("[batch-table] one image was unusable", imageError);
+				if (failed) {
 
-				}
-
-			}
-
-			if (event.type === "image" && !event.ok) {
-
-				failed++;
-
-			}
-
-		};
-
-		for (;;) {
-
-			/*
-			 * Session #244: a stream that stops sending lines must not
-			 * hang the row open. Each read gets an idle budget; a stall
-			 * is a retryable timeout, so the step is retried quietly
-			 * instead of leaving the row "Rendering the AI images"
-			 * forever (or surfacing an abort message).
-			 */
-			const chunk =
-				await batchReadChunk(reader);
-
-			if (chunk.done) {
-				break;
-			}
-
-			buffer +=
-				decoder.decode(chunk.value, { stream: true });
-
-			let newlineIndex =
-				buffer.indexOf("\\n");
-
-			while (newlineIndex >= 0) {
-
-				const line =
-					buffer
-						.slice(0, newlineIndex)
-						.trim();
-
-				buffer =
-					buffer.slice(newlineIndex + 1);
-
-				if (line) {
-
-					try {
-						handleEvent(JSON.parse(line));
-					}
-					catch (parseError) { }
+					console.warn("[batch-table] row " + row.id + " skipped " + failed + " failed image(s)");
 
 				}
 
-				newlineIndex =
-					buffer.indexOf("\\n");
+				refreshCredits();
 
+				return images;
+
+			},
+			{
+				meta: { kind: "batch-row", rowId: row.id },
+				isCancelled: function () {
+					return Boolean(row && row.stopRequested);
+				}
 			}
-
-		}
-
-		const tail =
-			(buffer + decoder.decode()).trim();
-
-		if (tail) {
-
-			try {
-				handleEvent(JSON.parse(tail));
-			}
-			catch (parseError) { }
-
-		}
-
-		if (!images.length) {
-
-			throw new Error(
-				"No image came out of the batch" +
-				(failed ? " (" + failed + " prompt(s) failed)" : "")
-			);
-
-		}
-
-		if (failed) {
-
-			console.warn("[batch-table] row " + row.id + " skipped " + failed + " failed image(s)");
-
-		}
-
-		refreshCredits();
-
-		return images;
+		);
 
 	}
 
@@ -7660,11 +8591,20 @@ export const APP_JS = `
 
 		for (let index = 0; index < images.length; index++) {
 
+			if (row && row.stopRequested) {
+
+				throw batchError("The row was stopped", "AbortError");
+
+			}
+
 			const img =
 				new Image();
 
 			img.src =
 				images[index].url;
+
+			let decodeTimer =
+				null;
 
 			try {
 
@@ -7680,10 +8620,11 @@ export const APP_JS = `
 						img.decode(),
 						new Promise(function (resolve) {
 
-							setTimeout(
-								resolve,
-								BATCH_SLIDE_DECODE_MS
-							);
+							decodeTimer =
+								setTimeout(
+									resolve,
+									BATCH_SLIDE_DECODE_MS
+								);
 
 						})
 					]);
@@ -7696,6 +8637,15 @@ export const APP_JS = `
 				console.warn("[batch-table] slide " + (index + 1) + " decode warning", loadError);
 
 			}
+			finally {
+
+				if (decodeTimer) {
+
+					clearTimeout(decodeTimer);
+
+				}
+
+			}
 
 			slides.push({
 				id:
@@ -7705,6 +8655,16 @@ export const APP_JS = `
 				img:
 					img
 			});
+
+			/* Yield the main thread every 3 decoded slides so browser CPU stays responsive. */
+			if (
+				index + 1 < images.length &&
+				(index + 1) % 3 === 0
+			) {
+
+				await batchDelay(0);
+
+			}
 
 		}
 
@@ -7903,6 +8863,80 @@ export const APP_JS = `
 
 	}
 
+	function syncBatchRowsFromDom() {
+
+		for (const row of batchRows) {
+
+			if (!row || row.running) {
+				continue;
+			}
+
+			const tr =
+				document.querySelector('[data-batch-row="' + row.id + '"]');
+
+			if (!tr) {
+				continue;
+			}
+
+			const scriptEl =
+				tr.querySelector('[data-batch-field="script"]');
+
+			if (
+				scriptEl &&
+				!batchRowHasScript(row) &&
+				String(scriptEl.value || "").trim().length > 0
+			) {
+
+				row.script =
+					String(scriptEl.value || "");
+
+				if (row.stage === "empty") {
+					row.stage = "ready";
+					paintBatchRowStatus(row);
+				}
+
+			}
+
+			const styleEl =
+				tr.querySelector('[data-batch-field="style"]');
+
+			if (styleEl && styleEl._batchTouched) {
+
+				syncBatchRowInput(row, "style", styleEl, true);
+
+			}
+
+			const minutesEl =
+				tr.querySelector('[data-batch-field="minutes"]');
+
+			if (minutesEl && minutesEl._batchTouched) {
+
+				syncBatchRowInput(row, "minutes", minutesEl, true);
+
+			}
+
+			const resEl =
+				tr.querySelector('[data-batch-field="resolution"]');
+
+			if (resEl && resEl._batchTouched) {
+
+				syncBatchRowInput(row, "resolution", resEl, true);
+
+			}
+
+			const orientEl =
+				tr.querySelector('[data-batch-field="orientation"]');
+
+			if (orientEl && orientEl._batchTouched) {
+
+				syncBatchRowInput(row, "orientation", orientEl, true);
+
+			}
+
+		}
+
+	}
+
 	async function generateBatchRows() {
 
 		if (batchRunBusy) {
@@ -7910,6 +8944,8 @@ export const APP_JS = `
 			return;
 
 		}
+
+		syncBatchRowsFromDom();
 
 		const scripted =
 			batchRows.filter(batchRowHasScript);
@@ -8152,6 +9188,10 @@ export const APP_JS = `
 			}
 
 		}
+
+		appImageStreamQueue.cancelMatching(function (meta) {
+			return Boolean(meta && meta.kind === "batch-row");
+		}, "The row was stopped");
 
 		renderBatchTable();
 
@@ -8654,6 +9694,9 @@ export const APP_JS = `
 				? Number(row.minutes)
 				: BATCH_MIN_MINUTES;
 
+		const rowDims =
+			batchRowDimensions(row);
+
 		renderContext = {
 			fileName:
 				"YouTubeVibeStudio_Row" +
@@ -8663,6 +9706,10 @@ export const APP_JS = `
 				".mp4",
 			subtitles:
 				row.subtitles || [],
+			frameWidth:
+				rowDims.width,
+			frameHeight:
+				rowDims.height,
 			batchRow:
 				true
 		};
@@ -8844,6 +9891,110 @@ export const APP_JS = `
 	}
 
 	/*
+	 * RULE 25: clearing a finished row's script makes it runnable anew.
+	 * Revoke its finished MP3/image object URLs, lock Preview/Export back
+	 * to pending placeholders, and return the row to "empty".
+	 */
+	function resetClearedBatchRow(row) {
+
+		if (!row || row.running) {
+			return;
+		}
+
+		revokeBatchRow(row);
+
+		row.mp3 =
+			null;
+
+		row.mp3Url =
+			"";
+
+		row.audio =
+			null;
+
+		row.prompts =
+			[];
+
+		row.images =
+			[];
+
+		row.slides =
+			[];
+
+		row.subtitles =
+			[];
+
+		row.animated =
+			false;
+
+		row.retrying =
+			false;
+
+		row.error =
+			"";
+
+		row.stage =
+			"empty";
+
+		row.detail =
+			"";
+
+		paintBatchRowStatus(row);
+
+		for (const kind of ["preview", "export"]) {
+
+			const cell =
+				document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="' + kind + '"]');
+
+			if (cell) {
+
+				cell.innerHTML =
+					batchActionCell(row, kind);
+
+			}
+
+		}
+
+	}
+
+	function syncBatchScriptStatus(row) {
+
+		if (!row || row.running) {
+			return;
+		}
+
+		if (
+			!batchRowHasScript(row) &&
+			(batchRowFinished(row) || row.stage === "done" || row.stage === "error")
+		) {
+
+			resetClearedBatchRow(row);
+
+			updateBatchToolbar();
+
+			return;
+
+		}
+
+		if (row.stage === "empty" || row.stage === "ready") {
+
+			row.stage =
+				batchRowHasScript(row)
+					? "ready"
+					: "empty";
+
+			row.detail =
+				"";
+
+			paintBatchRowStatus(row);
+
+		}
+
+		updateBatchToolbar();
+
+	}
+
+	/*
 	 * Everything the table needs is delegated on the two containers, so
 	 * rows added later are wired without re-binding: typing writes back
 	 * to the row's state, and the action buttons in the last two cells
@@ -8915,46 +10066,19 @@ export const APP_JS = `
 
 					}
 
+					target._batchTouched =
+						true;
+
 					syncBatchRowInput(
 						row,
 						field,
-						target
+						target,
+						false
 					);
 
 					if (field === "script") {
 
-						/*
-						 * An empty row waits, a filled row is ready: the
-						 * status line is the only thing that changes while
-						 * the user types, never the input itself.
-						 */
-						if (row.stage === "empty" || row.stage === "ready") {
-
-							row.stage =
-								batchRowHasScript(row)
-									? "ready"
-									: "empty";
-
-							const status =
-								tr.querySelector(
-									'[data-batch-slot="status"]'
-								);
-
-							if (status) {
-
-								status.textContent =
-									batchStatusText(row);
-
-								status.setAttribute(
-									"data-stage",
-									row.stage
-								);
-
-							}
-
-						}
-
-						updateBatchToolbar();
+						syncBatchScriptStatus(row);
 
 					}
 
@@ -8962,9 +10086,10 @@ export const APP_JS = `
 			);
 
 			/*
-			 * The resolution / orientation selects are <select> elements: they
-			 * also fire "change" (some browsers only reliably fire that one),
-			 * so the row state and its pixel hint are written from both.
+			 * Handle "change" across ALL row controls ('style', 'minutes',
+			 * 'resolution', 'orientation', and 'script'), since <select>
+			 * elements in Safari/WebKit and <input type="number"> blur/spin
+			 * commits reliably fire "change".
 			 */
 			body.addEventListener(
 				"change",
@@ -8984,7 +10109,7 @@ export const APP_JS = `
 							"data-batch-field"
 						);
 
-					if (field !== "resolution" && field !== "orientation") {
+					if (!field) {
 
 						return;
 
@@ -9010,11 +10135,21 @@ export const APP_JS = `
 
 					if (row) {
 
+						target._batchTouched =
+							true;
+
 						syncBatchRowInput(
 							row,
 							field,
-							target
+							target,
+							true
 						);
+
+						if (field === "script") {
+
+							syncBatchScriptStatus(row);
+
+						}
 
 					}
 
@@ -9218,6 +10353,33 @@ export const APP_JS = `
 
 		}
 
+		if (studioLayout === "table") {
+
+			const topGen =
+				document.getElementById(
+					"top-generate"
+				);
+
+			if (topGen) {
+
+				topGen.disabled =
+					false;
+
+				topGen.textContent =
+					batchRunBusy
+						? "\u25a0 Stop generating"
+						: "\u2726 Generate" +
+							(runnable ? " (" + runnable + ")" : "");
+
+				topGen.title =
+					batchRunBusy
+						? "Stop generating active batch rows"
+						: "Generate every unfinished row that has a script (three rows at a time)";
+
+			}
+
+		}
+
 	}
 
 	/*
@@ -9249,7 +10411,8 @@ export const APP_JS = `
 	function syncBatchRowInput(
 		row,
 		field,
-		element
+		element,
+		commit
 	) {
 
 		if (!row || !element) {
@@ -9269,9 +10432,15 @@ export const APP_JS = `
 
 		if (field === "style") {
 
-			row.style =
-				element.value ||
-				row.style;
+			const chosen =
+				String(element.value || "").trim();
+
+			if (chosen && SEO_IMAGE_STYLES.indexOf(chosen) !== -1) {
+
+				row.style =
+					chosen;
+
+			}
 
 			return;
 
@@ -9307,9 +10476,19 @@ export const APP_JS = `
 
 		if (field === "minutes") {
 
+			const rawText =
+				String(element.value || "").trim();
+
+			if (!commit && rawText === "") {
+
+				/* Let the user clear the digit while typing a replacement. */
+				return;
+
+			}
+
 			const minutes =
 				Math.round(
-					Number(element.value) || 0
+					Number(rawText) || 0
 				);
 
 			row.minutes =
@@ -9319,7 +10498,7 @@ export const APP_JS = `
 						? BATCH_MAX_MINUTES
 						: minutes;
 
-			if (Number(element.value) !== minutes) {
+			if (commit && String(element.value) !== String(row.minutes)) {
 
 				element.value =
 					String(row.minutes);
@@ -9336,6 +10515,24 @@ export const APP_JS = `
 
 		/* The quick-batch table is part of the shell: bound once, here. */
 		bindBatchTable();
+
+		const topGen =
+			document.getElementById(
+				"top-generate"
+			);
+
+		if (topGen) {
+
+			topGen.removeAttribute(
+				"onclick"
+			);
+
+			topGen.addEventListener(
+				"click",
+				onGenerateClick
+			);
+
+		}
 
 		const buttons =
 			document.querySelectorAll(
@@ -10327,6 +11524,22 @@ export const APP_JS = `
 	 */
 	function onGenerateClick() {
 
+		if (studioLayout === "table") {
+
+			if (batchRunBusy) {
+
+				stopBatchRows();
+
+				return;
+
+			}
+
+			generateBatchRows();
+
+			return;
+
+		}
+
 		if (generating) {
 			return;
 		}
@@ -11134,47 +12347,95 @@ export const APP_JS = `
 			variants.push(variant);
 		}
 
-		const outcomes = await Promise.all(variants.map(async function (variant) {
-			try {
-				const response = await fetch(AI_ENDPOINT(prompt, variant));
-				if (!response.ok) {
-					/* The worker returns {success:false, error:"..."}. */
-					let message = "Image generation failed";
-					try {
-						const errJson = await response.json();
-						if (errJson && errJson.error) message = errJson.error;
-						/* 429 carries the authoritative counters. */
-						if (errJson && errJson.credits) applyCredits(errJson.credits);
+		let outcomes = [];
+
+		try {
+
+			outcomes = await Promise.all(variants.map(function (variant) {
+				return manualImageTaskQueue.enqueue(
+					"manual-video-" + n,
+					async function () {
+						try {
+							const response = await fetch(AI_ENDPOINT(prompt, variant));
+							if (!response.ok) {
+								/* The worker returns {success:false, error:"..."}. */
+								let message = "Image generation failed";
+								try {
+									const errJson = await response.json();
+									if (errJson && errJson.error) message = errJson.error;
+									/* 429 carries the authoritative counters. */
+									if (errJson && errJson.credits) applyCredits(errJson.credits);
+								}
+								catch (jsonError) {
+									/* keep default */
+								}
+								const httpError = new Error(message);
+								httpError.status = response.status;
+								throw httpError;
+							}
+							const blob = await response.blob();
+							if (flowProject && flowProject._deleted) {
+								return { ok: false, status: 0, cancelled: true, message: "The video was deleted" };
+							}
+							const liveIdx = flowProject ? videoProjects.indexOf(flowProject) + 1 : n;
+							if (liveIdx > 0) {
+								addAiResultCard(liveIdx, prompt, variant, blob);
+							}
+							return { ok: true };
+						}
+						catch (aiError) {
+							console.error(aiError);
+							return {
+								ok: false,
+								status: aiError && aiError.status ? aiError.status : 0,
+								message: aiError instanceof Error ? aiError.message : String(aiError)
+							};
+						}
+					},
+					{
+						meta: {
+							kind: "manual-ai",
+							videoIndex: n,
+							project: flowProject || null
+						},
+						isCancelled: function () {
+							return Boolean(flowProject && flowProject._deleted);
+						}
 					}
-					catch (jsonError) {
-						/* keep default */
-					}
-					const httpError = new Error(message);
-					httpError.status = response.status;
-					throw httpError;
-				}
-				const blob = await response.blob();
-				addAiResultCard(n, prompt, variant, blob);
-				return { ok: true };
+				).catch(function (queueError) {
+					return {
+						ok: false,
+						cancelled: true,
+						status: 0,
+						message: queueError instanceof Error ? queueError.message : String(queueError)
+					};
+				});
+			}));
+
+		}
+		finally {
+
+			if (btn) {
+				btn.disabled =
+					false;
 			}
-			catch (aiError) {
-				console.error(aiError);
-				return {
-					ok: false,
-					status: aiError && aiError.status ? aiError.status : 0,
-					message: aiError instanceof Error ? aiError.message : String(aiError)
-				};
-			}
-		}));
+
+		}
+
+		let cancelledCount = 0;
 
 		outcomes.forEach(function (outcome) {
 			if (outcome.ok) return;
+			if (outcome.cancelled) {
+				cancelledCount++;
+				return;
+			}
 			failures++;
 			lastError = outcome.message;
 		});
-		if (btn) {
-			btn.disabled =
-				false;
+
+		if (cancelledCount === AI_IMAGES_PER_PROMPT) {
+			return;
 		}
 
 		if (statusEl) {
@@ -15203,22 +16464,6 @@ export const APP_JS = `
 		}
 	);
 
-	const SEO_IMAGE_STYLES = [
-		"Cinematic Film",
-		"Editorial Magazine",
-		"Kinetic Typography",
-		"Neon Night",
-		"Minimalist",
-		"Retro Poster",
-		"Documentary",
-		"Split Composition",
-		"Dream Glow",
-		"Pop Comic"
-	];
-
-	const DEFAULT_SEO_IMAGE_STYLE =
-		"Cinematic Film";
-
 	/* The whole prompt LLM call happens inside this one request. */
 	const IMAGE_PROMPT_REQUEST_TIMEOUT_MS =
 		180000;
@@ -16201,8 +17446,21 @@ export const APP_JS = `
 		base64,
 		mime
 	) {
+		const cleaned =
+			String(base64 || "")
+				.replace(/^data:[^;]+;base64,/i, "")
+				.replace(/\\s+/g, "");
+		if (
+			typeof Uint8Array !== "undefined" &&
+			typeof Uint8Array.fromBase64 === "function"
+		) {
+			return new Blob(
+				[Uint8Array.fromBase64(cleaned)],
+				{ type: mime || "image/png" }
+			);
+		}
 		const binary =
-			atob(String(base64 || ""));
+			atob(cleaned);
 		const bytes =
 			new Uint8Array(binary.length);
 		for (let i = 0; i < binary.length; i++) {
@@ -16252,11 +17510,18 @@ export const APP_JS = `
 		 */
 		setVaAiGenerateEnabled(n, false);
 
-		/* A second run for this video cancels the previous one's stream. */
+		/* A second run for this video cancels the previous one's prompt/batch streams. */
+		if (project._imagePromptCreateController) {
+			try { project._imagePromptCreateController.abort(); } catch (abortPromptErr) { }
+			project._imagePromptCreateController = null;
+		}
 		if (project._imageBatchController) {
 			try { project._imageBatchController.abort(); } catch (abortError) { }
 			project._imageBatchController = null;
 		}
+
+		project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
+		const myFlowSeq = project._imageFlowSeq;
 
 		project.imagePrompts = null;
 		project.imagePromptTarget = 0;
@@ -16313,38 +17578,51 @@ export const APP_JS = `
 			}
 		}
 		catch (promptError) {
+			if (project._deleted || project._imageFlowSeq !== myFlowSeq) {
+				return;
+			}
+			const liveN = videoProjects.indexOf(project) + 1;
+			if (liveN <= 0) return;
 			const message = promptError && promptError.message ? promptError.message : String(promptError);
 			console.warn("[seo-image-flow] prompt generation failed", {
-				videoIndex: n,
+				videoIndex: liveN,
 				ms: Date.now() - project._imageFlowStartedAt,
 				error: message
 			});
-			await finalizeImagePromptFlow(n, "Image prompts could not be generated: " + message);
+			await finalizeImagePromptFlow(liveN, "Image prompts could not be generated: " + message);
 			return;
 		}
 
-		if (!project._imageFlowActive) return;
+		if (project._deleted || project._imageFlowSeq !== myFlowSeq || !project._imageFlowActive) return;
+		const batchN = videoProjects.indexOf(project) + 1;
+		if (batchN <= 0) return;
 
 		const target = Math.min(prompts.length, availableImages);
 		project.imagePrompts = prompts;
 		project.imagePromptTarget = target;
 		/* Tags the cards this flow adds so the summary can count them. */
-		project.imagePromptFlowId = "imgflow-" + n + "-" + Date.now().toString(36);
+		project.imagePromptFlowId = "imgflow-" + batchN + "-" + Date.now().toString(36);
 
 		console.info("[seo-image-flow] prompts ready", {
-			videoIndex: n,
+			videoIndex: batchN,
 			count: prompts.length,
 			imageTarget: target,
 			ms: Date.now() - project._imageFlowStartedAt
 		});
 
 		await runImageBatch(
-			n,
+			batchN,
 			prompts.slice(0, target),
-			project.imagePromptFlowId
+			project.imagePromptFlowId,
+			project,
+			myFlowSeq
 		);
 
-		await finalizeImagePromptFlow(n, project._imageFlowStopReason || "");
+		if (project._deleted || project._imageFlowSeq !== myFlowSeq) return;
+		const finalN = videoProjects.indexOf(project) + 1;
+		if (finalN <= 0) return;
+
+		await finalizeImagePromptFlow(finalN, project._imageFlowStopReason || "");
 	}
 
 	/*
@@ -16357,17 +17635,22 @@ export const APP_JS = `
 	async function runImageBatch(
 		n,
 		prompts,
-		flowId
+		flowId,
+		ownerProject,
+		ownerFlowSeq
 	) {
 
 		const project =
-			videoProjects[n - 1];
-		if (!project || !project._imageFlowActive || !prompts.length) return;
+			ownerProject || videoProjects[n - 1];
+		if (!project || project._deleted || !project._imageFlowActive || !prompts.length) return;
+		const expectedSeq =
+			typeof ownerFlowSeq === "number" ? ownerFlowSeq : project._imageFlowSeq;
 
-		const statusEl =
-			document.getElementById(
-				"va-ai-status-" + n
-			);
+		const resolveStatusEl = function () {
+			const liveIdx = videoProjects.indexOf(project) + 1;
+			return liveIdx > 0 ? document.getElementById("va-ai-status-" + liveIdx) : null;
+		};
+		const statusEl = resolveStatusEl();
 		const total = prompts.length;
 		let added = 0;
 		let failed = 0;
@@ -16385,12 +17668,20 @@ export const APP_JS = `
 				: null;
 		project._imageBatchController = controller;
 
+		const isStaleFlow = function () {
+			return Boolean(
+				project._deleted ||
+				!project._imageFlowActive ||
+				(typeof expectedSeq === "number" && project._imageFlowSeq !== expectedSeq)
+			);
+		};
+
 		let idleTimer = null;
 		const armIdleTimer = function () {
 			if (!controller) return;
 			if (idleTimer) clearTimeout(idleTimer);
 			idleTimer = setTimeout(function () {
-				if (!project._imageFlowStopReason) {
+				if (!isStaleFlow() && !project._imageFlowStopReason) {
 					project._imageFlowStopReason = "The image batch stopped responding for " + Math.round(IMAGE_BATCH_IDLE_TIMEOUT_MS / 1000) + " seconds.";
 				}
 				try { controller.abort(); } catch (abortError) { }
@@ -16404,13 +17695,17 @@ export const APP_JS = `
 				(skipped ? ", " + skipped + " skipped" : "") + "…";
 		};
 
+		let galleryCommitChain =
+			Promise.resolve();
+
 		const handleEvent = function (event) {
-			if (!event || typeof event !== "object") return;
+			if (!event || typeof event !== "object" || isStaleFlow()) return;
 			if (event.credits) applyCredits(event.credits);
+			const curStatusEl = resolveStatusEl();
 
 			if (event.type === "start") {
-				if (statusEl) {
-					statusEl.textContent =
+				if (curStatusEl) {
+					curStatusEl.textContent =
 						"Rendering " + event.count + " AI images in parallel" +
 						(event.width && event.height ? " (" + event.width + "×" + event.height + ")" : "") + "…";
 				}
@@ -16418,7 +17713,7 @@ export const APP_JS = `
 			}
 
 			if (event.type === "tick") {
-				if (statusEl && !batchDone) statusEl.textContent = progressText();
+				if (curStatusEl && !batchDone) curStatusEl.textContent = progressText();
 				return;
 			}
 
@@ -16430,38 +17725,63 @@ export const APP_JS = `
 						index: event.index,
 						error: event.error || "unknown image error"
 					});
+					if (curStatusEl && !batchDone) curStatusEl.textContent = progressText();
 				}
-				else if (event.data && project._imageFlowActive) {
-					try {
-						const blob = base64ImageBlob(event.data, event.mime);
-						const file = new File(
-							[blob],
-							"ai-video" + n + "-seo-" + (Number(event.index) + 1) + "-" + Date.now() + ".png",
-							{ type: blob.type || "image/png" }
-						);
-						const inserted = addAiToVideo(n, file, blob, flowId, true);
-						if (inserted) {
-							added++;
-						}
-						else {
-							skipped++;
-							project._imageFlowStopReason =
-								"The video gallery reached its " + MAX_IMAGE_UPLOADS + "-image limit.";
-							if (controller) {
-								try { controller.abort(); } catch (abortError) { }
+				else if (event.data && !isStaleFlow()) {
+					const eventIndex = Number(event.index);
+					const decodeJob = decodeBase64ImageOffThread(event.data, event.mime);
+					galleryCommitChain = galleryCommitChain.then(function () {
+						return decodeJob.then(
+							function (blob) {
+								if (isStaleFlow()) return;
+								const liveN = videoProjects.indexOf(project) + 1;
+								if (liveN <= 0) return;
+								try {
+									const file = new File(
+										[blob],
+										"ai-video" + liveN + "-seo-" + (eventIndex + 1) + "-" + Date.now() + ".png",
+										{ type: blob.type || "image/png" }
+									);
+									const inserted = liveN === n
+										? addAiToVideo(n, file, blob, flowId, true)
+										: addAiToVideo(liveN, file, blob, flowId, true);
+									if (inserted) {
+										added++;
+									}
+									else {
+										skipped++;
+										project._imageFlowStopReason =
+											"The video gallery reached its " + MAX_IMAGE_UPLOADS + "-image limit.";
+										if (controller) {
+											try { controller.abort(); } catch (abortError) { }
+										}
+									}
+								}
+								catch (insertError) {
+									failed++;
+									console.error("[seo-image-flow] gallery insertion failed", {
+										videoIndex: liveN,
+										index: eventIndex,
+										error: insertError && insertError.message ? insertError.message : String(insertError)
+									});
+								}
+								const nextStatusEl = resolveStatusEl();
+								if (nextStatusEl && !batchDone) nextStatusEl.textContent = progressText();
+							},
+							function (decodeError) {
+								if (isStaleFlow()) return;
+								failed++;
+								console.error("[seo-image-flow] image decode failed", {
+									videoIndex: n,
+									index: eventIndex,
+									error: decodeError && decodeError.message ? decodeError.message : String(decodeError)
+								});
+								const nextStatusEl = resolveStatusEl();
+								if (nextStatusEl && !batchDone) nextStatusEl.textContent = progressText();
 							}
-						}
-					}
-					catch (insertError) {
-						failed++;
-						console.error("[seo-image-flow] gallery insertion failed", {
-							videoIndex: n,
-							index: event.index,
-							error: insertError && insertError.message ? insertError.message : String(insertError)
-						});
-					}
+						);
+					});
 				}
-				if (statusEl && !batchDone) statusEl.textContent = progressText();
 				return;
 			}
 
@@ -16477,83 +17797,99 @@ export const APP_JS = `
 		};
 
 		try {
-			armIdleTimer();
-			const response = await fetch(
-				"/api/image-batch",
-				Object.assign(
-					{
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							"Accept": "application/x-ndjson"
-						},
-						body: JSON.stringify({ prompts: prompts })
-					},
-					controller ? { signal: controller.signal } : {}
-				)
-			);
+			await appImageStreamQueue.enqueue(
+				"editor-video-" + n,
+				async function () {
+					armIdleTimer();
+					const response = await fetch(
+						"/api/image-batch",
+						Object.assign(
+							{
+								method: "POST",
+								headers: {
+									"Content-Type": "application/json",
+									"Accept": "application/x-ndjson"
+								},
+								body: JSON.stringify({ prompts: prompts })
+							},
+							controller ? { signal: controller.signal } : {}
+						)
+					);
 
-			if (!response.ok) {
-				const errJson = await seoResponseJson(response);
-				if (errJson && errJson.credits) applyCredits(errJson.credits);
-				throw new Error((errJson && errJson.error) || ("Image batch failed (HTTP " + response.status + ")"));
-			}
-
-			const reader = response.body && typeof response.body.getReader === "function"
-				? response.body.getReader()
-				: null;
-
-			if (!reader) {
-				throw new Error("This browser cannot read the image batch stream");
-			}
-
-			const decoder = new TextDecoder();
-			let buffer = "";
-			for (;;) {
-				const chunk = await reader.read();
-				if (chunk.done) break;
-				armIdleTimer();
-				buffer += decoder.decode(chunk.value, { stream: true });
-				let newlineIndex = buffer.indexOf("\\n");
-				while (newlineIndex >= 0) {
-					const line = buffer.slice(0, newlineIndex).trim();
-					buffer = buffer.slice(newlineIndex + 1);
-					if (line) {
-						try { handleEvent(JSON.parse(line)); } catch (parseError) { }
+					if (!response.ok) {
+						const errJson = await seoResponseJson(response);
+						if (errJson && errJson.credits) applyCredits(errJson.credits);
+						throw new Error((errJson && errJson.error) || ("Image batch failed (HTTP " + response.status + ")"));
 					}
-					newlineIndex = buffer.indexOf("\\n");
+
+					const reader = response.body && typeof response.body.getReader === "function"
+						? response.body.getReader()
+						: null;
+
+					if (!reader) {
+						throw new Error("This browser cannot read the image batch stream");
+					}
+
+					const decoder = new TextDecoder();
+					let buffer = "";
+					for (;;) {
+						const chunk = await reader.read();
+						if (chunk.done) break;
+						armIdleTimer();
+						buffer += decoder.decode(chunk.value, { stream: true });
+						let newlineIndex = buffer.indexOf("\\n");
+						while (newlineIndex >= 0) {
+							const line = buffer.slice(0, newlineIndex).trim();
+							buffer = buffer.slice(newlineIndex + 1);
+							if (line) {
+								try { handleEvent(JSON.parse(line)); } catch (parseError) { }
+							}
+							newlineIndex = buffer.indexOf("\\n");
+						}
+					}
+					const tail = (buffer + decoder.decode()).trim();
+					if (tail) {
+						try { handleEvent(JSON.parse(tail)); } catch (parseError) { }
+					}
+					await galleryCommitChain;
+				},
+				{
+					signal: controller ? controller.signal : null,
+					meta: { kind: "editor-video", videoIndex: n, project: project }
 				}
-			}
-			const tail = (buffer + decoder.decode()).trim();
-			if (tail) {
-				try { handleEvent(JSON.parse(tail)); } catch (parseError) { }
-			}
+			);
 		}
 		catch (batchError) {
-			const message = batchError && batchError.message ? batchError.message : String(batchError);
-			const aborted = batchError && batchError.name === "AbortError";
-			console.warn("[seo-image-flow] image batch interrupted", {
-				videoIndex: n,
-				added: added,
-				failed: failed,
-				aborted: aborted,
-				error: message
-			});
-			if (aborted && !project._imageFlowStopReason) {
-				project._imageFlowStopReason =
-					"The image batch was interrupted after " + added + " of " + total + " images.";
-			}
-			else if (!aborted) {
-				project._imageFlowStopReason =
-					"Image generation failed: " + message;
+			if (!isStaleFlow()) {
+				const message = batchError && batchError.message ? batchError.message : String(batchError);
+				const aborted = batchError && batchError.name === "AbortError";
+				console.warn("[seo-image-flow] image batch interrupted", {
+					videoIndex: n,
+					added: added,
+					failed: failed,
+					aborted: aborted,
+					error: message
+				});
+				if (aborted && !project._imageFlowStopReason) {
+					project._imageFlowStopReason =
+						"The image batch was interrupted after " + added + " of " + total + " images.";
+				}
+				else if (!aborted) {
+					project._imageFlowStopReason =
+						"Image generation failed: " + message;
+				}
 			}
 		}
 		finally {
 			if (idleTimer) clearTimeout(idleTimer);
-			project._imageBatchController = null;
-			project.aiImagesDone = added;
-			project._aiImageFailures = failed;
-			project._aiImageSkipped = skipped;
+			if (project._imageBatchController === controller) {
+				project._imageBatchController = null;
+			}
+			if (typeof expectedSeq !== "number" || project._imageFlowSeq === expectedSeq) {
+				project.aiImagesDone = added;
+				project._aiImageFailures = failed;
+				project._aiImageSkipped = skipped;
+			}
 			refreshCredits();
 			console.info("[seo-image-flow] image batch finished", {
 				videoIndex: n,
@@ -17422,8 +18758,10 @@ export const APP_JS = `
 
 		genBtn.disabled = true;
 
-		statusEl.textContent =
-			"Preparing...";
+		if (statusEl) {
+			statusEl.textContent =
+				"Preparing...";
+		}
 
 		try {
 
@@ -17443,8 +18781,10 @@ export const APP_JS = `
 
 			}
 
-			statusEl.textContent =
-				"Speaking your script (MeloTTS)...";
+			if (statusEl) {
+				statusEl.textContent =
+					"Speaking your script (MeloTTS)...";
+			}
 
 			const response =
 				await fetch(
@@ -17541,8 +18881,11 @@ export const APP_JS = `
 				a
 			);
 
-			URL.revokeObjectURL(
-				url
+			setTimeout(
+				function () {
+					URL.revokeObjectURL(url);
+				},
+				2000
 			);
 
 			project.voiceoverFile =
@@ -17566,18 +18909,22 @@ export const APP_JS = `
 					);
 			}
 
-			statusEl.textContent =
-				"Voiceover MP3 saved \u2014 upload it as the audio track" +
-				(project.subtitles && project.subtitles.length
-					? " (subtitles re-timed to the MP3)"
-					: "");
+			if (statusEl) {
+				statusEl.textContent =
+					"Voiceover MP3 saved \u2014 upload it as the audio track" +
+					(project.subtitles && project.subtitles.length
+						? " (subtitles re-timed to the MP3)"
+						: "");
+			}
 
 		}
 		catch (err) {
 
-			statusEl.textContent =
-				"Voiceover failed: " +
-				(err.message || err);
+			if (statusEl) {
+				statusEl.textContent =
+					"Voiceover failed: " +
+					(err.message || err);
+			}
 
 		}
 		finally {
@@ -17984,11 +19331,15 @@ export const APP_JS = `
 
 
 		const WIDTH =
-			quality.width;
+			renderContext && renderContext.frameWidth
+				? renderContext.frameWidth
+				: quality.width;
 
 
 		const HEIGHT =
-			quality.height;
+			renderContext && renderContext.frameHeight
+				? renderContext.frameHeight
+				: quality.height;
 
 
 		const FPS =

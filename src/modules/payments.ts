@@ -261,6 +261,15 @@ async function parseUploadedScreenshotRequest(request: Request): Promise<
 			? rawData.slice(commaIdx + 1)
 			: rawData;
 
+	const maxBase64Chars = Math.ceil((MAX_PAYMENT_IMAGE_BYTES * 4) / 3) + 4096;
+	if (base64Part.length > maxBase64Chars) {
+		return {
+			ok: false,
+			status: 413,
+			error: "Screenshot image is too large (maximum 5 MB)."
+		};
+	}
+
 	let bytes: Uint8Array;
 	try {
 		bytes = base64ToBytes(base64Part);
@@ -521,7 +530,12 @@ export async function handlePaymentRoutes(
 		if (!metaRaw) {
 			return payJson({ success: false, error: "Payment not found" }, 404);
 		}
-		const meta = JSON.parse(metaRaw) as PaymentTransactionRecord;
+		let meta: PaymentTransactionRecord;
+		try {
+			meta = JSON.parse(metaRaw) as PaymentTransactionRecord;
+		} catch {
+			return payJson({ success: false, error: "Corrupted payment record" }, 500);
+		}
 		if (
 			String(meta.username || "").toLowerCase() !==
 			sessionUser.username.toLowerCase()
@@ -762,7 +776,15 @@ export async function handlePaymentRoutes(
 			);
 		}
 
-		const payment = JSON.parse(metaRaw) as PaymentTransactionRecord;
+		let payment: PaymentTransactionRecord;
+		try {
+			payment = JSON.parse(metaRaw) as PaymentTransactionRecord;
+		} catch {
+			return payJson(
+				{ success: false, error: "Corrupted payment transaction record." },
+				500
+			);
+		}
 		const txnKey =
 			PAYMENT_TXN_PREFIX + transactionNumber.toLowerCase().replace(/\s+/g, "");
 		const existingTxnRaw = await env.KV_BINDING.get(txnKey);
@@ -795,7 +817,15 @@ export async function handlePaymentRoutes(
 			);
 		}
 
-		const userRecord = JSON.parse(userRaw) as Record<string, unknown>;
+		let userRecord: Record<string, unknown>;
+		try {
+			userRecord = JSON.parse(userRaw) as Record<string, unknown>;
+		} catch {
+			return payJson(
+				{ success: false, error: "Corrupted user account record." },
+				500
+			);
+		}
 		userRecord.usertype = "paid_user";
 		userRecord.upgradedAt = new Date().toISOString();
 		userRecord.verifiedTransactionNumber = transactionNumber;
