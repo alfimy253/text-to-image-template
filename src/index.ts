@@ -3368,22 +3368,47 @@ export default {
 			) {
 
 				/*
-				 * Limit 50: each account costs one record read
-				 * plus one credits read, so the whole listing
-				 * stays well inside the per-invocation budget.
+				 * Limit 50 rows: each account costs one record
+				 * read plus one credits read, so the whole
+				 * listing stays well inside the per-invocation
+				 * budget. The full key count (up to KV's
+				 * 1,000-key page) rides along so the page can
+				 * say when only part of the table is shown.
 				 */
 				const listed =
 					await env.KV_BINDING.list(
 						{
-							prefix: "user:",
-							limit: 50
+							prefix: AUTH_USER_PREFIX,
+							limit: 1000
 						}
+					);
+
+				const accountKeys =
+					listed.keys.slice(
+						0,
+						50
+					);
+
+				/*
+				 * Bounded repair pass (see authEmailIndexMap):
+				 * one extra list plus at most
+				 * AUTH_EMAIL_SCAN_MAX index reads heals legacy
+				 * rows - a user record written before the
+				 * credits system or the email index gets its
+				 * email and plan filled in from the unique
+				 * username, and a missing email:<address>
+				 * pointer is recreated from the record.
+				 */
+				const indexMap =
+					await authEmailIndexMap(
+						env,
+						true
 					);
 
 				const users =
 					(
 						await Promise.all(
-							listed.keys.map(
+							accountKeys.map(
 								async (key: any) => {
 
 									const raw =
@@ -3411,11 +3436,29 @@ export default {
 
 									}
 
+									const keyUsername =
+										key.name.substring(
+											AUTH_USER_PREFIX.length
+										);
+
+									try {
+
+										record =
+											await authRepairUserRecord(
+												env,
+												keyUsername,
+												record,
+												indexMap
+											);
+
+									}
+									catch (repairError) {
+										/* display only; never fail the list */
+									}
+
 									const username =
 										record.username ||
-										key.name.substring(
-											"user:".length
-										);
+										keyUsername;
 
 									const usertype =
 										creditNormalizeUsertype(
@@ -3458,6 +3501,19 @@ export default {
 											usertype,
 										plan:
 											summary.plan,
+										/*
+										 * Flattened for the table: the
+										 * plan label and its daily
+										 * image allowance, so a row
+										 * reads "Free plan - 70,000 AI
+										 * images / day" without the
+										 * client re-deriving it.
+										 */
+										planLabel:
+											summary.plan.label,
+										planImages:
+											summary.plan.limits
+												.images,
 										day:
 											summary.day,
 										used:
@@ -3472,10 +3528,23 @@ export default {
 								}
 							)
 						)
-					).filter(
-						(user) =>
-							user !== null
-					);
+					)
+						.filter(
+							(user) =>
+								user !== null
+						)
+						/*
+						 * Newest accounts first: KV lists keys
+						 * alphabetically, which is not the order
+						 * the settings page wants to show.
+						 */
+						.sort(
+							(a: any, b: any) =>
+								String(b.createdAt)
+									.localeCompare(
+										String(a.createdAt)
+									)
+						);
 
 				return json(
 					{
@@ -3486,6 +3555,13 @@ export default {
 							creditResetsAt(),
 						users:
 							users,
+						shown:
+							users.length,
+						total:
+							listed.keys.length,
+						hasMore:
+							listed.list_complete ===
+							false,
 						plans: [
 							CREDIT_PLANS.free,
 							CREDIT_PLANS.paid_user
@@ -3551,7 +3627,7 @@ export default {
 				}
 
 				const key =
-					"user:" + username;
+					authUserKey(username);
 
 				const raw =
 					await env.KV_BINDING.get(
@@ -3594,8 +3670,41 @@ export default {
 
 				}
 
+				/*
+				 * The plan lives on the account row. It is
+				 * written together with the email (a legacy
+				 * row may not have one yet) so the row always
+				 * describes the whole account.
+				 */
+				record.username =
+					record.username ||
+					username;
+
 				record.usertype =
 					usertype;
+
+				record.updatedAt =
+					new Date().toISOString();
+
+				if (!record.email) {
+					try {
+						const indexMap =
+							await authEmailIndexMap(
+								env,
+								true
+							);
+
+						record.email =
+							indexMap.byUsername[
+								username
+							] ||
+							"";
+					}
+					catch (indexError) {
+						record.email =
+							record.email || "";
+					}
+				}
 
 				await env.KV_BINDING.put(
 					key,
@@ -3603,6 +3712,19 @@ export default {
 						record
 					)
 				);
+
+				/*
+				 * Keep the email pointer's value in step:
+				 * email:<address> shows the same email and
+				 * plan as user:<username>.
+				 */
+				if (record.email) {
+					await authWriteEmailIndex(
+						env,
+						record.email,
+						record
+					);
+				}
 
 				/*
 				 * Optional reset: a fresh account should not
@@ -3650,6 +3772,9 @@ export default {
 						username:
 							record.username ||
 							username,
+						email:
+							record.email ||
+							"",
 						usertype:
 							usertype,
 						plan:
@@ -3996,8 +4121,379 @@ function json(data, status = 200, setCookie = null) {
 const AUTH_EMAIL_PREFIX =
 	"email:";
 
+const AUTH_USER_PREFIX =
+	"user:";
+
 const AUTH_LEGACY_SCAN_MAX =
 	200;
+
+
+/*
+ * ---- The user row is the single source of truth ----------------
+ *
+ * KV layout (one row per account, keyed by the UNIQUE username):
+ *
+ *   user:<username>   { username, email, usertype, createdAt, ... }
+ *                     ^ the account row: credentials, email and
+ *                       the plan ("free" / "paid_user") all live
+ *                       in this one value.
+ *   email:<address>   { username, email, usertype }
+ *                     ^ a pointer index for the O(1) uniqueness
+ *                       check. Its value mirrors the user row, so
+ *                       either key shows the same email + plan.
+ *
+ * Accounts written by older builds can be missing `email` or
+ * `usertype` (and accounts created before the index have no
+ * email:<address> row at all). authRepairUserRecord() heals both
+ * directions using only the username, which is unique: the email
+ * index fills in a missing email on the user row, and the user
+ * row recreates a missing index row. Nothing is ever overwritten
+ * with a different username, so a stale pointer cannot reassign
+ * an account.
+ */
+
+function authUserKey(
+	username: any
+): string {
+
+	return (
+		AUTH_USER_PREFIX +
+		String(username || "")
+			.trim()
+			.toLowerCase()
+	);
+
+}
+
+
+function authEmailAddress(
+	value: any
+): string {
+
+	return String(value || "")
+		.trim()
+		.toLowerCase();
+
+}
+
+
+/* The value written at email:<address> — mirrors the user row. */
+function authEmailIndexValue(
+	record: any,
+	email: any
+): any {
+
+	return {
+		username:
+			record &&
+			record.username
+				? record.username
+				: "",
+		email:
+			authEmailAddress(email),
+		usertype:
+			creditNormalizeUsertype(
+				record &&
+				record.usertype
+			)
+	};
+
+}
+
+
+async function authWriteEmailIndex(
+	env: any,
+	email: any,
+	record: any
+): Promise<void> {
+
+	const address =
+		authEmailAddress(email);
+
+	if (!address || !env.KV_BINDING) {
+		return;
+	}
+
+	await env.KV_BINDING.put(
+		AUTH_EMAIL_PREFIX + address,
+		JSON.stringify(
+			authEmailIndexValue(
+				record,
+				address
+			)
+		)
+	);
+
+}
+
+
+/*
+ * Read the email index, bounded.
+ *
+ * The list() itself is one operation and tells us which addresses
+ * exist (that is all the uniqueness check and the "is the pointer
+ * missing?" test need). The reverse map — address -> username — is
+ * only needed to fill in the email of an account row written before
+ * the index existed, so it reads at most AUTH_EMAIL_SCAN_MAX values,
+ * and only when reverseScan is requested.
+ *
+ * Worst case for one settings-page load: 1 list (users) + 1 list
+ * (emails) + 50 user reads + 50 email reads + 50 credits reads,
+ * i.e. ~152 operations — comfortably inside the 1,000-operation
+ * per-invocation limit, and the same shape as before this change.
+ */
+const AUTH_EMAIL_SCAN_MAX =
+	50;
+
+async function authEmailIndexMap(
+	env: any,
+	reverseScan: boolean = false
+): Promise<any> {
+
+	const byUsername: any =
+		{};
+
+	const emails: any =
+		{};
+
+	const known: any =
+		{};
+
+	if (!env.KV_BINDING) {
+		return { byUsername, emails, known };
+	}
+
+	let listed: any;
+
+	try {
+		listed =
+			await env.KV_BINDING.list(
+				{
+					prefix: AUTH_EMAIL_PREFIX,
+					limit: 1000
+				}
+			);
+	}
+	catch (listError) {
+		return { byUsername, emails, known };
+	}
+
+	for (const key of listed.keys) {
+		emails[
+			authEmailAddress(
+				String(key.name)
+					.slice(
+						AUTH_EMAIL_PREFIX.length
+					)
+			)
+		] = true;
+	}
+
+	if (!reverseScan) {
+		return { byUsername, emails, known };
+	}
+
+	const rows =
+		await Promise.all(
+			listed.keys
+				.slice(
+					0,
+					AUTH_EMAIL_SCAN_MAX
+				)
+				.map(
+					async (key: any) => {
+
+						const address =
+							authEmailAddress(
+								String(key.name)
+									.slice(
+										AUTH_EMAIL_PREFIX.length
+									)
+							);
+
+						try {
+							const raw =
+								await env.KV_BINDING.get(
+									key.name
+								);
+
+							if (!raw) {
+								return {
+									address,
+									username: "",
+									complete: false
+								};
+							}
+
+							const indexRecord =
+								JSON.parse(raw);
+
+							return {
+								address,
+								username:
+									String(
+										(indexRecord &&
+											indexRecord.username) ||
+										""
+									)
+										.trim()
+										.toLowerCase(),
+								/*
+								 * Older pointers stored only
+								 * { username }. Those are
+								 * refreshed to the full
+								 * { username, email, usertype }
+								 * value on the next read.
+								 */
+								complete:
+									Boolean(
+										indexRecord &&
+										indexRecord.email &&
+										indexRecord.usertype
+									)
+							};
+						}
+						catch (parseError) {
+							return {
+								address,
+								username: "",
+								complete: false
+							};
+						}
+					}
+				)
+		);
+
+	for (const row of rows) {
+
+		if (!row.address) {
+			continue;
+		}
+
+		known[row.address] =
+			row.complete === true;
+
+		if (row.username) {
+			byUsername[row.username] =
+				row.address;
+		}
+	}
+
+	return { byUsername, emails, known };
+
+}
+
+
+/*
+ * Heal one account row in place.
+ *
+ * Guarantees after the call: the user row carries `username`,
+ * `email` and `usertype`, and the email index row exists with the
+ * same email + plan. Writes happen only when something was
+ * actually missing, so the common case costs zero writes.
+ */
+async function authRepairUserRecord(
+	env: any,
+	username: any,
+	record: any,
+	indexMap: any = null
+): Promise<any> {
+
+	if (!record || typeof record !== "object") {
+		return record;
+	}
+
+	const cleanUsername =
+		String(
+			record.username ||
+			username ||
+			""
+		).trim();
+
+	const emailFromIndex =
+		indexMap &&
+		indexMap.byUsername
+			? indexMap.byUsername[
+				cleanUsername.toLowerCase()
+			]
+			: "";
+
+	let userDirty = false;
+
+	if (!record.username && cleanUsername) {
+		record.username = cleanUsername;
+		userDirty = true;
+	}
+
+	let address =
+		authEmailAddress(record.email);
+
+	if (!address && emailFromIndex) {
+		address = authEmailAddress(emailFromIndex);
+		record.email = address;
+		userDirty = true;
+	}
+
+	const usertype =
+		creditNormalizeUsertype(
+			record.usertype
+		);
+
+	if (record.usertype !== usertype) {
+		record.usertype = usertype;
+		userDirty = true;
+	}
+
+	if (
+		userDirty &&
+		env.KV_BINDING &&
+		cleanUsername
+	) {
+		record.updatedAt =
+			new Date().toISOString();
+
+		await env.KV_BINDING.put(
+			authUserKey(cleanUsername),
+			JSON.stringify(record)
+		);
+	}
+
+	/*
+	 * Keep the pointer index in step with the row: it is written
+	 * for legacy accounts (no email:<address> key yet) and for
+	 * every plan change.
+	 */
+	const pointerKnown =
+		Boolean(
+			indexMap &&
+			indexMap.known &&
+			Object.prototype.hasOwnProperty.call(
+				indexMap.known,
+				address
+			)
+		);
+
+	if (
+		address &&
+		(
+			!indexMap ||
+			!indexMap.emails ||
+			!indexMap.emails[address] ||
+			(pointerKnown &&
+				indexMap.known[address] ===
+					false)
+		)
+	) {
+		await authWriteEmailIndex(
+			env,
+			address,
+			record
+		);
+	}
+
+	return record;
+
+}
 
 
 function authToHex(bytes) {
@@ -4095,7 +4591,7 @@ function authSessionCookie(
  * -------------------------------------------------------------
  * Plans:
  *   free       unlimited videos, AI scripts and voiceovers,
- *              50 AI images per day
+ *              70,000 AI images per day
  *   paid_user  unlimited videos, AI scripts and voiceovers,
  *              1,200 AI images per day
  *
@@ -4138,7 +4634,7 @@ const CREDIT_PLANS = {
 		label: "Free",
 		limits: {
 			videos: null,
-			images: 50,
+			images: 70000,
 			scripts: null,
 			voiceovers: null
 		}
@@ -4234,7 +4730,7 @@ function creditPlanFor(
 	 * `guest` is an actor type, never a stored account plan, but
 	 * resolving it here keeps every helper safe: a guest call site
 	 * that forgets to pass GUEST_PLAN explicitly still gets the
-	 * 10-image plan instead of silently inheriting free's 50.
+	 * 10-image plan instead of silently inheriting free's allowance.
 	 */
 	if (
 		String(usertype || "")
@@ -5054,6 +5550,30 @@ async function guestCreditConsume(
 }
 
 
+/*
+ * 70000 -> "70,000". Every user-facing limit in this file goes
+ * through here so a plan change updates the copy with it.
+ */
+function creditFormatNumber(
+	value: any
+): string {
+
+	const number =
+		Number(value);
+
+	if (!Number.isFinite(number)) {
+		return String(
+			value == null ? "" : value
+		);
+	}
+
+	return number.toLocaleString(
+		"en-US"
+	);
+
+}
+
+
 /* ---- Image credit gate ---------------------------------------- *
  *
  * Shared by GET /image/gen (one image) and POST /api/image-batch
@@ -5087,12 +5607,17 @@ function creditExhaustedMessage(
 
 	return (
 		"Daily image credits used up (" +
-		limit +
+		creditFormatNumber(limit) +
 		" images/day on the " +
 		label +
 		" plan). Credits renew at midnight (UTC+8)." +
 		(guest
-			? " Create a free account for 50 images per day."
+			? " Create a free account for " +
+				creditFormatNumber(
+					CREDIT_PLANS.free.limits
+						.images
+				) +
+				" images per day."
 			: "")
 	);
 
@@ -5205,7 +5730,12 @@ async function imageCreditHooks(
 								success: false,
 								authenticated: false,
 								error:
-									"Sign in to generate AI images \u2014 every free account gets 50 images per day. No account? Open /free for 10 images per day."
+									"Sign in to generate AI images \u2014 every free account gets " +
+									creditFormatNumber(
+										CREDIT_PLANS.free
+											.limits.images
+									) +
+									" images per day. No account? Open /free for 10 images per day."
 							},
 							401
 						)
@@ -5837,8 +6367,7 @@ async function handleAuthApi(
 
 			if (
 				await env.KV_BINDING.get(
-					"user:" +
-						username.toLowerCase()
+					authUserKey(username)
 				)
 			) {
 				return json(
@@ -5934,7 +6463,7 @@ async function handleAuthApi(
 				/*
 				 * Every new account starts on the free
 				 * plan: unlimited videos, AI scripts and
-				 * voiceovers plus 50 AI images per day.
+				 * voiceovers plus 70,000 AI images per day.
 				 * The settings page can promote it to
 				 * paid_user (1,200 images/day).
 				 */
@@ -5944,9 +6473,14 @@ async function handleAuthApi(
 					new Date().toISOString()
 			};
 
+			/*
+			 * One row owns everything about the
+			 * account - username (unique), email and
+			 * plan - so any single read of
+			 * user:<username> is enough to label it.
+			 */
 			await env.KV_BINDING.put(
-				"user:" +
-					username.toLowerCase(),
+				authUserKey(username),
 				JSON.stringify(
 					user
 				)
@@ -5954,18 +6488,14 @@ async function handleAuthApi(
 
 			/*
 			 * The email index is what makes the
-			 * uniqueness check a single read; it
-			 * is written for every new account.
+			 * uniqueness check a single read. Its value
+			 * mirrors the user row (email + plan), so the
+			 * two keys always describe the same account.
 			 */
-			await env.KV_BINDING.put(
-				AUTH_EMAIL_PREFIX +
-					email,
-				JSON.stringify(
-					{
-						username:
-							username
-					}
-				)
+			await authWriteEmailIndex(
+				env,
+				email,
+				user
 			);
 
 			const token =
@@ -6002,11 +6532,11 @@ async function handleAuthApi(
 					success: true,
 					user: {
 						username:
-							username,
+							user.username,
 						email:
-							email,
+							user.email,
 						usertype:
-							"free"
+							user.usertype
 					},
 					plan:
 						signupCredits.plan,

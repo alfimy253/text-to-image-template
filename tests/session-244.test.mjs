@@ -381,12 +381,12 @@ function makeAdmin() {
 				day: "2026-10-26",
 				resetsAt: "2026-10-26T16:00:00.000Z",
 				plans: [
-					{ id: "free", label: "Free", limits: { images: 50 } },
+					{ id: "free", label: "Free", limits: { images: 70000 } },
 					{ id: "paid_user", label: "Paid", limits: { images: 1200 } }
 				],
 				users: [
-					{ username: "ana", usertype: "paid_user", plan: { limits: { images: 1200 } }, used: { images: 12 }, remaining: { images: 1188 } },
-					{ username: "ben", usertype: "free", plan: { limits: { images: 50 } }, used: { images: 3 }, remaining: { images: 47 } }
+					{ username: "ana", email: "ana@studio.test", usertype: "paid_user", plan: { id: "paid_user", label: "Paid", limits: { images: 1200 } }, planLabel: "Paid", planImages: 1200, used: { images: 12 }, remaining: { images: 1188 } },
+					{ username: "ben", email: "ben@studio.test", usertype: "free", plan: { id: "free", label: "Free", limits: { images: 70000 } }, planLabel: "Free", planImages: 70000, used: { images: 3 }, remaining: { images: 69997 } }
 				]
 			});
 		}
@@ -464,12 +464,45 @@ test("Site Admin shows Guest Credits by IP, Plans and Accounts Credits as separa
 	const rows = [...plans.querySelectorAll("[data-cfg-plan-row]")].map((row) => row.textContent);
 	assert.equal(rows.length, 3, "free, paid and the guest plan");
 	assert.match(rows[0], /Free/);
-	assert.match(rows[0], /50 AI images \/ day/);
+	assert.match(rows[0], /70,000 AI images \/ day/);
 	assert.match(rows[0], /1 account/);
 	assert.match(rows[1], /Paid/);
-	assert.match(rows[1], /1200 AI images \/ day/);
+	assert.match(rows[1], /1,200 AI images \/ day/);
 	assert.match(rows[2], /Guest/);
 	assert.match(rows[2], /10 AI images \/ day/);
+
+	/*
+	 * The Accounts page labels every row with the email stored on the
+	 * account and the plan detail (label + daily image allowance), so a
+	 * username is never shown without its plan.
+	 */
+	w.document.querySelector('[data-cfg-tab="accounts"]').click();
+	await waitFor(() => w.document.querySelectorAll("[data-cfg-user]").length === 2);
+
+	const accountRows = [...w.document.querySelectorAll("[data-cfg-user]")].map((row) => ({
+		username: row.getAttribute("data-cfg-user"),
+		plan: row.getAttribute("data-cfg-user-plan"),
+		text: row.textContent
+	}));
+
+	assert.equal(accountRows.length, 2);
+	accountRows.forEach((row) => {
+		assert.match(row.text, /@studio\.test/, "the account email is shown");
+		assert.match(row.text, /(Free|Paid) plan · [\d,]+ AI images \/ day/, "the plan detail is shown");
+	});
+
+	const paidRow = accountRows.find((row) => row.username === "ana");
+	const freeRow = accountRows.find((row) => row.username === "ben");
+	assert.equal(paidRow.plan, "paid_user");
+	assert.match(paidRow.text, /Paid plan · 1,200 AI images \/ day/);
+	assert.match(paidRow.text, /1,188 of 1,200 images left today/);
+	assert.equal(freeRow.plan, "free");
+	assert.match(freeRow.text, /Free plan · 70,000 AI images \/ day/);
+	assert.match(freeRow.text, /69,997 of 70,000 images left today/);
+
+	/* the plan picker's labels come from the payload, not hard-coded copy */
+	const freeOption = w.document.querySelector('#cfg-credit-plan option[value="free"]');
+	assert.match(freeOption.textContent, /70,000 AI images \/ day/);
 });
 
 /* ------------------------------------------------------------------ */

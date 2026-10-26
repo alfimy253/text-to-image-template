@@ -353,6 +353,64 @@ export const CONFIG_PAGE_SCRIPT = `
 		white-space: nowrap;
 	}
 
+	/* Accounts Credits: one row per account, email + plan detail */
+	.cfg-user-row {
+		align-items: flex-start;
+		flex-wrap: wrap;
+	}
+
+	.cfg-user-id {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 160px;
+		flex: 1;
+	}
+
+	.cfg-user-row .cfg-user-id code {
+		font-size: 0.86rem;
+		font-weight: 700;
+	}
+
+	.cfg-user-email {
+		font-size: 0.76rem;
+		color: #9ca3af;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.cfg-user-plan {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		align-items: flex-end;
+		text-align: right;
+	}
+
+	.cfg-plan-badge {
+		display: inline-block;
+		padding: 2px 8px;
+		border-radius: 999px;
+		border: 1px solid #2c3a52;
+		background: #111827;
+		color: #cbd5e1;
+		font-size: 0.74rem;
+		white-space: nowrap;
+	}
+
+	.cfg-plan-badge.paid {
+		border-color: #b45309;
+		background: #2a1c08;
+		color: #fbbf24;
+	}
+
+	.cfg-user-usage {
+		font-size: 0.74rem;
+		color: #9ca3af;
+		white-space: nowrap;
+	}
+
 	.cfg-worker-status {
 		display: flex;
 		align-items: center;
@@ -813,7 +871,7 @@ export const CONFIG_PAGE_SCRIPT = `
 				'<section class="cfg-panel" id="cfg-panel-accounts">' +
 					'<div class="cfg-card">' +
 						'<h2>Accounts Credits</h2>' +
-						'<p class="cfg-sub">Free: 50 AI images/day \u00b7 Paid (<code>paid_user</code>): 1,200 AI images/day. Click any account row to load it into the form.</p>' +
+						'<p class="cfg-sub">Each row shows the account\u2019s email and the plan stored on its <code>user:&lt;username&gt;</code> record \u2014 Free: 70,000 AI images/day \u00b7 Paid (<code>paid_user</code>): 1,200 AI images/day. Click any row to load it into the form.</p>' +
 						'<div style="display:grid;gap:10px;">' +
 							'<div>' +
 								'<label class="cfg-label" for="cfg-credit-user">Username</label>' +
@@ -822,7 +880,7 @@ export const CONFIG_PAGE_SCRIPT = `
 							'<div>' +
 								'<label class="cfg-label" for="cfg-credit-plan">Plan</label>' +
 								'<select id="cfg-credit-plan" class="cfg-select">' +
-									'<option value="free">Free \u2014 50 AI images / day</option>' +
+									'<option value="free">Free \u2014 70,000 AI images / day</option>' +
 									'<option value="paid_user">Paid (paid_user) \u2014 1,200 AI images / day</option>' +
 								'</select>' +
 							'</div>' +
@@ -1235,6 +1293,31 @@ export const CONFIG_PAGE_SCRIPT = `
 		setWorkerActive(!workerActive);
 	});
 
+	/* 70000 -> "70,000" (plain-text safe; esc() still applied on output) */
+	function fmtNum(n) {
+		var value = Number(n);
+		if (!isFinite(value)) return String(n == null ? "" : n);
+		return value.toLocaleString("en-US");
+	}
+
+	/*
+	 * A plan's human detail: "Free plan - 70,000 AI images / day".
+	 * Built from the API payload only, so the numbers on this page
+	 * always match what the credit meter enforces.
+	 */
+	function planDetail(plan, usertype) {
+		var id = (plan && plan.id) || usertype || "free";
+		var label = (plan && plan.label) || (id === "paid_user" ? "Paid" : id === "guest" ? "Guest" : "Free");
+		var limit = plan && plan.limits ? plan.limits.images : undefined;
+		var detail = label + " plan";
+		if (limit === null) {
+			detail += " · unlimited AI images";
+		} else if (typeof limit === "number") {
+			detail += " · " + fmtNum(limit) + " AI images / day";
+		}
+		return detail;
+	}
+
 	/*
 	 * TAB 3 (Plans, session #244): the plan definitions the credit meter
 	 * enforces, read from the same GET /api/config/users payload the
@@ -1254,9 +1337,8 @@ export const CONFIG_PAGE_SCRIPT = `
 		/* The guest plan is an actor type, not assignable - show it too. */
 		plans.push({ id: "guest", label: "Guest (per masked IP)", limits: { images: 10 } });
 		plans.forEach(function(plan) {
-			var limit = plan && plan.limits && plan.limits.images !== null
-				? plan.limits.images
-				: null;
+			var hasLimit = plan && plan.limits && plan.limits.images !== null && plan.limits.images !== undefined;
+			var limit = hasLimit ? plan.limits.images : null;
 			var onPlan = users.filter(function(u) { return (u.usertype || "free") === plan.id; });
 			var usedToday = onPlan.reduce(function(sum, u) {
 				return sum + Number((u.used && u.used.images) || 0);
@@ -1268,8 +1350,8 @@ export const CONFIG_PAGE_SCRIPT = `
 				'<strong>' + esc(plan.label || plan.id || "Plan") + '</strong>' +
 				'<span style="font-size:0.78rem;color:#9ca3af;">' +
 					'<code>' + esc(plan.id || "") + '</code> · ' +
-					(limit === null ? "unlimited AI images" : esc(limit) + " AI images / day") +
-					(plan.id === "guest" ? "" : " · " + onPlan.length + " account" + (onPlan.length === 1 ? "" : "s") + " · " + usedToday + " used today") +
+					(limit === null ? "unlimited AI images" : esc(fmtNum(limit)) + " AI images / day") +
+					(plan.id === "guest" ? "" : " · " + onPlan.length + " account" + (onPlan.length === 1 ? "" : "s") + " · " + esc(fmtNum(usedToday)) + " used today") +
 				'</span>';
 			box.appendChild(card);
 		});
@@ -1281,12 +1363,34 @@ export const CONFIG_PAGE_SCRIPT = `
 		}
 	}
 
+	/*
+	 * Keep the plan picker's labels equal to the plans the worker
+	 * actually enforces (the payload is the only source of numbers).
+	 */
+	function syncPlanOptions(d) {
+		var select = document.getElementById("cfg-credit-plan");
+		if (!select || !d || !Array.isArray(d.plans)) return;
+		d.plans.forEach(function(plan) {
+			var option = select.querySelector('option[value="' + plan.id + '"]');
+			if (!option) return;
+			var limit = plan.limits ? plan.limits.images : null;
+			option.textContent = (plan.label || plan.id) +
+				(limit === null || limit === undefined
+					? " \u2014 unlimited AI images"
+					: " \u2014 " + fmtNum(limit) + " AI images / day");
+		});
+		if (d.plans.length && !select.value) {
+			select.value = d.plans[0].id;
+		}
+	}
+
 	function loadCreditUsers() {
 		var box = document.getElementById("cfg-users-list");
 		fetch("/api/config/users?pw=" + encodeURIComponent(unlockedPw), { credentials: "same-origin" })
 			.then(function(r) { return r.json().catch(function() { return {}; }); })
 			.then(function(d) {
 				renderPlansPanel(d);
+				if (d && d.success) syncPlanOptions(d);
 				if (!box) return;
 				box.innerHTML = "";
 				if (!d || !d.success) {
@@ -1300,20 +1404,44 @@ export const CONFIG_PAGE_SCRIPT = `
 				}
 				users.forEach(function(u) {
 					var row = document.createElement("div");
-					row.className = "cfg-worker-row";
+					row.className = "cfg-worker-row cfg-user-row";
 					row.style.cursor = "pointer";
-					var lim = u.plan && u.plan.limits && u.plan.limits.images !== null
-						? (u.remaining.images + "/" + u.plan.limits.images + " images left")
-						: "unlimited";
+					row.setAttribute("data-cfg-user", u.username || "");
+					row.setAttribute("data-cfg-user-plan", u.usertype || "free");
+					var planImages = u.plan && u.plan.limits ? u.plan.limits.images : null;
+					var remaining = u.remaining ? u.remaining.images : null;
+					var usedImages = u.used ? Number(u.used.images || 0) : 0;
+					var usage = (planImages === null || planImages === undefined)
+						? "unlimited images"
+						: (remaining === null || remaining === undefined
+							? "—"
+							: fmtNum(remaining) + " of " + fmtNum(planImages) + " images left today")
+							+ " · " + fmtNum(usedImages) + " used";
 					row.innerHTML =
-						'<code>' + esc(u.username) + '</code>' +
-						'<span style="font-size:0.78rem;color:#9ca3af;">' + esc(u.usertype || "free") + ' · ' + esc(lim) + '</span>';
+						'<span class="cfg-user-id">' +
+							'<code>' + esc(u.username) + '</code>' +
+							'<span class="cfg-user-email">' + esc(u.email || "no email on record") + '</span>' +
+						'</span>' +
+						'<span class="cfg-user-plan">' +
+							'<span class="cfg-plan-badge' + (u.usertype === "paid_user" ? " paid" : "") + '">' +
+								esc(planDetail(u.plan, u.usertype)) +
+							'</span>' +
+							'<span class="cfg-user-usage">' + esc(usage) + '</span>' +
+						'</span>';
 					row.addEventListener("click", function() {
 						document.getElementById("cfg-credit-user").value = u.username;
 						document.getElementById("cfg-credit-plan").value = u.usertype === "paid_user" ? "paid_user" : "free";
 					});
 					box.appendChild(row);
 				});
+				if (typeof d.total === "number" && d.total > users.length) {
+					var more = document.createElement("div");
+					more.style.fontSize = "0.78rem";
+					more.style.color = "#6b7280";
+					more.style.marginTop = "8px";
+					more.textContent = "Showing " + users.length + " of " + d.total + (d.hasMore ? "+" : "") + " accounts (the newest first).";
+					box.appendChild(more);
+				}
 			})
 			.catch(function() {});
 	}

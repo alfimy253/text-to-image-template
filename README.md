@@ -70,8 +70,10 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   background-worker mode on the current-day settings page remain in the code; nothing in the
   studio accordions calls them, and every video is rendered locally or through the quick batch
   table.
-- **Accounts.** KV-backed sign-up/sign-in, unlimited accounts (each with an `email:<address>`
-  uniqueness index).
+- **Accounts.** KV-backed sign-up/sign-in, unlimited accounts. Each account is one row keyed by
+  its unique username — `user:<username>` holds `username`, `email` and the plan (`usertype`) —
+  plus an `email:<address>` index whose value mirrors `{ username, email, usertype }`, so the same
+  email + plan is readable from either key.
 - **Account dashboard and manual upgrades.** `/account` shows the signed-in profile, live daily
   allowance, plan, recent receipts and the correct studio destination (`/studio` for free,
   `/paid` for paid). `/upgrade` displays editable local-gateway instructions and a signed-in
@@ -85,7 +87,7 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   link into the shared top menu or footer. Reserved/nested routes, duplicate slugs, data-URI image
   uploads and more than 100 blocks are rejected; public text is HTML-escaped.
 - **Daily credits.** Every account is on a plan (`usertype`): **free** — unlimited video projects,
-  unlimited AI scripts, unlimited voiceovers and **50 AI images per day**; **paid_user** —
+  unlimited AI scripts, unlimited voiceovers and **70,000 AI images per day**; **paid_user** —
   everything in free plus **1,200 AI images per day**. Counters live in KV
   (`credits:<username>`) and renew at midnight Asia/Taipei (UTC+8). The studio shows a credits
   pill with today's allowance, the image route returns `429` with the counters when the allowance
@@ -167,10 +169,11 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
 | CMS | 8 pages · 100 blocks/page · flat slug up to 64 chars · paragraph text up to 20,000 chars/block · HTTP(S) image URLs only |
 | Payment screenshots | PNG/JPEG/WEBP/GIF magic bytes · 5 MiB · authentication required · manual admin approval |
 | Theme | one setting for the whole deployment: `default` · `strata` · `stellar` · `nightlab` · `paper` · `swiss` · `neo` |
-| Free plan (`usertype: free`) | unlimited videos · 50 AI images/day · unlimited AI scripts · unlimited voiceovers |
+| Free plan (`usertype: free`) | unlimited videos · 70,000 AI images/day · unlimited AI scripts · unlimited voiceovers |
 | Paid plan (`usertype: paid_user`) | unlimited videos · 1,200 AI images/day · unlimited AI scripts · unlimited voiceovers |
 | Free-plan alias | `free_user` (or any value other than `paid_user`) is read as `free` |
 | Guest plan (`/free`, no account) | unlimited videos · **10 AI images/day per IP address** · unlimited AI scripts · unlimited voiceovers |
+| Account row | `user:<username>` = `{ username, email, usertype }` (keyed by the unique username) · `email:<address>` mirrors the same email + plan |
 | Credit renewal | daily at midnight Asia/Taipei (UTC+8); `credits:<username>` and `ipcredits:<hash>` records expire after 2 days |
 | Guest IP records | only a salted SHA-256 hash + masked address (`203.0.113.0`) are stored, never the raw IP |
 | Quality | 480p/1.2 Mbps · 720p/2.5 Mbps · 720p/5 Mbps, 30 fps |
@@ -281,7 +284,7 @@ skin covers the whole site.
 | `GET /api/worker/poll` · `POST /api/worker/deliver` · `POST /api/worker/failed` | Background worker queue |
 | `GET`/`POST /api/config/workers` | Registered worker URLs (max 3, `POST` needs the settings password) |
 | `GET`/`POST /api/config/theme` | Current UI theme / set it (`default`, `strata`, `stellar`, `nightlab`, `paper`, `swiss`, `neo`); the GET is open, the POST needs the settings password |
-| `GET`/`POST /api/config/users` | Accounts with plan + today's usage / set `usertype` (`free`, `paid_user`) and reset counters — both need the settings password |
+| `GET`/`POST /api/config/users` | Accounts with email, plan label + today's usage (legacy rows are healed with their email + plan on read) / set `usertype` (`free`, `paid_user`), reset counters — both need the settings password |
 | `GET`/`POST /api/config/ipcredits` | Guest credits table (masked IP, usage, remaining) / delete one IP row (reset) — both need the settings password |
 
 ## Documentation

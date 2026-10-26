@@ -799,8 +799,40 @@ export async function handlePaymentRoutes(
 		userRecord.usertype = "paid_user";
 		userRecord.upgradedAt = new Date().toISOString();
 		userRecord.verifiedTransactionNumber = transactionNumber;
+		userRecord.updatedAt = userRecord.upgradedAt;
+		if (!userRecord.username) {
+			userRecord.username = String(payment.username || "");
+		}
+		/*
+		 * The account row is the source of truth for both the email
+		 * and the plan, so a row written by an older build is
+		 * completed from the payment record while we are here.
+		 */
+		const accountEmail = String(
+			userRecord.email || payment.email || ""
+		)
+			.trim()
+			.toLowerCase();
+		if (accountEmail) {
+			userRecord.email = accountEmail;
+		}
 
 		await env.KV_BINDING.put(userKey, JSON.stringify(userRecord));
+
+		/*
+		 * Mirror the new plan into the email index, which stores the
+		 * same { username, email, usertype } triple as the user row.
+		 */
+		if (accountEmail) {
+			await env.KV_BINDING.put(
+				"email:" + accountEmail,
+				JSON.stringify({
+					username: String(userRecord.username || payment.username || ""),
+					email: accountEmail,
+					usertype: "paid_user"
+				})
+			);
+		}
 
 		payment.status = "approved";
 		payment.transactionNumber = transactionNumber;

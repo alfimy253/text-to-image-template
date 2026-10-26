@@ -899,13 +899,13 @@
 | `Current theme: Studio (default).` / `Current theme: Night Lab.` / `Current theme: Neo Brutalist.` | Appearance status line (`themeLabel()`) | the value stored under `config:theme` |
 | `Preview only — press Save theme to apply it for everyone.` | Appearance status line after picking | the preview is client-side only (RULE 19) |
 | `Saved — reload the studio page to see the new theme.` | Appearance status line after saving | server-side injection on the next page render |
-| `Free plan: 50 AI images every day · unlimited videos, AI scripts and voiceovers.` / `Paid plan (paid_user): 1,200 AI images every day.` | auth overlay (`.auth-plan-note`) | `CREDIT_PLANS.free/paid_user.limits` (RULE 20) |
+| `Free plan: 70,000 AI images every day · unlimited videos, AI scripts and voiceovers.` / `Paid plan (paid_user): 1,200 AI images every day.` | auth overlay (`.auth-plan-note`) | `CREDIT_PLANS.free/paid_user.limits` (RULE 20) |
 | `No account? Open the free studio — 10 AI images a day, counted per IP address.` | auth overlay (`.auth-guest-note`, link to `/free`) | `GUEST_PLAN.limits.images = 10`, `ipcredits:` keying (RULE 21) |
 | `Daily credits` · `Video projects Unlimited` · `AI images N / limit left today` · `AI scripts Unlimited` · `Voiceovers Unlimited` · `Used today: n images · n scripts · n voiceovers` · `Renews in Nh Nm (midnight UTC+8)` | credits pill + popover (`.credit-pill`, `.credit-popover`) | `CREDIT_PLANS`, `creditSummary()`, `creditResetsAt()` (RULE 20) |
-| `Create a free account — 50 images/day` | guest credits popover (`.credit-signup`) | the `free` plan's image limit vs the guest's 10 (RULE 21) |
-| `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).` + `Create a free account for 50 images per day.` (guests) | `429` body, shown in `#va-ai-status-N` and the quota alert | the same plan limits + the guest upgrade path (RULE 20/21) |
-| `Sign in to generate AI images — every free account gets 50 images per day. No account? Open /free for 10 images per day.` | `401` body from `/image/gen` | the `free` and guest image limits |
-| `Free: 50 AI images per day. Paid (paid_user): 1,200 AI images per day. … Counters renew every day at midnight (UTC+8).` | settings page, Plans & credits (`.cfg-note`) | `CREDIT_PLANS` + `creditResetsAt()` (RULE 20) |
+| `Create a free account — 70,000 images/day` | guest credits popover (`.credit-signup`) | the `free` plan's image limit vs the guest's 10 (RULE 21) |
+| `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).` + `Create a free account for 70,000 images per day.` (guests) | `429` body, shown in `#va-ai-status-N` and the quota alert | the same plan limits + the guest upgrade path (RULE 20/21) |
+| `Sign in to generate AI images — every free account gets 70,000 images per day. No account? Open /free for 10 images per day.` | `401` body from `/image/gen` | the `free` and guest image limits |
+| `Free: 70,000 AI images per day. Paid (paid_user): 1,200 AI images per day. … Counters renew every day at midnight (UTC+8).` | settings page, Accounts Credits (`.cfg-sub`) | `CREDIT_PLANS` + `creditResetsAt()` (RULE 20) |
 | `Guest credits by IP` / `Visitors who never sign in (GET /free) get 10 AI images per day. …` | settings page, guest table (`.cfg-group-title`, `.cfg-note`) | `GUEST_PLAN`, the `ipcredits:` table (RULE 21) |
 
 ### Blocking `alert()` boxes (35 — the app's only modal feedback)
@@ -920,7 +920,7 @@
 - AI images: `Enter an image prompt first.`, `Image generation failed: <error>`, and the
   pre-submit quota alert
   `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).`
-  (guests also get `Create a free account for 50 images per day.`).
+  (guests also get `Create a free account for 70,000 images per day.`).
 - Render: `Please wait for images to generate or upload your own!` (also gates the **🎬 Generate
   Videos** button), `<project>: add at least one image, GIF or MP4 first.`,
   `A video is already being generated — please wait for it to finish.`,
@@ -1071,7 +1071,7 @@
 - Every user record (`user:<username>`) carries `usertype`; `free_user` and any missing/unknown
   value read as the canonical `free` plan (so pre-credits accounts keep working).
   - `free` — unlimited video projects, unlimited AI scripts, unlimited voiceovers and
-    **50 AI images per day**.
+    **70,000 AI images per day**.
   - `paid_user` — the same unlimited tools plus **1,200 AI images per day**.
   - New accounts are written with `usertype: "free"` by `POST /api/signup`.
 - Today's counters live in `credits:<username>`:
@@ -1192,7 +1192,7 @@ addresses and gives visitors without an account a small, IP-metered allowance.
   - `PLAN_MODE = window.__PLAN_MODE || ""`; on `/free`, a `401` from `/api/session` boots the
     studio as `authAccess = "freemium"` and paints the guest credits pill
     (**Guest · 10 / 10 left today**).
-  - The guest popover adds **Create a free account — 50 images/day** (opens the sign-up
+  - The guest popover adds **Create a free account — 70,000 images/day** (opens the sign-up
     overlay); the `429` body and pre-submit check add the same upgrade hint.
   - Signing out of `/free` returns to guest mode rather than the landing page.
   - The auth overlay links to `/free`; the landing nav, plans section and footer all link to

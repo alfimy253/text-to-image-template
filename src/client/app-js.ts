@@ -11053,7 +11053,7 @@ export const APP_JS = `
 		}
 
 		/*
-		 * Daily image credits (50 on the free plan,
+		 * Daily image credits (70,000 on the free plan,
 		 * 1,200 on paid_user). The worker enforces
 		 * the real limit; this pre-check just avoids
 		 * a doomed pair of requests.
@@ -11066,12 +11066,14 @@ export const APP_JS = `
 		) {
 			const quotaMessage =
 				"Daily image credits used up (" +
-				creditImagesLimit() +
+				creditFormatNumber(
+					creditImagesLimit()
+				) +
 				" per day on the " +
 				creditPlanLabel() +
 				" plan). Credits renew at midnight (UTC+8)." +
 				(PLAN_MODE === "freemium"
-					? " Create a free account for 50 images per day."
+					? " Create a free account for 70,000 images per day."
 					: "");
 			if (statusEl) {
 				statusEl.textContent = quotaMessage;
@@ -11631,7 +11633,7 @@ export const APP_JS = `
 			'<button type="button" class="auth-close" id="auth-close" aria-label="Close">&times;</button>' +
 			'<div class="auth-title" id="auth-title">\ud83c\udfac YouTube Vibe Studio</div>' +
 			'<div class="auth-sub" id="auth-sub">Sign in to use the studio</div>' +
-			'<div class="auth-plan-note">Free plan: 50 AI images every day \u00b7 unlimited videos, AI scripts and voiceovers.<br>Paid plan (paid_user): 1,200 AI images every day.</div>' +
+			'<div class="auth-plan-note">Free plan: 70,000 AI images every day \u00b7 unlimited videos, AI scripts and voiceovers.<br>Paid plan (paid_user): 1,200 AI images every day.</div>' +
 			'<div class="auth-guest-note">No account? <a href="/free">Open the free studio</a> \u2014 10 AI images a day, counted per IP address.</div>' +
 			'<div class="auth-error" id="auth-error" role="alert"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
@@ -12625,7 +12627,7 @@ export const APP_JS = `
 	//  image allowance is spent.
 	//
 	//  free       unlimited videos / AI scripts / voiceovers,
-	//             50 AI images per day
+	//             70,000 AI images per day
 	//  paid_user  unlimited videos / AI scripts / voiceovers,
 	//             1,200 AI images per day
 	//  Every counter renews at midnight Asia/Taipei (UTC+8).
@@ -12633,6 +12635,26 @@ export const APP_JS = `
 
 	let creditState =
 		null;
+
+	/* 70000 -> "70,000" so a big allowance stays readable */
+	function creditFormatNumber(
+		value
+	) {
+
+		const number =
+			Number(value);
+
+		if (!isFinite(number)) {
+			return String(
+				value == null ? "" : value
+			);
+		}
+
+		return number.toLocaleString(
+			"en-US"
+		);
+
+	}
 
 	function creditPlanLabel() {
 
@@ -12665,7 +12687,7 @@ export const APP_JS = `
 			creditState.plan &&
 			creditState.plan.limits
 			? creditState.plan.limits.images
-			: 50;
+			: 70000;
 
 	}
 
@@ -12683,9 +12705,11 @@ export const APP_JS = `
 		}
 
 		return (
-			left +
+			creditFormatNumber(left) +
 			" / " +
-			creditImagesLimit() +
+			creditFormatNumber(
+				creditImagesLimit()
+			) +
 			" left today"
 		);
 
@@ -12768,10 +12792,15 @@ export const APP_JS = `
 		plural
 	) {
 
+		const value =
+			Number(count) || 0;
+
 		return (
-			count +
+			creditFormatNumber(
+				value
+			) +
 			" " +
-			(Number(count) === 1
+			(value === 1
 				? singular
 				: plural)
 		);
@@ -12956,7 +12985,7 @@ export const APP_JS = `
 
 		/*
 		 * A guest can turn the 10/day IP allowance into a
-		 * 50/day account at any time.
+		 * 70,000/day account at any time.
 		 */
 		if (
 			creditState &&
@@ -12977,7 +13006,7 @@ export const APP_JS = `
 				"credit-signup";
 
 			cta.textContent =
-				"Create a free account \u2014 50 images/day";
+				"Create a free account \u2014 70,000 images/day";
 
 			cta.addEventListener(
 				"click",
