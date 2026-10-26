@@ -76,6 +76,19 @@
 > strictly bounded by 3, while subsequent rows process without requiring the user to press Generate
 > again. Session record: `bug-fix-session-248.md`.
 >
+> **Session #251 (2026-10-26): 3-stage pipeline hardening, 1,800-char style/anti-distortion guards,
+> 3-images-per-3-seconds pacing, and Node.js-style non-blocking image queues.**
+> Extracted `POST /api/voiceover` into `src/modules/voiceover.ts` (Unicode `/[\p{L}\p{N}]/u`
+> speakable filtering, `<= 400`-char chunking, MP3 ID3v2 header stripping, sticky Deepgram Aura
+> fallbacks, bounded 15 s client `decodeBatchAudio`); capped `IMAGE_PROMPT_MAX_CHARS = 1800`
+> across `src/modules/image-prompts.ts` and `src/modules/image-batch.ts` with proportional
+> 4-paragraph preservation, per-style `IMAGE_STYLE_DISCIPLINE` locks, `IMAGE_ANTI_DISTORTION_GUARD`,
+> and expanded SDXL/Flux anti-distortion prompts; added 64 px SDXL dimension healing and model
+> fallbacks; and introduced `src/modules/image-queue.ts` (`ImageTaskQueue` +
+> `EventLoopCpuSerializer`) plus client `window.__IMAGE_TASK_RUNTIME` (round-robin event-driven
+> queues + off-thread Web Worker base64 decoding) pacing generation at **3 images per 3 seconds
+> per video/row** without blocking the main thread. See **RULE 28** and `bug-fix-session-251.md`.
+>
 > **Current SEO/template revision (2026-10-23):** short/long-tail overlap is allowed with shared
 > counts; long-tail keywords have no word/character length rule. RULE 13 now has one scene gallery,
 > animated objects in Graphics, working layer/rotation controls and required 5–7 ring uploads.
@@ -353,15 +366,20 @@
 - `GET /image/gen?prompt=&variant=` — the per-video AI panel.
   - `prompt` is required (`400 "Missing prompt"` otherwise); `variant` is echoed back in
     `X-Image-Variant`; also `Cache-Control: no-store`.
-  - The server appends `", 16:9 landscape, a completely text-free image"` to the prompt, sends a
-    long `negative_prompt` banning text, CJK characters, subtitles, signs, logos, watermarks and
-    numbers, **and** asks the model for a real size: `runImageModel()` always sends the module's
-    `IMAGE_WIDTH = 1024` / `IMAGE_HEIGHT = 576` (16:9) defaults. The panel's hint says
+  - Dispatched through the shared Node.js-style non-blocking `sharedImageTaskQueue`
+    (`src/modules/image-queue.ts`, keyed per user/IP group — see RULE 28). The server appends
+    `", 16:9 landscape, a completely text-free image"` to the prompt, condenses prompts to
+    `IMAGE_MODEL_PROMPT_MAX_CHARS = 1800`, sends `IMAGE_NEGATIVE_PROMPT` banning both text/scripts
+    and anatomical/structural distortion (`distorted, deformed, bad anatomy, extra/fused fingers,
+    warped perspective, bent architecture, …`), sets `guidance: 7.5` on 20-step SDXL base, heals
+    odd sub-1024 dimensions via `sdxlSafeDimensions()`, falls back to
+    `@cf/bytedance/stable-diffusion-xl-lightning` and `@cf/black-forest-labs/flux-1-schnell`, and
+    renders at `IMAGE_WIDTH = 1024` / `IMAGE_HEIGHT = 576` (16:9) defaults. The panel's hint says
     **landscape 16:9 · 1024×576** for exactly that reason; the old "480 px landscape" wording (and
     the unused `AI_IMAGE_WIDTH = 854` / `AI_IMAGE_HEIGHT = 480` pair next to it) never described a
     rendered file. See `toberesolved.md` A1-A3.
-  - Client behaviour: each submit is **2 parallel requests** (`variant` 1 and 2, fired through
-    `Promise.all`, not one after the other).
+  - Client behaviour: each submit schedules **2 parallel requests** (`variant` 1 and 2, dispatched
+    through `manualImageTaskQueue` inside `Promise.all`, not one after the other).
     - Restriction: while *this* video's script & style walkthrough is rendering its images
       (`project._imageFlowActive`), its **✨ Generate 2 Images** button is disabled
       (`setVaAiGenerateEnabled(n, false)`, re-enabled in `finalizeImagePromptFlow()`), and
@@ -503,38 +521,40 @@
 ---
 
 
-## RULE 8 — Voiceover is MeloTTS with defensive sanitising, chunking, retries and a foreign fallback
+## RULE 8 — Voiceover is MeloTTS with defensive sanitising, chunking, retries and layered fallbacks
 
-- `POST /api/voiceover` with `{text, lang}`:
-  - `env.AI` missing → `503`; empty text after cleaning → `400 "No script text to speak"`;
-    `lang` must be one of `en, zh, es, fr, hi, it, ja, ko` → else `400`.
+- `POST /api/voiceover` with `{text, lang}` (`src/modules/voiceover.ts`, invoked after the credit
+  gate in `src/index.ts`):
+  - `env.AI` missing → `503`; empty or non-speakable text after cleaning (no Unicode
+    `/[\p{L}\p{N}]/u` letter/digit) → `400 "No script text to speak"`; `lang` must be one of
+    `en, zh, es, fr, hi, it, ja, ko` → else `400`.
     - Restriction: the UI locks the voice select to **English only** (`disabled` select). The
       other seven languages are reachable only by calling the API directly.
-  - Text cleaning before synthesis (each step exists because the upstream TTS failed on it):
-    - strip control characters, collapse whitespace, `trim`;
+  - Text cleaning before synthesis (`sanitizeVoiceoverText`, each step exists because upstream
+    MeloTTS failed with `AiError 3043` on 0-phoneme or malformed inputs):
+    - strip URLs, markdown syntax, control/zero-width characters, and lone surrogates;
     - cap at **8 000 characters** — with a surrogate-pair guard so an emoji is never cut in half;
-    - normalise `—`/`–` → `-`, `…` → `...`, curly quotes → straight quotes, NBSP → space;
-    - drop lone surrogates.
-      - Rationale in code: a lone surrogate or unusual typography in the prompt triggers
-        upstream `AiError 3043: Internal server error`.
-  - Chunking: sentences are matched with `/[^.!?…]+[.!?…]*\s*/g` and packed into chunks of at
-    most **500 characters**; a single sentence longer than 500 chars is hard-split at 500 with
-    the same emoji guard.
+    - normalise `—`/`–` → `-`, `…` → `...`, curly quotes → straight quotes, NBSP → space, and
+      collapse standalone symbol/emoji runs.
+  - Chunking (`splitVoiceoverChunks`): sentences, clauses, and words are packed into chunks of at
+    most **`VOICEOVER_CHUNK_MAX = 400` characters** (with surrogate-pair-safe hard splits on
+    unbroken tokens) and re-filtered so every emitted chunk contains speakable `/[\p{L}\p{N}]/u`
+    characters.
     - Restriction: chunks are synthesised **sequentially** in a `for` loop, so a long script is
       as slow as the sum of its chunks.
-  - Per chunk: up to **3 attempts** with `400 ms * attempt` backoff; any failure logs
-    `[voiceover] tts error` and falls through to the free fallback TTS
-    (`FALLBACK_TTS_URL = "https://tts-api.netlify.app/"`, called with `?text=&lang=`).
-    - Restriction: a third-party host is now a runtime dependency of voiceover; if it also
-      fails the route returns `500 "TTS failed (chunk i of n): <last error>"`.
-  - Output normalisation: each chunk's audio is accepted as `ArrayBuffer`, `ReadableStream`,
-    `{byteLength}`, `{arrayBuffer()}`, base64 string, or `{audio: base64}`.
-    - Non-empty bytes are required or the route 500s with
-      `"Unexpected TTS output (chunk i of n)"`.
-  - Container handling: if **every** piece starts with `RIFF`, the fmt chunk of the first piece
-    and the data chunks of all pieces are reassembled into one valid WAV (correct RIFF sizes,
-    28-byte header) and returned as `audio/wav` + `voiceover.wav`; otherwise the bytes are
-    concatenated as `audio/mpeg` + `voiceover.mp3`.
+  - Per chunk: up to **3 attempts** on `@cf/myshell-ai/melotts` with `400 ms * attempt` backoff;
+    for English (`lang === "en"`), if MeloTTS fails, falls back stickily to native Workers AI MP3
+    models (`@cf/deepgram/aura-2-en`, `@cf/deepgram/aura-1`), and finally to
+    `FALLBACK_TTS_URL = "https://tts-api.netlify.app/"` under a 15 s timeout with strict audio
+    magic-byte / `Content-Type` validation (HTML/JSON error pages are rejected).
+  - Output normalisation: each chunk's audio is accepted as `Response`, `ArrayBuffer`,
+    `Uint8Array`, `ReadableStream`, `{byteLength}`, `{arrayBuffer()}`, base64 string, or
+    `{audio: base64}`.
+  - Container handling (`joinVoiceoverPieces`): if **every** piece starts with `RIFF`, the fmt
+    chunk of the first piece and the data chunks of all pieces are reassembled into one valid WAV
+    (correct RIFF sizes, 28-byte header) and returned as `audio/wav` + `voiceover.wav`; otherwise
+    leading duplicate ID3v2 headers on chunks `2..N` are stripped (`stripMp3Id3Tag`) before
+    concatenating as `audio/mpeg` + `voiceover.mp3`.
     - Restriction: mixed containers (some WAV, some MP3) silently fall into the "MP3" branch and
       produce a file that players may not decode cleanly. Documented as "rare".
   - The response is always `Content-Disposition: attachment` — the browser downloads it; it is
@@ -1866,9 +1886,12 @@ cites `kv-scale-test.md` §8, the last section of that document.
 
 **Remaining known limits**
 
-- A single batch is capped at 20 prompts and 4 parallel renders; a very slow upstream makes the
-  batch take longer, but the browser keeps receiving `tick` events and the 120 s idle watchdog
-  only fires when the stream goes completely silent.
+- A single batch is capped at 20 prompts (`IMAGE_PROMPT_MAX_CHARS = 1800` per prompt) and
+  dispatched through the Node.js-style non-blocking `sharedImageTaskQueue` at **3 images per
+  3 seconds per video/row** (`IMAGE_BATCH_CONCURRENCY = 3`, `IMAGE_BATCH_WAVE_INTERVAL_MS = 3000`,
+  `DEFAULT_GLOBAL_IMAGE_CONCURRENCY = 9` round-robin across active batches — see **RULE 28**). A
+  very slow upstream makes the batch take longer, but the browser keeps receiving `tick` events and
+  the 120 s idle watchdog only fires when the stream goes completely silent.
 - Motion graphics/animations are unaffected; only AI image generation changed.
 
 ## RULE 24 FOLLOW-UP — style dropdown, template controls and image-flow reliability (2026-10-24)
@@ -1942,11 +1965,18 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   they are buttons, **both at once**. There is no preview-only or export-only state, and a row with
   no script never gets a control at all (`generateBatchRows()` skips it).
 - **Pipeline** (`runBatchRow`):
-  `POST /api/voiceover {text, lang:"en"}` → `decodeBatchAudio` → `buildScriptCues(script, ms)` →
+  `POST /api/voiceover {text, lang:"en"}` → `decodeBatchAudio` (bounded by
+  `BATCH_AUDIO_DECODE_MS = 15000`, resuming suspended `AudioContext`s and falling back to
+  `row.minutes * 60000` ms) → `buildScriptCues(script, ms)` →
   `POST /api/image-prompts {topic, minutes, style, resolution, orientation, script}` →
-  `POST /api/image-batch {prompts, resolution, orientation}` (NDJSON) →
+  `POST /api/image-batch {prompts, resolution, orientation}` (NDJSON via `appImageStreamQueue` at
+  `BATCH_IMAGE_STREAM_CONCURRENCY = 3` and off-thread `decodeBase64ImageOffThread`) →
   `buildBatchSlides` → `animated = true`. `BATCH_REQUEST_TIMEOUT_MS = 240000` bounds each request
-  and `BATCH_SLIDE_DECODE_MS = 10000` bounds each `img.decode()`.
+  and `BATCH_SLIDE_DECODE_MS = 10000` bounds each `img.decode()` (timer cleared in `finally`,
+  yielding every 3 decoded slides). Both `#batch-generate-btn` and top-bar `#top-generate` trigger
+  `generateBatchRows()` / `stopBatchRows()` when in `"table"` layout, `syncBatchRowsFromDom()`
+  captures unfired inputs before running, and `resetClearedBatchRow()` resets a cleared finished
+  row back to `stage = "empty"` with pending Preview/Export text.
 - **Three rows at a time + staggered pipeline execution (Session #248).** `generateBatchRows()`
   builds the pending queue (`batchRowPending(row)` = has a script **and** `!batchRowFinished(row)`
   **and** `!row.running`), starts up to `BATCH_RUN_CONCURRENCY = 3` rows simultaneously in the
@@ -2132,3 +2162,103 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   left) and `tests/seo-plan-resilience.test.mjs` (8 planner/retry cases). `npm test` →
   **79/79** after the Session #211 second pass (the four new table/editor cases live in
   `tests/quick-batch-table.test.mjs`).
+
+---
+
+## RULE 28 — Session #251: 1,800-char style/anti-distortion guards, 3-per-3s pacing, Node.js-style non-blocking image queues & 3-stage pipeline repairs
+
+> Added 2026-10-26. Full root-cause and verification record: `bug-fix-session-251.md`.
+
+- **`IMAGE_PROMPT_MAX_CHARS = 1800` across writer and renderer.** Both `src/modules/image-prompts.ts`
+  and `src/modules/image-batch.ts` (`IMAGE_MODEL_PROMPT_MAX_CHARS = 1800`) enforce the 1,800-char
+  prompt ceiling (comfortably below SDXL's 2,048-char schema cap). `fitParagraphsToBudget()` trims
+  over-budget multi-paragraph prompts proportionally across paragraphs on word boundaries so all
+  three scene paragraphs plus the closing `Visual style:` paragraph remain intact; `condensePromptForModel()`
+  preserves the closing `Visual style:` directive if a raw caller passes a longer string.
+- **Strict style-fidelity discipline (`IMAGE_STYLE_DISCIPLINE`) & anti-distortion guards.**
+  - Every style in `IMAGE_STYLES` carries a medium-specific lock rule in `src/modules/image-prompts.ts`
+    forbidding style drift across incompatible art mediums (e.g., no DSLR lens clichés inside
+    `Pop Comic` or `Retro Poster`; no cartoon/ink cues inside `Documentary` or `Cinematic Film`).
+  - `IMAGE_ANTI_DISTORTION_GUARD` instructs the prompt writer to compose 1–2 clearly separated
+    focal subjects in grounded poses, natural human proportions, symmetrical facial features with
+    aligned eyes, relaxed five-fingered hands, straight architectural lines, coherent
+    single-viewpoint perspective, and solid non-merging object boundaries; `enforceParagraphGuard()`
+    and `applyImageStyleToPrompts()` reinforce both locks on every prompt.
+  - `IMAGE_NEGATIVE_PROMPT` (`src/modules/image-batch.ts`) bans anatomical, limb, hand/finger,
+    facial, and perspective distortions alongside text/watermarks; 20-step SDXL base uses
+    `IMAGE_GUIDANCE_SCALE = 7.5`; `@cf/black-forest-labs/flux-1-schnell` receives positive style,
+    perspective, anatomy, and text-free guardrails.
+- **Prompt LLM & SDXL resilience.**
+  - `src/modules/image-prompts.ts` caps primary output tokens at `IMAGE_PROMPT_MAX_TOKENS = 3584`
+    (preventing 8,192-token context-window overflow on `@cf/meta/llama-3.1-8b-instruct-fp8`), falls
+    back to `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, escapes unescaped control characters inside
+    JSON string literals (`repairJsonControlChars`), and salvages complete scenes from truncated
+    JSON arrays (`salvageJsonPromptArray`) so retries only request missing scenes.
+  - `runImageModel()` (`src/modules/image-batch.ts`) heals non-64-multiple sub-1024 frames via
+    `sdxlSafeDimensions()` (`1024×576`, `576×1024`, `1024×1024`), validates PNG/JPEG/WebP magic
+    bytes (`detectImageMime`), encodes base64 in O(N), and falls back to
+    `@cf/bytedance/stable-diffusion-xl-lightning` and `@cf/black-forest-labs/flux-1-schnell`.
+- **Node.js-style event-driven non-blocking image task queues & worker pools (3 images / 3 s per video/row).**
+  - **Worker (`src/modules/image-queue.ts`):** `sharedImageTaskQueue` (`ImageTaskQueue`) coordinates
+    both `POST /api/image-batch` and `GET /image/gen` on a single-threaded, non-blocking event loop.
+    Callers `enqueue()` in O(1); bursts coalesce into one microtask `pump()` pass; rate-throttled
+    lanes arm exact one-shot wakeup timers (zero polling); offloaded `env.AI.run()` calls execute
+    concurrently up to `DEFAULT_GLOBAL_IMAGE_CONCURRENCY = 9` globally and
+    `IMAGE_BATCH_CONCURRENCY = 3` per video/row within a `IMAGE_BATCH_WAVE_INTERVAL_MS = 3000` ms
+    sliding window (`IMAGE_BATCH_MIN_COOLDOWN_MS = 250` ms breathing gap after full bursts),
+    scheduled **round-robin** across active groups with **zero head-of-line blocking** and instant
+    `AbortSignal` queue eviction + credit refund. `EventLoopCpuSerializer` (`taskQueue.cpu`) runs
+    synchronous `bytesToBase64` + JSON NDJSON framing one image per event-loop turn via
+    `yieldEventLoop()`.
+  - **Browser client (`window.__IMAGE_TASK_RUNTIME` in `src/client/app-js.ts`):**
+    `createEventDrivenTaskQueue` (`appImageStreamQueue` at `BATCH_IMAGE_STREAM_CONCURRENCY = 3` and
+    `manualImageTaskQueue` at `3`) schedules Quick Batch Table (`requestBatchImages`), Editor SEO
+    walkthrough (`runImageBatch`), and Manual AI panel (`submitAiImages`) requests fairly in
+    round-robin with instant `cancelMatching()` eviction on `stopBatchRows()` and **zero
+    `setInterval`**. `decodeBase64ImageOffThread()` offloads base64 payloads `>= 16,384` chars to up
+    to `CLIENT_DECODE_THREAD_POOL_SIZE = 3` reusable `Blob` Web Workers transferring `ArrayBuffer`s
+    zero-copy, commits DOM cards/slides in arrival order on serialized promise chains, and falls
+    back automatically to `65,536`-char (`48 KiB` binary) event-loop-yielding slices when `Worker`
+    is unavailable.
+- **Deep-debug isolation, credit-refund, container & studio invariants.**
+  - **Cloudflare `IoContext` request isolation (`src/modules/image-queue.ts`):** `ImageTaskQueue`
+    uses per-caller `notifyStart` gates and per-request rate-window timers so `task.execute()` and
+    all timers execute strictly inside the **enqueuing request's own async `IoContext`** (never on
+    behalf of whichever earlier request's `finally` triggered `pump()`), handles read-only
+    `DOMException` `AbortError` instances without mutating `.name`, and decrements
+    `EventLoopCpuSerializer.pendingCount` before resolving callers.
+  - **Write-confirmed billing & backpressure stall guard (`src/modules/image-batch.ts`):**
+    `emitRawLine()` resolves `true` only after `writer.write()` succeeds and races `writer.write()`
+    against a `200 ms` post-abort drain watchdog so a wedged `TransformStream` never blocks
+    `finally` or `credits.refund(refundable)`; `generated++` is incremented strictly on confirmed
+    writes so `reader.cancel()` refunds every undelivered scene; `EventLoopCpuSerializer` is
+    instantiated per request; `GET /image/gen` bounds `runImageModel()` with
+    `IMAGE_ATTEMPT_TIMEOUT_MS`; and `imageCreditHooks()` supplies `subject` + explicit 429
+    exhaustion messaging.
+  - **Homogeneous voiceover containers & empty-output failover (`src/modules/voiceover.ts`):**
+    `sanitizeTextForTts()` strips bare `https?://` and `www.` URLs alongside markdown links; empty
+    primary MeloTTS outputs trigger retry + Aura-2 / `TTS_FALLBACK_URL` failover; `request.signal`
+    cancels mid-synthesis with HTTP `499`; and if a later chunk fails over from WAV (`RIFF`) to MP3,
+    earlier WAV chunks are re-synthesized via the MP3 fallback so `joinVoiceoverPieces()` never
+    mixes WAV and MP3 containers.
+  - **Prompt/SEO/payment resilience (`src/modules/image-prompts.ts`, `script-seo.ts`, `payments.ts`):**
+    `generateImagePrompts()` falls back to 70B whenever `collected.length < count` (even if primary
+    returned empty HTTP 200 replies), `parseImagePrompts()` uses `fitParagraphsToBudget()` and
+    `{...}` object fallback before `[...]`, `handleSeoScriptGeneration()` bounds planner (`45 s`)
+    and writer (`90 s`) calls with `runAiCallWithTimeout()`, and `payments.ts` checks base64 byte
+    size *before* `atob()` (`413`) and guards KV `JSON.parse()` calls (`500`).
+  - **Quick Batch orientation export & accordion deletion safety (`src/client/app-js.ts`,
+    `template-composer-js.ts`):** `batchFetch()` keeps `row.controller` + timeout active across
+    `consumeResponse` body reads (`blob()` / `json()`); `exportBatchRow()` passes
+    `frameWidth`/`frameHeight` from `batchRowDimensions(row)` into `generateMP4()` so Portrait and
+    Square rows render at their true aspect ratios instead of global `#res-select`;
+    `runImageBatch()` resolves `videoProjects.indexOf(flowProject) + 1` dynamically while
+    `deleteVideoAccordion()` marks `_deleted`, increments `_imageFlowSeq`, aborts active
+    controllers, evicts queued tasks in `appImageStreamQueue` / `manualImageTaskQueue`, and revokes
+    audio + AI card blob URLs so deleted videos never leak images into renumbered survivors;
+    `template-composer-js.ts` revokes failed `im.decode()` object URLs immediately and attaches
+    `<a download>` to `document.body`.
+- **Verification.** `tests/session-250-batch-pipeline.test.mjs` (13 tests) and
+  `tests/deep-debug-regressions.test.mjs` (6 deep-debug regression tests); `npm test` →
+  **120/120** passing across all 12 test files; `npx wrangler deploy --dry-run` clean.
+

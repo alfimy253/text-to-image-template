@@ -1735,15 +1735,16 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			photos = [];
 			for (const f of files) {
 				const u = URL.createObjectURL(f);
-				photoUrls.push(u);
 				const im = new Image();
 				im.src = u;
 				try {
 					await im.decode();
 				}
 				catch (decodeError) {
+					URL.revokeObjectURL(u);
 					continue;
 				}
+				photoUrls.push(u);
 				photos.push(im);
 			}
 			renderPhotoThumbs();
@@ -1957,7 +1958,9 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 					a.href = url;
 					a.download = name;
 					a.textContent = "Download MP4";
+					document.body.appendChild(a);
 					a.click();
+					a.remove();
 				}
 
 				if (progressEl) {

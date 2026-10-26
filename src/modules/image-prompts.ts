@@ -45,6 +45,17 @@ export const IMAGE_STYLES = [
 export type ImageStyle = (typeof IMAGE_STYLES)[number];
 export const DEFAULT_IMAGE_STYLE: ImageStyle = "Cinematic Film";
 
+/*
+ * `@cf/meta/llama-3.1-8b-instruct-fp8` has an ~8K token context window, so
+ * `max_tokens` must stay comfortably below `8192 - prompt_tokens`. If the
+ * primary model throws transport/context errors and produces zero prompts,
+ * fall back to the 70B fast instruct model (same fallback slug as `script-seo.ts`).
+ */
+export const IMAGE_PROMPT_MAX_TOKENS = 3584;
+export const IMAGE_PROMPT_FALLBACK_MODELS: readonly string[] = [
+	"@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+];
+
 export const IMAGE_STYLE_GUIDANCE: Record<ImageStyle, string> = {
 	"Cinematic Film": "cinematic film still, motivated dramatic lighting, layered depth, natural lens perspective, rich film color grade",
 	"Editorial Magazine": "premium editorial photography, deliberate art direction, clean composition, refined palette, polished magazine imagery",
@@ -140,7 +151,42 @@ export function summarizeScriptIdea(script: string, topic = "my video"): string 
  */
 export const IMAGE_PROMPT_MIN_PARAGRAPHS = 3;
 export const IMAGE_PROMPT_PARAGRAPH_MIN_WORDS = 30;
-export const IMAGE_PROMPT_MAX_CHARS = 2600;
+export const IMAGE_PROMPT_MAX_CHARS = 1800;
+
+/*
+ * Per-style discipline rules instructing the prompt-writer model how to adhere
+ * carefully to the selected visual style without drifting into conflicting
+ * mediums (for instance, slipping DSLR photo jargon into Pop Comic or Retro
+ * Poster, or cartoon ink cues into Documentary or Cinematic Film).
+ */
+export const IMAGE_STYLE_DISCIPLINE: Record<ImageStyle, string> = {
+	"Cinematic Film":
+		"Stay strictly inside grounded cinema aesthetics with motivated practical and key light, natural optical depth, and tactile physical materials; never mix in cartoon, comic ink, vector, or plastic CGI styling",
+	"Editorial Magazine":
+		"Stay strictly inside polished editorial magazine art direction with intentional studio or location lighting, refined colour harmony, and crisp real-world textures; never drift into comic linework, neon cyberpunk clutter, or fantasy painting",
+	"Kinetic Typography":
+		"Stay strictly inside clean motion-design graphic geometry, bold colour blocks, and directional visual rhythm with zero rendered letters, numerals, or faux text glyphs; never drift into muddy snapshot realism",
+	"Neon Night":
+		"Stay strictly inside nocturnal cyan-and-magenta neon lighting, wet specular reflections, deep rich shadows, and urban night atmosphere; never drift into flat daylight, pastel storybook, or vintage paper poster looks",
+	"Minimalist":
+		"Stay strictly inside uncluttered minimalist design with one clear focal subject, generous calm negative space, a restrained palette, and soft clean lighting; never crowd the frame with busy backgrounds or visual noise",
+	"Retro Poster":
+		"Stay strictly inside vintage screenprint poster illustration with bold flat graphic silhouettes, a limited mid-century palette, and subtle paper and halftone grain with zero lettering; never mix in raw DSLR photo terms or glossy 3D renders",
+	"Documentary":
+		"Stay strictly inside authentic candid documentary observation with natural available light, believable everyday surroundings, and understated true-to-life colour; never drift into staged glamour, neon fantasy, or illustrated styles",
+	"Split Composition":
+		"Stay strictly inside a clean two-zone split frame (one crisp vertical, horizontal, or diagonal divider) pairing two balanced, coherent visual moments with zero labels; never collapse into a messy multi-panel collage",
+	"Dream Glow":
+		"Stay strictly inside luminous dreamlike atmosphere with soft bloom, gentle haze, and harmonious ethereal gradients while keeping every subject structurally solid; never drift into gritty harsh realism or sharp comic ink",
+	"Pop Comic":
+		"Stay strictly inside bold pop-comic illustration with crisp black ink outlines, vibrant halftone accents, and punchy flat colour fills with zero speech bubbles or sound-effect text; never mix in photorealistic camera-lens jargon"
+};
+
+export const IMAGE_ANTI_DISTORTION_GUARD =
+	"ANTI-DISTORTION & STRUCTURAL GUARD: design clean, physically coherent compositions that prevent AI image distortion — " +
+	"feature 1 to 2 clearly separated focal subjects in natural, grounded poses rather than tangled crowds or overlapping bodies; " +
+	"whenever people or hands appear, specify natural human proportions, symmetrical facial features with aligned eyes, and relaxed five-fingered hands in clear, unobstructed positions (avoiding contorted wrists, extra or fused fingers, or duplicate limbs); " +
+	"keep architectural lines straight, perspective coherent from a single viewpoint, object boundaries solid without melting or floating parts, and foreground-to-background scale realistic.";
 
 /*
  * Splits one model-written prompt into its paragraphs. Blank-line separated
@@ -173,12 +219,61 @@ export function isThinPrompt(prompt: string): boolean {
 	);
 }
 
+function clipAtWordBoundary(value: string, maxChars: number): string {
+	const clean = value.replace(/\s+/g, " ").trim();
+	if (clean.length <= maxChars) return clean;
+	if (maxChars <= 1) return clean.slice(0, Math.max(0, maxChars));
+	const sliced = clean.slice(0, maxChars);
+	const boundary = sliced.replace(/\s+\S*$/, "").trim();
+	const chosen = boundary.length >= Math.floor(maxChars * 0.6) ? boundary : sliced.trim();
+	return chosen.replace(/[\s,;:.!?]+$/g, "");
+}
+
+/*
+ * Trims a multi-paragraph prompt proportionally across paragraphs when it
+ * exceeds `maxChars`, so no closing paragraph is sliced off and words are not
+ * chopped mid-token. Short prompts (`<= maxChars`) are returned untouched.
+ */
+function fitParagraphsToBudget(prompt: string, maxChars: number): string {
+	const trimmed = prompt.replace(/[\s,;:.!?]+$/g, "");
+	if (trimmed.length <= maxChars) return trimmed;
+	const paragraphs = splitPromptParagraphs(prompt);
+	if (paragraphs.length <= 1) {
+		return clipAtWordBoundary(trimmed, maxChars);
+	}
+	const separatorCost = (paragraphs.length - 1) * 2;
+	const textBudget = Math.max(paragraphs.length * 24, maxChars - separatorCost);
+	const totalChars = paragraphs.reduce((sum, p) => sum + p.length, 0) || 1;
+	const floorPerParagraph = Math.min(80, Math.floor(textBudget / paragraphs.length));
+	const rawBudgets = paragraphs.map((p) =>
+		Math.max(floorPerParagraph, Math.floor((p.length / totalChars) * textBudget))
+	);
+	let allocated = rawBudgets.reduce((sum, b) => sum + b, 0);
+	while (allocated > textBudget) {
+		let maxIdx = 0;
+		for (let i = 1; i < rawBudgets.length; i++) {
+			if (rawBudgets[i] > rawBudgets[maxIdx]) maxIdx = i;
+		}
+		if (rawBudgets[maxIdx] <= 24) break;
+		rawBudgets[maxIdx]--;
+		allocated--;
+	}
+	const fitted = paragraphs
+		.map((p, idx) => clipAtWordBoundary(p, rawBudgets[idx]))
+		.filter(Boolean)
+		.join("\n\n");
+	return fitted.length <= maxChars
+		? fitted
+		: clipAtWordBoundary(fitted, maxChars);
+}
+
 /*
  * Quality / style-enhancer guard applied to the writer's own answer. A scene
  * the model returned shorter than three paragraphs is topped up with
- * style-derived depth paragraphs (light, camera, colour grade) so the image
- * model always receives a full, three-paragraph prompt. Scenes are never
- * dropped — the flow is deliberately best-effort.
+ * style-derived depth paragraphs (light, camera, colour grade, anti-distortion
+ * geometry) so the image model always receives a full, three-paragraph prompt
+ * faithful to the chosen style. Scenes are never dropped — the flow is
+ * deliberately best-effort.
  */
 export function enforceParagraphGuard(prompt: string, styleValue: unknown): string {
 	const style = normalizeImageStyle(styleValue) || DEFAULT_IMAGE_STYLE;
@@ -189,9 +284,11 @@ export function enforceParagraphGuard(prompt: string, styleValue: unknown): stri
 		.filter(Boolean);
 	const fillers = [
 		"Atmosphere and light: " + (beats[1] || beats[0] || styleGuide) +
-			", with a readable foreground, midground and background so the scene has real depth, and light that clearly comes from a motivated source inside the frame.",
+			", with a readable foreground, midground and background so the scene has real depth, coherent perspective, and light that clearly comes from a motivated source inside the frame in strict " +
+			style + " aesthetics.",
 		"Camera and finish: " + (beats[2] || beats[0] || styleGuide) +
-			", framed as one decisive moment with a deliberate composition, balanced negative space, realistic scale and a consistent colour grade across the sequence."
+			", framed as one decisive moment with a deliberate composition, balanced negative space, realistic scale, intact natural proportions, crisp undistorted geometry, and a consistent " +
+			style + " colour grade across the sequence."
 	];
 
 	const paragraphs = splitPromptParagraphs(prompt);
@@ -204,9 +301,14 @@ export function enforceParagraphGuard(prompt: string, styleValue: unknown): stri
 	const guarded = paragraphs.map((paragraph, index) =>
 		index === 0 || countWords(paragraph) >= IMAGE_PROMPT_PARAGRAPH_MIN_WORDS
 			? paragraph
-			: paragraph + " " + styleGuide + "."
+			: paragraph +
+				" Rendered carefully in " +
+				style +
+				" (" +
+				styleGuide +
+				") with natural proportions and clean undistorted forms."
 	);
-	return guarded.join("\n\n").replace(/\s+$/g, "").slice(0, IMAGE_PROMPT_MAX_CHARS);
+	return fitParagraphsToBudget(guarded.join("\n\n").replace(/\s+$/g, ""), IMAGE_PROMPT_MAX_CHARS);
 }
 
 /*
@@ -220,6 +322,7 @@ export function buildImagePromptInstruction(
 ): string {
 	const style = normalizeImageStyle(input.style) || DEFAULT_IMAGE_STYLE;
 	const styleGuide = IMAGE_STYLE_GUIDANCE[style];
+	const styleDiscipline = IMAGE_STYLE_DISCIPLINE[style];
 	const topic = String(input.topic || "my video").replace(/\s+/g, " ").trim().slice(0, 160) || "my video";
 	const frame = imageFrameFor(input.resolution, input.orientation);
 	const frameRule =
@@ -250,11 +353,16 @@ export function buildImagePromptInstruction(
 		"Answer with ONLY one JSON object, no prose and no code fences. " +
 		"Treat the short script idea below as the general meaning of the whole video. Create broad, representative scenes that portray its central idea and progression; do not make a literal shot for every line of narration or copy lines from the script. " +
 		"The video topic is: " + topic + ". The script length is " + input.minutes + " minute(s), so return exactly " + count + " image prompts in opening-to-closing order. " +
-		"Every prompt must consistently follow the same selected video image style: " + style + ". Style direction: " + styleGuide + ". Apply this visual language to every scene; do not mix in another aesthetic. " +
+		"STRICT STYLE FIDELITY — BE EXTRA CAREFUL FOLLOWING THE SELECTED STYLE: Every prompt must consistently follow the same selected video image style: " + style + ". " +
+		"Style direction: " + styleGuide + ". " + styleDiscipline + ". " +
+		"Check every paragraph before emitting it to ensure its lighting, textures, palette, and medium vocabulary stay 100% faithful to " + style + " without drifting into another visual style or mixing incompatible art mediums. " +
 		frameRule + " " +
-		"QUALITY / STYLE GUARD - LENGTH: every prompt must be at least " + IMAGE_PROMPT_MIN_PARAGRAPHS + " paragraphs long, separated by a blank line, written inside one JSON string with \\n\\n between the paragraphs. " +
-		"Paragraph 1 = the subject and its action in this scene. Paragraph 2 = the setting, atmosphere, weather, time of day and light. Paragraph 3 = camera and lens (shot size, angle, height, depth of field), colour grade and the finishing style notes. " +
-		"Each paragraph needs at least " + IMAGE_PROMPT_PARAGRAPH_MIN_WORDS + " words of concrete, filmable visual detail; a prompt of one or two short sentences is rejected and re-asked. Do not pad with filler, repeat a sentence, or describe the narration - add real visual information instead. " +
+		IMAGE_ANTI_DISTORTION_GUARD + " " +
+		"QUALITY / STYLE GUARD - LENGTH: every prompt must be at least " + IMAGE_PROMPT_MIN_PARAGRAPHS + " paragraphs long, separated by a blank line, and at most " + IMAGE_PROMPT_MAX_CHARS + " characters total, written inside one JSON string with \\n\\n between the paragraphs. " +
+		"Paragraph 1 = the subject and its action in this scene, with clear, grounded posture and natural proportions. " +
+		"Paragraph 2 = the setting, atmosphere, weather, time of day and light, with coherent perspective and solid spatial depth in " + style + ". " +
+		"Paragraph 3 = camera and lens (shot size, angle, height, depth of field or medium-appropriate framing), colour grade and the finishing " + style + " style and anti-distortion clarity notes. " +
+		"Each paragraph needs at least " + IMAGE_PROMPT_PARAGRAPH_MIN_WORDS + " words of concrete, filmable visual detail (aim for roughly 700 to 1,350 characters per three-paragraph scene so it fits cleanly within the " + IMAGE_PROMPT_MAX_CHARS + "-character limit); a prompt of one or two short sentences is rejected and re-asked. Do not pad with filler, repeat a sentence, or describe the narration - add real visual information instead. " +
 		"Vary scene scale and angle while keeping the sequence coherent and relevant to the basic script idea. " +
 		"No rendered text, words, letters, captions, logos, watermarks or numbers inside any image. " +
 		(keywords ? "SEO keywords are context only; use their subjects when natural, never render the words: " + keywords + ". " : "") +
@@ -265,17 +373,24 @@ export function buildImagePromptInstruction(
 
 /*
  * Final pass over every scene prompt: the paragraph guard first, then the
- * selected video style appended as its own closing paragraph so the style can
- * never be truncated away by a long scene description.
+ * selected video style + anti-distortion lock appended as its own closing
+ * paragraph so neither can ever be truncated away by a long scene description.
  */
 export function applyImageStyleToPrompts(prompts: string[], styleValue: unknown): string[] {
 	const style = normalizeImageStyle(styleValue) || DEFAULT_IMAGE_STYLE;
-	const suffix = "Visual style: " + style + " — " + IMAGE_STYLE_GUIDANCE[style] + ".";
+	const suffix =
+		"Visual style: " +
+		style +
+		" — " +
+		IMAGE_STYLE_GUIDANCE[style] +
+		". Strictly maintain pure " +
+		style +
+		" aesthetics with zero style drift, natural proportions, coherent perspective, intact anatomy, and crisp undistorted geometry.";
 	const maxSceneChars = Math.max(240, IMAGE_PROMPT_MAX_CHARS - suffix.length - 2);
 	return prompts.map((prompt) => {
-		const guarded = enforceParagraphGuard(prompt, style).slice(0, maxSceneChars)
+		const guarded = fitParagraphsToBudget(enforceParagraphGuard(prompt, style), maxSceneChars)
 			.replace(/[\s,;:.!?]+$/g, "");
-		return (guarded ? guarded + "\n\n" : "") + suffix;
+		return ((guarded ? guarded + "\n\n" : "") + suffix).slice(0, IMAGE_PROMPT_MAX_CHARS);
 	});
 }
 
@@ -296,6 +411,219 @@ export function normalizePromptEntry(value: string): string {
 		.trim();
 }
 
+/*
+ * Instruct models asked for `\n\n` paragraph breaks frequently emit literal
+ * 0x0A newlines or 0x09 tabs inside `"..."` JSON strings (plus trailing commas
+ * before `]` / `}`), which causes `JSON.parse()` to throw. Escape control
+ * characters strictly inside JSON string literals while leaving structural
+ * whitespace untouched.
+ */
+export function repairJsonControlChars(source: string): string {
+	let out = "";
+	let inString = false;
+	let escaped = false;
+
+	for (let i = 0; i < source.length; i++) {
+		const ch = source[i];
+		const code = source.charCodeAt(i);
+
+		if (inString) {
+			if (escaped) {
+				out += ch;
+				escaped = false;
+				continue;
+			}
+			if (ch === "\\") {
+				out += ch;
+				escaped = true;
+				continue;
+			}
+			if (ch === '"') {
+				out += ch;
+				inString = false;
+				continue;
+			}
+			if (ch === "\n") {
+				out += "\\n";
+				continue;
+			}
+			if (ch === "\r") {
+				out += "\\r";
+				continue;
+			}
+			if (ch === "\t") {
+				out += "\\t";
+				continue;
+			}
+			if (code < 0x20) {
+				out += " ";
+				continue;
+			}
+			out += ch;
+			continue;
+		}
+
+		if (ch === '"') {
+			inString = true;
+			out += ch;
+			continue;
+		}
+		out += ch;
+	}
+
+	/* Remove trailing commas outside string literals (`["a",]` -> `["a"]`). */
+	let cleaned = "";
+	inString = false;
+	escaped = false;
+	for (let i = 0; i < out.length; i++) {
+		const ch = out[i];
+		if (inString) {
+			cleaned += ch;
+			if (escaped) {
+				escaped = false;
+			} else if (ch === "\\") {
+				escaped = true;
+			} else if (ch === '"') {
+				inString = false;
+			}
+			continue;
+		}
+		if (ch === '"') {
+			inString = true;
+			cleaned += ch;
+			continue;
+		}
+		if (ch === ",") {
+			let j = i + 1;
+			while (j < out.length && /\s/.test(out[j])) j++;
+			if (j < out.length && (out[j] === "]" || out[j] === "}")) {
+				continue;
+			}
+		}
+		cleaned += ch;
+	}
+
+	return cleaned;
+}
+
+/*
+ * When a large prompt batch hits `max_tokens` mid-array
+ * (`{"prompts":["scene 1...","scene 2...","truncated...`), extract every
+ * COMPLETE JSON string element inside the array and drop only the unfinished
+ * tail item so the next top-up attempt only requests the remaining scenes.
+ */
+function salvageJsonPromptArray(repairedJson: string): string[] {
+	const keyMatch = /"(?:prompts|images|scenes|items)"\s*:\s*\[/i.exec(repairedJson);
+	const startIdx = keyMatch
+		? keyMatch.index + keyMatch[0].length
+		: repairedJson.indexOf("[") !== -1
+			? repairedJson.indexOf("[") + 1
+			: -1;
+	if (startIdx === -1) return [];
+
+	const items: string[] = [];
+	let i = startIdx;
+	while (i < repairedJson.length) {
+		const ch = repairedJson[i];
+		if (/\s|,/.test(ch)) {
+			i++;
+			continue;
+		}
+		if (ch === "]") break;
+		if (ch === '"') {
+			let end = i + 1;
+			let escaped = false;
+			let closed = false;
+			while (end < repairedJson.length) {
+				const c = repairedJson[end];
+				if (escaped) {
+					escaped = false;
+				} else if (c === "\\") {
+					escaped = true;
+				} else if (c === '"') {
+					closed = true;
+					break;
+				}
+				end++;
+			}
+			if (!closed) {
+				/* Truncated final string literal — stop cleanly. */
+				break;
+			}
+			const literal = repairedJson.slice(i, end + 1);
+			try {
+				const parsed = JSON.parse(literal);
+				if (typeof parsed === "string" && parsed.trim()) {
+					items.push(parsed);
+				}
+			} catch {
+				/* Skip malformed string literal */
+			}
+			i = end + 1;
+			continue;
+		}
+		/* Handle array of objects `[{"prompt": "..."}, ...]` */
+		if (ch === "{") {
+			let depth = 0;
+			let end = i;
+			let inStr = false;
+			let esc = false;
+			while (end < repairedJson.length) {
+				const c = repairedJson[end];
+				if (inStr) {
+					if (esc) esc = false;
+					else if (c === "\\") esc = true;
+					else if (c === '"') inStr = false;
+				} else {
+					if (c === '"') inStr = true;
+					else if (c === "{") depth++;
+					else if (c === "}") {
+						depth--;
+						if (depth === 0) break;
+					}
+				}
+				end++;
+			}
+			if (depth !== 0) break;
+			try {
+				const obj = JSON.parse(repairedJson.slice(i, end + 1)) as Record<string, unknown>;
+				const text = coerceEntryString(obj);
+				if (text) items.push(text);
+			} catch {
+				/* Skip malformed object */
+			}
+			i = end + 1;
+			continue;
+		}
+		i++;
+	}
+	return items;
+}
+
+function coerceEntryString(entry: unknown): string {
+	if (typeof entry === "string") return entry;
+	if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+		const rec = entry as Record<string, unknown>;
+		for (const key of ["prompt", "description", "scene", "text", "visual", "content"]) {
+			if (typeof rec[key] === "string" && (rec[key] as string).trim()) {
+				return rec[key] as string;
+			}
+		}
+	}
+	return "";
+}
+
+function extractPromptArrayFromParsed(parsed: unknown): unknown[] {
+	if (Array.isArray(parsed)) return parsed;
+	if (parsed && typeof parsed === "object") {
+		const rec = parsed as Record<string, unknown>;
+		for (const key of ["prompts", "images", "scenes", "items"]) {
+			if (Array.isArray(rec[key])) return rec[key] as unknown[];
+		}
+	}
+	return [];
+}
+
 export function parseImagePrompts(text: string, expectedCount: number): string[] {
 	const raw = String(text || "").trim();
 	let list: unknown[] = [];
@@ -310,19 +638,31 @@ export function parseImagePrompts(text: string, expectedCount: number): string[]
 				}
 			}
 		}
-		const objStart = jsonText.indexOf("{");
-		const arrStart = jsonText.indexOf("[");
-		try {
-			if (arrStart !== -1 && (objStart === -1 || arrStart < objStart)) {
-				const parsed = JSON.parse(jsonText.slice(arrStart, jsonText.lastIndexOf("]") + 1));
-				if (Array.isArray(parsed)) list = parsed;
-			} else if (objStart !== -1) {
-				const parsed = JSON.parse(jsonText.slice(objStart, jsonText.lastIndexOf("}") + 1)) as Record<string, unknown>;
-				if (Array.isArray(parsed.prompts)) list = parsed.prompts;
-				else if (Array.isArray(parsed.images)) list = parsed.images;
+		const repaired = repairJsonControlChars(jsonText);
+		const objStart = repaired.indexOf("{");
+		const arrStart = repaired.indexOf("[");
+		if (arrStart !== -1 && (objStart === -1 || arrStart < objStart)) {
+			try {
+				const arrEnd = repaired.lastIndexOf("]");
+				if (arrEnd > arrStart) {
+					list = extractPromptArrayFromParsed(JSON.parse(repaired.slice(arrStart, arrEnd + 1)));
+				}
+			} catch {
+				list = [];
 			}
-		} catch {
-			list = [];
+		}
+		if (!list.length && objStart !== -1) {
+			try {
+				const objEnd = repaired.lastIndexOf("}");
+				if (objEnd > objStart) {
+					list = extractPromptArrayFromParsed(JSON.parse(repaired.slice(objStart, objEnd + 1)));
+				}
+			} catch {
+				list = [];
+			}
+		}
+		if (!list.length && (objStart !== -1 || arrStart !== -1)) {
+			list = salvageJsonPromptArray(repaired);
 		}
 		if (!list.length) {
 			list = rescuePromptList(raw);
@@ -330,12 +670,14 @@ export function parseImagePrompts(text: string, expectedCount: number): string[]
 	}
 	const prompts: string[] = [];
 	for (const entry of list) {
-		const cleaned = normalizePromptEntry(typeof entry === "string" ? entry : JSON.stringify(entry ?? ""))
+		const rawEntry = coerceEntryString(entry);
+		if (!rawEntry) continue;
+		const normalized = normalizePromptEntry(rawEntry)
 			.split(/\n{2,}/)
 			.map((paragraph) => paragraph.trim())
 			.filter((paragraph) => paragraph && paragraph.indexOf("-->") === -1)
-			.join("\n\n")
-			.slice(0, IMAGE_PROMPT_MAX_CHARS);
+			.join("\n\n");
+		const cleaned = fitParagraphsToBudget(normalized, IMAGE_PROMPT_MAX_CHARS);
 		if (cleaned && prompts.indexOf(cleaned) === -1) prompts.push(cleaned);
 		if (prompts.length >= expectedCount) break;
 	}
@@ -361,6 +703,17 @@ function rescuePromptList(raw: string): string[] {
 			if (current.length) current.push("");
 			continue;
 		}
+		/* Ignore markdown code fences and bare JSON wrapper tokens */
+		if (/^```/.test(trimmed)) continue;
+		if (/^(?:\{|\}|\[|\]|,|"(?:prompts|images|scenes|items)"\s*:\s*\[?)$/i.test(trimmed)) {
+			continue;
+		}
+		const sceneHeading = /^(?:scene|prompt|image)\s+\d+\s*[:.)-]?\s*(.*)$/i.exec(trimmed);
+		if (sceneHeading) {
+			flush();
+			if (sceneHeading[1]) current.push(sceneHeading[1]);
+			continue;
+		}
 		const marker = /^(?:[-*•]|\d+[.)])\s+/.exec(trimmed);
 		if (marker) {
 			flush();
@@ -374,12 +727,39 @@ function rescuePromptList(raw: string): string[] {
 	return entries;
 }
 
-/* `env.AI.run()` text models answer `{response}`; tolerate a plain string. */
+/*
+ * `env.AI.run()` text models usually answer `{response: "..."}`, but newer
+ * Llama post-processors on Workers AI can auto-parse valid JSON into
+ * `{response: {prompts: [...]}}` (an object) or chat-completion `{choices}`.
+ */
 function aiText(result: unknown): string {
 	if (!result) return "";
 	if (typeof result === "string") return result;
-	const value = result as { response?: unknown };
-	if (typeof value.response === "string") return value.response;
+	if (Array.isArray(result)) return JSON.stringify(result);
+	const obj = result as Record<string, unknown>;
+	if (typeof obj.response === "string") return obj.response;
+	if (obj.response && typeof obj.response === "object") {
+		return JSON.stringify(obj.response);
+	}
+	if (typeof obj.output_text === "string") return obj.output_text;
+	if (obj.result && typeof obj.result === "object") {
+		const inner = obj.result as Record<string, unknown>;
+		if (typeof inner.response === "string") return inner.response;
+		if (inner.response && typeof inner.response === "object") {
+			return JSON.stringify(inner.response);
+		}
+	}
+	if (Array.isArray(obj.choices) && obj.choices.length > 0) {
+		const first = obj.choices[0] as Record<string, unknown>;
+		if (first && first.message && typeof first.message === "object") {
+			const content = (first.message as Record<string, unknown>).content;
+			if (typeof content === "string") return content;
+		}
+		if (first && typeof first.text === "string") return first.text;
+	}
+	if (Array.isArray(obj.prompts) || Array.isArray(obj.images)) {
+		return JSON.stringify(obj);
+	}
 	return "";
 }
 
@@ -417,39 +797,63 @@ function errorMessage(error: unknown): string {
 export async function generateImagePrompts(
 	env: AiEnv,
 	model: string,
-	input: ImagePromptInput
+	input: ImagePromptInput,
+	fallbackModels: readonly string[] = IMAGE_PROMPT_FALLBACK_MODELS
 ): Promise<string[]> {
 	const expectedCount = imagePromptCountForMinutes(input.minutes);
 	const collected: string[] = [];
 	let lastError = "";
 
-	for (let attempt = 1; attempt <= 3 && collected.length < expectedCount; attempt++) {
-		const missing = expectedCount - collected.length;
-		let prompt = buildImagePromptInstruction(input, missing);
-		if (collected.length) {
-			prompt +=
-				" The sequence already has these prompts, do not repeat them: " +
-				collected.slice(-4).map((entry) => entry.slice(0, 160)).join(" | ") +
-				" Continue the sequence with exactly " + missing + " new prompts, each one as long as the rule above requires.";
-		}
-		try {
-			const result = await withTimeout(
-				env.AI!.run(model, {
-					prompt,
-					/* Three rich paragraphs per scene cost far more tokens than a
-					 * one-liner did: budget ~800 tokens per prompt. */
-					max_tokens: Math.min(16384, Math.max(1024, missing * 800)),
-					temperature: attempt === 1 ? 0.65 : 0.45
-				}),
-				IMAGE_PROMPT_TIMEOUT_MS,
-				"Image prompt generation"
-			);
-			const parsed = parseImagePrompts(aiText(result), missing);
-			for (const entry of parsed) {
-				if (collected.indexOf(entry) === -1) collected.push(entry);
+	const runModelPass = async (
+		slug: string,
+		maxAttempts: number,
+		tokenCeiling: number
+	): Promise<boolean> => {
+		let threw = false;
+		for (let attempt = 1; attempt <= maxAttempts && collected.length < expectedCount; attempt++) {
+			const missing = expectedCount - collected.length;
+			let prompt = buildImagePromptInstruction(input, missing);
+			if (collected.length) {
+				prompt +=
+					" The sequence already has these prompts, do not repeat them: " +
+					collected.slice(-4).map((entry) => entry.slice(0, 160)).join(" | ") +
+					" Continue the sequence with exactly " + missing + " new prompts, each one as long as the rule above requires.";
 			}
-		} catch (error) {
-			lastError = errorMessage(error);
+			try {
+				const result = await withTimeout(
+					env.AI!.run(slug, {
+						prompt,
+						/*
+						 * Keep `max_tokens` safely inside `@cf/meta/llama-3.1-8b-instruct-fp8`'s
+						 * ~8K context window (`prompt_tokens + max_tokens <= 8192`). If a large
+						 * batch truncates mid-array, `salvageJsonPromptArray()` keeps every
+						 * complete scene and the next iteration tops up the remainder.
+						 */
+						max_tokens: Math.min(tokenCeiling, Math.max(1024, missing * 240)),
+						temperature: attempt === 1 ? 0.65 : 0.45
+					}),
+					IMAGE_PROMPT_TIMEOUT_MS,
+					"Image prompt generation"
+				);
+				const parsed = parseImagePrompts(aiText(result), missing);
+				for (const entry of parsed) {
+					if (collected.indexOf(entry) === -1) collected.push(entry);
+				}
+			} catch (error) {
+				threw = true;
+				lastError = errorMessage(error);
+			}
+		}
+		return threw;
+	};
+
+	await runModelPass(model, 3, IMAGE_PROMPT_MAX_TOKENS);
+
+	if (!collected.length) {
+		for (const fbSlug of fallbackModels) {
+			if (!fbSlug || fbSlug === model) continue;
+			await runModelPass(fbSlug, 2, 4096);
+			if (collected.length) break;
 		}
 	}
 

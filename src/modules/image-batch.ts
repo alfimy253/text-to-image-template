@@ -27,13 +27,32 @@
  * refunded for every image that fails.
  */
 
+import {
+	EventLoopCpuSerializer,
+	ImageTaskQueue,
+	sharedImageTaskQueue,
+	DEFAULT_GLOBAL_IMAGE_CONCURRENCY
+} from "./image-queue";
+
+export { ImageTaskQueue, sharedImageTaskQueue, DEFAULT_GLOBAL_IMAGE_CONCURRENCY };
+
 export const IMAGE_MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0";
 
 /* A video gallery holds 25 stills; no batch may exceed the 20-prompt maximum. */
 export const IMAGE_BATCH_MAX_PROMPTS = 20;
 
-/* Images rendered in parallel inside one request. */
-export const IMAGE_BATCH_CONCURRENCY = 4;
+/*
+ * Paced wave generation per video/row: render at most 3 images per 3-second
+ * window (`IMAGE_BATCH_CONCURRENCY = 3` every `IMAGE_BATCH_WAVE_INTERVAL_MS = 3000` ms,
+ * with at least `IMAGE_BATCH_MIN_COOLDOWN_MS` of breathing room between waves)
+ * so neither the Worker isolate nor the browser decoder suffers CPU spikes.
+ */
+export const IMAGE_BATCH_CONCURRENCY = 3;
+export const IMAGE_BATCH_WAVE_INTERVAL_MS = 3000;
+export const IMAGE_BATCH_MIN_COOLDOWN_MS = 250;
+
+/* Classifier-free guidance scale for 20-step SDXL base style & anatomy adherence. */
+export const IMAGE_GUIDANCE_SCALE = 7.5;
 
 /* Attempts per image (1 try + 1 retry) before the scene is reported failed. */
 export const IMAGE_BATCH_ATTEMPTS = 2;
@@ -133,9 +152,13 @@ export function sanitizeImageFrame(body: Record<string, unknown>): ImageFrame | 
 	return imageFrameFor(rawResolution, rawOrientation);
 }
 
-/* The model is text-free by design; the negative prompt keeps it that way. */
+/*
+ * The model is text-free by design and guarded against anatomical, perspective,
+ * and structural distortion; the negative prompt reinforces both constraints.
+ */
 export const IMAGE_NEGATIVE_PROMPT =
-	"text, words, letters, writing, script, kanji, Chinese characters, Japanese characters, hiragana, katakana, CJK characters, subtitles, captions, signs, billboards, logos, watermarks, typography, numbers";
+	"text, words, letters, writing, script, kanji, Chinese characters, Japanese characters, hiragana, katakana, CJK characters, subtitles, captions, signs, billboards, logos, watermarks, typography, numbers, " +
+	"distorted, deformed, disfigured, bad anatomy, bad proportions, malformed limbs, extra limbs, missing limbs, fused limbs, floating limbs, extra fingers, fused fingers, too many fingers, mutated hands, poorly drawn hands, poorly drawn face, asymmetrical eyes, cross-eyed, duplicate faces, cloned body, twisted torso, warped perspective, bent architecture, melted objects, blurry, out of focus, jpeg artifacts, lowres, cropped, worst quality";
 
 /*
  * How long one prompt LLM call may take before the batch gives up. The writer
@@ -181,22 +204,91 @@ function json(data: unknown, status = 200): Response {
 /* --- byte <-> base64 (no Buffer / atob dependency assumptions) ---------- */
 
 export function bytesToBase64(bytes: Uint8Array): string {
-	let binary = "";
+	const native = bytes as unknown as { toBase64?: () => string };
+	if (typeof native.toBase64 === "function") {
+		return native.toBase64();
+	}
+	const globalBuf = (globalThis as unknown as {
+		Buffer?: {
+			from: (buf: ArrayBufferLike, offset: number, length: number) => {
+				toString: (enc: string) => string;
+			};
+		};
+	}).Buffer;
+	if (globalBuf && typeof globalBuf.from === "function") {
+		return globalBuf
+			.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+			.toString("base64");
+	}
+	const parts: string[] = [];
 	const chunk = 0x8000;
 	for (let i = 0; i < bytes.length; i += chunk) {
-		binary += String.fromCharCode.apply(
-			null,
-			Array.from(bytes.subarray(i, i + chunk)) as unknown as number[]
+		parts.push(
+			String.fromCharCode.apply(
+				null,
+				bytes.subarray(i, i + chunk) as unknown as number[]
+			)
 		);
 	}
-	return btoa(binary);
+	return btoa(parts.join(""));
 }
 
 export function base64ToBytes(value: string): Uint8Array {
-	const binary = atob(value);
+	const cleaned = String(value || "")
+		.replace(/^data:[^;]+;base64,/i, "")
+		.replace(/\s+/g, "");
+	if (!cleaned) return new Uint8Array(0);
+	const u8Ctor = Uint8Array as unknown as {
+		fromBase64?: (input: string) => Uint8Array;
+	};
+	if (typeof u8Ctor.fromBase64 === "function") {
+		return u8Ctor.fromBase64(cleaned);
+	}
+	const globalBuf = (globalThis as unknown as {
+		Buffer?: { from: (input: string, enc: string) => Uint8Array };
+	}).Buffer;
+	if (globalBuf && typeof globalBuf.from === "function") {
+		const buf = globalBuf.from(cleaned, "base64");
+		return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+	}
+	const binary = atob(cleaned);
 	const bytes = new Uint8Array(binary.length);
 	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 	return bytes;
+}
+
+async function readStreamToBytes(stream: {
+	getReader: () => {
+		read: () => Promise<{ done: boolean; value?: Uint8Array }>;
+	};
+}): Promise<Uint8Array> {
+	const reader = stream.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		if (value && value.byteLength) {
+			const view =
+				value instanceof Uint8Array
+					? value
+					: new Uint8Array(
+							(value as ArrayBufferView).buffer,
+							(value as ArrayBufferView).byteOffset,
+							(value as ArrayBufferView).byteLength
+						);
+			chunks.push(view);
+			total += view.byteLength;
+		}
+	}
+	if (chunks.length === 1) return chunks[0];
+	const merged = new Uint8Array(total);
+	let offset = 0;
+	for (const c of chunks) {
+		merged.set(c, offset);
+		offset += c.byteLength;
+	}
+	return merged;
 }
 
 /*
@@ -207,6 +299,7 @@ export function base64ToBytes(value: string): Uint8Array {
  */
 async function toImageBytes(result: unknown): Promise<Uint8Array | null> {
 	if (!result) return null;
+	if (result instanceof Uint8Array) return result;
 	if (typeof result === "string") {
 		try {
 			return base64ToBytes(result);
@@ -226,7 +319,31 @@ async function toImageBytes(result: unknown): Promise<Uint8Array | null> {
 		const merged = await new Response(result).arrayBuffer();
 		return new Uint8Array(merged);
 	}
-	const maybe = result as { image?: unknown };
+	if (
+		typeof result === "object" &&
+		typeof (result as { getReader?: unknown }).getReader === "function"
+	) {
+		return readStreamToBytes(
+			result as {
+				getReader: () => {
+					read: () => Promise<{ done: boolean; value?: Uint8Array }>;
+				};
+			}
+		);
+	}
+	if (
+		typeof result === "object" &&
+		typeof (result as { arrayBuffer?: unknown }).arrayBuffer === "function"
+	) {
+		return new Uint8Array(
+			await (result as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer()
+		);
+	}
+	const maybe = result as {
+		image?: unknown;
+		data?: unknown;
+		result?: { image?: unknown };
+	};
 	if (maybe && typeof maybe.image === "string") {
 		try {
 			return base64ToBytes(maybe.image);
@@ -234,8 +351,122 @@ async function toImageBytes(result: unknown): Promise<Uint8Array | null> {
 			return null;
 		}
 	}
+	if (maybe && maybe.image && typeof maybe.image === "object") {
+		return toImageBytes(maybe.image);
+	}
+	if (maybe && typeof maybe.data === "string") {
+		try {
+			return base64ToBytes(maybe.data);
+		} catch {
+			return null;
+		}
+	}
+	if (maybe && maybe.result && typeof maybe.result === "object") {
+		return toImageBytes(maybe.result);
+	}
 	return null;
 }
+
+function detectImageMime(bytes: Uint8Array): string | null {
+	if (!bytes || bytes.byteLength < 4) return null;
+	/* PNG: 89 50 4E 47 */
+	if (
+		bytes[0] === 0x89 &&
+		bytes[1] === 0x50 &&
+		bytes[2] === 0x4e &&
+		bytes[3] === 0x47
+	) {
+		return "image/png";
+	}
+	/* JPEG: FF D8 FF */
+	if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+		return "image/jpeg";
+	}
+	/* WebP: RIFF....WEBP */
+	if (
+		bytes.byteLength >= 12 &&
+		bytes[0] === 0x52 &&
+		bytes[1] === 0x49 &&
+		bytes[2] === 0x46 &&
+		bytes[3] === 0x46 &&
+		bytes[8] === 0x57 &&
+		bytes[9] === 0x45 &&
+		bytes[10] === 0x42 &&
+		bytes[11] === 0x50
+	) {
+		return "image/webp";
+	}
+	/* GIF: GIF87a / GIF89a */
+	if (
+		bytes.byteLength >= 6 &&
+		bytes[0] === 0x47 &&
+		bytes[1] === 0x49 &&
+		bytes[2] === 0x46 &&
+		bytes[3] === 0x38
+	) {
+		return "image/gif";
+	}
+	/* Reject obvious text/HTML/JSON error bodies */
+	if (bytes[0] === 0x3c || bytes[0] === 0x7b || bytes[0] === 0x5b) {
+		return null;
+	}
+	return "image/png";
+}
+
+/*
+ * Aligned with `IMAGE_PROMPT_MAX_CHARS = 1800` (comfortably below SDXL's
+ * 2048-char schema cap). Condense multi-paragraph prompts onto single-spaced
+ * prose <= 1800 chars while preserving the closing `Visual style:` directive
+ * when trimming is needed.
+ */
+export const IMAGE_MODEL_PROMPT_MAX_CHARS = 1800;
+
+export function condensePromptForModel(
+	prompt: string,
+	maxChars = IMAGE_MODEL_PROMPT_MAX_CHARS
+): string {
+	const flat = String(prompt || "")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (flat.length <= maxChars) return flat;
+
+	const styleIdx = flat.lastIndexOf("Visual style:");
+	if (styleIdx > 0) {
+		const styleTail = flat.slice(styleIdx).trim();
+		if (styleTail.length < maxChars - 120) {
+			const headBudget = maxChars - styleTail.length - 2;
+			return flat.slice(0, headBudget).trimEnd() + ". " + styleTail;
+		}
+	}
+	return flat.slice(0, maxChars).trimEnd();
+}
+
+/*
+ * SDXL's VAE (8x) + 3 UNet downsample blocks require dimensions divisible by 64
+ * (and >= 512) to avoid odd-latent skip-connection tensor mismatches (3043) on
+ * sub-1024 frames such as 720x408, 544x304 or 480x272.
+ */
+export function sdxlSafeDimensions(
+	width: number,
+	height: number
+): { width: number; height: number } {
+	if (
+		width >= 512 &&
+		height >= 512 &&
+		width % 64 === 0 &&
+		height % 64 === 0
+	) {
+		return { width, height };
+	}
+	if (width > height) return { width: 1024, height: 576 };
+	if (height > width) return { width: 576, height: 1024 };
+	return { width: 1024, height: 1024 };
+}
+
+export const IMAGE_FALLBACK_MODELS: readonly string[] = [
+	"@cf/bytedance/stable-diffusion-xl-lightning",
+	"@cf/black-forest-labs/flux-1-schnell"
+];
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -267,38 +498,109 @@ function errorMessage(error: unknown): string {
 export async function runImageModel(
 	env: AiEnv,
 	prompt: string,
-	options: { width?: number; height?: number; seed?: number } = {}
+	options: {
+		width?: number;
+		height?: number;
+		seed?: number;
+		fallbackModels?: readonly string[];
+	} = {}
 ): Promise<ImageModelResult> {
 	if (!env || !env.AI) throw new Error("AI binding not configured");
-	const input: Record<string, unknown> = {
-		prompt,
-		negative_prompt: IMAGE_NEGATIVE_PROMPT,
-		width: options.width || IMAGE_WIDTH,
-		height: options.height || IMAGE_HEIGHT,
-		num_steps: 20
+	const reqWidth = options.width || IMAGE_WIDTH;
+	const reqHeight = options.height || IMAGE_HEIGHT;
+	const modelPrompt = condensePromptForModel(prompt, IMAGE_MODEL_PROMPT_MAX_CHARS);
+
+	const decodeValidated = async (raw: unknown): Promise<ImageModelResult> => {
+		const bytes = await toImageBytes(raw);
+		if (!bytes || !bytes.length) {
+			throw new Error("The image model returned an empty image");
+		}
+		const mime = detectImageMime(bytes);
+		if (!mime) {
+			throw new Error("The image model returned non-image bytes (" + bytes.byteLength + " B)");
+		}
+		return { bytes, mime };
 	};
-	if (typeof options.seed === "number") input.seed = options.seed;
-	const raw = await env.AI.run(IMAGE_MODEL, input);
-	const bytes = await toImageBytes(raw);
-	if (!bytes || !bytes.length) throw new Error("The image model returned an empty image");
-	/* A PNG starts with the 8-byte signature; anything else is not usable. */
-	const isPng =
-		bytes.length > 8 &&
-		bytes[0] === 0x89 &&
-		bytes[1] === 0x50 &&
-		bytes[2] === 0x4e &&
-		bytes[3] === 0x47;
-	return { bytes, mime: isPng ? "image/png" : "image/jpeg" };
+
+	const buildSdxlInput = (
+		w: number,
+		h: number,
+		steps: number,
+		guidance?: number
+	): Record<string, unknown> => {
+		const input: Record<string, unknown> = {
+			prompt: modelPrompt,
+			negative_prompt: IMAGE_NEGATIVE_PROMPT,
+			width: w,
+			height: h,
+			num_steps: steps
+		};
+		if (typeof guidance === "number") input.guidance = guidance;
+		if (typeof options.seed === "number") input.seed = options.seed;
+		return input;
+	};
+
+	let primaryError: unknown = null;
+	try {
+		const raw = await env.AI.run(
+			IMAGE_MODEL,
+			buildSdxlInput(reqWidth, reqHeight, 20, IMAGE_GUIDANCE_SCALE)
+		);
+		return await decodeValidated(raw);
+	} catch (err) {
+		primaryError = err;
+	}
+
+	const safeDims = sdxlSafeDimensions(reqWidth, reqHeight);
+	if (safeDims.width !== reqWidth || safeDims.height !== reqHeight) {
+		try {
+			const raw = await env.AI.run(
+				IMAGE_MODEL,
+				buildSdxlInput(safeDims.width, safeDims.height, 20, IMAGE_GUIDANCE_SCALE)
+			);
+			return await decodeValidated(raw);
+		} catch (alignedErr) {
+			primaryError = primaryError || alignedErr;
+		}
+	}
+
+	const fallbacks =
+		options.fallbackModels === undefined
+			? IMAGE_FALLBACK_MODELS
+			: options.fallbackModels;
+
+	for (const fbSlug of fallbacks) {
+		if (!fbSlug || fbSlug === IMAGE_MODEL) continue;
+		try {
+			const fbInput: Record<string, unknown> =
+				fbSlug === "@cf/black-forest-labs/flux-1-schnell"
+					? {
+							prompt: condensePromptForModel(
+								modelPrompt +
+									" Strictly follow the specified visual style with coherent perspective, natural proportions, intact anatomy, crisp undistorted forms, and no text, words, letters, or watermarks.",
+								IMAGE_MODEL_PROMPT_MAX_CHARS
+							),
+							steps: 4
+						}
+					: buildSdxlInput(safeDims.width, safeDims.height, 4);
+			const raw = await env.AI.run(fbSlug, fbInput);
+			return await decodeValidated(raw);
+		} catch {
+			/* Keep primaryError as the authoritative error if all fallbacks fail. */
+		}
+	}
+
+	throw primaryError instanceof Error
+		? primaryError
+		: new Error(errorMessage(primaryError));
 }
 
 /*
  * One batch prompt sent to SDXL. The studio's scene prompts are three-paragraph
  * descriptions, so paragraph breaks are kept (the image model reads them as
  * sentence boundaries) while everything else is normalised to single spaces.
- * The cap is generous on purpose: SDXL pays attention to the first ~77 tokens,
- * and the extra paragraphs act as the style/quality guard for the whole frame.
  */
-export const IMAGE_PROMPT_MAX_CHARS = 2600;
+export const IMAGE_PROMPT_MAX_CHARS = 1800;
 
 export function normalizeBatchPrompt(value: unknown): string {
 	return String(value ?? "")
@@ -325,13 +627,52 @@ function sanitizePrompts(raw: unknown): string[] | { error: string } {
 	return prompts;
 }
 
+function createBatchAbortError(): Error {
+	const err = new Error("Image batch aborted");
+	err.name = "AbortError";
+	return err;
+}
+
+function abortableRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
+	if (signal && signal.aborted) {
+		return Promise.reject(createBatchAbortError());
+	}
+	return new Promise<void>((resolve, reject) => {
+		let settled = false;
+		let cleanup: (() => void) | null = null;
+		const timer = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			if (cleanup) cleanup();
+			resolve();
+		}, ms);
+		if (signal && typeof signal.addEventListener === "function") {
+			const onAbort = () => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				cleanup = null;
+				reject(createBatchAbortError());
+			};
+			signal.addEventListener("abort", onAbort, { once: true });
+			cleanup = () => {
+				signal.removeEventListener("abort", onAbort);
+			};
+		}
+	});
+}
+
 async function generateOneWithRetry(
 	env: AiEnv,
 	prompt: string,
-	frame?: ImageFrame
+	frame?: ImageFrame,
+	signal?: AbortSignal
 ): Promise<{ ok: true; result: ImageModelResult } | { ok: false; error: string }> {
 	let lastError = "Image generation failed";
 	for (let attempt = 1; attempt <= IMAGE_BATCH_ATTEMPTS; attempt++) {
+		if (signal && signal.aborted) {
+			throw createBatchAbortError();
+		}
 		try {
 			const result = await withTimeout(
 				runImageModel(env, prompt, {
@@ -345,26 +686,46 @@ async function generateOneWithRetry(
 			);
 			return { ok: true, result };
 		} catch (error) {
+			if (
+				(signal && signal.aborted) ||
+				(error && (error as Error).name === "AbortError")
+			) {
+				throw createBatchAbortError();
+			}
 			lastError = errorMessage(error);
 			if (attempt < IMAGE_BATCH_ATTEMPTS) {
-				await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+				await abortableRetryDelay(500 * attempt, signal);
 			}
 		}
 	}
 	return { ok: false, error: lastError };
 }
 
+let batchGroupSequence = 0;
+
+export interface ImageBatchPacingOptions {
+	waveIntervalMs?: number;
+	minCooldownMs?: number;
+	groupId?: string;
+	queue?: ImageTaskQueue;
+}
+
 /*
- * POST /api/image-batch
- *
- * Validates the prompt list, reserves credits, then streams the images as
- * they finish. Every failure is reported per scene and refunded, so a partial
- * batch still produces a clear result for the browser.
+ * Validates the prompt list, reserves credits, then schedules every scene onto
+ * the Node.js-style event-driven non-blocking `ImageTaskQueue`:
+ *   - All scene tasks are enqueued immediately in O(1) without blocking the JS
+ *     thread or waiting on sibling stragglers.
+ *   - Slow model inference (`env.AI.run`) runs off-thread in the bounded
+ *     background I/O pool (`IMAGE_BATCH_CONCURRENCY = 3` per video/row at a
+ *     rate of 3 images per 3 seconds, round-robin across concurrent rows).
+ *   - Synchronous base64 encoding + JSON framing runs one image per event-loop
+ *     turn via `taskQueue.cpu.run(...)` before streaming out.
  */
 export async function handleImageBatch(
 	request: Request,
 	env: AiEnv,
-	credits: ImageCreditHooks
+	credits: ImageCreditHooks,
+	pacing: ImageBatchPacingOptions = {}
 ): Promise<Response> {
 	const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
 	if (!env || !env.AI) {
@@ -407,27 +768,131 @@ export async function handleImageBatch(
 	const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
 	const writer = writable.getWriter();
 	let closed = false;
+	let writeBusy = false;
 	let writeChain: Promise<void> = Promise.resolve();
 
-	/* One serialised writer for every event, so parallel renders can't interleave. */
-	const emit = (event: unknown): Promise<void> => {
-		writeChain = writeChain.then(async () => {
-			if (closed) return;
+	const stopController = new AbortController();
+	let abortListenerAttached = false;
+	const forwardAbort = () => {
+		try {
+			stopController.abort();
+		} catch {
+			/* ignore */
+		}
+	};
+	if (request.signal && typeof request.signal.addEventListener === "function") {
+		if (request.signal.aborted) {
+			forwardAbort();
+		} else {
+			request.signal.addEventListener("abort", forwardAbort, { once: true });
+			abortListenerAttached = true;
+		}
+	}
+
+	const hasCustomTiming =
+		typeof pacing.waveIntervalMs === "number" || typeof pacing.minCooldownMs === "number";
+	const waveIntervalMs =
+		typeof pacing.waveIntervalMs === "number" && Number.isFinite(pacing.waveIntervalMs)
+			? Math.max(0, Math.floor(pacing.waveIntervalMs))
+			: IMAGE_BATCH_WAVE_INTERVAL_MS;
+	const minCooldownMs =
+		typeof pacing.minCooldownMs === "number" && Number.isFinite(pacing.minCooldownMs)
+			? Math.max(0, Math.floor(pacing.minCooldownMs))
+			: IMAGE_BATCH_MIN_COOLDOWN_MS;
+
+	const taskQueue =
+		pacing.queue ||
+		(hasCustomTiming
+			? new ImageTaskQueue({
+					maxGlobalConcurrency: DEFAULT_GLOBAL_IMAGE_CONCURRENCY,
+					maxGroupConcurrency: IMAGE_BATCH_CONCURRENCY,
+					groupWindowLimit: IMAGE_BATCH_CONCURRENCY,
+					groupWindowMs: waveIntervalMs,
+					minCooldownMs
+				})
+			: sharedImageTaskQueue);
+
+	/* Per-request CPU serializer so `setTimeout(..., 0)` yields stay in this request's IoContext. */
+	const cpuSerializer = new EventLoopCpuSerializer();
+
+	/*
+	 * One serialised writer for every event, so parallel renders can't interleave.
+	 * Resolves `true` ONLY when `writer.write` succeeded so undelivered images are
+	 * never billed if the stream closes mid-write.
+	 */
+	const emitRawLine = (line: string): Promise<boolean> => {
+		const op = writeChain.then(async () => {
+			if (closed) return false;
+			writeBusy = true;
+			let drainTimer: ReturnType<typeof setTimeout> | null = null;
+			let abortWatchHandler: (() => void) | null = null;
 			try {
-				await writer.write(encoder.encode(JSON.stringify(event) + "\n"));
+				const writePromise = writer.write(encoder.encode(line));
+				writePromise.catch(() => {});
+
+				const stallGuard = new Promise<"stalled">((resolve) => {
+					const armDrainWatchdog = () => {
+						if (drainTimer) return;
+						drainTimer = setTimeout(() => {
+							drainTimer = null;
+							resolve("stalled");
+						}, 200);
+					};
+					if (stopController.signal.aborted) {
+						armDrainWatchdog();
+					} else {
+						abortWatchHandler = armDrainWatchdog;
+						stopController.signal.addEventListener("abort", armDrainWatchdog, {
+							once: true
+						});
+					}
+				});
+
+				const outcome = await Promise.race([
+					writePromise.then(() => "written" as const),
+					stallGuard
+				]);
+				if (outcome === "stalled") {
+					closed = true;
+					try {
+						void writer.abort(new Error("Client stream stalled after abort")).catch(() => {});
+					} catch {
+						/* ignore */
+					}
+					return false;
+				}
+				return true;
 			} catch {
 				closed = true;
+				forwardAbort();
+				return false;
+			} finally {
+				if (drainTimer) clearTimeout(drainTimer);
+				if (abortWatchHandler) {
+					stopController.signal.removeEventListener("abort", abortWatchHandler);
+				}
+				writeBusy = false;
 			}
 		});
-		return writeChain;
+		writeChain = op.then(
+			() => undefined,
+			() => undefined
+		);
+		return op;
 	};
+	const emit = (event: unknown): Promise<boolean> =>
+		emitRawLine(JSON.stringify(event) + "\n");
 
 	const startedAt = Date.now();
+	const groupId = pacing.groupId || "batch-" + startedAt + "-" + ++batchGroupSequence;
+
 	console.info("[image-batch] started", {
+		groupId,
 		requested,
 		count,
 		available: reservation.granted,
 		concurrency: IMAGE_BATCH_CONCURRENCY,
+		waveIntervalMs,
 		resolution: frame.resolution,
 		orientation: frame.orientation,
 		width: frame.width,
@@ -439,13 +904,13 @@ export async function handleImageBatch(
 		let generated = 0;
 		let failed = 0;
 		let summary = reservation.summary;
-		let nextIndex = 0;
 
 		await emit({
 			type: "start",
 			requested,
 			count,
 			concurrency: Math.min(IMAGE_BATCH_CONCURRENCY, count),
+			waveIntervalMs,
 			width: frame.width,
 			height: frame.height,
 			resolution: frame.resolution,
@@ -454,41 +919,87 @@ export async function handleImageBatch(
 			credits: summary
 		});
 
-		/* Keep the connection from looking idle while the first renders run. */
+		const stopped = () => closed || stopController.signal.aborted;
+
+		/* Keep the connection from looking idle while queued tasks or rate windows run. */
 		const heartbeat = setInterval(() => {
-			void emit({ type: "tick", at: Date.now() });
+			if (stopped()) {
+				clearInterval(heartbeat);
+				return;
+			}
+			if (!writeBusy) {
+				void emit({ type: "tick", at: Date.now() });
+			}
 		}, 10000);
 
-		const stopped = () => closed || Boolean(request.signal && request.signal.aborted);
-
-		const workerLoop = async () => {
-			while (!stopped()) {
-				const index = nextIndex++;
-				if (index >= count) return;
-				const outcome = await generateOneWithRetry(env, prompts[index], frame);
-				if (stopped()) return;
-				if (outcome.ok) {
-					generated++;
-					await emit({
-						type: "image",
-						index,
-						ok: true,
-						mime: outcome.result.mime,
-						data: bytesToBase64(outcome.result.bytes),
-						bytes: outcome.result.bytes.length
-					});
-				} else {
-					failed++;
-					await emit({ type: "image", index, ok: false, error: outcome.error });
-				}
-			}
-		};
-
 		try {
-			const lanes = Math.max(1, Math.min(IMAGE_BATCH_CONCURRENCY, count));
-			const lanesDone: Promise<void>[] = [];
-			for (let lane = 0; lane < lanes; lane++) lanesDone.push(workerLoop());
-			await Promise.all(lanesDone);
+			/*
+			 * Non-blocking submission: register all `count` scene tasks on the
+			 * event-driven queue immediately; each settles independently as its
+			 * background I/O slot completes.
+			 */
+			const sceneJobs: Promise<void>[] = [];
+			for (let sceneIndex = 0; sceneIndex < count; sceneIndex++) {
+				const job = taskQueue
+					.enqueue({
+						groupId,
+						signal: stopController.signal,
+						execute: () =>
+							generateOneWithRetry(
+								env,
+								prompts[sceneIndex],
+								frame,
+								stopController.signal
+							)
+					})
+					.then(
+						async (outcome) => {
+							if (stopped()) return;
+							if (outcome.ok) {
+								const result = outcome.result;
+								const line = await cpuSerializer.run(
+									() =>
+										JSON.stringify({
+											type: "image",
+											index: sceneIndex,
+											ok: true,
+											mime: result.mime,
+											data: bytesToBase64(result.bytes),
+											bytes: result.bytes.length
+										}) + "\n"
+								);
+								if (await emitRawLine(line)) {
+									generated++;
+								}
+							} else {
+								failed++;
+								await emit({
+									type: "image",
+									index: sceneIndex,
+									ok: false,
+									error: outcome.error
+								});
+							}
+						},
+						(err) => {
+							/* Queued tasks evicted by AbortSignal are unrendered (not failed) and refunded below. */
+							if (stopped() || (err && (err as Error).name === "AbortError")) {
+								return;
+							}
+							failed++;
+							return emit({
+								type: "image",
+								index: sceneIndex,
+								ok: false,
+								error: errorMessage(err)
+							}).then(() => undefined);
+						}
+					);
+				sceneJobs.push(job);
+			}
+
+			await Promise.all(sceneJobs);
+			await writeChain;
 		} catch (error) {
 			const message = errorMessage(error);
 			failed = Math.max(failed, count - generated - failed);
@@ -496,6 +1007,17 @@ export async function handleImageBatch(
 			console.error("[image-batch] failed", { requested, count, generated, failed, error: message });
 		} finally {
 			clearInterval(heartbeat);
+			if (
+				abortListenerAttached &&
+				request.signal &&
+				typeof request.signal.removeEventListener === "function"
+			) {
+				try {
+					request.signal.removeEventListener("abort", forwardAbort);
+				} catch {
+					/* ignore */
+				}
+			}
 			/*
 			 * Every granted scene that did not reach the browser (failed or
 			 * never started because the client went away) is refunded in one
@@ -532,10 +1054,12 @@ export async function handleImageBatch(
 				ms: Date.now() - startedAt
 			});
 			await writeChain;
-			try {
-				await writer.close();
-			} catch {
-				/* already closed by the client */
+			if (!closed) {
+				try {
+					await writer.close();
+				} catch {
+					/* already closed by the client */
+				}
 			}
 		}
 	})();

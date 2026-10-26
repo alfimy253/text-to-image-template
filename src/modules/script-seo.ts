@@ -138,10 +138,16 @@ export function aiText(result: unknown): string {
 	if (typeof obj.response === "string") {
 		return obj.response.trim();
 	}
+	if (obj.response && typeof obj.response === "object") {
+		return JSON.stringify(obj.response);
+	}
 	if (obj.result && typeof obj.result === "object") {
 		const inner = obj.result as Record<string, unknown>;
 		if (typeof inner.response === "string") {
 			return inner.response.trim();
+		}
+		if (inner.response && typeof inner.response === "object") {
+			return JSON.stringify(inner.response);
 		}
 	}
 	if (Array.isArray(obj.choices) && obj.choices.length > 0) {
@@ -1143,14 +1149,33 @@ export function buildSeoPlannerPrompt(
 export const SEO_PLAN_FALLBACK_MODELS: string[] =
 	["@cf/meta/llama-3.3-70b-instruct-fp8-fast"];
 
-/* A hung Workers AI call must not hold a plan forever. */
+/* A hung Workers AI call must not hold a plan or script forever. */
 export const SEO_PLAN_AI_TIMEOUT_MS = 45000;
+export const SEO_SCRIPT_AI_TIMEOUT_MS = 90000;
 
 /* Transport attempts per model (validation attempts are separate). */
 export const SEO_PLAN_TRANSPORT_ATTEMPTS = 2;
 
 function plannerSleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runAiCallWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			reject(new Error("model call timed out after " + timeoutMs + " ms"));
+		}, timeoutMs);
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(err) => {
+				clearTimeout(timer);
+				reject(err);
+			}
+		);
+	});
 }
 
 function errorMessage(err: unknown): string {
@@ -1200,26 +1225,15 @@ export async function runPlannerModelCall(
 			};
 		}
 
-		let timer: ReturnType<typeof setTimeout> | null = null;
-
 		try {
-			const call = env.AI.run(model, {
-				prompt,
-				max_tokens: maxTokens,
-				temperature
-			});
-
-			const timeout = new Promise<never>((_resolve, reject) => {
-				timer = setTimeout(() => {
-					reject(
-						new Error(
-							"model call timed out after " + timeoutMs + " ms"
-						)
-					);
-				}, timeoutMs);
-			});
-
-			const result = await Promise.race([call, timeout]);
+			const result = await runAiCallWithTimeout(
+				env.AI.run(model, {
+					prompt,
+					max_tokens: maxTokens,
+					temperature
+				}),
+				timeoutMs
+			);
 			const text = aiText(result);
 
 			if (!text) {
@@ -1235,10 +1249,6 @@ export async function runPlannerModelCall(
 			}
 		} catch (err: unknown) {
 			lastError = errorMessage(err);
-		} finally {
-			if (timer) {
-				clearTimeout(timer);
-			}
 		}
 
 		console.warn("[seo-plan] model call failed", {
@@ -1693,11 +1703,14 @@ export async function handleSeoScriptGeneration(
 			let rawText = "";
 
 			try {
-				const result = await env.AI.run(scriptModel, {
-					prompt,
-					max_tokens: 1024,
-					temperature: plannerTemp
-				});
+				const result = await runAiCallWithTimeout(
+					env.AI.run(scriptModel, {
+						prompt,
+						max_tokens: 1024,
+						temperature: plannerTemp
+					}),
+					SEO_PLAN_AI_TIMEOUT_MS
+				);
 
 				rawText = aiText(result);
 
@@ -1892,11 +1905,14 @@ export async function handleSeoScriptGeneration(
 			let rawSrt = "";
 
 			try {
-				const result = await env.AI.run(scriptModel, {
-					prompt,
-					max_tokens: writerMaxTokens,
-					temperature: writerTemp
-				});
+				const result = await runAiCallWithTimeout(
+					env.AI.run(scriptModel, {
+						prompt,
+						max_tokens: writerMaxTokens,
+						temperature: writerTemp
+					}),
+					SEO_SCRIPT_AI_TIMEOUT_MS
+				);
 
 				rawSrt = aiText(result);
 			} catch (modelError: unknown) {
