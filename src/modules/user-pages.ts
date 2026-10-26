@@ -372,7 +372,7 @@ export async function renderAccountPageResponse(
 					${
 						isPaid
 							? "Your account has been verified and upgraded to paid_user."
-							: "Want higher daily AI image limits (1,200/day) and Paid Studio access? Click Upgrade to pay via our local payment gateway and upload your transaction screenshot."
+							: "Want Paid Studio access and the same 10,000 AI images/day ceiling, with priority generation? Click Upgrade to pay via our local payment gateway and upload your transaction screenshot."
 					}
 				</p>
 				${submissionsHtml}

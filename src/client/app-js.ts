@@ -8273,6 +8273,23 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 	}
 
+	/*
+	 * #262: a load rejection is not the user's mistake. Turn the server's
+	 * Retry-After hint into one short, actionable sentence instead of leaking a
+	 * raw provider string (the browser already honours the wait itself).
+	 */
+	function describeImageLoadFailure(error) {
+		const retryMs = error && Number(error.retryAfterMs) > 0 ? Number(error.retryAfterMs) : 0;
+		const overload = Boolean(
+			error && (error.kind === "overload" || error.status === 503)
+		);
+		if (overload) {
+			const seconds = retryMs > 0 ? Math.max(1, Math.ceil(retryMs / 1000)) : 5;
+			return "The image server is busy right now \u2014 images pause for about " + seconds + " s and then continue.";
+		}
+		return (error && error.message) || "Image generation failed";
+	}
+
 	/* Step 3: one bounded image chunk through the shared browser stream queue. */
 	async function requestBatchImages(
 		row,
@@ -12361,10 +12378,9 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		}
 
 		/*
-		 * Daily image credits (70,000 on the free plan,
-		 * 1,200 on paid_user). The worker enforces
-		 * the real limit; this pre-check just avoids
-		 * a doomed pair of requests.
+		 * Daily image credits (10,000 per day on every plan).
+		 * The worker enforces the real limit; this pre-check
+		 * just avoids a doomed pair of requests.
 		 */
 		if (
 			creditState &&
@@ -12381,7 +12397,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				creditPlanLabel() +
 				" plan). Credits renew at midnight (UTC+8)." +
 				(PLAN_MODE === "freemium"
-					? " Create a free account for 70,000 images per day."
+					? " Create a free account for 10,000 images per day."
 					: "");
 			if (statusEl) {
 				statusEl.textContent = quotaMessage;
@@ -12947,7 +12963,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	/*
 	 * Which URL served this shell (RULE 21):
 	 *   ""          the landing page at /
-	 *   "freemium"  /free  (no account, 10 images/day per IP)
+	 *   "freemium"  /free  (no account, 10,000 images/day per IP)
 	 *   "studio"    /studio (free_user or paid_user)
 	 *   "paid"      /paid  (paid_user only)
 	 * The worker injects window.__PLAN_MODE before this script.
@@ -12995,8 +13011,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			'<button type="button" class="auth-close" id="auth-close" aria-label="Close">&times;</button>' +
 			'<div class="auth-title" id="auth-title">\ud83c\udfac YouTube Vibe Studio</div>' +
 			'<div class="auth-sub" id="auth-sub">Sign in to use the studio</div>' +
-			'<div class="auth-plan-note">Free plan: 70,000 AI images every day \u00b7 unlimited videos, AI scripts and voiceovers.<br>Paid plan (paid_user): 1,200 AI images every day.</div>' +
-			'<div class="auth-guest-note">No account? <a href="/free">Open the free studio</a> \u2014 10 AI images a day, counted per IP address.</div>' +
+			'<div class="auth-plan-note">Every plan: 10,000 AI images every day \u00b7 unlimited videos, AI scripts and voiceovers. Server load is balanced automatically, so bursts queue instead of failing.</div>' +
+			'<div class="auth-guest-note">No account? <a href="/free">Open the free studio</a> \u2014 the same 10,000 AI images a day, counted per IP address.</div>' +
 			'<div class="auth-error" id="auth-error" role="alert"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
 			'<label for="auth-email">Email</label>' +
@@ -13988,17 +14004,16 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	//  /image/gen returns 429 + the counters when the daily
 	//  image allowance is spent.
 	//
-	//  free       unlimited videos / AI scripts / voiceovers,
-	//             70,000 AI images per day
-	//  paid_user  unlimited videos / AI scripts / voiceovers,
-	//             1,200 AI images per day
+	//  every plan unlimited videos / AI scripts / voiceovers,
+	//             10,000 AI images per day (free, paid_user
+	//             and the anonymous guest tier)
 	//  Every counter renews at midnight Asia/Taipei (UTC+8).
 	// =========================================================
 
 	let creditState =
 		null;
 
-	/* 70000 -> "70,000" so a big allowance stays readable */
+	/* 10000 -> "10,000" so a big allowance stays readable */
 	function creditFormatNumber(
 		value
 	) {
@@ -14049,7 +14064,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			creditState.plan &&
 			creditState.plan.limits
 			? creditState.plan.limits.images
-			: 70000;
+			: 10000;
 
 	}
 
@@ -14399,8 +14414,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		);
 
 		/*
-		 * A guest can turn the 10/day IP allowance into a
-		 * 70,000/day account at any time.
+		 * A guest can turn the anonymous IP allowance into a
+		 * named account at any time (same 10,000/day ceiling).
 		 */
 		if (
 			creditState &&
@@ -14421,7 +14436,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				"credit-signup";
 
 			cta.textContent =
-				"Create a free account \u2014 70,000 images/day";
+				"Create a free account \u2014 10,000 images/day";
 
 			cta.addEventListener(
 				"click",
@@ -16257,7 +16272,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			/*
 			 * /free is the freemium entry: no account
 			 * needed, boot the studio with the IP-keyed
-			 * guest credits (10 images per day).
+			 * guest credits (10,000 images per day).
 			 */
 			if (PLAN_MODE === "freemium") {
 				authAccess = "freemium";
@@ -17915,7 +17930,15 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				project._aiImageFailures = (project._aiImageFailures || 0) + results.filter(function (r) { return !r.ok; }).length;
 				if (results.every(function (r) { return !r.ok; }) || results.some(function (r) {
 					return r.error && [401,403,429].indexOf(r.error.status) >= 0;
-				})) project._imageFlowStopReason = "The image batch could not complete; delivered images were kept.";
+				})) {
+					/* Prefer the load hint: "server busy, retry in N s" beats a raw AiError. */
+					const firstFailure = results.find(function (r) { return !r.ok && r.error; });
+					project._imageFlowStopReason = results.some(function (r) {
+						return r.error && (r.error.kind === "overload" || r.error.status === 503);
+					})
+						? describeImageLoadFailure(firstFailure && firstFailure.error)
+						: "The image batch could not complete; delivered images were kept.";
+				}
 			}
 		} catch (error) {
 			if (!stale()) project._imageFlowStopReason = "Image generation was interrupted; delivered images were kept.";

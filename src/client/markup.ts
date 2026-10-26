@@ -104,7 +104,7 @@ export const PAGE_MARKUP = `
 						</a>
 					</div>
 					<div class="landing-microcopy">
-						<span>Made for creators</span><i aria-hidden="true"></i><span>70,000 free AI images daily</span><i aria-hidden="true"></i><span>Rendered in your browser</span>
+						<span>Made for creators</span><i aria-hidden="true"></i><span>10,000 free AI images daily</span><i aria-hidden="true"></i><span>Rendered in your browser</span>
 					</div>
 				</div>
 
@@ -205,7 +205,7 @@ export const PAGE_MARKUP = `
 						<p>For creators trying ideas and shipping their first videos.</p>
 						<ul class="landing-plan-list">
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> video projects</span></li>
-							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>70,000</b> AI images every day</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>10,000</b> AI images every day</span></li>
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> AI script generation</span></li>
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> voiceovers</span></li>
 						</ul>
@@ -215,13 +215,13 @@ export const PAGE_MARKUP = `
 					<article class="landing-plan-card landing-plan-featured">
 						<div class="landing-plan-top">
 							<span class="landing-plan-badge">PAID PLAN</span>
-							<span class="landing-plan-price">1,200<span>images / day</span></span>
+							<span class="landing-plan-price">10,000<span>images / day</span></span>
 						</div>
 						<h3>Paid</h3>
 						<p>For channel builders who generate every single day.</p>
 						<ul class="landing-plan-list">
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> video projects</span></li>
-							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>1,200</b> AI images every day</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>10,000</b> AI images every day</span></li>
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> AI script generation</span></li>
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> voiceovers</span></li>
 						</ul>

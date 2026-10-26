@@ -90,7 +90,8 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   `/paid` for paid). `/upgrade` displays editable local-gateway instructions and a signed-in
   screenshot uploader. This is **manual payment verification**, not an automated payment provider:
   an administrator reviews the receipt, enters its transaction number and approves it, which sets
-  `usertype = "paid_user"`; the next credit/request read receives the 1,200-image allowance.
+  `usertype = "paid_user"`. Image allowances are identical on every plan (10,000/day), so an
+  upgrade changes studio access, not the daily image ceiling.
   Receipt images are restricted to their owner or the settings administrator.
 - **Basic CMS.** The current-day settings page's **CMS Pages** tab creates, edits and deletes up
   to **8** public, single-level pages. Blocks are paragraphs and HTTP(S) image URLs (two images
@@ -98,8 +99,9 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   link into the shared top menu or footer. Reserved/nested routes, duplicate slugs, data-URI image
   uploads and more than 100 blocks are rejected; public text is HTML-escaped.
 - **Daily credits.** Every account is on a plan (`usertype`): **free** — unlimited video projects,
-  unlimited AI scripts, unlimited voiceovers and **70,000 AI images per day**; **paid_user** —
-  everything in free plus **1,200 AI images per day**. Counters live in KV
+  unlimited AI scripts, unlimited voiceovers and **10,000 AI images per day**; **paid_user** —
+  everything in free plus **10,000 AI images per day** (the same ceiling; the paid plan is about
+  studio access, not a bigger image quota). Counters live in KV
   (`credits:<username>`) and renew at midnight Asia/Taipei (UTC+8). The studio shows a credits
   pill with today's allowance, the image route returns `429` with the counters when the allowance
   is spent, and the settings page can promote an account to `paid_user` (or reset its counters).
@@ -180,10 +182,10 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
 | CMS | 8 pages · 100 blocks/page · flat slug up to 64 chars · paragraph text up to 20,000 chars/block · HTTP(S) image URLs only |
 | Payment screenshots | PNG/JPEG/WEBP/GIF magic bytes · 5 MiB · authentication required · manual admin approval |
 | Theme | one setting for the whole deployment: `default` · `strata` · `stellar` · `nightlab` · `paper` · `swiss` · `neo` |
-| Free plan (`usertype: free`) | unlimited videos · 70,000 AI images/day · unlimited AI scripts · unlimited voiceovers |
-| Paid plan (`usertype: paid_user`) | unlimited videos · 1,200 AI images/day · unlimited AI scripts · unlimited voiceovers |
+| Free plan (`usertype: free`) | unlimited videos · 10,000 AI images/day · unlimited AI scripts · unlimited voiceovers |
+| Paid plan (`usertype: paid_user`) | unlimited videos · 10,000 AI images/day · unlimited AI scripts · unlimited voiceovers |
 | Free-plan alias | `free_user` (or any value other than `paid_user`) is read as `free` |
-| Guest plan (`/free`, no account) | unlimited videos · **10 AI images/day per IP address** · unlimited AI scripts · unlimited voiceovers |
+| Guest plan (`/free`, no account) | unlimited videos · **10,000 AI images/day per IP address** · unlimited AI scripts · unlimited voiceovers |
 | Account row | `user:<username>` = `{ username, email, usertype }` (keyed by the unique username) · `email:<address>` mirrors the same email + plan |
 | Credit renewal | daily at midnight Asia/Taipei (UTC+8); `credits:<username>` and `ipcredits:<hash>` records expire after 2 days |
 | Guest IP records | only a salted SHA-256 hash + masked address (`203.0.113.0`) are stored, never the raw IP |
@@ -275,7 +277,7 @@ skin covers the whole site.
 | `GET /{current-day}/config/uvxyz` | Settings / background-worker page; current Asia/Taipei day only (e.g. `/16/config/uvxyz` on 2026-10-16) |
 | `GET /{slug}` | Public CMS page after all built-in routes; one flat non-reserved slug, otherwise `404` |
 | `GET /image/:i` | Workers AI demo image (unmetered, index into `prompts[]`) |
-| `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` for a cold anonymous request when KV is bound, `429` at the limit, `X-Credit-*` headers on success |
+| `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session or `yvs_free` guest (10,000 images/day on every plan); `401` for a cold anonymous request when KV is bound, `429` at the limit, `503` + `Retry-After` when the image fleet is shedding load, `X-Credit-*` headers on success |
 | `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated **plain-text** script (`{script, format:"plain"}` — no `srt` key is returned) plus keyword counts; accepts a user-selected `keywordSet` from `/api/seo-plan`, which is re-validated and skips the planner. Negotiated `singleAttempt:true,attempt:0–2` performs one writer call; browser owns retries |
 | `POST /api/seo-plan` | Two different validated SEO keyword sets (title + headings + 1 long-tail + 4 shorts each) for a topic, for the walkthrough's Select step |
 | `POST /api/image-prompts` | Synchronous scene prompts: optional `batch:{offset,count:1–3,attempt:0–2,previous}` performs one model call; `200 {prompts,count,expectedCount,batch?,style,minutes}`. Browser manages progressive 10/14/20 totals and retries. Without `batch`, legacy all-prompts/top-up behavior remains; `400` invalid input, `502` model failure, `503` no AI binding. The old `GET`/`DELETE /api/image-prompts/:id` job URL answers `410` |

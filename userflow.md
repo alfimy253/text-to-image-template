@@ -128,7 +128,7 @@ User opens /
 
 Landing actions:
    top "Sign up" link → auth overlay in create-account mode
-   nav "Plans" → #landing-plans section (Free: 70,000 AI images/day · Paid: 1,200/day;
+   nav "Plans" → #landing-plans section (Free and Paid: 10,000 AI images/day each;
                  unlimited videos, AI scripts and voiceovers on both; renews midnight UTC+8)
    nav "Free studio" / plans "Open the free studio" / footer "Try the free studio"
                  → GET /free (no account; 10 AI images/day per IP)
@@ -179,13 +179,15 @@ Image generation (AI panel, 2 variants per submit):
      ├─ 200  → PNG + X-Credit-Images-Remaining; credit consumed in KV
      ├─ 401  → the worker's error ("Sign in to generate AI images — … Open /free …")
      │          appears as "1 of 2 failed: …" in the AI status line (loop stops)
-     ├─ 429  → same status-line form for "Daily image credits used up (70,000 images/day on the
+     ├─ 429  → same status-line form for "Daily image credits used up (10,000 images/day on the
      │          Free plan). Credits renew at midnight (UTC+8)." (loop stops, pill drops to 0)
+     ├─ 503  → the image fleet is shedding load: Retry-After + {kind:"overload", retryAfterMs,
+     │          load}; the credit is refunded and the message says "server busy, retry in N s"
      └─ 500  → model error; the consumed credit is refunded
 
 Plans (user record user:<name>.usertype):
-   free       unlimited videos · 70,000 AI images/day · unlimited AI scripts · unlimited voiceovers
-   paid_user  unlimited videos · 1,200 AI images/day · unlimited AI scripts · unlimited voiceovers
+   free       unlimited videos · 10,000 AI images/day · unlimited AI scripts · unlimited voiceovers
+   paid_user  unlimited videos · 10,000 AI images/day · unlimited AI scripts · unlimited voiceovers
 
 KV records:
    credits:<name> = { day:"YYYY-MM-DD", images, scripts, voiceovers, videos, updatedAt }  (TTL 2 days)
@@ -215,15 +217,17 @@ Visitor opens /free (or a landing/footer link to it)
    │
    ├─ AI images: GET /image/gen  (cookie present, no session)
    │     → worker hashes CF-Connecting-IP, spends ipcredits:<hash> with the guest plan
-   │       200 → PNG + X-Credit-Plan: guest, X-Credit-Images-Limit: 10,
+   │       200 → PNG + X-Credit-Plan: guest, X-Credit-Images-Limit: 10000,
    │              X-Credit-Images-Remaining, X-Credit-Scope: ip
    │       429 → same "1 of 2 failed: …" status line with "Daily image credits used up
-   │              (10 images/day on the Guest plan)... Create a free account for 70,000 images per day."
+   │              (10,000 images/day on the Guest plan)... Create a free account for 10,000 images per day."
+   │       503 → fleet is shedding load: Retry-After + retryAfterMs; the browser pauses its own
+   │              media fan-out for that long before asking again (credit refunded)
    │       500 → credit refunded
    │
    ├─ AI scripts / voiceovers / videos: unlimited for guests; usage is booked to the IP row
    │
-   └─ Popover CTA "Create a free account — 70,000 images/day" → sign-up overlay
+   └─ Popover CTA "Create a free account — 10,000 images/day" → sign-up overlay
         (or the auth-overlay link back to /free)
 
 Settings page → Guest credits by IP
@@ -278,7 +282,7 @@ Administrator → current-day settings → Payment Transactions
      ├─ receipt or account missing → 404
      └─ success → payment.status="approved", payment_txn:<normalized-number> index,
                   user:<name>.usertype="paid_user"
-The next /api/credits or /paid request rereads the user record: 1,200 images/day and Paid Studio
+The next /api/credits or /paid request rereads the user record: the 10,000 images/day ceiling and Paid Studio
 access apply without issuing a new session cookie.
 ```
 
@@ -731,11 +735,11 @@ Seven full-page tabs (the credits were split into their own pages in Bug Fix Ses
      seven theme cards + Save Theme; registered worker URLs; Background Worker Mode
      background mode polls /api/worker/poll and renders queued jobs until Stop/tab close
   2. Guest Credits by IP
-     GET /api/config/ipcredits lists today's masked IPs with used/left on the 10-image guest
-     plan; one Reset button per row (POST /api/config/ipcredits {pw,key}) + Refresh
+     GET /api/config/ipcredits lists today's masked IPs with used/left on the guest plan
+     (10,000 images/day); one Reset button per row (POST /api/config/ipcredits {pw,key}) + Refresh
   3. Plans
-     GET /api/config/users {plans, users} renders one row per plan definition: Free 50 AI
-     images/day, Paid (paid_user) 1,200/day and the read-only Guest plan 10/day per IP, each
+     GET /api/config/users {plans, users} renders one row per plan definition: Free 10,000 AI
+     images/day, Paid (paid_user) 10,000/day and the read-only Guest plan 10,000/day per IP, each
      with the number of accounts on it and today's images used; Refresh Plans re-reads it
   4. Accounts Credits
      username + plan select + optional "Reset today counters" → POST /api/config/users

@@ -28,6 +28,16 @@
  *        monopolize the single JS thread or breach Worker CPU limits.
  */
 
+import {
+	ImageLoadGovernor,
+	sharedImageLoadGovernor
+} from "./image-load";
+
+export {
+	ImageLoadGovernor,
+	sharedImageLoadGovernor
+} from "./image-load";
+
 export const DEFAULT_GLOBAL_IMAGE_CONCURRENCY = 6;
 export const DEFAULT_GROUP_IMAGE_CONCURRENCY = 3;
 export const DEFAULT_GROUP_WINDOW_LIMIT = 3;
@@ -45,6 +55,13 @@ export interface ImageTaskQueueOptions {
 	groupWindowMs?: number;
 	/** Optional minimum spacing between consecutive starts in the same group. */
 	minCooldownMs?: number;
+	/**
+	 * Optional load governor. When present the queue's real global ceiling is
+	 * `min(maxGlobalConcurrency, governor.limit)` and every dispatch additionally
+	 * waits out `governor.cooldownRemainingMs` (server-load backoff). `null`
+	 * disables load awareness entirely (pure pacing, used by unit tests).
+	 */
+	governor?: ImageLoadGovernor | null;
 	/** Clock override for deterministic unit testing. */
 	now?: () => number;
 }
@@ -178,6 +195,7 @@ export class ImageTaskQueue {
 	readonly groupWindowLimit: number;
 	readonly groupWindowMs: number;
 	readonly minCooldownMs: number;
+	readonly governor: ImageLoadGovernor | null;
 	readonly cpu = new EventLoopCpuSerializer();
 
 	private readonly now: () => number;
@@ -212,7 +230,27 @@ export class ImageTaskQueue {
 			0,
 			Math.floor(options.minCooldownMs ?? DEFAULT_MIN_COOLDOWN_MS)
 		);
+		this.governor = options.governor === undefined ? sharedImageLoadGovernor : options.governor;
 		this.now = options.now || (() => Date.now());
+	}
+
+	/*
+	 * The number of image model calls this queue may run right now. Static
+	 * `maxGlobalConcurrency` is the hard ceiling; the shared load governor can
+	 * lower it while the provider is complaining and raise it again as calls
+	 * succeed (AIMD), so a burst of requests shares one fleet-wide budget.
+	 */
+	effectiveGlobalConcurrency(): number {
+		const governed = this.governor ? this.governor.limit : this.maxGlobalConcurrency;
+		return Math.max(
+			1,
+			Math.min(this.maxGlobalConcurrency, Math.floor(governed))
+		);
+	}
+
+	/** Milliseconds new work must still wait for the server-load cooldown. */
+	loadCooldownMs(): number {
+		return this.governor ? this.governor.cooldownRemainingMs : 0;
 	}
 
 	stats(): ImageTaskQueueStats {
@@ -393,6 +431,13 @@ export class ImageTaskQueue {
 
 	private earliestSlotAt(lane: GroupLane, now: number): number {
 		let readyAt = now;
+		/* Server-load backoff: no new image call dispatches during a cooldown. */
+		if (this.governor) {
+			const cooldown = this.governor.cooldownRemainingMs;
+			if (cooldown > 0) {
+				readyAt = Math.max(readyAt, now + cooldown);
+			}
+		}
 		if (this.minCooldownMs > 0 && Number.isFinite(lane.lastDispatchedAt)) {
 			readyAt = Math.max(readyAt, lane.lastDispatchedAt + this.minCooldownMs);
 		}
@@ -461,7 +506,7 @@ export class ImageTaskQueue {
 		 * all groups whose rate windows are currently open (`readyAt <= now`).
 		 */
 		while (
-			this.activeCount < this.maxGlobalConcurrency &&
+			this.activeCount < this.effectiveGlobalConcurrency() &&
 			this.groupRing.length > 0
 		) {
 			const now = this.now();
@@ -548,5 +593,6 @@ export const sharedImageTaskQueue = new ImageTaskQueue({
 	maxGroupConcurrency: DEFAULT_GROUP_IMAGE_CONCURRENCY,
 	groupWindowLimit: DEFAULT_GROUP_WINDOW_LIMIT,
 	groupWindowMs: DEFAULT_GROUP_WINDOW_MS,
-	minCooldownMs: DEFAULT_MIN_COOLDOWN_MS
+	minCooldownMs: DEFAULT_MIN_COOLDOWN_MS,
+	governor: sharedImageLoadGovernor
 });
