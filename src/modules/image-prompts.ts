@@ -2,8 +2,13 @@
  * AI image-prompt generation (`src/modules/image-prompts.ts`)
  *
  *   POST /api/image-prompts
- *     {topic, minutes, style, script|scriptIdea, keywordSet}
+ *     {topic, minutes, style, script|scriptIdea, keywordSet, batch?}
  *     -> 200 {success, prompts: string[], count, expectedCount, style, minutes}
+ *
+ * New editor/table callers pass batch:{offset,count<=3,attempt,previous}.
+ * A batch performs ONE inference (45s budget); the browser owns retries,
+ * fallback selection, lookahead and image sequencing. Without batch, the
+ * legacy 10/14/20 prompt response and top-up behavior remain compatible.
  *
  * The route is SYNCHRONOUS: the instruct model runs inside the request and the
  * finished, styled prompt list is the response body. There is no job id, no
@@ -52,6 +57,7 @@ export const DEFAULT_IMAGE_STYLE: ImageStyle = "Cinematic Film";
  * fall back to the 70B fast instruct model (same fallback slug as `script-seo.ts`).
  */
 export const IMAGE_PROMPT_MAX_TOKENS = 3584;
+export const IMAGE_PROMPT_BATCH_TIMEOUT_MS = 45000;
 export const IMAGE_PROMPT_FALLBACK_MODELS: readonly string[] = [
 	"@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 ];
@@ -79,6 +85,8 @@ export interface ImagePromptInput {
 	/* Session #211: the quick-batch table's Resolution + Orientation columns. */
 	resolution?: number;
 	orientation?: string;
+	/** Stateless browser-managed batch. Omitted by legacy callers. */
+	batch?: { offset: number; count: number; total: number; attempt: number; previous: string[] };
 }
 
 type AiEnv = {
@@ -800,7 +808,7 @@ export async function generateImagePrompts(
 	input: ImagePromptInput,
 	fallbackModels: readonly string[] = IMAGE_PROMPT_FALLBACK_MODELS
 ): Promise<string[]> {
-	const expectedCount = imagePromptCountForMinutes(input.minutes);
+	const expectedCount = input.batch?.count ?? imagePromptCountForMinutes(input.minutes);
 	const collected: string[] = [];
 	let lastError = "";
 
@@ -813,6 +821,12 @@ export async function generateImagePrompts(
 		for (let attempt = 1; attempt <= maxAttempts && collected.length < expectedCount; attempt++) {
 			const missing = expectedCount - collected.length;
 			let prompt = buildImagePromptInstruction(input, missing);
+			if (input.batch) {
+				prompt += " SEQUENCE: write scenes " + (input.batch.offset + 1) + " through " +
+					(input.batch.offset + expectedCount) + " of " + input.batch.total +
+					" total scenes. Cover only this part of the opening-to-closing story, not the whole arc again." +
+					" Avoid repeating these preceding scenes: " + input.batch.previous.join(" | ");
+			}
 			if (collected.length) {
 				prompt +=
 					" The sequence already has these prompts, do not repeat them: " +
@@ -829,10 +843,10 @@ export async function generateImagePrompts(
 						 * batch truncates mid-array, `salvageJsonPromptArray()` keeps every
 						 * complete scene and the next iteration tops up the remainder.
 						 */
-						max_tokens: Math.min(tokenCeiling, Math.max(1024, missing * 240)),
+						max_tokens: Math.min(tokenCeiling, Math.max(1024, missing * (input.batch ? 600 : 240))),
 						temperature: attempt === 1 ? 0.65 : 0.45
 					}),
-					IMAGE_PROMPT_TIMEOUT_MS,
+					input.batch ? IMAGE_PROMPT_BATCH_TIMEOUT_MS : IMAGE_PROMPT_TIMEOUT_MS,
 					"Image prompt generation"
 				);
 				const parsed = parseImagePrompts(aiText(result), missing);
@@ -847,9 +861,13 @@ export async function generateImagePrompts(
 		return threw;
 	};
 
-	await runModelPass(model, 3, IMAGE_PROMPT_MAX_TOKENS);
+	// New callers own retries in the browser: exactly ONE inference per request.
+	// A retry may select the server-approved fallback; never accept arbitrary model slugs.
+	const selectedModel = input.batch && input.batch.attempt > 0
+		? (fallbackModels.find((slug) => slug && slug !== model) || model) : model;
+	await runModelPass(selectedModel, input.batch ? 1 : 3, IMAGE_PROMPT_MAX_TOKENS);
 
-	if (!collected.length) {
+	if (!collected.length && !input.batch) {
 		for (const fbSlug of fallbackModels) {
 			if (!fbSlug || fbSlug === model) continue;
 			await runModelPass(fbSlug, 2, 4096);
@@ -919,6 +937,23 @@ const rawIdea = typeof body.scriptIdea === "string"
 			return { error: "Orientation must be one of square, landscape, portrait" };
 		}
 	}
+	let batch: ImagePromptInput["batch"];
+	if (body.batch !== undefined) {
+		if (!body.batch || typeof body.batch !== "object" || Array.isArray(body.batch)) {
+			return { error: "Batch must be an object" };
+		}
+		const b = body.batch as Record<string, unknown>;
+		const total = imagePromptCountForMinutes(minutes);
+		if (!Number.isInteger(b.offset) || Number(b.offset) < 0 || Number(b.offset) >= total ||
+			!Number.isInteger(b.count) || Number(b.count) < 1 || Number(b.count) > 3 ||
+			Number(b.offset) + Number(b.count) > total ||
+			(b.attempt !== undefined && (!Number.isInteger(b.attempt) || Number(b.attempt) < 0 || Number(b.attempt) > 2))) {
+			return { error: "Batch requires offset within the scene total, count 1-3, and attempt 0-2" };
+		}
+		batch = { offset: Number(b.offset), count: Number(b.count), total,
+			attempt: Number(b.attempt) || 0,
+			previous: Array.isArray(b.previous) ? b.previous.slice(-4).filter((v): v is string => typeof v === "string").map((v) => v.slice(0, 160)) : [] };
+	}
 	const scriptIdea = summarizeScriptIdea(rawIdea, topic);
 	const keywordSet =
 		body.keywordSet && typeof body.keywordSet === "object" && !Array.isArray(body.keywordSet)
@@ -931,7 +966,8 @@ const rawIdea = typeof body.scriptIdea === "string"
 		scriptIdea,
 		keywordSet,
 		resolution: frame.resolution,
-		orientation: frame.orientation
+		orientation: frame.orientation,
+		batch
 	};
 }
 
@@ -944,20 +980,25 @@ export async function handleGenerateImagePrompts(
 	env: AiEnv,
 	model: string
 ): Promise<Response> {
-	const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+	const body = await request.json().catch(() => null);
+	if (!body || typeof body !== "object" || Array.isArray(body)) {
+		return json({ success: false, error: "Expected a JSON object", prompts: [] }, 400);
+	}
 	if (!env || !env.AI) {
 		return json({ success: false, error: "AI binding not configured", prompts: [] }, 503);
 	}
-	const input = sanitizeInput(body);
+	const input = sanitizeInput(body as Record<string, unknown>);
 	if ("error" in input) {
 		return json({ success: false, error: input.error, prompts: [] }, 400);
 	}
 
+	const usedModel = input.batch && input.batch.attempt > 0
+		? (IMAGE_PROMPT_FALLBACK_MODELS.find((slug) => slug && slug !== model) || model) : model;
 	const startedAt = Date.now();
 	const expectedCount = imagePromptCountForMinutes(input.minutes);
 	const frame = imageFrameFor(input.resolution, input.orientation);
 	console.info("[image-prompts] started", {
-		model,
+		model: usedModel,
 		minutes: input.minutes,
 		expectedCount,
 		style: input.style,
@@ -971,6 +1012,7 @@ export async function handleGenerateImagePrompts(
 		const prompts = await generateImagePrompts(env, model, input);
 		console.info("[image-prompts] ready", {
 			count: prompts.length,
+			batch: input.batch ? { offset: input.batch.offset, requested: input.batch.count, nextOffset: input.batch.offset + prompts.length } : undefined,
 			expectedCount,
 			ms: Date.now() - startedAt
 		});
@@ -978,6 +1020,7 @@ export async function handleGenerateImagePrompts(
 			success: true,
 			prompts,
 			count: prompts.length,
+			batch: input.batch ? { offset: input.batch.offset, requested: input.batch.count, nextOffset: input.batch.offset + prompts.length } : undefined,
 			expectedCount,
 			style: input.style,
 			minutes: input.minutes,
@@ -985,16 +1028,18 @@ export async function handleGenerateImagePrompts(
 			orientation: frame.orientation,
 			width: frame.width,
 			height: frame.height,
-			model,
+			model: usedModel,
 			ms: Date.now() - startedAt
 		});
 	} catch (error) {
-		const message = errorMessage(error);
+		const rawMessage = errorMessage(error);
+		const message = /abort|signal/i.test(rawMessage)
+			? "The scene prompt model request was interrupted. Please retry." : rawMessage;
 		console.error("[image-prompts] failed", {
 			ms: Date.now() - startedAt,
 			error: message
 		});
-		return json({ success: false, error: message, prompts: [] }, 502);
+		return json({ success: false, error: message, code: "IMAGE_PROMPT_MODEL_FAILED", prompts: [] }, 502);
 	}
 }
 

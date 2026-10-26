@@ -27,6 +27,8 @@
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"e2e:dev": "wrangler dev --config wrangler.e2e.jsonc",
-		"test": "node --import tsx --test tests/*.test.mjs"
+		"test": "node --import tsx --test tests/*.test.mjs",
+		"e2e:accounting": "wrangler dev --local --config wrangler.accounting-e2e.jsonc",
+		"e2e:accounting:smoke": "node bench/session-261-accounting-smoke.mjs"
 	}
 }

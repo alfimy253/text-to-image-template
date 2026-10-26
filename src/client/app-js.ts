@@ -13,7 +13,14 @@
  * (\`, \${, \\u...) are intentional — do not reformat.
  */
 
+import { BROWSER_OFFLOAD_JS } from "./browser-offload";
+import { BROWSER_USAGE_JS } from "./usage-ledger";
+import { PROGRESSIVE_IMAGE_PIPELINE_JS } from "./progressive-image-pipeline";
+
 export const APP_JS = `
+${BROWSER_OFFLOAD_JS}
+${BROWSER_USAGE_JS}
+${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	// =========================================================
 	// DATA
 	// =========================================================
@@ -1634,7 +1641,7 @@ export const APP_JS = `
 					currentAudio.url
 				) {
 
-					URL.revokeObjectURL(
+					releaseStudioObjectUrl(
 						currentAudio.url
 					);
 
@@ -1653,7 +1660,7 @@ export const APP_JS = `
 						decoded,
 
 					url:
-						URL.createObjectURL(
+						createStudioObjectUrl(
 							file
 						)
 
@@ -1743,7 +1750,7 @@ export const APP_JS = `
 			currentAudio.url
 		) {
 
-			URL.revokeObjectURL(
+			releaseStudioObjectUrl(
 				currentAudio.url
 			);
 
@@ -1925,7 +1932,7 @@ export const APP_JS = `
 
 
 			const imageURL =
-				URL.createObjectURL(
+				createStudioObjectUrl(
 					blob
 				);
 
@@ -2157,7 +2164,7 @@ export const APP_JS = `
 					try {
 
 						const imageURL =
-							URL.createObjectURL(
+							createStudioObjectUrl(
 								file
 							);
 
@@ -2255,7 +2262,7 @@ export const APP_JS = `
 								);
 
 
-								URL.revokeObjectURL(
+								releaseStudioObjectUrl(
 									imageURL
 								);
 
@@ -2748,7 +2755,7 @@ export const APP_JS = `
 				)
 			) {
 
-				URL.revokeObjectURL(
+				releaseStudioObjectUrl(
 					slide.img.src
 				);
 
@@ -5523,11 +5530,14 @@ export const APP_JS = `
 		project._deleted = true;
 		project._imageFlowActive = false;
 		project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
+		if (project._manualControllers) project._manualControllers.forEach(function (controller) { controller.abort(); });
 
 		for (const ctrlKey of [
 			"_imageBatchController",
 			"_imagePromptCreateController",
-			"_seoPlanController"
+			"_seoPlanController",
+			"_seoScriptController",
+			"_voiceoverController"
 		]) {
 			if (project[ctrlKey]) {
 				try {
@@ -5561,7 +5571,7 @@ export const APP_JS = `
 			Array.from(aiResultsPanel.children).forEach(function (card) {
 				if (card && card._displayUrl) {
 					try {
-						URL.revokeObjectURL(card._displayUrl);
+						releaseStudioObjectUrl(card._displayUrl);
 					}
 					catch (revokeErr) { }
 				}
@@ -5570,7 +5580,7 @@ export const APP_JS = `
 
 		if (project.audio && project.audio.url) {
 			try {
-				URL.revokeObjectURL(project.audio.url);
+				releaseStudioObjectUrl(project.audio.url);
 			}
 			catch (audioRevokeErr) { }
 		}
@@ -5579,7 +5589,7 @@ export const APP_JS = `
 		for (const asset of project.assets) {
 
 			try {
-				URL.revokeObjectURL(asset.url);
+				releaseStudioObjectUrl(asset.url);
 			}
 			catch (revokeError) { }
 
@@ -6592,7 +6602,7 @@ export const APP_JS = `
 		try {
 
 			scriptUrl =
-				URL.createObjectURL(
+				createStudioObjectUrl(
 					new Blob([DECODE_WORKER_SOURCE], { type: "application/javascript" })
 				);
 
@@ -6600,7 +6610,7 @@ export const APP_JS = `
 				new Worker(scriptUrl);
 
 			if (typeof URL.revokeObjectURL === "function") {
-				try { URL.revokeObjectURL(scriptUrl); } catch (revokeErr) { }
+				try { releaseStudioObjectUrl(scriptUrl); } catch (revokeErr) { }
 			}
 
 			worker.onmessage = function (ev) {
@@ -6656,7 +6666,7 @@ export const APP_JS = `
 		catch (spawnErr) {
 
 			if (scriptUrl && typeof URL.revokeObjectURL === "function") {
-				try { URL.revokeObjectURL(scriptUrl); } catch (revokeErr2) { }
+				try { releaseStudioObjectUrl(scriptUrl); } catch (revokeErr2) { }
 			}
 
 			decodeWorkerPool.disabled = true;
@@ -7026,13 +7036,16 @@ export const APP_JS = `
 		for (const url of row.objectUrls || []) {
 
 			try {
-				URL.revokeObjectURL(url);
+				releaseStudioObjectUrl(url);
 			}
 			catch (revokeError) { }
 
 		}
 
 		row.objectUrls = [];
+		for (const slide of row.slides || []) {
+			if (slide.img && typeof slide.img.close === "function") { try { slide.img.close(); } catch (closeError) {} }
+		}
 
 	}
 
@@ -7363,7 +7376,7 @@ export const APP_JS = `
 
 			try {
 
-				URL.revokeObjectURL(url);
+				releaseStudioObjectUrl(url);
 
 			}
 			catch (revokeError) { }
@@ -8024,9 +8037,23 @@ export const APP_JS = `
 
 	}
 
+	async function batchRunVoiceStep(row, stage, detail, step) {
+		if ((await studioOffload.capabilities()).chunkVoiceover) {
+			setBatchStage(row, stage, detail);
+			return step();
+		}
+		return batchRunStep(row, stage, detail, step);
+	}
+
 	/* Step 1: the script becomes the voiceover MP3 (worker-side chunked). */
 	async function requestBatchVoiceover(row) {
-
+		if ((await studioOffload.capabilities()).chunkVoiceover) {
+			return studioOffload.voiceover(String(row.script || "").trim(), "en", {
+				isCancelled: function () { return Boolean(row.stopRequested); },
+				setController: function (controller) { row.controller = controller; },
+				clearController: function (controller) { if (row.controller === controller) row.controller = null; }
+			});
+		}
 		return await batchFetch(
 			row,
 			"/api/voiceover",
@@ -8138,10 +8165,33 @@ export const APP_JS = `
 	}
 
 	/* Step 2: the script + the row's style become the scene prompts. */
-	async function requestBatchPrompts(row) {
+	async function requestBatchPrompts(row, batch) {
 
+		const caps = await studioOffload.capabilities();
+		const compact = caps.compactPrompts ? studioOffload.compactIdea(row.script, batchRowTopic(row)) : null;
+		if (caps.compactPrompts) {
+			const owner = { controller: null }; row._promptOwner = owner;
+			const response = await studioOffload.jsonRequest("/api/image-prompts", {
+				method: "POST", headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ topic: batchRowTopic(row), minutes: row.minutes, style: row.style, batch: batch,
+					resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value, scriptIdea: compact })
+			}, 60000, {
+				isCancelled: function () { return Boolean(row.stopRequested); },
+				setController: function (controller) { owner.controller = controller; },
+				clearController: function (controller) { if (owner.controller === controller) owner.controller = null; }
+			});
+			const data = await response.json();
+			if (!response.ok || !data.success) {
+				const error = new Error(data.error || "Scene prompt request failed");
+				error.retryable = response.status >= 500 || response.status === 429 || response.ok; throw error;
+			}
+			return data.prompts;
+		}
+		// Separate ownership: prompt lookahead must not overwrite the image stream's Stop handle.
+		const owner = Object.create(row);
+		row._promptOwner = owner;
 		return await batchFetch(
-			row,
+			owner,
 			"/api/image-prompts",
 			{
 				method: "POST",
@@ -8150,6 +8200,7 @@ export const APP_JS = `
 				},
 				body:
 					JSON.stringify({
+						batch: batch,
 						topic:
 							batchRowTopic(row),
 						minutes:
@@ -8165,11 +8216,11 @@ export const APP_JS = `
 								batchResolution(row.resolution),
 							orientation:
 								batchOrientation(row.orientation).value,
-						script:
-							String(row.script || "").trim()
+						scriptIdea: compact || undefined,
+						script: compact ? undefined : String(row.script || "").trim()
 					})
 			},
-			BATCH_REQUEST_TIMEOUT_MS,
+			60000,
 			async function (response) {
 
 				const data =
@@ -8179,10 +8230,9 @@ export const APP_JS = `
 
 				if (!response.ok || !data.success) {
 
-					throw new Error(
-						(data && data.error) ||
-						("Image prompts failed (HTTP " + response.status + ")")
-					);
+					const error = new Error((data && data.error) || ("Image prompts failed (HTTP " + response.status + ")"));
+					error.retryable = response.status >= 500 || response.status === 429 || response.ok;
+					throw error;
 
 				}
 
@@ -8223,12 +8273,37 @@ export const APP_JS = `
 
 	}
 
-	/* Step 3: ONE batch request renders every prompt of the row via the event-driven queue. */
+	/* Step 3: one bounded image chunk through the shared browser stream queue. */
 	async function requestBatchImages(
 		row,
 		prompts
 	) {
-
+		if ((await studioOffload.capabilities()).binaryImages) {
+			const images = [];
+			const results = await studioOffload.images(prompts, {
+				resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value
+			}, {
+				isCancelled: function () { return Boolean(row.stopRequested); },
+				priority: function () {
+					const tr = document.querySelector('[data-batch-row="' + row.id + '"]');
+					return tr && tr.contains(document.activeElement) ? 2 : 0;
+				},
+				setController: function (controller) { row.controller = controller; },
+				clearController: function (controller) { if (row.controller === controller) row.controller = null; },
+				onImage: function (blob, index) {
+					if (row.stopRequested) return;
+					const url = createStudioObjectUrl(blob); row.objectUrls.push(url);
+					images.push({ blob: blob, url: url, index: index });
+				}
+			});
+			refreshCredits();
+			images.sort(function (a, b) { return a.index - b.index; });
+			if (!images.length) throw new Error("No image came out of the binary batch");
+			const failedImages = results.filter(function (r) { return !r.ok; }).length;
+			if (failedImages) recordStudioUsage("images", "error", failedImages);
+			if (failedImages) console.warn("[batch-table] partial binary image batch; no automatic replay");
+			return images;
+		}
 		return appImageStreamQueue.enqueue(
 			"table-row-" + row.id,
 			async function () {
@@ -8344,6 +8419,9 @@ export const APP_JS = `
 				let failed =
 					0;
 
+				let streamFailure = null;
+				let streamDone = false;
+
 				let imageCommitChain =
 					Promise.resolve();
 
@@ -8353,6 +8431,8 @@ export const APP_JS = `
 						return;
 					}
 
+					if (event.type === "done") streamDone = true;
+					if (event.type === "error") streamFailure = new Error(event.error || "Image stream failed");
 					if (event.credits) {
 						applyCredits(event.credits);
 					}
@@ -8384,7 +8464,7 @@ export const APP_JS = `
 									}
 
 									const url =
-										URL.createObjectURL(blob);
+										createStudioObjectUrl(blob);
 
 									row.objectUrls.push(url);
 
@@ -8509,8 +8589,12 @@ export const APP_JS = `
 					await imageCommitChain;
 
 				}
+				catch (error) {
+					streamFailure = error;
+				}
 				finally {
-
+					if (streamFailure) streamAbortHandle.abort();
+					await imageCommitChain;
 					if (row.controller === streamAbortHandle) {
 
 						row.controller =
@@ -8524,6 +8608,11 @@ export const APP_JS = `
 					throw batchError("The row was stopped", "AbortError");
 				}
 
+				if (!streamDone && !streamFailure) streamFailure = new Error("Image stream ended before completion");
+				if (streamFailure) {
+					if (!images.length) throw streamFailure;
+					row._imagePipelineWarning = "Image stream was interrupted; delivered images were kept.";
+				}
 				if (!images.length) {
 
 					throw new Error(
@@ -8684,6 +8773,7 @@ export const APP_JS = `
 		revokeBatchRow(row);
 
 		row.stopRequested = false;
+		row._imagePipelineWarning = "";
 		row.retrying = false;
 		row.mp3 = null;
 		row.mp3Url = "";
@@ -8706,7 +8796,7 @@ export const APP_JS = `
 			 * one attempt or four.
 			 */
 			const spanMs =
-				await batchRunStep(
+				await batchRunVoiceStep(
 					row,
 					"voice",
 					"Speaking " + String(row.script || "").trim().length + " characters",
@@ -8727,9 +8817,11 @@ export const APP_JS = `
 							blob;
 
 						row.mp3Url =
-							URL.createObjectURL(blob);
+							createStudioObjectUrl(blob);
 
 						row.objectUrls.push(row.mp3Url);
+
+						recordStudioUsage("voiceovers", "ok", 1);
 
 						setBatchStage(row, "timing");
 
@@ -8751,39 +8843,38 @@ export const APP_JS = `
 					spanMs
 				);
 
-			row.prompts =
-				await batchRunStep(
-					row,
-					"prompts",
-					"for " + row.minutes + " min \u00b7 " + row.style,
-					function () {
-
-						return requestBatchPrompts(row);
-
+			row.prompts = [];
+			row.images = [];
+			setBatchStage(row, "prompts", "Writing the first three scene prompts");
+			try {
+				await runProgressiveImagePipeline({
+					total: imageSceneTarget(row.minutes),
+					isCancelled: function () { return Boolean(row.stopRequested); },
+					request: function (batch) { return requestBatchPrompts(row, batch); },
+					onPrompts: function (prompts) { row.prompts = prompts; },
+					cancelPrompts: function () {
+						if (row._promptOwner && row._promptOwner.controller) row._promptOwner.controller.abort();
+					},
+					render: async function (prompts, offset) {
+						setBatchStage(row, "images", row.images.length + " of " + imageSceneTarget(row.minutes));
+						if (offset === 0) startUnprocessedRows(row);
+						// Never retry a consumed image batch: it could charge for or duplicate delivered images.
+						const images = await requestBatchImages(row, prompts);
+						images.forEach(function (image) { image.index += offset; });
+						row.images.push.apply(row.images, images);
+						/* #261: local, best-effort record of usable images. */
+						if (images.length) recordStudioUsage("images", "ok", images.length);
+						if (row._imagePipelineWarning) throw new Error(row._imagePipelineWarning);
 					}
-				);
-
-			/*
-			 * Session #248: row moves to the next step of processing
-			 * (image generation). Start unprocessed rows so they do not
-			 * wait for earlier rows to completely finish the pipeline.
-			 */
-			startUnprocessedRows(row);
-
-			row.images =
-				await batchRunStep(
-					row,
-					"images",
-					"0 of " + row.prompts.length,
-					function () {
-
-						return requestBatchImages(
-							row,
-							row.prompts
-						);
-
-					}
-				);
+				});
+			} catch (pipelineError) {
+				// Keep usable earlier batches on a later prompt failure; Stop still stops the row.
+				if (row.stopRequested || !row.images.length) throw pipelineError;
+				console.warn("[batch-table] using partial image pipeline", batchErrorBrief(pipelineError));
+			} finally {
+				if (row._promptOwner && row._promptOwner.controller) row._promptOwner.controller.abort();
+				row._promptOwner = null;
+			}
 
 			row.slides =
 				await batchRunStep(
@@ -9177,6 +9268,10 @@ export const APP_JS = `
 
 			row.retrying =
 				false;
+
+			if (row._promptOwner && row._promptOwner.controller) {
+				row._promptOwner.controller.abort();
+			}
 
 			if (row.controller) {
 
@@ -9858,7 +9953,7 @@ export const APP_JS = `
 	) {
 
 		const url =
-			URL.createObjectURL(
+			createStudioObjectUrl(
 				blob
 			);
 
@@ -9883,7 +9978,7 @@ export const APP_JS = `
 
 		setTimeout(
 			function () {
-				URL.revokeObjectURL(url);
+				releaseStudioObjectUrl(url);
 			},
 			2000
 		);
@@ -10678,7 +10773,7 @@ export const APP_JS = `
 				 * enforced at upload.
 				 */
 				const clipURL =
-					URL.createObjectURL(
+					createStudioObjectUrl(
 						file
 					);
 
@@ -10723,7 +10818,7 @@ export const APP_JS = `
 				}
 				catch (probeError) {
 
-					URL.revokeObjectURL(
+					releaseStudioObjectUrl(
 						clipURL
 					);
 
@@ -10745,7 +10840,7 @@ export const APP_JS = `
 						MP4_MAX_DURATION_S
 				) {
 
-					URL.revokeObjectURL(
+					releaseStudioObjectUrl(
 						clipURL
 					);
 
@@ -10798,7 +10893,7 @@ export const APP_JS = `
 							: "image",
 					file: file,
 					url:
-						URL.createObjectURL(
+						createStudioObjectUrl(
 							file
 						),
 					card: null,
@@ -11175,7 +11270,7 @@ export const APP_JS = `
 			asset.url
 		) {
 
-			URL.revokeObjectURL(
+			releaseStudioObjectUrl(
 				asset.url
 			);
 
@@ -12309,7 +12404,7 @@ export const APP_JS = `
 			).forEach(
 				(card) => {
 					if (card._displayUrl) {
-						URL.revokeObjectURL(
+						releaseStudioObjectUrl(
 							card._displayUrl
 						);
 					}
@@ -12356,7 +12451,13 @@ export const APP_JS = `
 					"manual-video-" + n,
 					async function () {
 						try {
-							const response = await fetch(AI_ENDPOINT(prompt, variant));
+							const response = await studioOffload.mediaResponse(AI_ENDPOINT(prompt, variant), {}, {
+								isCancelled: function () { return Boolean(flowProject && flowProject._deleted); },
+								setController: function (controller) {
+									if (flowProject) { if (!flowProject._manualControllers) flowProject._manualControllers = new Set(); flowProject._manualControllers.add(controller); }
+								},
+								clearController: function (controller) { if (flowProject && flowProject._manualControllers) flowProject._manualControllers.delete(controller); }
+							});
 							if (!response.ok) {
 								/* The worker returns {success:false, error:"..."}. */
 								let message = "Image generation failed";
@@ -12489,7 +12590,7 @@ export const APP_JS = `
 		}
 
 		const url =
-			URL.createObjectURL(
+			createStudioObjectUrl(
 				blob
 			);
 
@@ -12681,7 +12782,7 @@ export const APP_JS = `
 		}
 
 		const url =
-			URL.createObjectURL(
+			createStudioObjectUrl(
 				blob
 			);
 
@@ -12713,7 +12814,7 @@ export const APP_JS = `
 			const assetIndex = project.assets.indexOf(asset);
 			if (assetIndex >= 0) project.assets.splice(assetIndex, 1);
 			if (asset.card && asset.card.parentNode) asset.card.parentNode.removeChild(asset.card);
-			try { URL.revokeObjectURL(url); } catch (revokeError) { }
+			try { releaseStudioObjectUrl(url); } catch (revokeError) { }
 			throw insertionError;
 		}
 		return true;
@@ -14245,6 +14346,59 @@ export const APP_JS = `
 		);
 
 		/*
+		 * #261 local record. Stored in this browser only; clearing it does
+		 * not restore server credits and a full local record never grants
+		 * extra ones.
+		 */
+		const localNote =
+			document.createElement(
+				"div"
+			);
+
+		localNote.className =
+			"credit-reset credit-local";
+
+		const localText =
+			localUsageText();
+
+		localNote.textContent =
+			localText
+				? "This device today: " +
+					localText +
+					". Local record only \\u2014 server credits are authoritative."
+				: "This device: no local usage recorded yet.";
+
+		popover.appendChild(
+			localNote
+		);
+
+		const clearLocal =
+			document.createElement(
+				"button"
+			);
+
+		clearLocal.type =
+			"button";
+		clearLocal.className =
+			"credit-local-clear";
+		clearLocal.textContent =
+			"Clear this device's usage record";
+
+		clearLocal.addEventListener(
+			"click",
+			(event) => {
+
+				event.stopPropagation();
+				clearLocalUsage();
+
+			}
+		);
+
+		popover.appendChild(
+			clearLocal
+		);
+
+		/*
 		 * A guest can turn the 10/day IP allowance into a
 		 * 70,000/day account at any time.
 		 */
@@ -14560,13 +14714,117 @@ export const APP_JS = `
 			return;
 		}
 
+		const local =
+			localUsageText();
+
 		line.textContent =
-			creditState
+			(creditState
 				? "Plan: " +
 					creditPlanLabel() +
 					" \\u2014 " +
 					creditImagesValue()
+				: "") +
+			(local
+				? (creditState ? "  \\u00b7  " : "") +
+					"This device: " +
+					local
+				: "");
+
+		line.title =
+			local
+				? "Recorded by this browser only (" +
+					local +
+					" today). Server credits remain authoritative."
 				: "";
+
+	}
+
+	/*
+	 * #261: local usage record (localStorage + a two-day cookie).
+	 *
+	 * This is display/history only. It lives on the user's device, can be
+	 * cleared, and is never read by the Worker to grant credits: the
+	 * existing KV counters and authentication still authorize every paid
+	 * request, and /api/credits stays authoritative.
+	 */
+	function localUsageText() {
+
+		try {
+
+			return studioUsage.describe();
+
+		}
+		catch (usageError) {
+
+			return "";
+
+		}
+
+	}
+
+	function refreshLocalUsageUi() {
+
+		try {
+
+			updateAccountCreditLine();
+
+		}
+		catch (lineError) {
+
+			/* the account box may not be on screen */
+
+		}
+
+		const popover =
+			document.getElementById(
+				"credit-popover"
+			);
+
+		if (popover && !popover.hidden) {
+			renderCreditPopover();
+		}
+
+	}
+
+	function recordStudioUsage(
+		kind,
+		outcome,
+		count
+	) {
+
+		try {
+
+			studioUsage.record(
+				kind,
+				outcome,
+				count
+			);
+
+		}
+		catch (usageError) {
+
+			return;
+
+		}
+
+		refreshLocalUsageUi();
+
+	}
+
+	function clearLocalUsage() {
+
+		try {
+
+			studioUsage.clear();
+
+		}
+		catch (usageError) {
+
+			/* ignore */
+
+		}
+
+		refreshLocalUsageUi();
 
 	}
 
@@ -14586,6 +14844,14 @@ export const APP_JS = `
 
 		creditState =
 			data;
+
+		/* #261: mirror the authoritative summary into the local record. */
+		try {
+			studioUsage.observe(data);
+		}
+		catch (usageError) {
+			/* a local record never blocks credits */
+		}
 
 		renderCreditPill();
 
@@ -14748,7 +15014,7 @@ export const APP_JS = `
 	) {
 
 		const url =
-			URL.createObjectURL(
+			createStudioObjectUrl(
 				blob
 			);
 
@@ -14773,7 +15039,7 @@ export const APP_JS = `
 
 		setTimeout(
 			() => {
-				URL.revokeObjectURL(
+				releaseStudioObjectUrl(
 					url
 				);
 			},
@@ -15574,7 +15840,7 @@ export const APP_JS = `
 				) {
 
 					const url =
-						URL.createObjectURL(
+						createStudioObjectUrl(
 							file
 						);
 
@@ -15631,7 +15897,7 @@ export const APP_JS = `
 				else {
 
 					asset.url =
-						URL.createObjectURL(
+						createStudioObjectUrl(
 							file
 						);
 
@@ -15863,7 +16129,7 @@ export const APP_JS = `
 			) {
 
 				if (a.url) {
-					URL.revokeObjectURL(
+					releaseStudioObjectUrl(
 						a.url
 					);
 				}
@@ -16347,18 +16613,12 @@ export const APP_JS = `
 	//      plain narration script from the selected set (two
 	//      automatic retries on failure before the accordion
 	//      reports the error — see runSeoScriptRequest).
-	//   3. Once the script is shown, POST /api/image-prompts runs
-	//      the prompt LLM INSIDE the request and answers with the
-	//      finished prompt list (style suffix included). There is
-	//      no job id, no poll URL and no timer: one request, one
-	//      response.
-	//   4. Every prompted image is then rendered by a SINGLE POST to
-	//      /api/image-batch. The worker renders them in parallel and
-	//      streams one NDJSON event per finished image, so the
-	//      gallery fills up as they arrive instead of one image
-	//      every 20 seconds. The stream's "done" event ends the
-	//      flow: counters are reported and the "Upload Image, GIF
-	//      or MP4" button is re-enabled.
+	//   3. The browser requests at most THREE scene prompts, starts their
+	//      image stream, and requests the next prompt batch concurrently.
+	//      One lookahead batch bounds memory; retries apply only to prompts.
+	//   4. Every image stream is drained before the next starts. Finalization
+	//      counts the whole flow and restores this video's controls. No KV,
+	//      background jobs, server-side video management or polling is needed.
 	// =========================================================
 
 	/*
@@ -16466,7 +16726,7 @@ export const APP_JS = `
 
 	/* The whole prompt LLM call happens inside this one request. */
 	const IMAGE_PROMPT_REQUEST_TIMEOUT_MS =
-		180000;
+		60000;
 
 	/* A batch stream that sends nothing for this long is treated as dead. */
 	const IMAGE_BATCH_IDLE_TIMEOUT_MS =
@@ -16480,15 +16740,24 @@ export const APP_JS = `
 		};
 	}
 
-	async function seoFetchWithTimeout(url, options, timeoutMs, project, controllerKey) {
+	async function seoFetchWithTimeout(url, options, timeoutMs, project, controllerKey, consumeResponse) {
 		if (typeof AbortController === "undefined") {
-			return fetch(url, options);
+			const response = await fetch(url, options);
+			return consumeResponse ? consumeResponse(response) : response;
 		}
 		const controller = new AbortController();
 		if (project && controllerKey) project[controllerKey] = controller;
-		const timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+		let timedOut = false;
+		const timer = setTimeout(function () { timedOut = true; controller.abort(); }, timeoutMs);
 		try {
-			return await fetch(url, Object.assign({}, options || {}, { signal: controller.signal }));
+			const response = await fetch(url, Object.assign({}, options || {}, { signal: controller.signal }));
+			return consumeResponse ? await consumeResponse(response) : response;
+		}
+		catch (error) {
+			if (timedOut || batchIsAbortError(error)) {
+				throw batchError(timedOut ? "Scene prompt request timed out; please retry." : "Scene prompt request was interrupted.", "TimeoutError");
+			}
+			throw error;
 		}
 		finally {
 			clearTimeout(timer);
@@ -17545,104 +17814,129 @@ export const APP_JS = `
 				"Writing your " + style + " scene prompts from the script…";
 		}
 
-		let prompts = [];
-		try {
-			const response = await seoFetchWithTimeout(
-				"/api/image-prompts",
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						topic: project._seoTopic || "my video",
-						minutes: project._seoMinutes || 1,
-						style: style,
-						script: project.script || "",
-						keywordSet: project.selectedSeoSet || null
-					})
-				},
-				IMAGE_PROMPT_REQUEST_TIMEOUT_MS,
-				project,
-				"_imagePromptCreateController"
-			);
-			const data = await seoResponseJson(response);
-			if (!response.ok || !data.success) {
-				throw new Error((data && data.error) || ("Image-prompt request failed (HTTP " + response.status + ")"));
-			}
-			prompts = Array.isArray(data.prompts)
-				? data.prompts.filter(function (prompt) {
-					return typeof prompt === "string" && prompt.trim().length > 0;
-				})
-				: [];
-			if (!prompts.length) {
-				throw new Error("The image-prompt model returned no scene prompts");
-			}
-		}
-		catch (promptError) {
-			if (project._deleted || project._imageFlowSeq !== myFlowSeq) {
-				return;
-			}
-			const liveN = videoProjects.indexOf(project) + 1;
-			if (liveN <= 0) return;
-			const message = promptError && promptError.message ? promptError.message : String(promptError);
-			console.warn("[seo-image-flow] prompt generation failed", {
-				videoIndex: liveN,
-				ms: Date.now() - project._imageFlowStartedAt,
-				error: message
-			});
-			await finalizeImagePromptFlow(liveN, "Image prompts could not be generated: " + message);
-			return;
-		}
-
-		if (project._deleted || project._imageFlowSeq !== myFlowSeq || !project._imageFlowActive) return;
-		const batchN = videoProjects.indexOf(project) + 1;
-		if (batchN <= 0) return;
-
-		const target = Math.min(prompts.length, availableImages);
-		project.imagePrompts = prompts;
+		const target = Math.min(imageSceneTarget(project._seoMinutes || 1), availableImages);
+		project.imagePrompts = [];
 		project.imagePromptTarget = target;
-		/* Tags the cards this flow adds so the summary can count them. */
-		project.imagePromptFlowId = "imgflow-" + batchN + "-" + Date.now().toString(36);
-
-		console.info("[seo-image-flow] prompts ready", {
-			videoIndex: batchN,
-			count: prompts.length,
-			imageTarget: target,
-			ms: Date.now() - project._imageFlowStartedAt
-		});
-
-		await runImageBatch(
-			batchN,
-			prompts.slice(0, target),
-			project.imagePromptFlowId,
-			project,
-			myFlowSeq
-		);
-
-		if (project._deleted || project._imageFlowSeq !== myFlowSeq) return;
+		project.imagePromptFlowId = "imgflow-" + n + "-" + myFlowSeq + "-" + Date.now().toString(36);
+		const isCancelled = function () {
+			return Boolean(project._deleted || project._imageFlowSeq !== myFlowSeq || !project._imageFlowActive);
+		};
+		try {
+			await runProgressiveImagePipeline({
+				total: target,
+				isCancelled: isCancelled,
+				onPrompts: function (prompts) { project.imagePrompts = prompts; },
+				cancelPrompts: function () {
+					if (project._imagePromptCreateController) project._imagePromptCreateController.abort();
+				},
+				request: async function (batch) {
+					const caps = await studioOffload.capabilities();
+					const compact = caps.compactPrompts ? studioOffload.compactIdea(project.script, project._seoTopic) : null;
+					const sendPrompt = caps.compactPrompts ? async function (url, init, timeout, owner, key, consume) {
+						const response = await studioOffload.jsonRequest(url, init, timeout, {
+							isCancelled: isCancelled,
+							setController: function (controller) { owner[key] = controller; },
+							clearController: function (controller) { if (owner[key] === controller) owner[key] = null; }
+						});
+						return consume(response);
+					} : seoFetchWithTimeout;
+					return sendPrompt("/api/image-prompts", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							topic: project._seoTopic || "my video", minutes: project._seoMinutes || 1,
+							style: style, script: compact ? undefined : (project.script || ""), scriptIdea: compact || undefined, keywordSet: project.selectedSeoSet || null,
+							batch: batch
+						})
+					}, IMAGE_PROMPT_REQUEST_TIMEOUT_MS, project, "_imagePromptCreateController", async function (response) {
+						const data = await seoResponseJson(response);
+						if (!response.ok || !data.success) {
+							const error = new Error((data && data.error) || ("Scene prompt request failed (HTTP " + response.status + ")"));
+							error.retryable = response.status >= 500 || response.status === 429 || response.ok;
+							throw error;
+						}
+						return data.prompts;
+					});
+				},
+				render: async function (prompts, offset) {
+					const liveN = videoProjects.indexOf(project) + 1;
+					if (liveN <= 0 || isCancelled()) return;
+					await runImageBatch(liveN, prompts, project.imagePromptFlowId, project, myFlowSeq, offset);
+					if (project._imageFlowStopReason) throw new Error(project._imageFlowStopReason);
+				}
+			});
+		} catch (error) {
+			if (isCancelled()) return;
+			project._imageFlowStopReason = project._imageFlowStopReason ||
+				(batchIsAbortError(error) ? "Scene prompt request was interrupted after bounded retries." :
+					"Image prompts could not be generated or rendered: " + (error.message || String(error)));
+		}
+		if (isCancelled()) return;
 		const finalN = videoProjects.indexOf(project) + 1;
-		if (finalN <= 0) return;
-
-		await finalizeImagePromptFlow(finalN, project._imageFlowStopReason || "");
+		if (finalN > 0) await finalizeImagePromptFlow(finalN, project._imageFlowStopReason || "");
 	}
 
 	/*
-	 * Renders every prompt in ONE request and consumes the NDJSON stream:
+	 * Renders one browser-scheduled chunk and consumes its NDJSON stream:
 	 *   start / tick / image{ok,data} / image{ok:false,error} / done / error
 	 * Each successful image is inserted into this video's gallery as soon as
 	 * it arrives, so a 10-image batch is on screen in one pass instead of
 	 * trickling in every 20 seconds.
 	 */
+	async function runBinaryEditorImages(n, prompts, flowId, project, ownerFlowSeq, sceneOffset) {
+		const seq = typeof ownerFlowSeq === "number" ? ownerFlowSeq : project._imageFlowSeq;
+		const stale = function () { return Boolean(project._deleted || !project._imageFlowActive || project._imageFlowSeq !== seq); };
+		try {
+			const results = await studioOffload.images(prompts, {}, {
+				isCancelled: stale,
+				priority: function () { return project.el && project.el.contains(document.activeElement) ? 2 : 0; },
+				setController: function (controller) { if (!stale()) project._imageBatchController = controller; else controller.abort(); },
+				clearController: function (controller) { if (project._imageBatchController === controller) project._imageBatchController = null; },
+				onImage: function (blob, index) {
+					if (stale()) return;
+					const liveN = videoProjects.indexOf(project) + 1;
+					if (liveN <= 0) return;
+					const name = "ai-video" + liveN + "-seo-" + ((Number(sceneOffset) || 0) + index + 1) + "-" + Date.now() + ".png";
+					const file = typeof File === "function" ? new File([blob], name, { type: blob.type }) : blob;
+					if (!file.name) { try { file.name = name; } catch (nameError) {} }
+					if (!addAiToVideo(liveN, file, blob, flowId, true)) {
+						project._imageFlowStopReason = "The video gallery reached its image limit.";
+						if (project._imageBatchController) project._imageBatchController.abort();
+						return;
+					}
+					project.aiImagesDone = (project.aiImagesDone || 0) + 1;
+
+					recordStudioUsage("images", "ok", 1);
+					const status = document.getElementById("va-ai-status-" + liveN);
+					if (status) status.textContent = project.aiImagesDone + " AI images added; generating the next scenes…";
+				}
+			});
+						if (!stale()) {
+				project._aiImageFailures = (project._aiImageFailures || 0) + results.filter(function (r) { return !r.ok; }).length;
+				if (results.every(function (r) { return !r.ok; }) || results.some(function (r) {
+					return r.error && [401,403,429].indexOf(r.error.status) >= 0;
+				})) project._imageFlowStopReason = "The image batch could not complete; delivered images were kept.";
+			}
+		} catch (error) {
+			if (!stale()) project._imageFlowStopReason = "Image generation was interrupted; delivered images were kept.";
+		} finally { refreshCredits(); }
+	}
+
 	async function runImageBatch(
 		n,
 		prompts,
 		flowId,
 		ownerProject,
-		ownerFlowSeq
+		ownerFlowSeq,
+		sceneOffset
 	) {
 
 		const project =
 			ownerProject || videoProjects[n - 1];
 		if (!project || project._deleted || !project._imageFlowActive || !prompts.length) return;
+		if ((await studioOffload.capabilities()).binaryImages) {
+			return runBinaryEditorImages(n, prompts, flowId, project, ownerFlowSeq, sceneOffset);
+		}
 		const expectedSeq =
 			typeof ownerFlowSeq === "number" ? ownerFlowSeq : project._imageFlowSeq;
 
@@ -17728,7 +18022,7 @@ export const APP_JS = `
 					if (curStatusEl && !batchDone) curStatusEl.textContent = progressText();
 				}
 				else if (event.data && !isStaleFlow()) {
-					const eventIndex = Number(event.index);
+					const eventIndex = (Number(sceneOffset) || 0) + Number(event.index);
 					const decodeJob = decodeBase64ImageOffThread(event.data, event.mime);
 					galleryCommitChain = galleryCommitChain.then(function () {
 						return decodeJob.then(
@@ -17747,6 +18041,9 @@ export const APP_JS = `
 										: addAiToVideo(liveN, file, blob, flowId, true);
 									if (inserted) {
 										added++;
+
+										recordStudioUsage("images", "ok", 1);
+
 									}
 									else {
 										skipped++;
@@ -17852,6 +18149,7 @@ export const APP_JS = `
 						try { handleEvent(JSON.parse(tail)); } catch (parseError) { }
 					}
 					await galleryCommitChain;
+					if (!batchDone) throw new Error("Image stream ended before completion; delivered images were kept.");
 				},
 				{
 					signal: controller ? controller.signal : null,
@@ -17881,14 +18179,16 @@ export const APP_JS = `
 			}
 		}
 		finally {
+			await galleryCommitChain;
+			if (controller) { try { controller.abort(); } catch (cleanupError) { } }
 			if (idleTimer) clearTimeout(idleTimer);
 			if (project._imageBatchController === controller) {
 				project._imageBatchController = null;
 			}
 			if (typeof expectedSeq !== "number" || project._imageFlowSeq === expectedSeq) {
-				project.aiImagesDone = added;
-				project._aiImageFailures = failed;
-				project._aiImageSkipped = skipped;
+				project.aiImagesDone = (project.aiImagesDone || 0) + added;
+				project._aiImageFailures = (project._aiImageFailures || 0) + failed;
+				project._aiImageSkipped = (project._aiImageSkipped || 0) + skipped;
 			}
 			refreshCredits();
 			console.info("[seo-image-flow] image batch finished", {
@@ -17990,8 +18290,8 @@ export const APP_JS = `
 	/*
 	 * A failed /api/script is retried TWICE more by the browser before
 	 * the video accordion shows an error: three attempts in total
-	 * (1 + SCRIPT_RETRY_LIMIT retries). The worker already re-asks its
-	 * own model output up to three times, so what these retries cover is
+	 * (1 + SCRIPT_RETRY_LIMIT retries). Negotiated #261 calls make one server inference per request;
+	 * only legacy calls retain server retries. These browser retries cover
 	 * the transient part a user actually notices - a cold Workers AI
 	 * container, a gateway 5xx, a dropped connection. The status line in
 	 * the accordion reports each retry, and the error text only appears
@@ -18005,14 +18305,23 @@ export const APP_JS = `
 		n,
 		topic,
 		minutes,
-		speed
+		speed,
+		attempt,
+		previousFailure
 	) {
 
 		const project =
 			videoProjects[n - 1];
-
+		const single = (await studioOffload.capabilities()).singleAttemptScript && project && project.selectedSeoSet;
+		const send = single ? function (url, init) {
+			return studioOffload.scriptRequest(init, {
+				isCancelled: function () { return Boolean(project._deleted); },
+				setController: function (controller) { project._seoScriptController = controller; },
+				clearController: function (controller) { if (project._seoScriptController === controller) project._seoScriptController = null; }
+			});
+		} : fetch;
 		const response =
-			await fetch(
+			await send(
 				"/api/script",
 				{
 					method: "POST",
@@ -18023,6 +18332,7 @@ export const APP_JS = `
 					body:
 						JSON.stringify(
 							{
+								singleAttempt: Boolean(single), attempt: Number(attempt) || 0, previousFailure: String(previousFailure || "").slice(0, 800),
 								topic: topic,
 								minutes: minutes,
 								speed: speed,
@@ -18053,11 +18363,9 @@ export const APP_JS = `
 			!data.script
 		) {
 
-			throw new Error(
-				(data && data.error) ||
-				("HTTP " +
-					response.status)
-			);
+			const error = new Error((data && data.error) || ("HTTP " + response.status));
+			error.retryable = !single || response.status >= 500 || response.status === 429;
+			throw error;
 
 		}
 
@@ -18315,17 +18623,23 @@ export const APP_JS = `
 			) {
 
 				try {
+					if (project._deleted || videoProjects.indexOf(project) < 0) return false;
 
 					const data =
 						await requestSeoScriptOnce(
-							n,
+							videoProjects.indexOf(project) + 1,
 							topic,
 							minutes,
-							speed
+							speed,
+							attempt - 1,
+							lastError && lastError.message
 						);
 
+					if (project._deleted) return false;
+					const liveN = videoProjects.indexOf(project) + 1;
+					if (liveN <= 0) return false;
 					applySeoScript(
-						n,
+						liveN,
 						data,
 						{
 							minutes: minutes,
@@ -18335,6 +18649,8 @@ export const APP_JS = `
 
 					scriptSucceeded =
 						true;
+
+					recordStudioUsage("scripts", "ok", 1);
 
 					lastError =
 						null;
@@ -18354,6 +18670,8 @@ export const APP_JS = `
 						error: (err && err.message) || String(err)
 					});
 
+					if (project._deleted) return false;
+					if (err && err.retryable === false) break;
 					if (attempt <= SCRIPT_RETRY_LIMIT) {
 						/* Not an error yet - the browser is retrying. */
 						const retryLine =
@@ -18369,9 +18687,10 @@ export const APP_JS = `
 						}
 
 						setSeoWalkthroughScriptStatus(
-							n,
+							videoProjects.indexOf(project) + 1,
 							retryLine
 						);
+						if ((await studioOffload.capabilities()).singleAttemptScript) await batchDelay(500 * attempt);
 					}
 
 				}
@@ -18393,9 +18712,11 @@ export const APP_JS = `
 				}
 
 				setSeoWalkthroughError(
-					n,
+					videoProjects.indexOf(project) + 1,
 					failureLine
 				);
+
+				recordStudioUsage("scripts", "error", 1);
 
 				console.error("[script-seo] failed", {
 					videoIndex: n,
@@ -18409,10 +18730,8 @@ export const APP_JS = `
 		}
 		finally {
 
-			setScriptLoading(
-				n,
-				false
-			);
+			const liveN = videoProjects.indexOf(project) + 1;
+			if (!project._deleted && liveN > 0) setScriptLoading(liveN, false);
 
 			if (!project._imageFlowActive) {
 
@@ -18724,6 +19043,18 @@ export const APP_JS = `
 
 	}
 
+	async function requestEditorVoiceover(project, text, lang) {
+		if ((await studioOffload.capabilities()).chunkVoiceover) {
+			const blob = await studioOffload.voiceover(text, lang, {
+				isCancelled: function () { return Boolean(project._deleted); },
+				setController: function (controller) { project._voiceoverController = controller; },
+				clearController: function (controller) { if (project._voiceoverController === controller) project._voiceoverController = null; }
+			});
+			return { ok: true, blob: async function () { return blob; } };
+		}
+		return fetch("/api/voiceover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text, lang: lang }) });
+	}
+
 	async function generateVoiceover(
 		n
 	) {
@@ -18786,27 +19117,8 @@ export const APP_JS = `
 					"Speaking your script (MeloTTS)...";
 			}
 
-			const response =
-				await fetch(
-					"/api/voiceover",
-					{
-						method: "POST",
-						headers: {
-							"Content-Type":
-								"application/json"
-						},
-						body:
-							JSON.stringify(
-								{
-									text: text,
-									lang:
-										voiceSel
-											? voiceSel.value
-											: "en"
-								}
-							)
-					}
-				);
+			const response = await requestEditorVoiceover(project, text, voiceSel ? voiceSel.value : "en");
+			if (project._deleted) return;
 
 			if (
 				!response.ok
@@ -18829,6 +19141,8 @@ export const APP_JS = `
 
 			const blob =
 				await response.blob();
+
+			recordStudioUsage("voiceovers", "ok", 1);
 
 			const titleEl =
 				document.getElementById(
@@ -18859,7 +19173,7 @@ export const APP_JS = `
 					: "mp3");
 
 			const url =
-				URL.createObjectURL(
+				createStudioObjectUrl(
 					blob
 				);
 
@@ -18883,7 +19197,7 @@ export const APP_JS = `
 
 			setTimeout(
 				function () {
-					URL.revokeObjectURL(url);
+					releaseStudioObjectUrl(url);
 				},
 				2000
 			);
@@ -20624,7 +20938,7 @@ export const APP_JS = `
 				blob;
 
 				const downloadURL =
-					URL.createObjectURL(
+					createStudioObjectUrl(
 						blob
 					);
 
@@ -20659,7 +20973,7 @@ export const APP_JS = `
 				setTimeout(
 					() => {
 
-						URL.revokeObjectURL(
+						releaseStudioObjectUrl(
 							downloadURL
 						);
 
@@ -20682,6 +20996,8 @@ export const APP_JS = `
 					: audioTrack
 						? "\u2713 MP4 Downloaded with audio!"
 						: "\u2713 MP4 Downloaded!";
+
+			recordStudioUsage("videos", "ok", 1);
 
 			return "done";
 

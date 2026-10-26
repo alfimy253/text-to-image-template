@@ -33,24 +33,35 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   two validated keyword sets; the user selects one and chooses from exactly ten image styles:
   **Cinematic Film, Editorial Magazine, Kinetic Typography, Neon Night, Minimalist, Retro Poster,
   Documentary, Split Composition, Dream Glow** or **Pop Comic**. The script is written from the
-  selected set, then **one** `POST /api/image-prompts` returns the finished scene prompts in its
-  response body — no job URL and no polling. The prompt LLM sees a compact, two-sentence script
-  idea and returns broad, concise scenes consistently styled from the chosen option (**10**
-  prompts for 1 minute, **14** for 2–3 minutes, **20** for 4–6 minutes); a short answer is topped
-  up instead of rejected. The browser then sends **one** `POST /api/image-batch`, which renders
-  every image **in parallel at 16:9 (1024×576)** and streams each finished image back as an
-  NDJSON event, so the gallery fills up "all at once" instead of one image every 20 seconds. The
-  batch respects the video's **25-still cap** (only the free slots are requested), refunds failed
-  scenes, and always re-enables the upload/script controls. See `system-rules.md` RULE 24 and
-  `bug-fix-session-241.md`.
+  selected set, then the **browser-managed progressive pipeline** requests up to **three** scene
+  prompts, starts rendering them, and requests the next prompt batch concurrently. One batch
+  of lookahead bounds buffering; there is no job URL, polling, or server-side video management.
+  Totals remain **10 / 14 / 20** for 1 / 2–3 / 4–6 minutes. Each prompt request makes one model
+  call (45 s budget); the browser retries transient prompt failures up to twice with a 60 s
+  request/body timeout. Paid images are never automatically replayed. **Bug fix #261** negotiates
+  binary per-image responses, browser voiceover chunk assembly, single-attempt script calls,
+  compact prompts, adaptive scheduling and ephemeral cross-tab cooperation, with feature-detected
+  older-browser fallbacks. Legacy NDJSON remains available. The **25-still cap**, refunds and
+  control cleanup remain. Bug fix #261 also keeps a **local-only usage record** (localStorage +
+  a two-day counts cookie) for the credits popover; it never authorizes a request and adds no
+  Durable Object or migration. Existing KV quotas remain best-effort under concurrency; review
+  [#261 implementation, compatibility and limits](bug-fix-session-261.md) before deploying. See
+  also the [progressive pipeline audit](progressive-image-pipeline-audit.md).
+- **Local usage record.** Bug fix #261 counts today's delivered images, scripts, voiceovers and
+  MP4 exports in this browser (`localStorage` per tab + a two-day counts cookie) and shows them in
+  the credits popover with a clear button. It is display/history only: records are editable and
+  per-device, the Worker never reads them for authorization, and `/api/credits` remains the
+  authoritative server summary.
 - **Quick Batch table.** The studio's **Table** view is a spreadsheet of up to **10** rows —
   Script (plain text you can paste), Style, Minutes, **Resolution** (480 / 540 / 720 / 1024 px long
   edge) and **Orientation** (square 1:1, landscape 16:9, portrait 9:16) — with **＋ Add row** and
   **✦ Generate (N)**. Both frame columns are sent to `/api/image-prompts` (each scene is written
   for that shape) and to `/api/image-batch` (SDXL really renders at that size), and the preview
-  canvas uses the row's frame. Generate runs **three rows at the same time** (voiceover → prompts →
-  batch images → slides → animation per row, next queued row as soon as a lane frees up), a row
-  that fails is marked failed on its own line, and a row that is **already finished is skipped** —
+  canvas uses the row's frame. Generate starts **three early-stage rows at a time** (voiceover →
+  progressive prompt/image chunks → slides → animation); the next queued row starts when the
+  first image chunk begins. Stop cancels prompt lookahead and image streaming together. Usable
+  partial images are retained on a later failure; row errors remain quiet in the console, and a
+  row that is **already finished is skipped** —
   its MP3/images/animation are in memory, so pressing Generate again never re-bills it.
   **Preview Here** / **Export Video** only become buttons once that row has all four parts. Export
   reuses the studio's own in-browser WebCodecs renderer and downloads
@@ -265,11 +276,13 @@ skin covers the whole site.
 | `GET /{slug}` | Public CMS page after all built-in routes; one flat non-reserved slug, otherwise `404` |
 | `GET /image/:i` | Workers AI demo image (unmetered, index into `prompts[]`) |
 | `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session (50/1,200 per day) or `yvs_free` guest (10/day per IP); `401` for a cold anonymous request when KV is bound, `429` at the limit, `X-Credit-*` headers on success |
-| `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated **plain-text** script (`{script, format:"plain"}` — no `srt` key is returned) plus keyword counts; accepts a user-selected `keywordSet` from `/api/seo-plan`, which is re-validated and skips the planner |
+| `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated **plain-text** script (`{script, format:"plain"}` — no `srt` key is returned) plus keyword counts; accepts a user-selected `keywordSet` from `/api/seo-plan`, which is re-validated and skips the planner. Negotiated `singleAttempt:true,attempt:0–2` performs one writer call; browser owns retries |
 | `POST /api/seo-plan` | Two different validated SEO keyword sets (title + headings + 1 long-tail + 4 shorts each) for a topic, for the walkthrough's Select step |
-| `POST /api/image-prompts` | Synchronous scene prompts: `200 {prompts, count, expectedCount, style, minutes}` (count 10/14/20 by script length 1 / 2–3 / 4–6 min, in the chosen image style; short answers are topped up); `400` invalid input, `502` model failure, `503` no AI binding. The old `GET`/`DELETE /api/image-prompts/:id` job URL answers `410` |
+| `POST /api/image-prompts` | Synchronous scene prompts: optional `batch:{offset,count:1–3,attempt:0–2,previous}` performs one model call; `200 {prompts,count,expectedCount,batch?,style,minutes}`. Browser manages progressive 10/14/20 totals and retries. Without `batch`, legacy all-prompts/top-up behavior remains; `400` invalid input, `502` model failure, `503` no AI binding. The old `GET`/`DELETE /api/image-prompts/:id` job URL answers `410` |
+| `GET /api/pipeline-capabilities` | No-store version 261 negotiation; missing/failed support falls back before paid work. No new binding or migration is required. |
+| `POST /api/image` | One prompt plus resolution/orientation → binary image, one KV credit reservation; no browser auto-replay, observable-failure refund. Quota checks are best-effort under concurrency (KV is not atomic). |
 | `POST /api/image-batch` | One request, every image: `{prompts: string[]}` (≤20) → `application/x-ndjson` with `start`/`tick`/`image`/`done` events. Renders in parallel at 1024×576, 1 image credit per prompt up front (account or `/free` guest allowance) refunded for failures; `401` anonymous, `429` no credits, `400` invalid prompts |
-| `POST /api/voiceover` · `GET /tts` | MeloTTS voiceover / fallback TTS proxy |
+| `POST /api/voiceover` · `GET /tts` | `chunk:true` returns one binary WAV/MP3 chunk (≤400 chars, allowlisted voiceIndex); browser schedules/joins. No flag retains full legacy narration. `/tts` is the fallback proxy. |
 | `GET /api/session` · `POST /api/signup` · `POST /api/login` · `POST /api/logout` | Accounts (session/signup/login include `usertype`, `plan` and `credits`) |
 | `GET /api/credits` | Today's plan, used counters, remaining allowances and `resetsAt` — for the signed-in user, or the IP-keyed guest plan after `/free` |
 | `POST /api/payments/upload` | Signed-in PNG/JPEG/WEBP/GIF receipt upload (multipart or JSON data URL), max 5 MiB; creates a `pending` record |
@@ -361,6 +374,9 @@ skin covers the whole site.
 npm ci
 npm test
 npx wrangler deploy --dry-run
+# optional: local KV + mock AI integration for #261 binary/chunk routes
+CLOUDFLARE_SEND_METRICS=false npm run e2e:accounting -- --ip 0.0.0.0 --port 8787
+npm run e2e:accounting:smoke
 ```
 
 `npm test` (verified on Node 22.22.3) covers the SEO planner/writer contract and a DOM/canvas-transform harness for the
@@ -368,8 +384,12 @@ composer, including image counts, failed/stale decodes, object-URL cleanup, laye
 rotated hit testing, every animated graphic and both MP4 actions. The harness stubs the codecs,
 not the application render loop. `e2e/index.ts` provides a deterministic AI fixture with an
 overlapping, >6-word long-tail plan for `npm run e2e:dev`; this is **mock AI**, not a live model.
-Actual Chromium/WebCodecs download and direct gallery insertion were also smoke-tested.
+The local usage record (localStorage plus a two-day counts cookie) is display-only and is never
+read by the Worker for authorization; clearing it does not change server credits. The accounting
+fixture proves the binary/chunk routes work with real local KV, but KV quota checks are not
+atomic, so it reports races instead of asserting an exact balance. Actual Chromium/WebCodecs
+download and direct gallery insertion were also smoke-tested.
 
-`npm run check` still stops on the **36 pre-existing TypeScript errors in `src/index.ts`**;
+`npm run check` still stops on the **30 pre-existing TypeScript errors in `src/index.ts`**;
 the standalone Wrangler dry-run succeeds. This revision does not claim to fix those unrelated
 legacy type errors or to verify live Cloudflare model availability.

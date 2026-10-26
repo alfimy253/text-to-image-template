@@ -114,16 +114,9 @@ function mockBatchRoutes(w, calls, options = {}) {
 				timeout.name = "TimeoutError";
 				throw timeout;
 			}
-			return jsonResponse({
-				success: true,
-				prompts: [
-					"Lead paragraph about scene 1.\n\nMiddle paragraph about scene 1.\n\nClosing paragraph about scene 1.",
-					"Lead paragraph about scene 2.\n\nMiddle paragraph about scene 2.\n\nClosing paragraph about scene 2."
-				],
-				count: 2,
-				expectedCount: 2,
-				style: "Neon Night"
-			});
+			const batch = JSON.parse(opts.body).batch || { count: 2, offset: 0 };
+			return jsonResponse({ success: true, prompts: Array.from({ length: batch.count },
+				(_, i) => "Scene " + (batch.offset + i) + " detailed art direction"), style: "Neon Night" });
 		}
 		if (path === "/api/image-batch" && method === "POST") {
 			const body = JSON.parse(opts.body);
@@ -339,7 +332,7 @@ test("a timed-out request is retried quietly, unlike a stop", async () => {
 
 	await w.runBatchRow(row);
 
-	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 2, "the timeout was retried");
+	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 5, "four scene batches plus one timeout retry");
 	assert.ok(w.batchRowFinished(row), "and the row finished");
 	assert.doesNotMatch(statusCell(w, row).textContent, /timeout|too long|abort|signal/i);
 

@@ -96,10 +96,11 @@ function mockBatchRoutes(w, calls, options = {}) {
 			};
 		}
 		if (path === "/api/image-prompts" && method === "POST") {
-			const count = options.promptCount === undefined ? 2 : options.promptCount;
+			const batch = JSON.parse(opts.body).batch || { count: 2, offset: 0 };
+			const count = Math.min(batch.count, options.promptCount === undefined ? 3 : options.promptCount);
 			return jsonResponse({
 				success: true,
-				prompts: Array.from({ length: count }, (_, i) => "Lead paragraph about scene " + (i + 1) + ".\n\nMiddle paragraph about scene " + (i + 1) + ".\n\nClosing paragraph about scene " + (i + 1) + "."),
+				prompts: Array.from({ length: count }, (_, i) => "Lead paragraph about scene " + (batch.offset + i + 1) + ".\n\nMiddle paragraph about scene " + (batch.offset + i + 1) + ".\n\nClosing paragraph about scene " + (batch.offset + i + 1) + "."),
 				count,
 				expectedCount: count,
 				style: "Neon Night"
@@ -273,10 +274,10 @@ test("one Generate runs every row that has a script and unlocks both cells toget
 	w.document.getElementById("batch-generate").click();
 	await waitFor(w, () => w.batchRowFinished(w.getBatchRow(filled.id)));
 
-	/* only the filled row ran: 1 voiceover, 1 prompt call, 1 batch call */
+	/* Only the filled row ran: one voiceover, five progressive batches for 14 scenes. */
 	assert.equal(calls.filter((call) => call.path === "/api/voiceover").length, 1);
-	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 1);
-	assert.equal(calls.filter((call) => call.path === "/api/image-batch").length, 1);
+	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 5);
+	assert.equal(calls.filter((call) => call.path === "/api/image-batch").length, 5);
 
 	const voice = JSON.parse(calls.find((call) => call.path === "/api/voiceover").body);
 	assert.equal(voice.text, script, "the voice reads the row script verbatim");
@@ -288,12 +289,12 @@ test("one Generate runs every row that has a script and unlocks both cells toget
 	assert.equal(prompt.script, script);
 
 	const batch = JSON.parse(calls.find((call) => call.path === "/api/image-batch").body);
-	assert.equal(batch.prompts.length, 2);
+	assert.equal(batch.prompts.length, 3);
 
 	/* the finished row: both cells are live buttons */
 	const row = w.getBatchRow(filled.id);
 	assert.ok(row.mp3, "the row has its MP3");
-	assert.equal(row.slides.length, 2, "the row has its animation");
+	assert.equal(row.slides.length, 14, "the row has its animation");
 	assert.ok(w.batchRowFinished(row));
 	const ready = w.document.querySelector('[data-batch-row="' + row.id + '"]');
 	assert.equal(ready.querySelectorAll('[data-batch-slot="preview"] button').length, 1);
@@ -597,4 +598,64 @@ test("the accordion's Generate AI Image button is locked only while its own walk
 	await flow;
 	assert.equal(w.document.getElementById("va-ai-btn-1").disabled, false, "video 1 unlocks when the flow ends");
 	assert.equal(w.document.getElementById("va-ai-btn-2").disabled, false, "video 2 was never touched");
+});
+
+test("Quick Batch renders its first chunk before the next prompt batch finishes", async (t) => {
+	const calls = [];
+	const { dom, w } = makeApp();
+	t.after(() => dom.window.close());
+	mockBatchRoutes(w, calls);
+	const baseFetch = w.fetch;
+	let release;
+	const gate = new Promise((resolve) => { release = resolve; });
+	let lookahead = false;
+	w.fetch = async (url, init = {}) => {
+		if (url === "/api/image-prompts" && JSON.parse(init.body).batch.offset === 3) {
+			lookahead = true;
+			await gate;
+		}
+		return baseFetch(url, init);
+	};
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	const row = w.addBatchRow({ script, minutes: 1 });
+	const run = w.runBatchRow(row);
+	assert.equal(await waitFor(w, () => row.images.length === 3), true);
+	assert.equal(lookahead, true);
+	assert.equal(w.batchRowFinished(row), false);
+	release();
+	await run;
+	assert.equal(row.images.length, 10);
+	assert.deepEqual(Array.from(row.images, (image) => image.index), Array.from({ length: 10 }, (_, i) => i));
+	assert.equal(w.batchRowFinished(row), true);
+});
+
+test("Quick Batch Stop aborts both the image stream and concurrent prompt request", async (t) => {
+	const calls = [];
+	const { dom, w } = makeApp();
+	t.after(() => dom.window.close());
+	mockBatchRoutes(w, calls);
+	const baseFetch = w.fetch;
+	let promptAborted = false, imageAborted = false, promptStarted = false, imageStarted = false;
+	w.fetch = async (url, init = {}) => {
+		const prompt = url === "/api/image-prompts" && JSON.parse(init.body).batch.offset === 3;
+		if (prompt || url === "/api/image-batch") {
+			if (prompt) promptStarted = true; else imageStarted = true;
+			return new Promise((_, reject) => {
+				init.signal.addEventListener("abort", () => {
+					if (prompt) promptAborted = true; else imageAborted = true;
+					reject(Object.assign(new Error("signal is aborted without reason"), { name: "AbortError" }));
+				}, { once: true });
+			});
+		}
+		return baseFetch(url, init);
+	};
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	const row = w.addBatchRow({ script, minutes: 1 });
+	const run = w.runBatchRow(row);
+	assert.equal(await waitFor(w, () => promptStarted && imageStarted), true);
+	w.stopBatchRows();
+	await run;
+	assert.equal(promptAborted, true);
+	assert.equal(imageAborted, true);
+	assert.equal(w.batchRowFinished(row), false);
 });

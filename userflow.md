@@ -1244,3 +1244,53 @@ GET  /media/<id>.mp3   -> the finished file
 Nothing in the studio posts to it and nothing in it is persisted: jobs live in memory, and the only
 files written are the MP3s in `render-app/output/` (git-ignored). `render-app-tts.zip` at the
 repository root is that same directory, ready to run on another machine.
+
+
+## Progressive image flow update (2026-10-26; supersedes full-list gate in flows 6/7)
+
+Editor and Quick Batch now share browser-only prompt/image orchestration:
+
+1. Request up to three scene prompts using `batch:{offset,count,attempt,previous}`.
+2. Render that chunk immediately while requesting the next prompt batch; allow only one
+   lookahead, then wait for both before advancing.
+3. Continue to 10/14/20 total scenes (or the editor's remaining gallery capacity). Short answers
+   advance by actual accepted count. Prompt retries retain their offset; already-consumed image
+   chunks are never replayed automatically.
+4. Drain images and finalize once. Earlier images survive later prompt failure. Editor reports
+   the stop reason and restores controls; Quick Batch can prepare a partial slideshow under its
+   existing quiet-error policy. Stop cancels both concurrent requests and never becomes success.
+
+The browser owns timing, slides, decoding, lifecycle and export. The Worker still authorizes
+credits, invokes AI, validates inputs and streams bounded image chunks. New prompt batches use
+one 45 s model wait and a browser 60 s request/body deadline, with at most two transient browser
+retries. No prompt jobs, polling or persistent video state. Legacy no-batch API calls remain
+compatible. Full analysis, limitations and rollout: `progressive-image-pipeline-audit.md` and
+`system-rules.md` RULE 29.
+
+
+## Bug fix #261 — negotiated browser offload (2026-10-26)
+
+Supersedes the earlier default NDJSON/full-voiceover descriptions. See RULE 30 and
+[the #261 report](bug-fix-session-261.md) for limits, the local usage record and tests.
+Both layouts probe `/api/pipeline-capabilities` without charging. With version 261 support:
+
+1. Browser requests a selected-keyword, single-attempt script; it owns bounded retry attempts.
+2. Browser compacts script context and requests three prompts, renders those with bounded
+   binary `/api/image` calls, and prepares one prompt lookahead until all scenes complete.
+3. Browser splits narration and requests individual `/api/voiceover` chunks, then joins WAV/MP3
+   locally with Worker/cooperative fallback. Quick Batch never nests whole-step retries here.
+4. Shared adaptive media/control queues cooperate across tabs when APIs permit. Stop/deletion
+   invalidate pending work; delivered media stays usable and resource URLs are cleaned up.
+5. Slides, animation and MP4 export remain browser-owned. Worker independently validates inputs,
+   invokes bounded inference and performs the existing KV credit reservation/refund.
+6. Delivered images, scripts, voiceovers and MP4 exports are counted in this browser
+   (`localStorage` + a two-day counts cookie) and shown in the credits popover with a clear
+   button. This is display/history only: it is per-device, editable, never sent as authority, and
+   clearing it does not restore server credits. `/api/credits` stays the server summary.
+
+Missing capabilities retain legacy APIs; missing browser features receive documented fallbacks,
+not universal IE/export compatibility. Cross-tab coordination is not a quota/security boundary.
+No Durable Object, database or wrangler migration is added, so KV quotas remain best-effort:
+concurrent requests can over- or under-count. Exact paid-usage enforcement would need a server
+serialization store. Nothing in this update deploys production or establishes measured CPU
+savings. No persistent client queue or server-managed video pipeline is introduced.

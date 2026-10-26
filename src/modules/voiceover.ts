@@ -620,10 +620,9 @@ export async function handleVoiceover(
 	options: HandleVoiceoverOptions = {}
 ): Promise<Response> {
 	try {
-		const body = (await request.json().catch(() => ({}))) as Record<
-			string,
-			unknown
-		>;
+		const rawBody = await request.json().catch(() => null);
+		if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return jsonResponse({ error: "Expected a JSON object" }, 400);
+		const body = rawBody as Record<string, unknown>;
 
 		const text = sanitizeVoiceoverText(body.text, VOICEOVER_MAX_CHARS);
 		const lang = String(body.lang || "en")
@@ -654,6 +653,35 @@ export async function handleVoiceover(
 			);
 		}
 
+		// #261: browser owns splitting, retry/fallback, format consistency and assembly.
+		if (body.chunk === true) {
+			const voiceIndex = body.voiceIndex ?? 0;
+			if (typeof body.text !== "string" || body.text.length > VOICEOVER_MAX_CHUNK ||
+				!Number.isInteger(voiceIndex) || Number(voiceIndex) < 0 || Number(voiceIndex) > (lang === "en" ? 2 : 0)) {
+				return jsonResponse({ error: "Chunk must be at most 400 characters; invalid voice index" }, 400);
+			}
+			if (request.signal.aborted) return jsonResponse({ error: "Voiceover cancelled" }, 499);
+			const model = Number(voiceIndex) === 0 ? (options.voiceoverModel || VOICEOVER_MODEL)
+				: VOICEOVER_EN_FALLBACK_MODELS[Number(voiceIndex) - 1];
+			try {
+				const bytes = await withTimeout((async () => {
+					const raw = await env.AI!.run(model, buildModelPayload(model, text, lang));
+					return extractTtsAudioBytes(raw);
+				})(), VOICEOVER_AI_TIMEOUT_MS, "TTS chunk");
+				if (request.signal.aborted) return jsonResponse({ error: "Voiceover cancelled" }, 499);
+				if (!bytes || !looksLikeAudioBytes(bytes) ||
+					!(isWavBytes(bytes) || (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) ||
+						(bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0))) {
+					throw new Error("TTS chunk did not contain WAV or MPEG audio");
+				}
+				return new Response(bytes as BodyInit, { headers: {
+					"Content-Type": isWavBytes(bytes) ? "audio/wav" : "audio/mpeg",
+					"Cache-Control": "no-store", "X-Voice-Index": String(voiceIndex), "X-Pipeline-Version": "261"
+				} });
+			} catch {
+				return jsonResponse({ error: "TTS chunk failed", retryable: true }, 502);
+			}
+		}
 		const chunks = splitVoiceoverChunks(text, VOICEOVER_MAX_CHUNK);
 		if (!chunks.length) {
 			return jsonResponse(
