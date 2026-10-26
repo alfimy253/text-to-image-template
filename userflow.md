@@ -128,7 +128,7 @@ User opens /
 
 Landing actions:
    top "Sign up" link → auth overlay in create-account mode
-   nav "Plans" → #landing-plans section (Free: 50 AI images/day · Paid: 1,200/day;
+   nav "Plans" → #landing-plans section (Free: 70,000 AI images/day · Paid: 1,200/day;
                  unlimited videos, AI scripts and voiceovers on both; renews midnight UTC+8)
    nav "Free studio" / plans "Open the free studio" / footer "Try the free studio"
                  → GET /free (no account; 10 AI images/day per IP)
@@ -179,12 +179,12 @@ Image generation (AI panel, 2 variants per submit):
      ├─ 200  → PNG + X-Credit-Images-Remaining; credit consumed in KV
      ├─ 401  → the worker's error ("Sign in to generate AI images — … Open /free …")
      │          appears as "1 of 2 failed: …" in the AI status line (loop stops)
-     ├─ 429  → same status-line form for "Daily image credits used up (50 images/day on the
+     ├─ 429  → same status-line form for "Daily image credits used up (70,000 images/day on the
      │          Free plan). Credits renew at midnight (UTC+8)." (loop stops, pill drops to 0)
      └─ 500  → model error; the consumed credit is refunded
 
 Plans (user record user:<name>.usertype):
-   free       unlimited videos · 50 AI images/day · unlimited AI scripts · unlimited voiceovers
+   free       unlimited videos · 70,000 AI images/day · unlimited AI scripts · unlimited voiceovers
    paid_user  unlimited videos · 1,200 AI images/day · unlimited AI scripts · unlimited voiceovers
 
 KV records:
@@ -218,12 +218,12 @@ Visitor opens /free (or a landing/footer link to it)
    │       200 → PNG + X-Credit-Plan: guest, X-Credit-Images-Limit: 10,
    │              X-Credit-Images-Remaining, X-Credit-Scope: ip
    │       429 → same "1 of 2 failed: …" status line with "Daily image credits used up
-   │              (10 images/day on the Guest plan)... Create a free account for 50 images per day."
+   │              (10 images/day on the Guest plan)... Create a free account for 70,000 images per day."
    │       500 → credit refunded
    │
    ├─ AI scripts / voiceovers / videos: unlimited for guests; usage is booked to the IP row
    │
-   └─ Popover CTA "Create a free account — 50 images/day" → sign-up overlay
+   └─ Popover CTA "Create a free account — 70,000 images/day" → sign-up overlay
         (or the auth-overlay link back to /free)
 
 Settings page → Guest credits by IP
