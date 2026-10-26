@@ -2436,3 +2436,35 @@ Canonical implementation, limits, verification and rollout: [bug-fix-session-261
 - **No new limits.** #263 adds no quota, no counter and no rate window. The only image ceilings are
   RULE 31's `IMAGE_DAILY_LIMIT = 10000` per day and the per-row 3-per-3 s pacing. The isolate-wide
   brake remains the adaptive governor (start 3, ceiling 6, halved on overload, jittered backoff).
+
+## RULE 32 — Session #264: bounded clip capture, negotiated image throughput
+
+- **No frame callback may be awaited without a deadline.** `generateMP4()` advances an MP4
+  slide through `nextClipFrame()` (500 ms deadline) and falls back to deterministic seek capture
+  (`captureClipFrameAt()`) for the rest of that slide when the browser stops presenting frames.
+  A detached, `display:none`, backgrounded or autoplay-blocked `<video>` presents nothing;
+  awaiting `requestVideoFrameCallback` without a bound is how the editor export sat on
+  "Completed image N of M" forever. `prepareClip()` returns "drawable?" instead of swallowing
+  a rejected `play()`, `drawImage()` is guarded by `drawableSlideSource()`, and clips that are
+  not composited are parked in `#clip-capture-host` (off-viewport, never `display:none`) for
+  the duration of the render and restored in the `finally` block.
+- **Every duration that reaches the frame loop is finite.** `slideDurationSec()` returns
+  `SLIDE_SECONDS_MIN` for `NaN`/`Infinity`/`<= 0` and clamps to `MP4_MAX_DURATION_S`;
+  `probeMp4Duration()` resolves the `Infinity` a fragmented MP4 reports (seek past the end),
+  rewinds to 0, and gives up after `CLIP_PROBE_TIMEOUT_MS = 15000` with a message instead of
+  leaving the upload promise pending. The encoder is watched the same way
+  (`ENCODER_STALL_TIMEOUT_MS = 15000`, `ENCODER_FLUSH_TIMEOUT_MS = 180000`).
+- **Capability answers are cacheable; transport failures are not.** `/api/pipeline-capabilities`
+  is asked once when it answers with the 261 contract (or a definitive non-261 answer) and is
+  re-negotiated (3 s guard) when the probe itself fails. Caching a failed probe for the session
+  pinned the whole tab to the slower base64/NDJSON path.
+- **Image-pipeline throughput is negotiated, never assumed.** `/api/pipeline-capabilities` may
+  add `imageSlots` (concurrent binary `/api/image` requests per tab, default `limits()`) and
+  `imageChunks` (3-scene chunks rendering at once, default 1). Both are additive fields under
+  `version: 261`; a client that does not receive them behaves exactly as documented in RULE 28.
+  `runProgressiveImagePipeline()` keeps `batch.count <= 3`, offset advancement by the accepted
+  count, "never re-render a paid batch" and "drain started images before surfacing an error".
+  The editor accordion flow stays at `parallelRenders = 1` because its images become ordered
+  slides. Pacing (3 images / 3 s per row), the shared governor
+  (`IMAGE_LOAD_START_CONCURRENCY = 3`, `IMAGE_LOAD_MAX_CONCURRENCY = 6`), `IMAGE_DAILY_LIMIT`
+  and the 20-image ceiling are unchanged.

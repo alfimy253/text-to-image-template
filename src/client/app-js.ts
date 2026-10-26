@@ -1138,31 +1138,72 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	 */
 	
 	
+	/*
+	 * Seconds one slide occupies.
+	 *
+	 * Hardened against the two values a media element can legitimately
+	 * report and that used to break the exporter:
+	 *
+	 *   Infinity  - a fragmented / MediaRecorder MP4 (no duration in
+	 *               moov, or a moov written at the end) reports
+	 *               \`duration === Infinity\` until the whole file is
+	 *               buffered. \`framesForSlide()\` then returned Infinity
+	 *               and the per-frame \`for (f = 0; f < frames; f++)\`
+	 *               loop never ended, so the video "never finished
+	 *               rendering" while the tab stayed busy forever.
+	 *   NaN / <=0 - an unreadable clip. Falls back to the still-image
+	 *               length instead of producing 0 or NaN frames.
+	 *
+	 * Both are clamped to the same one-minute cap the upload path
+	 * enforces (\`MP4_MAX_DURATION_S\`), so the render length is always a
+	 * finite, bounded number of frames.
+	 */
+
 	function slideDurationSec(
 		slide
 	) {
-	
-	
-		if (
+
+		const raw =
+
+			slide &&
 			slide._partialSec !=
 				null
+
+				? Number(
+					slide._partialSec
+				)
+
+				: slide &&
+					slide.type ===
+						"mp4" &&
+					Number(
+						slide.duration
+					) > 0
+
+					? Number(
+						slide.duration
+					)
+
+					: SLIDE_SECONDS_MIN;
+
+
+		if (
+			!Number.isFinite(
+				raw
+			) ||
+			raw <= 0
 		) {
-	
-	
-			return slide._partialSec;
-	
-	
+
+			return SLIDE_SECONDS_MIN;
+
 		}
-	
-	
-		return slide.type ===
-			"mp4"
-		&& slide.duration >
-			0
-		? slide.duration
-		: SLIDE_SECONDS_MIN;
-	
-	
+
+
+		return Math.min(
+			raw,
+			MP4_MAX_DURATION_S
+		);
+
 	}
 	
 	
@@ -1269,95 +1310,1042 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	
 	
 	/*
-		 * Waits for the next presented
-		 * frame of a playing clip so
-		 * the export stays in real time.
+	 * =========================================================
+	 * MP4 CLIP FRAME CAPTURE (bug fix: the export used to hang
+	 * forever on the first MP4 slide)
+	 * =========================================================
+	 *
+	 * The renderer used to advance a clip by awaiting
+	 * \`requestVideoFrameCallback\` once per output frame, i.e. it
+	 * depended on the browser really PRESENTING frames of a
+	 * playing <video>. A callback is only delivered for an element
+	 * that is actually being composited:
+	 *
+	 *   - the editor layout's clip element (\`asset.videoEl\`) is
+	 *     created with createElement and never attached (the card
+	 *     shows its own <video>), and the legacy gallery lives in
+	 *     a display:none panel;
+	 *   - a background/throttled tab presents no frames at all;
+	 *   - an autoplay rejection (\`prepareClip\` only logged it)
+	 *     leaves the element paused.
+	 *
+	 * In all three cases the callback never fired, the \`await\`
+	 * never settled, and the status line froze on the last
+	 * "Completed image N of M" while \`project.status\` stayed
+	 * "rendering" for good - the reported "it did not finish
+	 * rendering the video". Nothing threw, so the bulk queue behind
+	 * it never advanced either.
+	 *
+	 * Capture is now bounded and has two modes:
+	 *
+	 *   playback - real time, exactly as before, while frames
+	 *              really arrive (the fast path for a visible,
+	 *              attached element);
+	 *   seek     - deterministic: the clip is paused and seeked to
+	 *              the exact time of the output frame. Seeking and
+	 *              drawing work on hidden/detached elements, so
+	 *              capture no longer depends on the compositor, on
+	 *              the tab being visible or on wall-clock speed.
 	 */
-	
-	
-	async function nextClipFrame(
+
+	const CLIP_FRAME_TIMEOUT_MS =
+		500;
+
+
+	const CLIP_READY_TIMEOUT_MS =
+		4000;
+
+
+	/*
+	 * True once the element has a decoded frame that drawImage()
+	 * can copy. Drawing a video with readyState < 2 throws
+	 * InvalidStateError, which used to end the whole export with
+	 * "Video rendering failed".
+	 */
+
+	/*
+	 * Reads a clip's real length.
+	 *
+	 * Two things used to go wrong at upload time:
+	 *
+	 *   1. The probe <video> was never attached to the document and had
+	 *      no deadline. A clip the browser declined to load (unsupported
+	 *      codec variant, a container that needs a range request) fired
+	 *      neither \`loadedmetadata\` nor \`error\`, so the upload promise
+	 *      never settled: the clip never appeared in the accordion, no
+	 *      error was shown, and Generate looked like it did nothing.
+	 *
+	 *   2. Fragmented / MediaRecorder MP4s report \`duration === Infinity\`
+	 *      until the whole file is buffered. That value passed the
+	 *      "longer than a minute" check (Infinity is not <= 60 either)
+	 *      and reached framesForSlide(), which turned it into Infinity
+	 *      frames - a \`for\` loop that never ends, i.e. exactly the
+	 *      "rendering never finishes" report.
+	 *
+	 * So: attach the probe off-screen (some browsers will not load a
+	 * detached video at all), give the load a deadline, resolve the
+	 * Infinity case the standard way (seek far past the end, read the
+	 * duration the element settles on), and hand the caller one honest
+	 * number or an error.
+	 */
+
+	async function probeMp4Duration(
+		video,
+		clipURL
+	) {
+
+		video.muted =
+			true;
+
+		video.playsInline =
+			true;
+
+		video.preload =
+			"auto";
+
+		video.src =
+			clipURL;
+
+
+		let host =
+			ensureClipCaptureHost();
+
+		let detach =
+			false;
+
+
+		if (
+			video.parentNode !==
+			host
+		) {
+
+			try {
+
+				host.appendChild(
+					video
+				);
+
+				detach =
+					true;
+
+			}
+
+			catch (attachError) {
+
+				/* decode-in-place is still worth trying */
+
+			}
+
+		}
+
+
+		try {
+
+			await new Promise(
+				(resolve, reject) => {
+
+					let settled =
+						false;
+
+					const finish =
+						(error) => {
+
+							if (settled) {
+
+								return;
+
+							}
+
+							settled =
+								true;
+
+
+							clearTimeout(
+								timer
+							);
+
+
+							for (
+								const name of [
+									"loadedmetadata",
+									"error"
+								]
+							) {
+
+								video.removeEventListener(
+									name,
+									onMeta
+								);
+
+								video.removeEventListener(
+									name,
+									onError
+								);
+
+							}
+
+
+							error
+								? reject(
+									error
+								)
+								: resolve();
+
+						};
+
+					const onMeta =
+						() => finish(
+							null
+						);
+
+					const onError =
+						() => finish(
+							new Error(
+								"The clip could not be decoded."
+							)
+						);
+
+					const timer =
+						setTimeout(
+							() => finish(
+								new Error(
+									"The clip took too long to load."
+								)
+							),
+							CLIP_PROBE_TIMEOUT_MS
+						);
+
+
+					video.addEventListener(
+						"loadedmetadata",
+						onMeta,
+						{
+							once:
+								true
+						}
+					);
+
+					video.addEventListener(
+						"error",
+						onError,
+						{
+							once:
+								true
+						}
+					);
+
+				}
+			);
+
+
+			let duration =
+				Number(
+					video.duration
+				);
+
+
+			if (!Number.isFinite(duration)) {
+
+				/*
+				 * Ask the element to load the real duration by
+				 * seeking past the end; it then reports the
+				 * media's actual length. Bounded, because a clip
+				 * that never answers is exactly what we are
+				 * trying to detect.
+				 */
+
+				await new Promise(
+					(resolve) => {
+
+						let settled =
+							false;
+
+						const finish =
+							() => {
+
+								if (settled) {
+
+									return;
+
+								}
+
+								settled =
+									true;
+
+
+								clearTimeout(
+									timer
+								);
+
+
+								video.removeEventListener(
+									"durationchange",
+									finish
+								);
+
+								video.removeEventListener(
+									"timeupdate",
+									finish
+								);
+
+								video.removeEventListener(
+									"seeked",
+									finish
+								);
+
+
+								resolve();
+
+							};
+
+						const timer =
+							setTimeout(
+								finish,
+								3000
+							);
+
+
+						for (
+							const name of [
+								"durationchange",
+								"timeupdate",
+								"seeked"
+							]
+						) {
+
+							video.addEventListener(
+								name,
+								finish
+							);
+
+						}
+
+
+						try {
+
+							video.currentTime =
+								1e101;
+
+						}
+
+						catch (seekError) {
+
+							finish();
+
+						}
+
+					}
+				);
+
+
+				duration =
+					Number(
+						video.duration
+					);
+
+
+				try {
+
+					video.currentTime =
+						0;
+
+				}
+
+				catch (resetError) {
+
+					/* the first frame still lands on 0 */
+
+				}
+
+			}
+
+
+			if (
+				!Number.isFinite(
+					duration
+				) ||
+				duration <=
+					0
+			) {
+
+				throw new Error(
+					"The clip reports no usable length."
+				);
+
+			}
+
+
+			return duration;
+
+		}
+
+		finally {
+
+			if (detach) {
+
+				try {
+
+					if (
+						video.parentNode ===
+						host
+					) {
+
+						host.removeChild(
+							video
+						);
+
+					}
+
+				}
+
+				catch (detachError) {
+
+					/* nothing else to do */
+
+				}
+
+			}
+
+		}
+
+	}
+
+
+	function clipHasFrame(
 		video
 	) {
-	
-	
+
+		return Boolean(
+			video &&
+			video.readyState >= 2 &&
+			(
+				typeof video.videoWidth !==
+					"number" ||
+				video.videoWidth > 0
+			)
+		);
+
+	}
+
+
+	/*
+	 * Can this slide's source be copied by drawImage() right now?
+	 *
+	 * Stills, GIF scratch canvases and canvas sources always can.
+	 * A <video> only can once it has a decoded frame; asking it before
+	 * that throws InvalidStateError, which is not a rendering failure
+	 * worth losing the entire export over.
+	 */
+
+	/*
+	 * Off-screen host for clip capture.
+	 *
+	 * \`requestVideoFrameCallback\` only fires while the browser really
+	 * composites the element, and a <video> that is detached from the
+	 * document (which is exactly what the editor's upload probe builds)
+	 * is never composited. Without a parent the capture fell back to
+	 * seeking for every single frame - correct, but several times slower
+	 * - and on some browsers never presented a frame at all.
+	 *
+	 * The host is deliberately NOT display:none (a display:none ancestor
+	 * stops presentation too): it is parked outside the viewport at
+	 * 2x2 px, which keeps decoding and frame presentation active while
+	 * being invisible to the user.
+	 */
+
+	const CLIP_HOST_ID =
+		"clip-capture-host";
+
+	const CLIP_PROBE_TIMEOUT_MS =
+		15000;
+
+
+	function ensureClipCaptureHost() {
+
+		let host =
+			document.getElementById(
+				CLIP_HOST_ID
+			);
+
+
+		if (host) {
+
+			return host;
+
+		}
+
+
+		host =
+			document.createElement(
+				"div"
+			);
+
+
+		host.id =
+			CLIP_HOST_ID;
+
+
+		host.setAttribute(
+			"aria-hidden",
+			"true"
+		);
+
+
+		host.style.cssText =
+			"position:fixed;left:-10000px;top:0;width:2px;height:2px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:-1;";
+
+
+		document.body.appendChild(
+			host
+		);
+
+
+		return host;
+
+	}
+
+
+	/*
+	 * Moves a clip into the off-screen host so it can present frames
+	 * while it is being captured, and returns a function that puts it
+	 * back where it came from.
+	 *
+	 * A clip that is already connected AND has a layout box (a real
+	 * preview the user can see) is left alone - it is already being
+	 * composited, and moving it would interrupt the preview.
+	 */
+
+	function mountClipForCapture(
+		video
+	) {
+
+		if (
+			!video ||
+			typeof video.play !==
+				"function"
+		) {
+
+			return null;
+
+		}
+
+
+		let boxed =
+			false;
+
+
+		try {
+
+			boxed =
+				video.isConnected ===
+					true &&
+				typeof video.getClientRects ===
+					"function" &&
+				video.getClientRects().length >
+					0;
+
+		}
+
+		catch (boxError) {
+
+			boxed =
+				false;
+
+		}
+
+
+		if (boxed) {
+
+			return null;
+
+		}
+
+
+		const parent =
+			video.parentNode || null;
+
+		const nextSibling =
+			video.nextSibling || null;
+
+
+		try {
+
+			ensureClipCaptureHost().appendChild(
+				video
+			);
+
+		}
+
+		catch (mountError) {
+
+			return null;
+
+		}
+
+
+		return function restoreClip() {
+
+			try {
+
+				const hostNode =
+					document.getElementById(
+						CLIP_HOST_ID
+					);
+
+
+				if (
+					!hostNode ||
+					video.parentNode !==
+						hostNode
+				) {
+
+					return;
+
+				}
+
+
+				if (parent) {
+
+					parent.insertBefore(
+						video,
+						nextSibling &&
+						nextSibling.parentNode ===
+							parent
+							? nextSibling
+							: null
+					);
+
+				}
+
+				else {
+
+					/* Detached before the export: detach it again. */
+					hostNode.removeChild(
+						video
+					);
+
+				}
+
+			}
+
+			catch (restoreError) {
+
+				/* the clip still decodes where it is */
+
+			}
+
+		};
+
+	}
+
+
+	function drawableSlideSource(
+		source
+	) {
+
+		if (!source) {
+
+			return false;
+
+		}
+
+
+		if (
+			typeof HTMLVideoElement !==
+				"undefined" &&
+			source instanceof
+				HTMLVideoElement
+		) {
+
+			return clipHasFrame(
+				source
+			);
+
+		}
+
+
+		return true;
+
+	}
+
+
+	/*
+	 * Waits (bounded) until the clip can be drawn, then returns
+	 * that answer instead of throwing.
+	 */
+
+	async function waitForClipFrame(
+		video
+	) {
+
+		if (
+			!video ||
+			clipHasFrame(
+				video
+			)
+		) {
+
+			return clipHasFrame(
+				video
+			);
+
+		}
+
+		return await new Promise(
+			(resolve) => {
+
+				let done =
+					false;
+
+				const finish =
+					(ok) => {
+
+						if (done) {
+
+							return;
+
+						}
+
+						done =
+							true;
+
+						for (
+							const name of [
+								"loadeddata",
+								"canplay",
+								"seeked"
+							]
+						) {
+
+							try {
+
+								video.removeEventListener(
+									name,
+									onReady
+								);
+
+							}
+							catch (listenerError) {
+								/* detached element */
+							}
+
+						}
+
+						resolve(
+							ok ===
+								true &&
+								clipHasFrame(
+									video
+								)
+						);
+
+					};
+
+				const onReady =
+					() => finish(
+						true
+					);
+
+				for (
+					const name of [
+						"loadeddata",
+						"canplay",
+						"seeked"
+					]
+				) {
+
+					try {
+
+						video.addEventListener(
+							name,
+							onReady
+						);
+
+					}
+					catch (listenerError) {
+						/* detached element */
+					}
+
+				}
+
+				setTimeout(
+					() => finish(
+						clipHasFrame(
+							video
+						)
+					),
+					CLIP_READY_TIMEOUT_MS
+				);
+
+			}
+		);
+
+	}
+
+
+	/*
+	 * Waits for the next PRESENTED frame of a playing clip.
+	 *
+	 * Returns true when a frame really arrived, false when the
+	 * deadline passed (hidden element / background tab / paused
+	 * clip). It never waits indefinitely.
+	 */
+
+	async function nextClipFrame(
+		video,
+		timeoutMs
+	) {
+
+		const deadline =
+			Math.max(
+				50,
+				Number(timeoutMs) ||
+					CLIP_FRAME_TIMEOUT_MS
+			);
+
+
 		if (
 			typeof video.requestVideoFrameCallback ===
 				"function"
 		) {
-	
-	
-			await new Promise(
+
+			return await new Promise(
 				(resolve) => {
-					video.requestVideoFrameCallback(
-						resolve
-					);
+
+					let done =
+						false;
+
+					const finish =
+						(ok) => {
+
+							if (done) {
+
+								return;
+
+							}
+
+							done =
+								true;
+
+							resolve(
+								ok ===
+									true
+							);
+
+						};
+
+					const timer =
+						setTimeout(
+							() => finish(
+								false
+							),
+							deadline
+						);
+
+					try {
+
+						video.requestVideoFrameCallback(
+							() => {
+
+								clearTimeout(
+									timer
+								);
+
+								finish(
+									true
+								);
+
+							}
+						);
+
+					}
+					catch (callbackError) {
+
+						clearTimeout(
+							timer
+						);
+
+						finish(
+							false
+						);
+
+					}
+
 				}
 			);
-	
-	
-			return;
-	
-	
+
 		}
-	
-	
-			await new Promise(
-				(resolve) =>
+
+
+		/*
+		 * Older browser: no presentation callback exists, so pace
+		 * the capture ourselves and report "arrived" only while
+		 * the element actually advances.
+		 */
+
+		const before =
+			Number(
+				video.currentTime
+			) || 0;
+
+		await new Promise(
+			(resolve) =>
 				setTimeout(
 					resolve,
 					34
 				)
-			);
-	
-	
+		);
+
+		return (
+			video.paused ===
+				false ||
+			(
+				Number(
+					video.currentTime
+				) || 0
+			) !==
+				before
+		);
+
 	}
-	
-	
+
+
 	/*
-		 * Restarts a clip silently for
-		 * frame capture.
+	 * Deterministic capture: park the clip on one exact time.
+	 * Used for every frame once playback stops presenting frames,
+	 * and as the fallback when play() itself was rejected.
 	 */
-	
-	
+
+	async function captureClipFrameAt(
+		video,
+		timeSec,
+		durationSec
+	) {
+
+		const reported =
+			Number(
+				video.duration
+			);
+
+		const limit =
+			Number.isFinite(
+				reported
+			) &&
+			reported > 0
+
+				? reported
+
+				: Number.isFinite(
+					durationSec
+				) &&
+					durationSec > 0
+
+					? durationSec
+
+					: 0;
+
+		const requested =
+			Number(
+				timeSec
+			);
+
+		let target =
+			Number.isFinite(
+				requested
+			) &&
+			requested > 0
+
+				? requested
+
+				: 0;
+
+
+		if (limit > 0) {
+
+			target =
+				Math.min(
+					target,
+					Math.max(
+						0,
+						limit -
+							0.001
+					)
+				);
+
+		}
+
+
+		await seekClipTo(
+			video,
+			target
+		);
+
+	}
+
+
+	/*
+	 * Restarts a clip silently for frame capture.
+	 *
+	 * Returns true when the clip can be drawn afterwards. A
+	 * rejected play() (autoplay policy, detached element) is not
+	 * fatal any more: the caller switches that slide to seek-based
+	 * capture instead of waiting for frames that never come.
+	 */
+
 	async function prepareClip(
 		video
 	) {
-	
-	
+
+
 		try {
-	
-	
+
+
 			video.pause();
-	
-	
+
+
 			await seekClipTo(
 				video,
 				0
 			);
-	
-	
+
+
 			video.muted =
 				true;
-	
-	
+
+
 			await video.play();
-	
-	
+
+
+			await waitForClipFrame(
+				video
+			);
+
+
+			return clipHasFrame(
+				video
+			);
+
+
 		}
-	
-	
+
+
 		catch (playError) {
-	
-	
+
+
 			console.error(
 				"Clip play failed:",
 				playError
 			);
-	
-	
+
+
+			return await waitForClipFrame(
+				video
+			);
+
+
 		}
-	
-	
+
+
 	}
 		function getSlideSequence() {
 	
@@ -4949,6 +5937,11 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		window.__VIDEO_PROJECTS =
 			videoProjects;
 
+
+		/* Session #264: clip duration probe (tests / debugging). */
+		window.__PROBE_MP4_DURATION =
+			probeMp4Duration;
+
 	}
 
 	let generating =
@@ -8337,11 +9330,19 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		const results = new Array(prompts.length);
 		let pending = prompts.map(function (_, index) { return index; });
 		let hintMs = 0;
+		/*
+		 * Negotiated per-tab image ceiling (bug fix: image generation felt
+		 * serial). Absent/unknown keeps the documented adaptive limit (3 on
+		 * a capable device), so an older Worker behaves exactly as before.
+		 */
+		const caps = await studioOffload.capabilities();
+		const imageSlots = Math.max(0, Math.min(8, Number(caps.imageSlots) || 0));
 
 		for (let round = 1; round <= rounds && pending.length; round++) {
 			if (owner.isCancelled && owner.isCancelled()) break;
 			const batch = pending.slice();
 			const perAttempt = {
+				slots: imageSlots || undefined,
 				isCancelled: owner.isCancelled,
 				priority: owner.priority,
 				setController: owner.setController,
@@ -9012,10 +10013,20 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			row.prompts = [];
 			row.images = [];
 			setBatchStage(row, "prompts", "Writing the first three scene prompts");
+			/*
+			 * Two chunks in flight when the Worker advertises it (bug fix:
+			 * image generation felt serial). Each chunk is three images, so
+			 * a ten-scene row keeps up to six requests busy instead of
+			 * waiting for its slowest image four separate times. Ordering is
+			 * preserved by sorting on the scene index below, which is what
+			 * the row's slides and the finished gallery are built from.
+			 */
+			const rowImageCaps = await studioOffload.capabilities();
 			try {
 				await runProgressiveImagePipeline({
 					total: imageSceneTarget(row.minutes),
 					isCancelled: function () { return Boolean(row.stopRequested); },
+					parallelRenders: Math.max(1, Math.min(4, Number(rowImageCaps.imageChunks) || 1)),
 					request: function (batch) { return requestBatchPrompts(row, batch); },
 					onPrompts: function (prompts) { row.prompts = prompts; },
 					cancelPrompts: function () {
@@ -9028,6 +10039,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						const images = await requestBatchImages(row, prompts);
 						images.forEach(function (image) { image.index += offset; });
 						row.images.push.apply(row.images, images);
+						row.images.sort(function (a, b) { return a.index - b.index; });
 						/* #261: local, best-effort record of usable images. */
 						if (images.length) recordStudioUsage("images", "ok", images.length);
 						if (row._imagePipelineWarning) throw new Error(row._imagePipelineWarning);
@@ -10952,38 +11964,16 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						"video"
 					);
 
-				probed.muted =
-					true;
-
-				probed.playsInline =
-					true;
-
-				probed.src =
-					clipURL;
+				let clipDuration =
+					0;
 
 				try {
 
-					await new Promise(
-						(resolve, reject) => {
-
-							probed.addEventListener(
-								"loadedmetadata",
-								resolve,
-								{
-									once: true
-								}
-							);
-
-							probed.addEventListener(
-								"error",
-								reject,
-								{
-									once: true
-								}
-							);
-
-						}
-					);
+					clipDuration =
+						await probeMp4Duration(
+							probed,
+							clipURL
+						);
 
 				}
 				catch (probeError) {
@@ -10995,15 +11985,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					alert(
 						"'" +
 							file.name +
-							"' could not be read as an MP4 clip."
+							"' could not be read as an MP4 clip. Try re-exporting it as a standard MP4 (H.264 + AAC)."
 					);
 
 					continue;
 
 				}
-
-				const clipDuration =
-					probed.duration;
 
 				if (
 					clipDuration >
@@ -16017,37 +17004,40 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 							"video"
 						);
 
-					probed.muted =
-						true;
+					/*
+					 * Same probe as the editor's upload path: a
+					 * deadline, a decodable container, and a
+					 * finite duration. A skipped clip is better
+					 * than a job that restores a NaN length and
+					 * renders no frames at all.
+					 */
 
-					probed.playsInline =
-						true;
+					let clipDuration =
+						0;
 
-					probed.src =
-						url;
+					try {
 
-					await new Promise(
-						(resolve, reject) =>
-						{
-							probed.addEventListener(
-								"loadedmetadata",
-								resolve,
-								{
-									once:
-										true
-								}
+						clipDuration =
+							await probeMp4Duration(
+								probed,
+								url
 							);
 
-							probed.addEventListener(
-								"error",
-								reject,
-								{
-									once:
-										true
-								}
-							);
-						}
-					);
+					}
+					catch (probeError) {
+
+						console.error(
+							"Saved clip could not be probed:",
+							probeError
+						);
+
+						releaseStudioObjectUrl(
+							url
+						);
+
+						continue;
+
+					}
 
 					probed.loop =
 						true;
@@ -16056,7 +17046,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						probed;
 
 					asset.duration =
-						probed.duration;
+						clipDuration;
 
 					asset.url =
 						url;
@@ -20278,12 +21268,65 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			12;
 
 
+		/*
+		 * A dead encoder (or a browser that silently stops draining
+		 * the queue) used to make this loop spin forever: the
+		 * progress bar froze at the same percentage and the export
+		 * never returned. It now fails fast with a clear message, so
+		 * the queue can mark the video "error" and move on to the
+		 * next one.
+		 */
+
+		const ENCODER_STALL_TIMEOUT_MS =
+			15000;
+
+
+		const ENCODER_FLUSH_TIMEOUT_MS =
+			180000;
+
+
 		async function waitForEncoder() {
+
+			const startedAt =
+				Date.now();
+
 
 			while (
 				videoEncoder.encodeQueueSize >
 				MAX_ENCODE_QUEUE
 			) {
+
+				if (encoderError) {
+
+					throw encoderError;
+
+				}
+
+
+				if (
+					videoEncoder.state ===
+						"closed"
+				) {
+
+					throw new Error(
+						"The video encoder closed before the export finished."
+					);
+
+				}
+
+
+				if (
+					Date.now() -
+						startedAt >
+					ENCODER_STALL_TIMEOUT_MS
+				) {
+
+					throw new Error(
+						"The video encoder stopped accepting frames. Try a lower quality or fewer MP4 clips."
+					);
+
+				}
+
 
 				await new Promise(
 					resolve =>
@@ -20348,6 +21391,56 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 
 		}
+
+
+		/*
+		 * Clip capture needs a composited element.
+		 *
+		 * The editor's clips (\`asset.videoEl\`) are built with
+		 * createElement() while the file is probed and are never
+		 * attached to the document, so the browser has no reason to
+		 * present their frames: requestVideoFrameCallback never
+		 * fires and the export used to wait forever on the very
+		 * first clip frame. Moving each such clip into the
+		 * invisible off-viewport host for the duration of the
+		 * export brings the playback path back; clips that are
+		 * already visible in a preview are left alone, and every
+		 * move is undone in the finally block below.
+		 */
+
+		const clipRestores =
+			[];
+
+
+		for (
+			const captureSlide of slides
+		) {
+
+			if (
+				captureSlide &&
+				captureSlide.type ===
+					"mp4" &&
+				captureSlide.videoEl
+			) {
+
+				const restore =
+					mountClipForCapture(
+						captureSlide.videoEl
+					);
+
+
+				if (restore) {
+
+					clipRestores.push(
+						restore
+					);
+
+				}
+
+			}
+
+		}
+
 
 
 		let currentFrame =
@@ -20428,13 +21521,46 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					: null;
 
 
+				/*
+				 * Two capture modes for this clip. Playback is the
+				 * fast path; once the browser stops presenting
+				 * frames (detached element, hidden tab, rejected
+				 * play()) the slide finishes in seek mode instead
+				 * of waiting forever.
+				 */
+
+				let clipSeekMode =
+					false;
+
+
+				const clipSeconds =
+					slideDurationSec(
+						slide
+					);
+
+
 				if (clipVideo) {
 
 
-					await prepareClip(
-						clipVideo
-					);
+					const clipDrawable =
+						await prepareClip(
+							clipVideo
+						);
 
+
+					clipSeekMode =
+						Boolean(
+							clipVideo.paused
+						);
+
+
+					if (!clipDrawable) {
+
+						console.warn(
+							"[render] A clip has no decodable frame yet; its frames are captured by seeking."
+						);
+
+					}
 
 				}
 
@@ -20458,7 +21584,14 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 
 					/*
-					 * Keep the clip in real time.
+					 * Keep the clip in real time while the browser
+					 * really presents frames; otherwise park it on
+					 * the exact time of this output frame.
+					 *
+					 * Both paths are bounded, so a clip can never
+					 * stall the export again (bug fix: the old
+					 * unbounded await on requestVideoFrameCallback
+					 * is what left the studio "rendering" forever).
 					 */
 
 
@@ -20469,10 +21602,68 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					) {
 
 
-						await nextClipFrame(
-							clipVideo
-						);
+						if (clipSeekMode) {
 
+
+							await captureClipFrameAt(
+								clipVideo,
+								f /
+									FPS,
+								clipSeconds
+							);
+
+
+						}
+
+						else {
+
+
+							const presented =
+								await nextClipFrame(
+									clipVideo,
+									CLIP_FRAME_TIMEOUT_MS
+								);
+
+
+							if (!presented) {
+
+								/*
+								 * Hidden element / background tab:
+								 * stop relying on the compositor for
+								 * the rest of this clip.
+								 */
+
+								clipSeekMode =
+									true;
+
+
+								console.warn(
+									"[render] The clip stopped presenting frames (hidden element or background tab); switching to seek-based frame capture."
+								);
+
+
+								try {
+
+									clipVideo.pause();
+
+								}
+								catch (pauseError) {
+
+									/* already paused */
+
+								}
+
+
+								await captureClipFrameAt(
+									clipVideo,
+									f /
+										FPS,
+									clipSeconds
+								);
+
+							}
+
+						}
 
 					}
 
@@ -20524,13 +21715,18 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 					/*
 					 * Progress from 0 to 1.
+					 *
+					 * A one-frame slide used to divide by zero
+					 * here, which turned every coordinate into
+					 * NaN and made drawImage() a no-op.
 					 */
 
 					const p =
 						f /
-						(
+						Math.max(
+							1,
 							frames -
-							1
+								1
 						);
 
 
@@ -20778,13 +21974,30 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						1;
 
 
-					ctx.drawImage(
-						img,
-						dx,
-						dy,
-						dw,
-						dh
-					);
+					/*
+					 * A video source can be drawable-checks
+					 * dependent: drawImage() throws
+					 * InvalidStateError when a clip has no
+					 * decoded frame, and that used to fail the
+					 * whole export. Skip that one draw and keep
+					 * rendering (the overlays still go on).
+					 */
+
+					if (
+						drawableSlideSource(
+							img
+						)
+					) {
+
+						ctx.drawImage(
+							img,
+							dx,
+							dy,
+							dw,
+							dh
+						);
+
+					}
 
 
 					// =========================================
@@ -21022,7 +22235,29 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					try {
 
 
-						resumeSlide.videoEl.play();
+						/*
+						 * play() rejects through its promise, which a
+						 * try/catch cannot see. Swallow it so a blocked
+						 * autoplay never surfaces as an unhandled
+						 * rejection (the export itself does not need
+						 * the preview to play).
+						 */
+
+						const resumed =
+							resumeSlide.videoEl.play();
+
+
+						if (
+							resumed &&
+							typeof resumed.catch ===
+								"function"
+						) {
+
+							resumed.catch(
+								() => {}
+							);
+
+						}
 
 
 					}
@@ -21054,7 +22289,63 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				"Finalizing MP4 file...";
 
 
-			await videoEncoder.flush();
+			/*
+			 * Bounded, for the same reason as waitForEncoder(): a
+			 * flush that never settles would leave the studio on
+			 * "Finalizing MP4 file..." forever. The promise is not
+			 * cancelled (WebCodecs has no cancel), but the export
+			 * now reports the failure instead of hanging.
+			 */
+
+			let flushTimer =
+				null;
+
+
+			try {
+
+				await Promise.race([
+					videoEncoder.flush(),
+					new Promise(
+						(resolve, reject) => {
+
+							flushTimer =
+								setTimeout(
+									() => reject(
+										new Error(
+											"Finalizing the MP4 file took longer than " +
+												Math.round(
+													ENCODER_FLUSH_TIMEOUT_MS /
+														1000
+												) +
+												" seconds. The file was not saved."
+										)
+									),
+									ENCODER_FLUSH_TIMEOUT_MS
+								);
+
+						}
+					)
+				]);
+
+			}
+
+			finally {
+
+				/*
+				 * Never leave the watchdog timer behind: a pending
+				 * 3-minute timer keeps the tab (and any test runner)
+				 * alive long after the export finished.
+				 */
+
+				if (flushTimer) {
+
+					clearTimeout(
+						flushTimer
+					);
+
+				}
+
+			}
 
 
 			if (encoderError) {
@@ -21249,6 +22540,28 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					console.warn(
 						"File stream cleanup error:",
 						error
+					);
+
+				}
+
+			}
+
+
+			for (
+				const restoreClip of clipRestores
+			) {
+
+				try {
+
+					restoreClip();
+
+				}
+
+				catch (restoreError) {
+
+					console.warn(
+						"Clip restore error:",
+						restoreError
 					);
 
 				}

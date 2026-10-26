@@ -2,7 +2,7 @@
 export const BROWSER_OFFLOAD_JS = String.raw`
 function createStudioOffloadRuntime(win) {
 	var nav = win.navigator || {}, queue = [], active = 0, mediaActive = 0, controlActive = 0, epoch = 0;
-	var capabilitiesPromise = null, retainedBytes = 0, urls = new Map(), controllers = new Set();
+	var capabilitiesPromise = null, capabilitiesRetryAt = 0, retainedBytes = 0, urls = new Map(), controllers = new Set();
 	var channel = null, peers = new Map(), pumpTimer = null, sequence = 0;
 	/* Server-load backoff (bug fix #262): no media fan-out until this timestamp. */
 	var backoffUntil = 0, backoffMs = 0;
@@ -29,6 +29,21 @@ function createStudioOffloadRuntime(win) {
 		var doc = win.document;
 		if ((doc && doc.hidden) || retainedBytes > Math.min(192, memory * 24) * 1024 * 1024) limit = 1;
 		return limit;
+	}
+	/*
+	 * How many concurrent jobs this particular job may run alongside.
+	 *
+	 * Default: limits(). A caller that negotiated a wider media ceiling
+	 * (the studio asks the Worker how many image requests a tab may keep in
+	 * flight) passes options.slots; it is clamped to 1..8 and can never go
+	 * below the adaptive limit for a backgrounded tab or a loaded device.
+	 */
+	function jobCeiling(options) {
+		var base = limits();
+		var asked = Number(options && options.slots);
+		if (!(asked > 0)) return base;
+		if (base === 1) return 1;
+		return Math.min(8, Math.max(base, Math.floor(asked)));
 	}
 	async function readBlob(blob) {
 		if (blob && typeof blob.arrayBuffer === "function") return blob.arrayBuffer();
@@ -84,11 +99,37 @@ function createStudioOffloadRuntime(win) {
 			if (abortHandler && options && options.signal) options.signal.removeEventListener("abort", abortHandler);
 		}
 	}
+	/*
+	 * Capability negotiation (bug fix: one transport hiccup used to pin the
+	 * whole tab to the slow legacy path).
+	 *
+	 * A definitive answer - an HTTP response that is not the 261 contract
+	 * (old server, 404, wrong shape) - is cached for the session, exactly as
+	 * before, so an old Worker is asked once and never again.
+	 *
+	 * A *failed probe* is not an answer. The first call happens while the
+	 * page is still booting and was given 5 s; a cold start, a flaky mobile
+	 * connection or a proxy hiccup made it reject, the empty object was
+	 * cached forever, and every image/script/voiceover request in that tab
+	 * silently fell back to the legacy base64 + NDJSON path - several times
+	 * slower than the binary path it should have used. Now a failed probe is
+	 * dropped (with a 3 s guard so a burst of callers cannot stampede the
+	 * route) and the next call negotiates again.
+	 */
 	function capabilities() {
-		if (!capabilitiesPromise) capabilitiesPromise = timedFetch("/api/pipeline-capabilities", {}, 5000, null,
+		if (capabilitiesPromise) return capabilitiesPromise;
+		if (capabilitiesRetryAt > Date.now()) return Promise.resolve({});
+		var request = timedFetch("/api/pipeline-capabilities", {}, 8000, null,
 			async function (r) { return r.ok ? r.json() : {}; }).then(function (caps) {
-				return caps && caps.version === 261 ? caps : {};
-			}, function () { return {}; });
+				if (caps && caps.version === 261) return caps;
+				/* Definitive: this Worker does not speak 261. Keep it. */
+				return {};
+			});
+		capabilitiesPromise = request.then(null, function () {
+			capabilitiesPromise = null;
+			capabilitiesRetryAt = Date.now() + 3000;
+			return {};
+		});
 		return capabilitiesPromise;
 	}
 	function getChannel() {
@@ -113,14 +154,16 @@ function createStudioOffloadRuntime(win) {
 		return channel;
 	}
 	async function coordinated(work, options, started) {
-		var kind = options.kind === "control" ? "control" : "media";
+		var kind = options.kind === "control" ? "control" : options.kind === "image" ? "image" : "media";
+		/* Image requests get the wider image ceiling; everything else keeps limits(). */
+		var slots = kind === "control" ? 1 : jobCeiling(options);
 		check(options, started);
 		// Web Locks are authoritative between cooperating same-origin tabs. No persistent state.
 		if (nav.locks && typeof nav.locks.request === "function") {
 			try {
 				for (;;) {
 					check(options, started);
-					for (var slot = 0; slot < (kind === "control" ? 1 : limits()); slot++) {
+					for (var slot = 0; slot < slots; slot++) {
 						var acquired = await nav.locks.request("yvs-generation-261-" + kind + "-" + slot,
 							{ ifAvailable: true }, async function (lock) {
 								if (!lock) return null;
@@ -188,7 +231,13 @@ function createStudioOffloadRuntime(win) {
 				if (job.options.kind === "control") return controlActive < 1;
 				/* Server asked us to wait: keep media jobs queued, not in flight. */
 				if (held > 0) return false;
-				return mediaActive < limits();
+				/*
+				 * A job may ask for a wider ceiling than limits() when the
+				 * Worker negotiated one (see images() below). Everything
+				 * that does not ask keeps the documented 3 (or 1/2 on a
+				 * smaller or backgrounded device).
+				 */
+				return mediaActive < jobCeiling(job.options);
 			});
 			if (admitted < 0) break;
 			var item = queue.splice(admitted, 1)[0];
@@ -246,6 +295,14 @@ function createStudioOffloadRuntime(win) {
 	function hintSeconds(value) { var n = Number(value); return n > 0 ? n : 0; }
 	async function images(prompts, frame, options) {
 		options = options || {};
+		/*
+		 * options.slots: how many images this tab may keep in flight, as
+		 * negotiated with the Worker (absent = the documented adaptive
+		 * limit, 3 on a capable device). Each request is one small binary
+		 * image, so a batch of ten no longer has to drain through a
+		 * three-wide pipe while three batch rows are rendering at once.
+		 */
+		var slots = Number(options.slots) > 0 ? Number(options.slots) : 0;
 		var g = group(options), results;
 		try {
 			results = await Promise.all(prompts.map(function (prompt, index) {
@@ -267,7 +324,7 @@ function createStudioOffloadRuntime(win) {
 						if (options.onError) options.onError(error, index);
 						return { ok: false, error: error, index: index, retryAfterMs: error && error.retryAfterMs || 0 };
 					}
-				}, g.options).catch(function (error) { return { ok: false, error: error, index: index }; });
+				}, Object.assign({}, g.options, { kind: "image", slots: slots })).catch(function (error) { return { ok: false, error: error, index: index }; });
 			}));
 			check(g.options);
 			return results;
@@ -476,7 +533,7 @@ function createStudioOffloadRuntime(win) {
 	function retainUrl(url, blob) { var size = Number(blob && blob.size) || 0; retainedBytes -= urls.get(url) || 0; urls.set(url, size); retainedBytes += size; return url; }
 	function releaseUrl(url) { retainedBytes = Math.max(0, retainedBytes - (urls.get(url) || 0)); urls.delete(url); }
 	function dispose() {
-		epoch++; capabilitiesPromise = null; backoffUntil = 0; backoffMs = 0;
+		epoch++; capabilitiesPromise = null; capabilitiesRetryAt = 0; backoffUntil = 0; backoffMs = 0;
 		controllers.forEach(function (c) { c.abort(); }); controllers.clear();
 		if (channel) { try { channel.close(); } catch (_) {} channel = null; }
 		peers.clear(); pump();
