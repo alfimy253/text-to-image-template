@@ -919,14 +919,15 @@
 | `Current theme: Studio (default).` / `Current theme: Night Lab.` / `Current theme: Neo Brutalist.` | Appearance status line (`themeLabel()`) | the value stored under `config:theme` |
 | `Preview only — press Save theme to apply it for everyone.` | Appearance status line after picking | the preview is client-side only (RULE 19) |
 | `Saved — reload the studio page to see the new theme.` | Appearance status line after saving | server-side injection on the next page render |
-| `Free plan: 70,000 AI images every day · unlimited videos, AI scripts and voiceovers.` / `Paid plan (paid_user): 1,200 AI images every day.` | auth overlay (`.auth-plan-note`) | `CREDIT_PLANS.free/paid_user.limits` (RULE 20) |
-| `No account? Open the free studio — 10 AI images a day, counted per IP address.` | auth overlay (`.auth-guest-note`, link to `/free`) | `GUEST_PLAN.limits.images = 10`, `ipcredits:` keying (RULE 21) |
+| `Every plan: 10,000 AI images every day · unlimited videos, AI scripts and voiceovers. Server load is balanced automatically, so bursts queue instead of failing.` | auth overlay (`.auth-plan-note`) | `CREDIT_PLANS.free/paid_user.limits` + `src/modules/image-load.ts` (RULE 20/28) |
+| `No account? Open the free studio — the same 10,000 AI images a day, counted per IP address.` | auth overlay (`.auth-guest-note`, link to `/free`) | `GUEST_PLAN.limits.images = 10000`, `ipcredits:` keying (RULE 21) |
 | `Daily credits` · `Video projects Unlimited` · `AI images N / limit left today` · `AI scripts Unlimited` · `Voiceovers Unlimited` · `Used today: n images · n scripts · n voiceovers` · `Renews in Nh Nm (midnight UTC+8)` | credits pill + popover (`.credit-pill`, `.credit-popover`) | `CREDIT_PLANS`, `creditSummary()`, `creditResetsAt()` (RULE 20) |
-| `Create a free account — 70,000 images/day` | guest credits popover (`.credit-signup`) | the `free` plan's image limit vs the guest's 10 (RULE 21) |
-| `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).` + `Create a free account for 70,000 images per day.` (guests) | `429` body, shown in `#va-ai-status-N` and the quota alert | the same plan limits + the guest upgrade path (RULE 20/21) |
-| `Sign in to generate AI images — every free account gets 70,000 images per day. No account? Open /free for 10 images per day.` | `401` body from `/image/gen` | the `free` and guest image limits |
-| `Free: 70,000 AI images per day. Paid (paid_user): 1,200 AI images per day. … Counters renew every day at midnight (UTC+8).` | settings page, Accounts Credits (`.cfg-sub`) | `CREDIT_PLANS` + `creditResetsAt()` (RULE 20) |
-| `Guest credits by IP` / `Visitors who never sign in (GET /free) get 10 AI images per day. …` | settings page, guest table (`.cfg-group-title`, `.cfg-note`) | `GUEST_PLAN`, the `ipcredits:` table (RULE 21) |
+| `Create a free account — 10,000 images/day` | guest credits popover (`.credit-signup`) | the `free` plan's image limit vs the guest's identical 10,000 (RULE 21) |
+| `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).` + `Create a free account for 10,000 images per day.` (guests) | `429` body, shown in `#va-ai-status-N` and the quota alert | the same plan limits + the guest upgrade path (RULE 20/21) |
+| `The image server is busy right now — images pause for about N s and then continue.` | image flow stop reason (`project._imageFlowStopReason`) | `{kind:"overload", retryAfterMs}` from `503`/stream events (RULE 28) |
+| `Sign in to generate AI images — every free account gets 10,000 images per day. No account? Open /free for the same 10,000 images per day.` | `401` body from `/image/gen` | the `free` and guest image limits |
+| `every plan (Free, Paid paid_user, Guest): 10,000 AI images/day. … Counters renew every day at midnight (UTC+8).` | settings page, Accounts Credits (`.cfg-sub`) | `CREDIT_PLANS` + `creditResetsAt()` (RULE 20) |
+| `Guest credits by IP` / `Visitors who never sign in (GET /free) get 10,000 AI images per day. …` | settings page, guest table (`.cfg-group-title`, `.cfg-note`) | `GUEST_PLAN`, the `ipcredits:` table (RULE 21) |
 
 ### Blocking `alert()` boxes (35 — the app's only modal feedback)
 
@@ -940,7 +941,7 @@
 - AI images: `Enter an image prompt first.`, `Image generation failed: <error>`, and the
   pre-submit quota alert
   `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).`
-  (guests also get `Create a free account for 70,000 images per day.`).
+  (guests also get `Create a free account for 10,000 images per day.`).
 - Render: `Please wait for images to generate or upload your own!` (also gates the **🎬 Generate
   Videos** button), `<project>: add at least one image, GIF or MP4 first.`,
   `A video is already being generated — please wait for it to finish.`,
@@ -1091,8 +1092,10 @@
 - Every user record (`user:<username>`) carries `usertype`; `free_user` and any missing/unknown
   value read as the canonical `free` plan (so pre-credits accounts keep working).
   - `free` — unlimited video projects, unlimited AI scripts, unlimited voiceovers and
-    **70,000 AI images per day**.
-  - `paid_user` — the same unlimited tools plus **1,200 AI images per day**.
+    **10,000 AI images per day** (`IMAGE_DAILY_LIMIT`).
+  - `paid_user` — the same unlimited tools plus **the same 10,000 AI images per day**
+    (`IMAGE_DAILY_LIMIT`; the paid plan is studio access, not a larger image quota — the old
+    1,200 paid / 70,000 free split read like a downgrade).
   - New accounts are written with `usertype: "free"` by `POST /api/signup`.
 - Today's counters live in `credits:<username>`:
   `{day:"YYYY-MM-DD", videos, images, scripts, voiceovers, updatedAt}` with a 2-day TTL.
@@ -1183,11 +1186,13 @@ addresses and gives visitors without an account a small, IP-metered allowance.
   `yvs_free=1; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`.
   - Anonymous `/image/gen` without the cookie is `401` (message points at `/free`).
   - The cookie only unlocks the IP bucket; it carries no identity and cannot raise the limit.
-- **Guest plan (`GUEST_PLAN`).** `{id:"guest", label:"Guest", limits:{videos:null, images:10,
-  scripts:null, voiceovers:null}}` — 10 AI images per day, everything else unlimited.
+- **Guest plan (`GUEST_PLAN`).** `{id:"guest", label:"Guest", limits:{videos:null,
+  images:IMAGE_DAILY_LIMIT, scripts:null, voiceovers:null}}` — the same 10,000 AI images per day
+  as an account (it was 10/day, which made the freemium studio stop working after ten images),
+  everything else unlimited.
 - **Per-IP counters.** Key `ipcredits:<sha256("yvs-guest:" + ip).hex.slice(0,40)>`.
   - Address source: `CF-Connecting-IP`, else the first `X-Forwarded-For` hop, else `"unknown"`
-    (one shared bucket — fails closed at 10 images).
+    (one shared bucket — shares one 10,000-image daily ceiling).
   - Record: `{day, videos, images, scripts, voiceovers, updatedAt, ip, maskedIp, hash, scope}`,
     TTL 2 days, same lazy Asia/Taipei rollover as `credits:<username>` (RULE 20). A model
     failure refunds the image and re-merges the identity, so the row keeps its masked address.
@@ -1211,8 +1216,8 @@ addresses and gives visitors without an account a small, IP-metered allowance.
 - **Client.**
   - `PLAN_MODE = window.__PLAN_MODE || ""`; on `/free`, a `401` from `/api/session` boots the
     studio as `authAccess = "freemium"` and paints the guest credits pill
-    (**Guest · 10 / 10 left today**).
-  - The guest popover adds **Create a free account — 70,000 images/day** (opens the sign-up
+    (**Guest · 10,000 / 10,000 left today**).
+  - The guest popover adds **Create a free account — 10,000 images/day** (opens the sign-up
     overlay); the `429` body and pre-submit check add the same upgrade hint.
   - Signing out of `/free` returns to guest mode rather than the landing page.
   - The auth overlay links to `/free`; the landing nav, plans section and footer all link to
@@ -1346,7 +1351,8 @@ addresses and gives visitors without an account a small, IP-metered allowance.
   - `POST /api/config/payments/approve` requires a nonempty transaction number (≤120 chars).
     `payment_txn:<lowercase-number-without-whitespace>` prevents the same number approving a
     different receipt (`409`). Success marks the receipt approved, writes that index and sets
-    `user:<name>.usertype="paid_user"`; the next request receives 1,200 images/day and `/paid`.
+    `user:<name>.usertype="paid_user"`; the next request receives paid access and `/paid`
+    (image allowance is the shared 10,000/day ceiling).
   - Restrictions: there is no rejection/refund workflow, KV updates are not transactional, and
     concurrent approvals/generation remain subject to KV eventual consistency. The settings
     password is the same shared operator constant documented in RULE 20, not per-admin auth.
@@ -2329,3 +2335,104 @@ Canonical implementation, limits, verification and rollout: [bug-fix-session-261
 - No persistent video jobs or media in client storage. More HTTP requests/browser work cost
   resources; do not claim production CPU savings without measurements. Timeouts cannot cancel
   active provider inference or guarantee refunds for invisible delivery.
+
+## RULE 31 — Bug fix #262: server-load balancing + request backoff replace hard image throttles (2026-10-26)
+
+> Added 2026-10-26. Full root-cause and verification record: `bug-fix-session-262.md`.
+
+- **One daily image ceiling for every actor: `IMAGE_DAILY_LIMIT = 10000`.** `CREDIT_PLANS.free`,
+  `CREDIT_PLANS.paid_user` and `GUEST_PLAN` all read that constant, so free, paid and anonymous
+  `/free` visitors get the same 10,000 images/day. Never reintroduce a per-plan split (70,000 free
+  vs 1,200 paid read as a downgrade) or a 10-image guest day (it stopped the freemium studio after
+  ten images). Every user-facing string, `X-Credit-Images-Limit` header and settings-page label is
+  derived from the plan payload, so the number appears in one place per surface.
+- **Load is handled by concurrency + backoff, not by refusing work.** `src/modules/image-load.ts`
+  owns a single isolate-wide `sharedImageLoadGovernor` (`ImageLoadGovernor`, AIMD):
+  - start at `IMAGE_LOAD_START_CONCURRENCY = 3`, `+1` after `IMAGE_LOAD_RECOVERY_WINDOW = 4`
+    consecutive provider successes, ceiling `IMAGE_LOAD_MAX_CONCURRENCY = 6`, floor 1;
+  - an overload signal halves the ceiling immediately and starts a cooldown of
+    `IMAGE_LOAD_COOLDOWN_BASE_MS * 2^(streak-1)`, capped by `IMAGE_LOAD_COOLDOWN_MAX_MS`; the
+    streak only grows once per cooldown window, so the three model fallbacks inside one doomed
+    scene count as **one** load event, not three;
+  - a provider `Retry-After` (header, `retryAfterMs` field or "retry after 3s" text) wins over the
+    computed cooldown and over `retryDelayMs()`;
+  - retries are `base * 2^(attempt-1)` with 50–100 % jitter, so a burst of scenes never retries in
+    lockstep (`IMAGE_LOAD_RETRY_BASE_MS = 800`, `IMAGE_LOAD_RETRY_MAX_MS = 20000`).
+- **Failure classification is mandatory before spending another inference.**
+  `classifyImageFailure()` returns `overload` (`429/502/503/504`, capacity, rate limit, overload,
+  quota, concurrency limit…), `transient` (`3043`, timeouts, empty/non-image bytes, network) or
+  `fatal` (400/401/403/404, retired/missing model slug, rejected prompt, unbound binding). Only
+  `overload` and `transient` retry; `fatal` stops immediately (`IMAGE_BATCH_ATTEMPTS = 2` for
+  ordinary failures, `IMAGE_OVERLOAD_ATTEMPTS = 4` for load), and every scene's retries must fit
+  `IMAGE_RETRY_BUDGET_MS = 45000` so it cannot pin a queue slot past the browser deadline.
+- **`ImageTaskQueue` reads the governor live** (`governor` option; `null` = pure pacing):
+  `effectiveGlobalConcurrency() = min(maxGlobalConcurrency, governor.limit)` and
+  `earliestSlotAt()` folds `governor.cooldownRemainingMs` into `readyAt`. The per-row
+  **3 images per 3 seconds** pacing from RULE 28 is unchanged, and a per-request pacing queue must
+  pass the shared governor so its own `DEFAULT_GLOBAL_IMAGE_CONCURRENCY` cannot multiply the
+  fleet-wide ceiling. Never arm a cross-request timer: waiters keep sleeping inside their own
+  request's `IoContext` (`abortableSleep`), per the #251 fix.
+- **HTTP contract.** `POST /api/image` answers `503` + `Retry-After` with
+  `{error, kind:"overload", retryAfterMs, load, credits}` when the fleet is shedding load (other
+  failures stay `502`, cancellations `499`), refunding exactly once. `GET /image/gen` mirrors that
+  (`503` + `Retry-After` + `kind`/`retryAfterMs`/`load`, otherwise `500`). `/api/image-batch`
+  streams `{type:"image", ok:false, kind, retryAfterMs}` per failed scene and includes
+  `overloadFailures`, `retryAfterMs` and `load` in `done`, and `load` in `start`.
+- **Browser must back off, not hammer.** `createStudioOffloadRuntime` records the server hint
+  (`responseError` reads `Retry-After`) and holds **media** jobs until it elapses
+  (`noteBackoff`, `stats().backoffMs`) while the reserved control lane keeps flowing. The editor
+  surfaces "The image server is busy right now — images pause for about N s and then continue."
+  instead of a raw provider string. Never auto-replay a failed paid image (RULE 30).
+- **What this is not.** The governor is in-memory per isolate: it never denies a request, is not a
+  quota, and does not synchronise across isolates or PoPs. KV credit counters stay best-effort
+  (RULE 30). If fleet-wide admission control becomes a requirement it needs a server-side
+  serialized store as a separate, deliberate change.
+
+## RULE 32 — Bug fix #263: retry at chunk granularity, keep pacing and the daily ceiling exactly as they are (2026-10-26)
+
+> Added 2026-10-26. Full root-cause and verification record: `bug-fix-session-263.md`.
+> Supersedes nothing in RULE 31: pacing stays **3 images per 3 s per row**, credits stay
+> **10,000 images/day** for free, paid and guest, and the load governor is unchanged.
+
+- **A chunk of images is retried per scene, never as a whole.** `requestImageChunk()` in
+  `src/client/app-js.ts` is the ONLY way the browser asks for a chunk of binary images (Quick Batch
+  `requestBatchImages` and the editor `runBinaryEditorImages`). It must keep all four properties:
+  1. an already-delivered scene is never requested again (no duplicate gallery slot, no second
+     charge, no replay of an ambiguous paid image — RULE 30 / RULE 31);
+  2. only the failed scenes are retried, at most 3 rounds, each waiting the server's `retryAfterMs`
+     hint or `min(800 * 2^(round-1), 15000)` ms;
+  3. `onImage(blob, index)` and every returned result use the ORIGINAL prompt index, even for a
+     retried subset — gallery slots and scene numbers depend on it;
+  4. cancellation leaves holes reported as `AbortError` failures, never as successes.
+  Before #263 a chunk was requested exactly once, so one bad chunk ended a 10-scene video with the
+  three images of the first chunk. Do not "fix" that by removing the flow's stop guard: the guard
+  also covers the gallery limit and the idle timeout.
+- **Load answers are retried; user mistakes are not.** `429` and `408` are load answers and are
+  always retried; `400/401/403/404/422` and `error.retryable === false` are permanent and are never
+  retried. Never let a bare `status >= 400 && status < 500` test swallow `429`.
+- **A model answer is not a load failure.** "The image-prompt model returned no new scene prompts"
+  (a duplicate/short batch) is marked `retryable = false`: the video keeps the images it already
+  rendered and finishes, instead of spending two more inferences on the same request and then
+  failing. Only transport/load failures are retried.
+- **`POST /api/image-prompts` answers load like `POST /api/image`.** An overload signal from the
+  prompt model returns **`503` + `Retry-After`** with
+  `{success:false, code:"IMAGE_PROMPT_MODEL_FAILED", kind:"overload", retryAfterMs, prompts:[]}`;
+  every other failure stays `502`; an aborted request is `transient` and must not arm the governor.
+  The handler feeds `sharedImageLoadGovernor.observeFailure(error)` so a text-fleet overload also
+  slows the next image call. Validation is unchanged and still runs before any paid inference
+  (`batch.count` 1–3, `batch.attempt` 0–2, one inference per attempt) — a malformed body is a
+  `400`, never a `502`.
+- **The browser must carry the hint through.** Every prompt-chunk call site (`requestBatchPrompts`
+  compact and legacy branches, the editor `request`, and the legacy `/api/image-batch` fallback)
+  attaches `status`, `kind` and `retryAfterMs` to the thrown error, and
+  `runProgressiveImagePipeline()`'s `requestNext()` waits on them (bounded at 15 s) instead of the
+  old fixed `500 * (attempt + 1)` ms. Retry counts stay 3, matching the `batch.attempt 0-2`
+  contract — do not widen `batch.attempt` without changing `sanitizeInput()` in the same commit.
+- **Pacing constants are derived, not duplicated.** `IMAGE_BATCH_CONCURRENCY` and
+  `IMAGE_BATCH_WAVE_INTERVAL_MS` (`image-batch.ts`) read `DEFAULT_GROUP_IMAGE_CONCURRENCY` and
+  `DEFAULT_GROUP_WINDOW_MS` (`image-queue.ts`). Never reintroduce a second, independently editable
+  `3`: a per-request wave that disagrees with the queue's own group budget is how a row "finishes"
+  early. Values stay **3 images / 3000 ms**, with `IMAGE_BATCH_MIN_COOLDOWN_MS = 250`.
+- **No new limits.** #263 adds no quota, no counter and no rate window. The only image ceilings are
+  RULE 31's `IMAGE_DAILY_LIMIT = 10000` per day and the per-row 3-per-3 s pacing. The isolate-wide
+  brake remains the adaptive governor (start 3, ceiling 6, halved on overload, jittered backoff).

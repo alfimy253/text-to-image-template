@@ -1,8 +1,8 @@
 /*
  * Account rows + plan labelling contract (worker level):
  *
- *  1. the free plan carries 70,000 AI images per day and the paid plan
- *     1,200, and every credits-aware route reports the same numbers;
+ *  1. every plan (free, paid_user, guest) carries the same 10,000 AI
+ *     images per day, and every credits-aware route reports that number;
  *  2. one row per account: user:<username> holds username, email and the
  *     plan (usertype), and email:<address> mirrors the same email + plan;
  *  3. a legacy row (no email / no usertype, no email index) is healed from
@@ -67,7 +67,7 @@ async function call(path, { method = "GET", body = null, kv } = {}) {
 	return { status: response.status, body: await response.json() };
 }
 
-test("the free plan allows 70,000 AI images per day, paid allows 1,200", async () => {
+test("every plan allows 10,000 AI images per day", async () => {
 	const kv = makeKv({
 		"user:ana": JSON.stringify({
 			username: "ana",
@@ -89,20 +89,20 @@ test("the free plan allows 70,000 AI images per day, paid allows 1,200", async (
 	assert.equal(body.success, true);
 
 	const plans = Object.fromEntries(body.plans.map((plan) => [plan.id, plan]));
-	assert.equal(plans.free.limits.images, 70000);
-	assert.equal(plans.paid_user.limits.images, 1200);
+	assert.equal(plans.free.limits.images, 10000);
+	assert.equal(plans.paid_user.limits.images, 10000);
 
 	const byName = Object.fromEntries(body.users.map((user) => [user.username, user]));
-	assert.equal(byName.ben.plan.limits.images, 70000);
-	assert.equal(byName.ben.remaining.images, 70000);
-	assert.equal(byName.ana.plan.limits.images, 1200);
-	assert.equal(byName.ana.remaining.images, 1200);
+	assert.equal(byName.ben.plan.limits.images, 10000);
+	assert.equal(byName.ben.remaining.images, 10000);
+	assert.equal(byName.ana.plan.limits.images, 10000);
+	assert.equal(byName.ana.remaining.images, 10000);
 
 	/* the listing is labelled: plan label + daily allowance per row */
 	assert.equal(byName.ben.planLabel, "Free");
-	assert.equal(byName.ben.planImages, 70000);
+	assert.equal(byName.ben.planImages, 10000);
 	assert.equal(byName.ana.planLabel, "Paid");
-	assert.equal(byName.ana.planImages, 1200);
+	assert.equal(byName.ana.planImages, 10000);
 });
 
 test("user:<username> and email:<address> describe the same account", async () => {
@@ -147,7 +147,7 @@ test("a legacy account row is healed from its unique username", async () => {
 	assert.ok(row, "the legacy account is listed");
 	assert.equal(row.email, "legacy@studio.test", "the email index fills in the row");
 	assert.equal(row.usertype, "free");
-	assert.equal(row.planImages, 70000);
+	assert.equal(row.planImages, 10000);
 	assert.equal(row.planLabel, "Free");
 
 	const healed = JSON.parse(kv.store.get("user:legacy"));
@@ -179,7 +179,7 @@ test("a plan change updates the user row and the email index together", async ()
 	assert.equal(status, 200);
 	assert.equal(body.success, true);
 	assert.equal(body.email, "dee@studio.test");
-	assert.equal(body.plan.limits.images, 1200);
+	assert.equal(body.plan.limits.images, 10000);
 
 	const user = JSON.parse(kv.store.get("user:dee"));
 	assert.equal(user.usertype, "paid_user");
@@ -207,7 +207,7 @@ test("signup writes the email + plan into both the user row and the index", asyn
 	assert.equal(body.success, true);
 	assert.equal(body.user.email, "eve@studio.test");
 	assert.equal(body.user.usertype, "free");
-	assert.equal(body.plan.limits.images, 70000);
+	assert.equal(body.plan.limits.images, 10000);
 
 	const user = JSON.parse(kv.store.get("user:eve"));
 	assert.equal(user.email, "eve@studio.test");

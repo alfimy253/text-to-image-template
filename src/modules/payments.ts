@@ -42,7 +42,7 @@ export interface SessionAccountUser {
 export const DEFAULT_PAYMENT_GATEWAY: PaymentGatewayConfig = {
 	gatewayName: "Local Payment Gateway",
 	gatewayDetails:
-		"Bank / E-Wallet Transfer\nAccount Name: Studio Billing\nAccount / Mobile Number: Set your local payment gateway details in the Site Configuration page.\nPlan Upgrade: Paid Plan (paid_user — 1,200 AI images/day)",
+		"Bank / E-Wallet Transfer\nAccount Name: Studio Billing\nAccount / Mobile Number: Set your local payment gateway details in the Site Configuration page.\nPlan Upgrade: Paid Plan (paid_user — 10,000 AI images/day)",
 	uploadInstructions:
 		"1. Send your payment using the Local Payment Gateway details listed above.\n" +
 		"2. Take a clear screenshot of the completed payment confirmation showing the transaction/reference number.\n" +

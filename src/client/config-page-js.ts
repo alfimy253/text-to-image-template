@@ -843,7 +843,7 @@ export const CONFIG_PAGE_SCRIPT = `
 						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
 							'<div>' +
 								'<h2>Guest Credits by IP (Today UTC+8)</h2>' +
-								'<p class="cfg-sub" style="margin-bottom:0;">Visitors on GET /free receive 10 AI images/day per masked IP. Reset clears today\u2019s counter for that IP.</p>' +
+								'<p class="cfg-sub" style="margin-bottom:0;">Visitors on GET /free receive 10,000 AI images/day per masked IP. Reset clears today\u2019s counter for that IP.</p>' +
 							'</div>' +
 							'<button type="button" class="cfg-btn" id="cfg-guests-refresh">Refresh Guest IPs</button>' +
 						'</div>' +
@@ -871,7 +871,7 @@ export const CONFIG_PAGE_SCRIPT = `
 				'<section class="cfg-panel" id="cfg-panel-accounts">' +
 					'<div class="cfg-card">' +
 						'<h2>Accounts Credits</h2>' +
-						'<p class="cfg-sub">Each row shows the account\u2019s email and the plan stored on its <code>user:&lt;username&gt;</code> record \u2014 Free: 70,000 AI images/day \u00b7 Paid (<code>paid_user</code>): 1,200 AI images/day. Click any row to load it into the form.</p>' +
+						'<p class="cfg-sub">Each row shows the account\u2019s email and the plan stored on its <code>user:&lt;username&gt;</code> record \u2014 every plan (Free, Paid <code>paid_user</code>, Guest): 10,000 AI images/day. Click any row to load it into the form.</p>' +
 						'<div style="display:grid;gap:10px;">' +
 							'<div>' +
 								'<label class="cfg-label" for="cfg-credit-user">Username</label>' +
@@ -880,8 +880,8 @@ export const CONFIG_PAGE_SCRIPT = `
 							'<div>' +
 								'<label class="cfg-label" for="cfg-credit-plan">Plan</label>' +
 								'<select id="cfg-credit-plan" class="cfg-select">' +
-									'<option value="free">Free \u2014 70,000 AI images / day</option>' +
-									'<option value="paid_user">Paid (paid_user) \u2014 1,200 AI images / day</option>' +
+									'<option value="free">Free \u2014 10,000 AI images / day</option>' +
+									'<option value="paid_user">Paid (paid_user) \u2014 10,000 AI images / day</option>' +
 								'</select>' +
 							'</div>' +
 							'<label style="display:flex;align-items:center;gap:8px;font-size:0.84rem;color:#cbd5e1;cursor:pointer;">' +
@@ -1293,7 +1293,7 @@ export const CONFIG_PAGE_SCRIPT = `
 		setWorkerActive(!workerActive);
 	});
 
-	/* 70000 -> "70,000" (plain-text safe; esc() still applied on output) */
+	/* 10000 -> "10,000" (plain-text safe; esc() still applied on output) */
 	function fmtNum(n) {
 		var value = Number(n);
 		if (!isFinite(value)) return String(n == null ? "" : n);
@@ -1301,7 +1301,7 @@ export const CONFIG_PAGE_SCRIPT = `
 	}
 
 	/*
-	 * A plan's human detail: "Free plan - 70,000 AI images / day".
+	 * A plan's human detail: "Free plan - 10,000 AI images / day".
 	 * Built from the API payload only, so the numbers on this page
 	 * always match what the credit meter enforces.
 	 */

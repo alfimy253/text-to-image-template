@@ -34,11 +34,13 @@ import {
 	handleRemovedImagePromptJobRoute
 } from "./modules/image-prompts";
 import {
+	classifyImageFailure,
 	handleImageBatch,
 	handleImageBinary,
 	IMAGE_ATTEMPT_TIMEOUT_MS,
 	type ImageModelResult,
 	runImageModel,
+	sharedImageLoadGovernor,
 	sharedImageTaskQueue
 } from "./modules/image-batch";
 import { handleVoiceover } from "./modules/voiceover";
@@ -576,15 +578,76 @@ export default {
 
 				}
 
-				return json(
+				/*
+				 * Server-load backoff: when the provider said it is
+				 * shedding load, answer 503 + Retry-After (with the
+				 * live concurrency ceiling) instead of a flat 500.
+				 * The caller can then wait exactly as long as the
+				 * fleet asked instead of guessing.
+				 */
+				const classification =
+					classifyImageFailure(error);
+
+				const overload =
+					classification.kind === "overload";
+
+				const loadHint =
+					classification.retryAfterMs ||
+					(overload
+						? sharedImageLoadGovernor.cooldownRemainingMs
+						: 0);
+
+				const failureBody: any = {
+					success: false,
+					error:
+						error instanceof Error
+							? error.message
+							: String(error),
+					kind:
+						classification.kind
+				};
+
+				if (loadHint > 0) {
+					failureBody.retryAfterMs =
+						loadHint;
+				}
+
+				if (overload) {
+					failureBody.load =
+						sharedImageLoadGovernor.snapshot();
+				}
+
+				const failureHeaders: any = {
+					"Content-Type":
+						"application/json",
+					"Cache-Control":
+						"no-store"
+				};
+
+				if (overload && loadHint > 0) {
+					failureHeaders["Retry-After"] =
+						String(
+							Math.max(
+								1,
+								Math.ceil(
+									loadHint / 1000
+								)
+							)
+						);
+				}
+
+				return new Response(
+					JSON.stringify(
+						failureBody
+					),
 					{
-						success: false,
-						error:
-							error instanceof Error
-								? error.message
-								: String(error)
-					},
-					500
+						status:
+							overload
+								? 503
+								: 500,
+						headers:
+							failureHeaders
+					}
 				);
 			}
 		}
@@ -2215,10 +2278,11 @@ export default {
 		 *                                optionally reset today's counts
 		 *
 		 * This is the DB operation behind the paid plan: writing
-		 * user:<name>.usertype = "paid_user" gives that account
-		 * 1,200 AI images per day on its next request; "free" puts it
-		 * back on 50. Both values share the same daily reset record,
-		 * so a plan change never loses today's usage.
+		 * user:<name>.usertype = "paid_user" applies the paid
+		 * (10,000 AI images/day) plan on its next request; "free"
+		 * applies the same daily ceiling. Both values share the same
+		 * daily reset record, so a plan change never loses today's
+		 * usage.
 		 */
 		if (
 			url.pathname ===
@@ -2409,7 +2473,7 @@ export default {
 										 * Flattened for the table: the
 										 * plan label and its daily
 										 * image allowance, so a row
-										 * reads "Free plan - 70,000 AI
+										 * reads "Free plan - 10,000 AI
 										 * images / day" without the
 										 * client re-deriving it.
 										 */
@@ -3493,11 +3557,13 @@ function authSessionCookie(
 /* =============================================================
  * DAILY CREDITS (KV-backed)
  * -------------------------------------------------------------
- * Plans:
+ * Plans (every plan shares IMAGE_DAILY_LIMIT = 10,000 AI
+ * images per day; the paid plan no longer has the *smaller*
+ * allowance it used to have, which read like a downgrade):
  *   free       unlimited videos, AI scripts and voiceovers,
- *              70,000 AI images per day
+ *              10,000 AI images per day
  *   paid_user  unlimited videos, AI scripts and voiceovers,
- *              1,200 AI images per day
+ *              10,000 AI images per day
  *
  * Usage lives in credits:<username> and rolls over at midnight
  * Asia/Taipei (UTC+8, no DST, so a fixed offset is exact).
@@ -3532,13 +3598,24 @@ const CREDIT_USERTYPES = [
 	"paid_user"
 ];
 
+/*
+ * ONE daily AI-image allowance for every actor (free, paid_user,
+ * guest). Server load is handled by concurrency + backoff in
+ * `modules/image-load.ts`, not by a per-window or per-plan quota,
+ * so the day limit is a fair-use ceiling and not a throttle:
+ * 10,000 images/day is far more than a person can click, and it
+ * stops a runaway loop from spending a whole month's budget.
+ */
+export const IMAGE_DAILY_LIMIT =
+	10000;
+
 const CREDIT_PLANS = {
 	free: {
 		id: "free",
 		label: "Free",
 		limits: {
 			videos: null,
-			images: 70000,
+			images: IMAGE_DAILY_LIMIT,
 			scripts: null,
 			voiceovers: null
 		}
@@ -3548,7 +3625,7 @@ const CREDIT_PLANS = {
 		label: "Paid",
 		limits: {
 			videos: null,
-			images: 1200,
+			images: IMAGE_DAILY_LIMIT,
 			scripts: null,
 			voiceovers: null
 		}
@@ -3559,12 +3636,14 @@ const CREDIT_PLANS = {
 /*
  * The freemium (no-account) plan used by GET /free.
  *
- * A visitor who has not signed in gets one metered slice of the
- * studio: 10 AI images per day, unlimited video projects, AI
- * scripts and voiceovers. Its counters use the same daily state
- * record as accounts, but are keyed by a hash of the visitor's
- * IP address (ipcredits:<hash>) instead of a username, so the
- * limit cannot be reset by clearing cookies.
+ * A visitor who has not signed in gets the same daily ceiling as
+ * an account (IMAGE_DAILY_LIMIT = 10,000 AI images per day) plus
+ * unlimited video projects, AI scripts and voiceovers. Its
+ * counters use the same daily state record as accounts, but are
+ * keyed by a hash of the visitor's IP address
+ * (ipcredits:<hash>) instead of a username, so the counter cannot
+ * be reset by clearing cookies. (It used to be 10/day, which made
+ * the freemium studio stop working after ten images.)
  *
  * GUEST_PLAN is deliberately NOT in CREDIT_USERTYPES: it is an
  * actor type, not something the settings page can assign to an
@@ -3575,7 +3654,7 @@ const GUEST_PLAN = {
 	label: "Guest",
 	limits: {
 		videos: null,
-		images: 10,
+		images: IMAGE_DAILY_LIMIT,
 		scripts: null,
 		voiceovers: null
 	}
@@ -4455,7 +4534,7 @@ async function guestCreditConsume(
 
 
 /*
- * 70000 -> "70,000". Every user-facing limit in this file goes
+ * 10000 -> "10,000". Every user-facing limit in this file goes
  * through here so a plan change updates the copy with it.
  */
 function creditFormatNumber(
@@ -4639,7 +4718,7 @@ async function imageCreditHooks(
 										CREDIT_PLANS.free
 											.limits.images
 									) +
-									" images per day. No account? Open /free for 10 images per day."
+									" images per day. No account? Open /free for the same 10,000 images per day."
 							},
 							401
 						)
@@ -5371,9 +5450,9 @@ async function handleAuthApi(
 				/*
 				 * Every new account starts on the free
 				 * plan: unlimited videos, AI scripts and
-				 * voiceovers plus 70,000 AI images per day.
+				 * voiceovers plus 10,000 AI images per day.
 				 * The settings page can promote it to
-				 * paid_user (1,200 images/day).
+				 * paid_user (the same 10,000 images/day).
 				 */
 				usertype:
 					"free",

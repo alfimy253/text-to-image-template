@@ -4,8 +4,20 @@ function createStudioOffloadRuntime(win) {
 	var nav = win.navigator || {}, queue = [], active = 0, mediaActive = 0, controlActive = 0, epoch = 0;
 	var capabilitiesPromise = null, retainedBytes = 0, urls = new Map(), controllers = new Set();
 	var channel = null, peers = new Map(), pumpTimer = null, sequence = 0;
+	/* Server-load backoff (bug fix #262): no media fan-out until this timestamp. */
+	var backoffUntil = 0, backoffMs = 0;
 	var tabId = Math.random().toString(36).slice(2) + Date.now().toString(36);
 	var sleep = function (ms) { return new Promise(function (resolve) { win.setTimeout(resolve, ms); }); };
+	function noteBackoff(ms) {
+		var wait = Number(ms); if (!(wait > 0)) return 0;
+		/* Cap at 20 s: a stale hint must never freeze the studio. */
+		wait = Math.min(20000, Math.round(wait));
+		backoffUntil = Math.max(backoffUntil, Date.now() + wait); backoffMs = wait;
+		/* #263: wake at least every 250 ms so Stop can reject queued media. */
+		if (queue.length && !pumpTimer) pumpTimer = win.setTimeout(pump, Math.min(wait, 250));
+		return wait;
+	}
+	function backoffRemaining() { var left = backoffUntil - Date.now(); return left > 0 ? left : 0; }
 	function abortError() { var e = new Error("Generation was cancelled"); e.name = "AbortError"; return e; }
 	function check(options, startEpoch) {
 		if ((startEpoch !== undefined && startEpoch !== epoch) ||
@@ -171,8 +183,12 @@ function createStudioOffloadRuntime(win) {
 		});
 		while (queue.length) {
 			// Reserve an independent text/control slot so three held images cannot block prompt lookahead.
+			var held = backoffRemaining();
 			var admitted = queue.findIndex(function (job) {
-				return job.options.kind === "control" ? controlActive < 1 : mediaActive < limits();
+				if (job.options.kind === "control") return controlActive < 1;
+				/* Server asked us to wait: keep media jobs queued, not in flight. */
+				if (held > 0) return false;
+				return mediaActive < limits();
 			});
 			if (admitted < 0) break;
 			var item = queue.splice(admitted, 1)[0];
@@ -187,7 +203,15 @@ function createStudioOffloadRuntime(win) {
 				});
 			})(item);
 		}
-		if (queue.length && !pumpTimer) pumpTimer = win.setTimeout(pump, 100);
+		if (queue.length && !pumpTimer) {
+			var wait = backoffRemaining();
+			/*
+			 * #263: never sleep a whole Retry-After here. A 20 s hold with no
+			 * re-check left a cancelled row looking "stuck generating"; polling
+			 * every 250 ms only costs a timer while jobs are actually queued.
+			 */
+			pumpTimer = win.setTimeout(pump, wait > 0 ? Math.max(50, Math.min(wait, 250)) : 100);
+		}
 	}
 	function schedule(work, options) {
 		options = options || {};
@@ -208,8 +232,18 @@ function createStudioOffloadRuntime(win) {
 		var data = await response.json().catch(function () { return {}; });
 		var error = new Error(data.error || ("Generation failed (HTTP " + response.status + ")"));
 		error.retryable = response.status >= 500 || response.status === 429;
-		error.status = response.status; throw error;
+		error.status = response.status;
+		/* #262: server-declared load cooldown (header wins, JSON is the fallback). */
+		var header = null;
+		try { header = response.headers && response.headers.get ? response.headers.get("Retry-After") : null; } catch (_) { header = null; }
+		var hint = Number(hintSeconds(header)) * 1000;
+		if (!(hint > 0) && data && Number(data.retryAfterMs) > 0) hint = Number(data.retryAfterMs);
+		error.retryAfterMs = hint > 0 ? hint : 0;
+		error.kind = data && data.kind ? String(data.kind) : "";
+		if (response.status === 503 && error.retryAfterMs > 0) noteBackoff(error.retryAfterMs);
+		throw error;
 	}
+	function hintSeconds(value) { var n = Number(value); return n > 0 ? n : 0; }
 	async function images(prompts, frame, options) {
 		options = options || {};
 		var g = group(options), results;
@@ -229,8 +263,9 @@ function createStudioOffloadRuntime(win) {
 						if (options.onImage) await options.onImage(blob, index);
 						return { ok: true, blob: blob, index: index };
 					} catch (error) {
+						if (error && error.retryAfterMs > 0) noteBackoff(error.retryAfterMs);
 						if (options.onError) options.onError(error, index);
-						return { ok: false, error: error, index: index };
+						return { ok: false, error: error, index: index, retryAfterMs: error && error.retryAfterMs || 0 };
 					}
 				}, g.options).catch(function (error) { return { ok: false, error: error, index: index }; });
 			}));
@@ -432,7 +467,7 @@ function createStudioOffloadRuntime(win) {
 				} catch (error) {
 					check(g.options);
 					if (error.retryable === false || attempt === 2) throw error;
-					await sleep(500 * (attempt + 1));
+					await sleep(error.retryAfterMs > 0 ? error.retryAfterMs : 500 * (attempt + 1));
 					// Restart all chunks on one fallback voice; never concatenate mixed containers/voices.
 				}
 			}
@@ -441,7 +476,8 @@ function createStudioOffloadRuntime(win) {
 	function retainUrl(url, blob) { var size = Number(blob && blob.size) || 0; retainedBytes -= urls.get(url) || 0; urls.set(url, size); retainedBytes += size; return url; }
 	function releaseUrl(url) { retainedBytes = Math.max(0, retainedBytes - (urls.get(url) || 0)); urls.delete(url); }
 	function dispose() {
-		epoch++; capabilitiesPromise = null; controllers.forEach(function (c) { c.abort(); }); controllers.clear();
+		epoch++; capabilitiesPromise = null; backoffUntil = 0; backoffMs = 0;
+		controllers.forEach(function (c) { c.abort(); }); controllers.clear();
 		if (channel) { try { channel.close(); } catch (_) {} channel = null; }
 		peers.clear(); pump();
 	}
@@ -450,7 +486,8 @@ function createStudioOffloadRuntime(win) {
 	return { capabilities: capabilities, images: images, voiceover: voiceover, compactIdea: compactIdea,
 		voiceChunks: voiceChunks, assembleAudio: assembleAudio, assembleBlobs: assembleBlobs, readBlob: readBlob,
 		timedFetch: timedFetch, mediaResponse: mediaResponse, scriptRequest: scriptRequest, jsonRequest: jsonRequest, schedule: schedule, limits: limits, retainUrl: retainUrl, releaseUrl: releaseUrl, dispose: dispose,
-		stats: function () { return { active: active, mediaActive: mediaActive, controlActive: controlActive, queued: queue.length, retainedBytes: retainedBytes, limit: limits() }; } };
+		stats: function () { return { active: active, mediaActive: mediaActive, controlActive: controlActive, queued: queue.length, retainedBytes: retainedBytes, limit: limits(), backoffMs: backoffRemaining() }; },
+		noteBackoff: noteBackoff, backoff: function () { return backoffRemaining(); } };
 }
 const studioOffload = createStudioOffloadRuntime(window);
 function createStudioObjectUrl(blob) { return studioOffload.retainUrl(URL.createObjectURL(blob), blob); }

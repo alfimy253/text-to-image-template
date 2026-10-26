@@ -426,7 +426,7 @@ test("generateImagePrompts falls back to 70B when primary returns empty 200 repl
 
 test("Worker credit exhaustion message on POST /api/image-batch and payment upload OOM / corrupted KV guards", async () => {
 	const kv = makeMemoryKv();
-	/* Exhaust the 10-image daily guest allowance on /free */
+	/* Spend some of the guest daily allowance on /free */
 	const exhaustRes = await worker.fetch(
 		new Request("https://studio.test/api/image-batch", {
 			method: "POST",
@@ -446,6 +446,18 @@ test("Worker credit exhaustion message on POST /api/image-batch and payment uplo
 		{}
 	);
 	await exhaustRes.text();
+
+	/*
+	 * #262: every plan (including the anonymous guest tier) now has a
+	 * 10,000 image/day ceiling, so one batch can no longer spend it down.
+	 * Seed the guest record at the ceiling instead, in the exact shape the
+	 * worker writes (`{ day, videos, images, scripts, voiceovers, ... }`).
+	 */
+	const guestKey = Array.from(kv._map.keys()).find((key) => key.startsWith("ipcredits:"));
+	assert.ok(guestKey, "the guest usage record exists after one batch");
+	const guestState = JSON.parse(kv._map.get(guestKey));
+	guestState.images = 10000;
+	kv._map.set(guestKey, JSON.stringify(guestState));
 
 	const blockedRes = await worker.fetch(
 		new Request("https://studio.test/api/image-batch", {

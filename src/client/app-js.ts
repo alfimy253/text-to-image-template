@@ -8183,7 +8183,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			const data = await response.json();
 			if (!response.ok || !data.success) {
 				const error = new Error(data.error || "Scene prompt request failed");
-				error.retryable = response.status >= 500 || response.status === 429 || response.ok; throw error;
+				error.retryable = response.status >= 500 || response.status === 429 || response.ok;
+				/* #263: keep the server's load answer so the retry can wait it out. */
+				error.status = response.status;
+				error.kind = data.kind || "";
+				error.retryAfterMs = Number(data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
+				throw error;
 			}
 			return data.prompts;
 		}
@@ -8273,6 +8278,153 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 	}
 
+	/*
+	 * #262: a load rejection is not the user's mistake. Turn the server's
+	 * Retry-After hint into one short, actionable sentence instead of leaking a
+	 * raw provider string (the browser already honours the wait itself).
+	 */
+	function describeImageLoadFailure(error) {
+		const retryMs = error && Number(error.retryAfterMs) > 0 ? Number(error.retryAfterMs) : 0;
+		const overload = Boolean(
+			error && (error.kind === "overload" || error.status === 503)
+		);
+		if (overload) {
+			const seconds = retryMs > 0 ? Math.max(1, Math.ceil(retryMs / 1000)) : 5;
+			return "The image server is busy right now \u2014 images pause for about " + seconds + " s and then continue.";
+		}
+		return (error && error.message) || "Image generation failed";
+	}
+
+	/*
+	 * #263: a retry wait that Stop can cut short. A plain setTimeout would keep
+	 * the row "generating" for up to 15 s after the user pressed Stop, which is
+	 * indistinguishable from a hung flow.
+	 */
+	function pauseWhileActive(ms, owner) {
+		return new Promise(function (resolve) {
+			const until = Date.now() + ms;
+			(function step() {
+				if (owner && owner.isCancelled && owner.isCancelled()) return resolve();
+				const left = until - Date.now();
+				if (left <= 0) return resolve();
+				setTimeout(step, Math.min(250, left));
+			})();
+		});
+	}
+
+	/*
+	 * #263: one chunk of binary images with bounded, load-aware retries.
+	 *
+	 * Before this, a chunk was requested exactly once. When every scene in the
+	 * *second* chunk hit a transient 5xx/overload (a busy fleet), the chunk
+	 * failed, the flow's stop reason was set and the pipeline threw — so a
+	 * 10-scene video "finished" with the 3 images of the first chunk. Now:
+	 *
+	 *   - already-delivered scenes are never re-requested (no duplicates, no
+	 *     double billing, no replay of an ambiguous paid image);
+	 *   - only the failed scenes are asked again, up to a bounded number of rounds;
+	 *   - the wait honours the server's Retry-After hint, then falls back to
+	 *     exponential backoff, so a burst of rows does not retry in lockstep;
+	 *   - permanent answers (400/401/403/404/422) are not retried at all; 429,
+	 *     408 and every 5xx are load/transient answers and are retried.
+	 *
+	 * onImage(blob, index) still receives the ORIGINAL prompt index, even for
+	 * a retried subset, because gallery slots and scene numbers depend on it.
+	 */
+	async function requestImageChunk(prompts, frame, options) {
+		const owner = options || {};
+		const rounds = Math.max(1, Number(owner.attempts) || 3);
+		const results = new Array(prompts.length);
+		let pending = prompts.map(function (_, index) { return index; });
+		let hintMs = 0;
+
+		for (let round = 1; round <= rounds && pending.length; round++) {
+			if (owner.isCancelled && owner.isCancelled()) break;
+			const batch = pending.slice();
+			const perAttempt = {
+				isCancelled: owner.isCancelled,
+				priority: owner.priority,
+				setController: owner.setController,
+				clearController: owner.clearController,
+				onImage: function (blob, localIndex) {
+					const index = batch[localIndex];
+					if (typeof index !== "number") return;
+					if (owner.onImage) return owner.onImage(blob, index);
+				},
+				onError: function (error, localIndex) {
+					const index = batch[localIndex];
+					if (typeof index !== "number") return;
+					if (owner.onError) owner.onError(error, index);
+				}
+			};
+			let batchResults;
+			try {
+				batchResults = await studioOffload.images(
+					batch.map(function (index) { return prompts[index]; }),
+					frame || {},
+					perAttempt
+				);
+			} catch (roundError) {
+				/*
+				 * The media scheduler rejects (rather than resolving every scene)
+				 * when the flow is cancelled mid-round. That is a Stop, not a
+				 * transport failure: leave the round's scenes unset so they are
+				 * reported as cancellations below.
+				 */
+				const cancelled =
+					(roundError && roundError.name === "AbortError") ||
+					(owner.isCancelled && owner.isCancelled());
+				if (cancelled) break;
+				throw roundError;
+			}
+
+			const retry = [];
+			batchResults.forEach(function (result, slot) {
+				const index = batch[slot];
+				/* Report the scene index, not the slot inside this retry round. */
+				if (result) result.index = index;
+				if (result && result.ok) {
+					results[index] = result;
+					return;
+				}
+				const error = result && result.error;
+				const hint = error && Number(error.retryAfterMs) > 0 ? Number(error.retryAfterMs) : 0;
+				if (hint > hintMs) hintMs = hint;
+				const status = error && Number(error.status);
+				/*
+				 * Credits/auth/validation will not change on a retry, but 429 and
+				 * 408 are load answers ("come back in a moment") and must be
+				 * retried, which is why they are excluded here.
+				 */
+				const permanent =
+					(status >= 400 && status < 500 && status !== 429 && status !== 408) ||
+					(error && error.retryable === false);
+				if (permanent || round === rounds) {
+					results[index] = result || { ok: false, index: index, error: error };
+					return;
+				}
+				retry.push(index);
+			});
+
+			pending = retry;
+			if (!pending.length) break;
+			const backoff = Math.min(
+				Math.max(hintMs, 800 * Math.pow(2, round - 1)),
+				15000
+			);
+			await pauseWhileActive(backoff, owner);
+		}
+
+		/* Cancelled rounds leave holes: report them as failures, never as success. */
+		return prompts.map(function (_, index) {
+			if (results[index]) return results[index];
+			const cancelled = new Error("Image generation was cancelled");
+			cancelled.name = "AbortError";
+			cancelled.retryable = false;
+			return { ok: false, index: index, error: cancelled };
+		});
+	}
+
 	/* Step 3: one bounded image chunk through the shared browser stream queue. */
 	async function requestBatchImages(
 		row,
@@ -8280,7 +8432,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	) {
 		if ((await studioOffload.capabilities()).binaryImages) {
 			const images = [];
-			const results = await studioOffload.images(prompts, {
+			const results = await requestImageChunk(prompts, {
 				resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value
 			}, {
 				isCancelled: function () { return Boolean(row.stopRequested); },
@@ -8350,10 +8502,24 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 								}
 
-								throw new Error(
-									(data && data.error) ||
-									("Image batch failed (HTTP " + resp.status + ")")
-								);
+								const batchError =
+									new Error(
+										(data && data.error) ||
+										("Image batch failed (HTTP " + resp.status + ")")
+									);
+
+								batchError.status =
+									resp.status;
+
+								batchError.kind =
+									(data && data.kind) || "";
+
+								batchError.retryAfterMs =
+									Number(data && data.retryAfterMs) > 0
+										? Number(data.retryAfterMs)
+										: 0;
+
+								throw batchError;
 
 							}
 
@@ -10400,6 +10566,10 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		window.startUnprocessedRows =
 			startUnprocessedRows;
 
+		/* Session #263: the load-aware image chunk retrier (tests / debugging). */
+		window.__REQUEST_IMAGE_CHUNK =
+			requestImageChunk;
+
 		window.startUnprocessedBatchRows =
 			startUnprocessedBatchRows;
 
@@ -12361,10 +12531,9 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		}
 
 		/*
-		 * Daily image credits (70,000 on the free plan,
-		 * 1,200 on paid_user). The worker enforces
-		 * the real limit; this pre-check just avoids
-		 * a doomed pair of requests.
+		 * Daily image credits (10,000 per day on every plan).
+		 * The worker enforces the real limit; this pre-check
+		 * just avoids a doomed pair of requests.
 		 */
 		if (
 			creditState &&
@@ -12381,7 +12550,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				creditPlanLabel() +
 				" plan). Credits renew at midnight (UTC+8)." +
 				(PLAN_MODE === "freemium"
-					? " Create a free account for 70,000 images per day."
+					? " Create a free account for 10,000 images per day."
 					: "");
 			if (statusEl) {
 				statusEl.textContent = quotaMessage;
@@ -12947,7 +13116,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	/*
 	 * Which URL served this shell (RULE 21):
 	 *   ""          the landing page at /
-	 *   "freemium"  /free  (no account, 10 images/day per IP)
+	 *   "freemium"  /free  (no account, 10,000 images/day per IP)
 	 *   "studio"    /studio (free_user or paid_user)
 	 *   "paid"      /paid  (paid_user only)
 	 * The worker injects window.__PLAN_MODE before this script.
@@ -12995,8 +13164,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			'<button type="button" class="auth-close" id="auth-close" aria-label="Close">&times;</button>' +
 			'<div class="auth-title" id="auth-title">\ud83c\udfac YouTube Vibe Studio</div>' +
 			'<div class="auth-sub" id="auth-sub">Sign in to use the studio</div>' +
-			'<div class="auth-plan-note">Free plan: 70,000 AI images every day \u00b7 unlimited videos, AI scripts and voiceovers.<br>Paid plan (paid_user): 1,200 AI images every day.</div>' +
-			'<div class="auth-guest-note">No account? <a href="/free">Open the free studio</a> \u2014 10 AI images a day, counted per IP address.</div>' +
+			'<div class="auth-plan-note">Every plan: 10,000 AI images every day \u00b7 unlimited videos, AI scripts and voiceovers. Server load is balanced automatically, so bursts queue instead of failing.</div>' +
+			'<div class="auth-guest-note">No account? <a href="/free">Open the free studio</a> \u2014 the same 10,000 AI images a day, counted per IP address.</div>' +
 			'<div class="auth-error" id="auth-error" role="alert"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
 			'<label for="auth-email">Email</label>' +
@@ -13988,17 +14157,16 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	//  /image/gen returns 429 + the counters when the daily
 	//  image allowance is spent.
 	//
-	//  free       unlimited videos / AI scripts / voiceovers,
-	//             70,000 AI images per day
-	//  paid_user  unlimited videos / AI scripts / voiceovers,
-	//             1,200 AI images per day
+	//  every plan unlimited videos / AI scripts / voiceovers,
+	//             10,000 AI images per day (free, paid_user
+	//             and the anonymous guest tier)
 	//  Every counter renews at midnight Asia/Taipei (UTC+8).
 	// =========================================================
 
 	let creditState =
 		null;
 
-	/* 70000 -> "70,000" so a big allowance stays readable */
+	/* 10000 -> "10,000" so a big allowance stays readable */
 	function creditFormatNumber(
 		value
 	) {
@@ -14049,7 +14217,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			creditState.plan &&
 			creditState.plan.limits
 			? creditState.plan.limits.images
-			: 70000;
+			: 10000;
 
 	}
 
@@ -14399,8 +14567,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		);
 
 		/*
-		 * A guest can turn the 10/day IP allowance into a
-		 * 70,000/day account at any time.
+		 * A guest can turn the anonymous IP allowance into a
+		 * named account at any time (same 10,000/day ceiling).
 		 */
 		if (
 			creditState &&
@@ -14421,7 +14589,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				"credit-signup";
 
 			cta.textContent =
-				"Create a free account \u2014 70,000 images/day";
+				"Create a free account \u2014 10,000 images/day";
 
 			cta.addEventListener(
 				"click",
@@ -16257,7 +16425,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			/*
 			 * /free is the freemium entry: no account
 			 * needed, boot the studio with the IP-keyed
-			 * guest credits (10 images per day).
+			 * guest credits (10,000 images per day).
 			 */
 			if (PLAN_MODE === "freemium") {
 				authAccess = "freemium";
@@ -17853,6 +18021,10 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						if (!response.ok || !data.success) {
 							const error = new Error((data && data.error) || ("Scene prompt request failed (HTTP " + response.status + ")"));
 							error.retryable = response.status >= 500 || response.status === 429 || response.ok;
+							error.status = response.status;
+							/* #263: a load answer carries the wait the server wants. */
+							error.kind = (data && data.kind) || "";
+							error.retryAfterMs = Number(data && data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
 							throw error;
 						}
 						return data.prompts;
@@ -17887,7 +18059,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		const seq = typeof ownerFlowSeq === "number" ? ownerFlowSeq : project._imageFlowSeq;
 		const stale = function () { return Boolean(project._deleted || !project._imageFlowActive || project._imageFlowSeq !== seq); };
 		try {
-			const results = await studioOffload.images(prompts, {}, {
+			const results = await requestImageChunk(prompts, {}, {
 				isCancelled: stale,
 				priority: function () { return project.el && project.el.contains(document.activeElement) ? 2 : 0; },
 				setController: function (controller) { if (!stale()) project._imageBatchController = controller; else controller.abort(); },
@@ -17915,7 +18087,15 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				project._aiImageFailures = (project._aiImageFailures || 0) + results.filter(function (r) { return !r.ok; }).length;
 				if (results.every(function (r) { return !r.ok; }) || results.some(function (r) {
 					return r.error && [401,403,429].indexOf(r.error.status) >= 0;
-				})) project._imageFlowStopReason = "The image batch could not complete; delivered images were kept.";
+				})) {
+					/* Prefer the load hint: "server busy, retry in N s" beats a raw AiError. */
+					const firstFailure = results.find(function (r) { return !r.ok && r.error; });
+					project._imageFlowStopReason = results.some(function (r) {
+						return r.error && (r.error.kind === "overload" || r.error.status === 503);
+					})
+						? describeImageLoadFailure(firstFailure && firstFailure.error)
+						: "The image batch could not complete; delivered images were kept.";
+				}
 			}
 		} catch (error) {
 			if (!stale()) project._imageFlowStopReason = "Image generation was interrupted; delivered images were kept.";

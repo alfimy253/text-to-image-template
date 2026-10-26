@@ -31,10 +31,26 @@ import {
 	EventLoopCpuSerializer,
 	ImageTaskQueue,
 	sharedImageTaskQueue,
-	DEFAULT_GLOBAL_IMAGE_CONCURRENCY
+	DEFAULT_GLOBAL_IMAGE_CONCURRENCY,
+	DEFAULT_GROUP_IMAGE_CONCURRENCY,
+	DEFAULT_GROUP_WINDOW_MS
 } from "./image-queue";
 
+import {
+	ImageLoadGovernor,
+	ImageLoadFailureKind,
+	IMAGE_LOAD_MAX_ATTEMPTS,
+	classifyImageFailure,
+	sharedImageLoadGovernor
+} from "./image-load";
+
 export { ImageTaskQueue, sharedImageTaskQueue, DEFAULT_GLOBAL_IMAGE_CONCURRENCY };
+export {
+	ImageLoadGovernor,
+	sharedImageLoadGovernor,
+	classifyImageFailure,
+	IMAGE_LOAD_MAX_ATTEMPTS
+};
 
 export const IMAGE_MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0";
 
@@ -46,16 +62,44 @@ export const IMAGE_BATCH_MAX_PROMPTS = 20;
  * window (`IMAGE_BATCH_CONCURRENCY = 3` every `IMAGE_BATCH_WAVE_INTERVAL_MS = 3000` ms,
  * with at least `IMAGE_BATCH_MIN_COOLDOWN_MS` of breathing room between waves)
  * so neither the Worker isolate nor the browser decoder suffers CPU spikes.
+ * Server load (as opposed to per-row fairness) is handled by the adaptive
+ * governor in `image-load.ts`, never by widening or removing this wave.
  */
-export const IMAGE_BATCH_CONCURRENCY = 3;
-export const IMAGE_BATCH_WAVE_INTERVAL_MS = 3000;
+/*
+ * Session #263: the per-row wave is now *derived* from the queue's own group
+ * budget instead of being a second, independently editable 3. The two used to
+ * be able to drift apart (server pacing 3/3 s, `IMAGE_BATCH_*` saying something
+ * else), which is exactly the class of bug where a row "finishes" early.
+ */
+export const IMAGE_BATCH_CONCURRENCY = DEFAULT_GROUP_IMAGE_CONCURRENCY;
+export const IMAGE_BATCH_WAVE_INTERVAL_MS = DEFAULT_GROUP_WINDOW_MS;
 export const IMAGE_BATCH_MIN_COOLDOWN_MS = 250;
 
 /* Classifier-free guidance scale for 20-step SDXL base style & anatomy adherence. */
 export const IMAGE_GUIDANCE_SCALE = 7.5;
 
-/* Attempts per image (1 try + 1 retry) before the scene is reported failed. */
+/*
+ * Attempts per image for ordinary (non-load) failures: one try + one retry,
+ * matching the historical "two bounded attempts" contract so a genuine model
+ * error never multiplies paid provider calls.
+ */
 export const IMAGE_BATCH_ATTEMPTS = 2;
+
+/*
+ * Attempts allowed when the provider explicitly signals load (429 / 503 /
+ * "capacity" / "overloaded"). Those calls usually produced no image at all, so
+ * a longer, backed-off ladder is both safe and the only way a burst survives a
+ * busy fleet. Fatal errors (bad model slug, rejected prompt) still stop after
+ * the first attempt.
+ */
+export const IMAGE_OVERLOAD_ATTEMPTS = IMAGE_LOAD_MAX_ATTEMPTS;
+
+/*
+ * Total wall time one scene may spend retrying (backoff sleeps included).
+ * Keeps a scene inside the browser's 165 s image deadline even when the fleet
+ * is shedding load, instead of pinning a queue slot until the client gives up.
+ */
+export const IMAGE_RETRY_BUDGET_MS = 45000;
 
 /* Per-attempt ceiling. SDXL usually answers in 3-12 s. */
 export const IMAGE_ATTEMPT_TIMEOUT_MS = 75000;
@@ -504,9 +548,17 @@ export async function runImageModel(
 		seed?: number;
 		fallbackModels?: readonly string[];
 		signal?: AbortSignal;
+		/**
+		 * Load governor fed by every provider call (success widens the pool
+		 * after a healthy streak, overload narrows it and starts a cooldown).
+		 * Defaults to the shared isolate governor; `null` opts out.
+		 */
+		governor?: ImageLoadGovernor | null;
 	} = {}
 ): Promise<ImageModelResult> {
 	if (!env || !env.AI) throw new Error("AI binding not configured");
+	/* Captured once: the guard above narrows the binding for every closure below. */
+	const ai = env.AI;
 	const reqWidth = options.width || IMAGE_WIDTH;
 	const reqHeight = options.height || IMAGE_HEIGHT;
 	const modelPrompt = condensePromptForModel(prompt, IMAGE_MODEL_PROMPT_MAX_CHARS);
@@ -543,13 +595,39 @@ export async function runImageModel(
 
 	const checkAbort = () => { if (options.signal?.aborted) throw createBatchAbortError(); };
 	checkAbort();
+
+	const governor =
+		options.governor === undefined ? sharedImageLoadGovernor : options.governor;
+
+	/*
+	 * Every provider call — primary, dimension-healed retry and each fallback —
+	 * passes through here, so the shared governor sees the real fleet pressure
+	 * (including fallback chains) instead of only the outer batch result.
+	 */
+	const runProvider = async (
+		slug: string,
+		input: Record<string, unknown>
+	): Promise<ImageModelResult> => {
+		checkAbort();
+		try {
+			const raw = await ai.run(slug, input);
+			const decoded = await decodeValidated(raw);
+			if (governor) governor.noteSuccess();
+			return decoded;
+		} catch (error) {
+			if (governor && !(error instanceof Error && error.name === "AbortError")) {
+				governor.observeFailure(error);
+			}
+			throw error;
+		}
+	};
+
 	let primaryError: unknown = null;
 	try {
-		const raw = await env.AI.run(
+		return await runProvider(
 			IMAGE_MODEL,
 			buildSdxlInput(reqWidth, reqHeight, 20, IMAGE_GUIDANCE_SCALE)
 		);
-		return await decodeValidated(raw);
 	} catch (err) {
 		primaryError = err;
 	}
@@ -558,11 +636,10 @@ export async function runImageModel(
 	const safeDims = sdxlSafeDimensions(reqWidth, reqHeight);
 	if (safeDims.width !== reqWidth || safeDims.height !== reqHeight) {
 		try {
-			const raw = await env.AI.run(
+			return await runProvider(
 				IMAGE_MODEL,
 				buildSdxlInput(safeDims.width, safeDims.height, 20, IMAGE_GUIDANCE_SCALE)
 			);
-			return await decodeValidated(raw);
 		} catch (alignedErr) {
 			primaryError = primaryError || alignedErr;
 		}
@@ -588,8 +665,7 @@ export async function runImageModel(
 							steps: 4
 						}
 					: buildSdxlInput(safeDims.width, safeDims.height, 4);
-			const raw = await env.AI.run(fbSlug, fbInput);
-			return await decodeValidated(raw);
+			return await runProvider(fbSlug, fbInput);
 		} catch {
 			/* Keep primaryError as the authoritative error if all fallbacks fail. */
 		}
@@ -638,6 +714,15 @@ function createBatchAbortError(): Error {
 	return err;
 }
 
+/*
+ * Retry delay when no governor is attached (opt-out / unit tests): the same
+ * exponential shape without the adaptive state, honouring a provider hint.
+ */
+function delayFromHint(retryAfterMs: number | null, attempt: number): number {
+	if (typeof retryAfterMs === "number" && retryAfterMs > 0) return retryAfterMs;
+	return Math.min(8000, 500 * Math.pow(2, Math.max(0, attempt - 1)));
+}
+
 function abortableRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
 	if (signal && signal.aborted) {
 		return Promise.reject(createBatchAbortError());
@@ -667,14 +752,48 @@ function abortableRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
+/** A scene that finally failed, with the load hint used for client backoff. */
+export interface ImageSceneFailure {
+	ok: false;
+	error: string;
+	/** `"overload"`, `"transient"` or `"fatal"`. */
+	kind: ImageLoadFailureKind;
+	/** How long the caller should wait before asking again (ms), or null. */
+	retryAfterMs: number | null;
+}
+
+/*
+ * One scene, with server-load aware retries.
+ *
+ * The old policy was "two attempts, 500 ms apart". That is the worst possible
+ * answer to a provider shedding load: every scene in every request retries at
+ * almost the same moment. Now:
+ *
+ *   - fatal errors (retired model slug, rejected prompt) stop immediately and
+ *     never cost a second inference;
+ *   - load/transient errors retry with exponential backoff + jitter
+ *     (`governor.retryDelayMs`), honouring a provider `Retry-After` when given;
+ *   - retries, backoff sleeps included, must fit in `IMAGE_RETRY_BUDGET_MS`,
+ *     so a scene cannot pin a queue slot past the browser's own deadline;
+ *   - the failure result carries `kind` + `retryAfterMs` so the HTTP layer can
+ *     answer `503` + `Retry-After` (binary route) or stream the hint to the
+ *     browser (batch route), which then backs off instead of hammering.
+ */
 async function generateOneWithRetry(
 	env: AiEnv,
 	prompt: string,
 	frame?: ImageFrame,
-	signal?: AbortSignal
-): Promise<{ ok: true; result: ImageModelResult } | { ok: false; error: string }> {
+	signal?: AbortSignal,
+	options: { governor?: ImageLoadGovernor | null } = {}
+): Promise<{ ok: true; result: ImageModelResult } | ImageSceneFailure> {
+	const governor =
+		options.governor === undefined ? sharedImageLoadGovernor : options.governor;
+	const retryDeadline = Date.now() + IMAGE_RETRY_BUDGET_MS;
 	let lastError = "Image generation failed";
-	for (let attempt = 1; attempt <= IMAGE_BATCH_ATTEMPTS; attempt++) {
+	let lastKind: ImageLoadFailureKind = "transient";
+	let lastRetryAfterMs: number | null = null;
+
+	for (let attempt = 1; attempt <= IMAGE_OVERLOAD_ATTEMPTS; attempt++) {
 		if (signal && signal.aborted) {
 			throw createBatchAbortError();
 		}
@@ -685,7 +804,8 @@ async function generateOneWithRetry(
 					seed: Math.floor(Math.random() * 2147483647),
 					/* The row's own Resolution + Orientation columns. */
 					width: frame ? frame.width : IMAGE_WIDTH,
-					height: frame ? frame.height : IMAGE_HEIGHT
+					height: frame ? frame.height : IMAGE_HEIGHT,
+					governor
 				}),
 				IMAGE_ATTEMPT_TIMEOUT_MS,
 				"Image generation"
@@ -698,13 +818,45 @@ async function generateOneWithRetry(
 			) {
 				throw createBatchAbortError();
 			}
+			const classification = classifyImageFailure(error);
 			lastError = errorMessage(error);
-			if (attempt < IMAGE_BATCH_ATTEMPTS) {
-				await abortableRetryDelay(500 * attempt, signal);
-			}
+			lastKind = classification.kind;
+			lastRetryAfterMs = classification.retryAfterMs;
+
+			/* A prompt/model problem cannot be fixed by spending another call. */
+			if (!classification.retryable) break;
+			/*
+			 * Load failures get the long ladder; everything else keeps the
+			 * historical two-attempt budget.
+			 */
+			const attemptsAllowed =
+				classification.kind === "overload"
+					? IMAGE_OVERLOAD_ATTEMPTS
+					: IMAGE_BATCH_ATTEMPTS;
+			if (attempt >= attemptsAllowed) break;
+
+			const remaining = retryDeadline - Date.now();
+			if (remaining <= 0) break;
+
+			const backoff = governor
+				? governor.retryDelayMs(attempt, classification.retryAfterMs)
+				: delayFromHint(classification.retryAfterMs, attempt);
+			const delay = Math.min(backoff, remaining);
+			if (!(delay > 0)) break;
+			await abortableRetryDelay(delay, signal);
 		}
 	}
-	return { ok: false, error: lastError };
+
+	if (lastKind === "overload" && !lastRetryAfterMs && governor) {
+		const cooldown = governor.cooldownRemainingMs;
+		if (cooldown > 0) lastRetryAfterMs = cooldown;
+	}
+	return {
+		ok: false,
+		error: lastError,
+		kind: lastKind,
+		retryAfterMs: lastRetryAfterMs
+	};
 }
 
 let batchGroupSequence = 0;
@@ -814,7 +966,13 @@ export async function handleImageBatch(
 					maxGroupConcurrency: IMAGE_BATCH_CONCURRENCY,
 					groupWindowLimit: IMAGE_BATCH_CONCURRENCY,
 					groupWindowMs: waveIntervalMs,
-					minCooldownMs
+					minCooldownMs,
+					/*
+					 * A per-request pacing queue still reads the shared load
+					 * governor, so its own `DEFAULT_GLOBAL_IMAGE_CONCURRENCY`
+					 * cannot multiply the fleet-wide ceiling.
+					 */
+					governor: sharedImageLoadGovernor
 				})
 			: sharedImageTaskQueue);
 
@@ -909,6 +1067,9 @@ export async function handleImageBatch(
 	const work = (async () => {
 		let generated = 0;
 		let failed = 0;
+		/* Load-shedding counters, reported to the browser in `done`. */
+		let overloadFailures = 0;
+		let loadHintMs: number | null = null;
 		let summary = reservation.summary;
 
 		await emit({
@@ -922,6 +1083,8 @@ export async function handleImageBatch(
 			resolution: frame.resolution,
 			orientation: frame.orientation,
 			model: IMAGE_MODEL,
+			/* Live server-load ceiling + cooldown, so the UI can explain a slow start. */
+			load: sharedImageLoadGovernor.snapshot(),
 			credits: summary
 		});
 
@@ -979,11 +1142,25 @@ export async function handleImageBatch(
 								}
 							} else {
 								failed++;
+								const failure = outcome as ImageSceneFailure;
+								if (failure.kind === "overload") overloadFailures++;
+								const hint =
+									typeof failure.retryAfterMs === "number" && failure.retryAfterMs > 0
+										? failure.retryAfterMs
+										: null;
+								if (hint && (!loadHintMs || hint > loadHintMs)) loadHintMs = hint;
 								await emit({
 									type: "image",
 									index: sceneIndex,
 									ok: false,
-									error: outcome.error
+									error: failure.error,
+									/*
+									 * The browser uses these to back off (and to show
+									 * "server busy, retrying in Ns") instead of firing
+									 * the next scene into an overloaded fleet.
+									 */
+									kind: failure.kind,
+									retryAfterMs: hint
 								});
 							}
 						},
@@ -1050,6 +1227,9 @@ export async function handleImageBatch(
 				failed,
 				skipped: Math.max(0, requested - count),
 				ms: Date.now() - startedAt,
+				overloadFailures,
+				retryAfterMs: loadHintMs,
+				load: sharedImageLoadGovernor.snapshot(),
 				credits: summary
 			});
 			console.info("[image-batch] done", {
@@ -1057,6 +1237,9 @@ export async function handleImageBatch(
 				count,
 				generated,
 				failed,
+				overloadFailures,
+				loadLimit: sharedImageLoadGovernor.limit,
+				loadCooldownMs: sharedImageLoadGovernor.cooldownRemainingMs,
 				ms: Date.now() - startedAt
 			});
 			await writeChain;
@@ -1086,6 +1269,43 @@ export async function handleImageBatch(
 }
 
 /** #261: single binary image; browser owns fan-out. Never replay on transport ambiguity. */
+/*
+ * Failure response for one binary image.
+ *
+ * Load failures answer `503 Service Unavailable` with a `Retry-After` header
+ * (rounded up to whole seconds) so the browser's scheduler, any proxy and the
+ * user all get one honest signal: come back in N seconds. Everything else
+ * stays a plain `502` with the provider message.
+ */
+function imageFailureResponse(
+	error: string,
+	kind: ImageLoadFailureKind,
+	retryAfterMs: number | null,
+	credits: unknown,
+	governor: ImageLoadGovernor | null = sharedImageLoadGovernor
+): Response {
+	const overload = kind === "overload";
+	const load = governor ? governor.snapshot() : null;
+	const hintMs =
+		typeof retryAfterMs === "number" && retryAfterMs > 0
+			? retryAfterMs
+			: load
+				? load.cooldownRemainingMs
+				: 0;
+	const headers: Record<string, string> = { "Cache-Control": "no-store" };
+	if (overload && hintMs > 0) {
+		headers["Retry-After"] = String(Math.max(1, Math.ceil(hintMs / 1000)));
+	}
+	const body: Record<string, unknown> = { error, kind };
+	if (overload) body.load = load;
+	if (hintMs > 0) body.retryAfterMs = hintMs;
+	body.credits = credits;
+	return new Response(JSON.stringify(body), {
+		status: overload ? 503 : 502,
+		headers: { "Content-Type": "application/json", ...headers }
+	});
+}
+
 export async function handleImageBinary(
 	request: Request, env: AiEnv, credits: ImageCreditHooks
 ): Promise<Response> {
@@ -1110,7 +1330,17 @@ export async function handleImageBinary(
 			signal: request.signal,
 			execute: () => generateOneWithRetry(env, prompts[0], frame, request.signal)
 		});
-		if (!outcome.ok) throw new Error(outcome.error);
+		if (!outcome.ok) {
+			/* Refund before answering: a scene that never rendered is never billed. */
+			const summary = await credits.refund(1);
+			const failure = outcome as ImageSceneFailure;
+			return imageFailureResponse(
+				failure.error,
+				failure.kind,
+				failure.retryAfterMs,
+				summary
+			);
+		}
 		if (request.signal.aborted) throw createBatchAbortError();
 		return new Response(outcome.result.bytes as BodyInit, {
 			headers: { "Content-Type": outcome.result.mime, "Cache-Control": "no-store",
@@ -1118,6 +1348,15 @@ export async function handleImageBinary(
 		});
 	} catch (error) {
 		const summary = await credits.refund(1);
-		return json({ error: request.signal.aborted ? "Image request cancelled" : errorMessage(error), credits: summary }, request.signal.aborted ? 499 : 502);
+		if (request.signal.aborted || (error as Error)?.name === "AbortError") {
+			return json({ error: "Image request cancelled", credits: summary }, 499);
+		}
+		const classification = classifyImageFailure(error);
+		return imageFailureResponse(
+			errorMessage(error),
+			classification.kind,
+			classification.retryAfterMs,
+			summary
+		);
 	}
 }
