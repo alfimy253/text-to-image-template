@@ -44,6 +44,22 @@ import {
 	sharedImageTaskQueue
 } from "./modules/image-batch";
 import { handleVoiceover } from "./modules/voiceover";
+import {
+	applyRelayCors,
+	handleRelayRoutes,
+	invalidateRelayCache,
+	relayPreflightResponse,
+	relayRuntimeOf,
+	relayTicketIdentity,
+	RELAY_TICKET_HEADER,
+	withRelayedAi
+} from "./modules/api-relay";
+import {
+	handleLlmRoutes,
+	promptFromAiInput,
+	readLlmConfig,
+	runOpenRouterCompletion
+} from "./modules/llm-openrouter";
 
 /*
  * =============================================================
@@ -161,8 +177,67 @@ function applyTheme(html: string, theme: string) {
 export default {
 	async fetch(request, env, ctx: any) {
 
+		/*
+		 * The relay layer wraps the whole router:
+		 *
+		 *   - a CORS preflight for an AI path is answered before routing,
+		 *   - every other answer passes through `applyRelayCors`, which only
+		 *     grants cross-origin reads to a caller holding a signed ticket,
+		 *   - `handleRequest` below is the original single-file router, with
+		 *     `env` upgraded so `env.AI` is the rotation runtime.
+		 */
+		const preflight =
+			relayPreflightResponse(request);
+
+		if (preflight) {
+			return preflight;
+		}
+
+		const response =
+			await handleRequest(
+				request,
+				env,
+				ctx
+			);
+
+		return await applyRelayCors(request, response, env);
+
+	}
+
+};
+
+
+/*
+ * The original router. `env` is upgraded inside: `withRelayedAi()` replaces
+ * only the AI binding, so every existing `env.AI.run()` call site (images,
+ * prompt writing, script, seo-plan, voiceover, the demo route) participates in
+ * the rotation pool without being rewritten.
+ */
+async function handleRequest(request: any, env: any, ctx: any) {
+
 		const url =
 			new URL(request.url);
+
+		/*
+		 * API rotation (src/modules/api-relay.ts): a lazily-evaluated pool of
+		 * this Worker plus the up-to-3 backup Worker URLs registered on the
+		 * settings page. Nothing happens here until a route touches env.AI.
+		 *
+		 * `baseEnv` keeps the untouched bindings: the inbound
+		 * `POST /api/relay/ai` endpoint MUST run on the raw binding, otherwise a
+		 * relayed call would be relayed again (and a pool member that also
+		 * received the request could bounce it back).
+		 */
+		const baseEnv = env;
+
+		/*
+		 * A request carrying a rotation ticket was deliberately sent here by
+		 * the browser, so this member runs the inference instead of relaying
+		 * it back to the Worker the studio just left.
+		 */
+		env = withRelayedAi(env, request, {
+			preferLocal: !!request.headers.get(RELAY_TICKET_HEADER)
+		});
 
 		// Capability negotiation is non-billable. Old clients keep legacy routes.
 		if (request.method === "GET" && url.pathname === "/api/pipeline-capabilities") {
@@ -184,7 +259,9 @@ export default {
 			 * render at once.
 			 */
 			return new Response(JSON.stringify({ version: 261, binaryImages: true, chunkVoiceover: true,
-				singleAttemptScript: true, compactPrompts: true, imageChunks: 2, imageSlots: 6 }), {
+				singleAttemptScript: true, compactPrompts: true, imageChunks: 2, imageSlots: 6,
+				/* API rotation across backup Workers (src/modules/api-relay.ts). */
+				apiRelay: 1 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});
 		}
@@ -741,6 +818,79 @@ export default {
 		const MAX_RENDER_JOBS =
 			10;
 
+		/* =====================================================
+		 * API ROTATION ROUTES (src/modules/api-relay.ts)
+		 *
+		 * GET  /api/relay/pool     pool + short-lived client ticket (studio)
+		 * GET  /api/relay/status   pool, health and probe results (admin)
+		 * GET/POST /api/relay/config  rotation policy (POST = password)
+		 * POST /api/relay/test     force a fresh probe of every backup
+		 * GET  /api/relay/ping     "I am a relay-capable deployment"
+		 * POST /api/relay/ai       one model call, executed here (token)
+		 *
+		 * Dispatched with the RAW bindings (`baseEnv`): a relayed call must
+		 * never be relayed again.
+		 * ===================================================== */
+
+		const relayResponse =
+			await handleRelayRoutes(
+				request,
+				url,
+				baseEnv,
+				{
+					selfOrigin: url.origin,
+					configPassword: CONFIG_PASSWORD,
+					identity: () => creditSessionUser(request, baseEnv),
+					guest: () => hasFreemiumCookie(request),
+					waitUntil: (promise) => {
+						if (ctx && typeof ctx.waitUntil === "function") {
+							ctx.waitUntil(promise);
+						}
+					}
+				}
+			);
+
+		if (relayResponse) {
+			return relayResponse;
+		}
+
+		/* =====================================================
+		 * LLM PROVIDER ROTATION ADMIN ROUTES (bug fix #271)
+		 *
+		 * GET  /api/llm/status   providers, model, key source, health
+		 * GET  /api/llm/config   rotation policy (the key is never echoed)
+		 * POST /api/llm/config   save the policy (settings password)
+		 * POST /api/llm/test     probe OpenRouter and/or Cloudflare now
+		 *
+		 * The user-facing raw call (`POST /api/llm/generate`) lives with the
+		 * other AI routes below, because it is billed and authenticated.
+		 * ===================================================== */
+
+		const llmResponse =
+			await handleLlmRoutes(
+				request,
+				url,
+				baseEnv,
+				{
+					configPassword: CONFIG_PASSWORD,
+					/* Runs through the rotation runtime, so the probe also
+					   exercises the backup-worker pool. */
+					cloudflareProbe: async (probePrompt: string) => {
+						const result: any = await env.AI.run(
+							SCRIPT_MODEL,
+							{ prompt: probePrompt, max_tokens: 64, temperature: 0.2 }
+						);
+						return result && typeof result.response === "string"
+							? result.response
+							: JSON.stringify(result || "");
+					}
+				}
+			);
+
+		if (llmResponse) {
+			return llmResponse;
+		}
+
 		// INSTRUCT model for the
 		// narration script. The old
 		// FREE llama-3.1-8b-instruct
@@ -1186,6 +1336,236 @@ export default {
 			return handleRemovedImagePromptJobRoute(
 				imagePromptJobMatch[1]
 			);
+
+		}
+
+		/* =====================================================
+		 * RAW INSTRUCT-MODEL API (bug fix #271)
+		 *
+		 * POST /api/llm/generate  {prompt, maxTokens?, temperature?,
+		 *                          systemPrompt?, provider?}
+		 *   -> {success, text, provider, model, ms}
+		 *
+		 * This is the second version of the AI API the studio's own text
+		 * routes use: the SAME single model + prompt contract, answered by
+		 * whichever provider the rotation picked (Cloudflare Workers AI or
+		 * OpenRouter). `provider` may force one of them; without it the
+		 * rotation decides, so an external caller gets the same spreading
+		 * the studio does.
+		 *
+		 * Auth follows the studio: a signed-in account, or the `yvs_free`
+		 * guest cookie when KV is bound (401 otherwise). Scripts are
+		 * unlimited on every plan, so the call does not consume an image
+		 * credit - it only records the same `scripts` usage counter.
+		 * ===================================================== */
+		if (
+			request.method === "POST" &&
+			url.pathname === "/api/llm/generate"
+		) {
+
+			const llmUser =
+				env && env.KV_BINDING
+					? await creditSessionUser(request, baseEnv)
+					: null;
+			const llmGuest =
+				!llmUser && hasFreemiumCookie(request);
+
+			if (
+				env &&
+				env.KV_BINDING &&
+				!llmUser &&
+				!llmGuest
+			) {
+
+				return json(
+					{
+						success: false,
+						error:
+							"Sign in or open /free to use the LLM API"
+					},
+					401
+				);
+
+			}
+
+			const llmBody: any =
+				await request.json().catch(() => null);
+
+			if (!llmBody || typeof llmBody !== "object" || Array.isArray(llmBody)) {
+				return json({ success: false, error: "Expected a JSON object" }, 400);
+			}
+
+			const llmSettings = await readLlmConfig(baseEnv);
+			const llmPrompt = promptFromAiInput(llmBody).trim();
+
+			if (!llmPrompt) {
+				return json({ success: false, error: "Missing prompt" }, 400);
+			}
+
+			if (llmPrompt.length > llmSettings.maxPromptChars) {
+				return json(
+					{
+						success: false,
+						error:
+							"Prompt too long (max " +
+							llmSettings.maxPromptChars +
+							" chars)"
+					},
+					413
+				);
+			}
+
+			const forced = String(llmBody.provider || "").trim().toLowerCase();
+			if (forced && forced !== "cloudflare" && forced !== "openrouter") {
+				return json(
+					{ success: false, error: "Provider must be cloudflare or openrouter" },
+					400
+				);
+			}
+
+			const startedAt = Date.now();
+
+			try {
+
+				if (forced === "openrouter") {
+					/* One provider, explicitly. */
+					const result = await runOpenRouterCompletion({
+						env: baseEnv,
+						config: llmSettings,
+						prompt: llmPrompt,
+						maxTokens: Number(llmBody.maxTokens ?? llmBody.max_tokens) || undefined,
+						temperature: Number(llmBody.temperature) || undefined,
+						systemPrompt:
+							typeof llmBody.systemPrompt === "string"
+								? llmBody.systemPrompt
+								: undefined,
+						signal: request.signal
+					});
+					return json({
+						success: true,
+						text: result.text,
+						provider: "openrouter",
+						model: result.model,
+						ms: result.ms
+					});
+				}
+
+				if (forced === "cloudflare") {
+					/* Bypass the provider rotation but stay in the Worker pool. */
+					const result: any = await env.AI.run(
+						SCRIPT_MODEL,
+						{
+							prompt: llmPrompt,
+							max_tokens:
+								Math.min(
+									Number(llmBody.maxTokens ?? llmBody.max_tokens) || 1024,
+									8192
+								),
+							temperature:
+								Number.isFinite(Number(llmBody.temperature))
+									? Number(llmBody.temperature)
+									: 0.7
+						}
+					);
+					const text =
+						result && typeof result.response === "string"
+							? result.response
+							: typeof result === "string"
+								? result
+								: "";
+					return json({
+						success: true,
+						text,
+						provider: "cloudflare",
+						model: SCRIPT_MODEL,
+						ms: Date.now() - startedAt
+					});
+				}
+
+				/* No explicit provider: the same rotation the studio uses. */
+				const result: any = await env.AI.run(
+					SCRIPT_MODEL,
+					{
+						prompt: llmPrompt,
+						max_tokens:
+							Math.min(
+								Number(llmBody.maxTokens ?? llmBody.max_tokens) || 1024,
+								8192
+							),
+						temperature:
+							Number.isFinite(Number(llmBody.temperature))
+								? Number(llmBody.temperature)
+								: 0.7
+					}
+				);
+				const text =
+					result && typeof result.response === "string"
+						? result.response
+						: typeof result === "string"
+							? result
+							: "";
+				const runtime = relayRuntimeOf(env);
+				return json({
+					success: true,
+					text,
+					provider:
+						result && result.provider
+							? String(result.provider)
+							: "cloudflare",
+					model:
+						result && result.model
+							? String(result.model)
+							: SCRIPT_MODEL,
+					ms: Date.now() - startedAt,
+					rotation: runtime ? runtime.stats() : undefined
+				});
+
+			}
+			catch (error) {
+
+				return json(
+					{
+						success: false,
+						error:
+							error instanceof Error
+								? error.message
+								: String(error)
+					},
+					502
+				);
+
+			}
+			finally {
+
+				/* Usage is informational and never blocks the call. */
+				try {
+
+					if (env && env.KV_BINDING) {
+
+						if (llmUser) {
+							await creditConsume(
+								env,
+								llmUser.username,
+								llmUser.usertype,
+								"scripts"
+							);
+						}
+						else if (llmGuest) {
+							await guestCreditConsume(
+								env,
+								await guestCreditIdentity(request),
+								"scripts"
+							);
+						}
+
+					}
+
+				}
+				catch (usageError) {
+					/* best effort */
+				}
+
+			}
 
 		}
 
@@ -2287,6 +2667,14 @@ export default {
 					)
 				);
 
+				/*
+				 * The rotation pool is cached for ~20 s inside every isolate;
+				 * drop it here so a newly registered backup starts receiving
+				 * model calls on the next request instead of the next cache
+				 * expiry.
+				 */
+				invalidateRelayCache();
+
 				return json(
 					{
 						success: true,
@@ -3065,9 +3453,7 @@ export default {
 				status: 404
 			}
 		);
-	}
-
-};
+}
 
 
 // =============================================================
@@ -4217,6 +4603,25 @@ async function authSessionFromRequest(
 	request: any,
 	env: any
 ): Promise<any> {
+
+	/*
+	 * Browser rotation ticket (src/modules/api-relay.ts).
+	 *
+	 * A request the studio rotated to a backup Worker carries no session
+	 * cookie for that origin, so the signed ticket is its credential. Tickets
+	 * are scoped to the AI paths (`RELAY_AI_PATHS`): `readRelayTicket()`
+	 * returns null for every other route, so a ticket can never authorize an
+	 * account, settings, payment, CMS or render route.
+	 */
+	const relayed =
+		await relayTicketIdentity(
+			request,
+			env
+		);
+
+	if (relayed) {
+		return relayed;
+	}
 
 	if (!env || !env.KV_BINDING) {
 		return null;

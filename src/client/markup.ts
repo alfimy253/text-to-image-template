@@ -842,6 +842,7 @@ export const PAGE_MARKUP = `
 	</div><!-- #studio-app -->
 
 <script>
+__API_ROTATION_JS__
 __APP_JS____TEMPLATE_COMPOSER_JS__
 </script>
 

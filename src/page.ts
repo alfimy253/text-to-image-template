@@ -19,6 +19,7 @@ import { prompts } from "./prompts";
 import { PAGE_MARKUP } from "./client/markup";
 import { APP_CSS } from "./client/styles";
 import { APP_JS } from "./client/app-js";
+import { API_ROTATION_JS } from "./client/api-rotation";
 import { TEMPLATE_COMPOSER_JS } from "./client/template-composer-js";
 
 let CACHED_HTML: string | null =
@@ -35,6 +36,10 @@ export function createHTML(): string {
 			.replace(
 				"__APP_CSS__",
 				() => APP_CSS
+			)
+			.replace(
+				"__API_ROTATION_JS__",
+				() => API_ROTATION_JS
 			)
 			.replace(
 				"__APP_JS__",
