@@ -2468,3 +2468,78 @@ Canonical implementation, limits, verification and rollout: [bug-fix-session-261
   slides. Pacing (3 images / 3 s per row), the shared governor
   (`IMAGE_LOAD_START_CONCURRENCY = 3`, `IMAGE_LOAD_MAX_CONCURRENCY = 6`), `IMAGE_DAILY_LIMIT`
   and the 20-image ceiling are unchanged.
+
+## RULE 33 — API rotation across the registered backup Workers (2026-10-26)
+
+The settings page has always been able to store up to three backup Worker URLs
+(`config:workers`); before Session #265 nothing ever contacted them. They are now a **live API
+pool** with the primary deployment. Full detail: `api-relay-rotation.md`.
+
+- **The pool is `[this Worker, ...registered backups]`.** Members come from KV `config:workers`,
+  the comma-separated `RELAY_WORKERS` environment variable, or `resolveRelayPool({envWorkers})`.
+  A URL is accepted only when it is `http(s)` and ≤ 500 chars (the same rule
+  `POST /api/config/workers` enforces), and a URL whose origin is already in the pool (including
+  our own) is dropped. With no backups the pool is `[this Worker]` and every call behaves exactly
+  as it did before. The pool and the policy are cached **20 s / 15 s per isolate** and both caches
+  are dropped when the URLs or the policy are saved. No new binding, Durable Object or migration is
+  introduced.
+- **Only inference rotates.** `withRelayedAi(env, request)` replaces the `AI` binding with a relay
+  runtime, so every existing `env.AI.run()` call — `/image/:i`, `/image/gen`, `/api/image`,
+  `/api/image-batch`, `/api/image-prompts`, `/api/script`, `/api/seo-plan`, `/api/voiceover`,
+  `/tts` — participates. Accounts, sessions and cookies, credit and guest counters, payments, CMS,
+  themes, the render queue and all HTML routes stay on the primary Worker, always. A backup Worker
+  never sees a session cookie: a rotated browser request carries a signed ticket instead.
+- **A relayed call is one signed HTTP hop.** `POST <member>/api/relay/ai` with
+  `x-yvs-relay-token` = `base64url({v:1,k:"ai",exp,m,d}).HMAC-SHA256`, signed with `RELAY_SECRET`
+  (built-in fallback allowed; the admin page warns when it is used), valid **120 s**, bound to the
+  model slug and a SHA-256 of the body. The endpoint executes the model **once, locally, and never
+  relays again** — the single rule that makes A → B → A impossible. Body ≤ 512 KiB, result ≤
+  24 MiB, model slugs must match `@scope/name`. `stream` is stripped: a relayed call returns one
+  complete answer (`{ok:true,result}` JSON or raw bytes), which the existing decoders accept
+  unchanged.
+- **Failover never costs a paid call twice.** Overload, timeout, dropped connection, a member
+  without an `AI` binding and an explicit `transient` relay error move to the next member and
+  finally to local; local is always appended as the last resort even beyond `maxAttempts`.
+  An `AbortError` (the caller cancelled) stops immediately, and a definitive model answer (bad
+  slug, rejected prompt, `x-yvs-relay-error-kind: model`) is surfaced without trying elsewhere.
+- **Health is per member and bounded.** Consecutive transient failures open a circuit for
+  `cooldown × 2^(n-1)`, base 30 s, ceiling 5 min; a success closes it and updates a moving latency.
+  Cooling members are moved to the end of the candidate list, never removed, so a fully cooled pool
+  still answers. A request that arrives with a rotation ticket runs locally (`preferLocal`), so a
+  deliberately chosen backup never bounces the inference back to the primary it just came from. Strategies: `round-robin` (default), `least-pending`, `weighted` (`localWeight`
+  0–10). `maxAttempts` is 1–5 (default 3) and `timeoutMs` is 5–240 s (default 100 s). Everything is
+  isolate memory: a load-shedding heuristic, never a quota.
+- **Browser rotation is opt-in by ticket, never by cookie.** `GET /api/relay/pool` answers the
+  pool (only backups that passed `GET /api/relay/ping` in the last 60 s) and, when rotation and
+  `clientRotation` are enabled and the caller is signed in or an allowed guest, a **180 s ticket**
+  scoped to `RELAY_AI_PATHS`. `src/client/api-rotation.ts` wraps `window.fetch`: allow-listed AI
+  paths round-robin over pool members (local included) with `credentials:"omit"` and the ticket
+  header; transport errors and `502/503/504` fall through to the next member and finally to local,
+  and a failed member is skipped for 30 s. Every other path — settings, payments, CMS, auth,
+  render jobs, HTML, the pool route itself — is never rewritten.
+- **A ticket is not a session and not an administrator.** `authSessionFromRequest()` accepts a
+  ticket only for a path inside `RELAY_AI_PATHS`; `/api/session`, `/api/config/*`,
+  `/api/payments/*`, CMS and account routes always ignore it. Guest tickets (`g:true`) never
+  produce an account identity.
+- **CORS grants nothing by itself.** Only the AI paths answer a preflight (`204`, `Allow-Origin: *`,
+  `Allow-Headers: content-type, x-yvs-relay-ticket`). The actual cross-origin response gains
+  `Access-Control-Allow-Origin` only when a valid ticket is present, so a third-party page neither
+  reads AI output nor drains the public `/image/gen` route. Same-origin traffic is untouched
+  (no `Origin`/no ticket ⇒ no header changes).
+- **The admin surface is password-gated where it mutates.** `POST /api/relay/config` and
+  `POST /api/relay/test` require the settings password (same `pw` field as every other settings
+  mutation); `GET /api/relay/status`, `GET /api/relay/config` and the existing
+  `GET /api/config/workers` are public exactly as before, so the status route adds no disclosure.
+  The **General & Themes → API Rotation & Backup Worker Pool** card shows each member's state,
+  success/failure counts, average latency, probe result and last error, and exposes Refresh Status,
+  Test Endpoints Now and Save Rotation.
+- **Background worker mode is unaffected.** The rotation endpoints are ordinary Worker routes:
+  a settings tab that is polling `/api/worker/poll` and rendering jobs locally keeps rotating the
+  studio's AI paths, and no render/queue route is ever relayed.
+- **Tests.** `tests/api-relay.test.mjs` (34 cases) covers pool resolution/deduplication, all three
+  strategies, the circuit breaker, token signing/expiry/tamper/kind/path scoping, the `env.AI`
+  upgrade, JSON and binary results, failover chains, the invalid-slug guard, the compute endpoint's
+  401/413/502/503 answers and body-digest binding, password-gated config/test, pool verification and
+  ticket issuance, preflight/read CORS rules, ticket-authenticated `/api/image`, ticket refusal on
+  account/settings/payment routes, a real two-Worker A → B relay, the no-loop guarantee and the
+  browser rotation/fallback wrapper. `npm test` must stay green.

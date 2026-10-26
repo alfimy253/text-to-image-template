@@ -353,6 +353,51 @@ export const CONFIG_PAGE_SCRIPT = `
 		white-space: nowrap;
 	}
 
+	/* API rotation (backup worker pool) */
+	.cfg-relay-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+		gap: 12px;
+		margin-top: 12px;
+	}
+	.cfg-relay-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 0.84rem;
+		color: #e5e7eb;
+	}
+	.cfg-relay-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: #3b82f6; }
+	.cfg-relay-table {
+		width: 100%;
+		border-collapse: collapse;
+		margin-top: 12px;
+		font-size: 0.8rem;
+	}
+	.cfg-relay-table th,
+	.cfg-relay-table td {
+		text-align: left;
+		padding: 7px 9px;
+		border-bottom: 1px solid #252f42;
+		vertical-align: top;
+	}
+	.cfg-relay-table th { color: #9ca3af; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.72rem; }
+	.cfg-relay-table code { color: #e5e7eb; word-break: break-all; }
+	.cfg-relay-state {
+		display: inline-block;
+		padding: 2px 8px;
+		border-radius: 999px;
+		font-size: 0.7rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	.cfg-relay-state.ready { background: rgba(34,197,94,0.16); color: #4ade80; }
+	.cfg-relay-state.busy { background: rgba(59,130,246,0.16); color: #60a5fa; }
+	.cfg-relay-state.cooling { background: rgba(245,158,11,0.16); color: #fbbf24; }
+	.cfg-relay-state.offline { background: rgba(239,68,68,0.16); color: #f87171; }
+	.cfg-relay-hint { margin-top: 10px; font-size: 0.78rem; color: #9ca3af; line-height: 1.5; }
+
 	/* Accounts Credits: one row per account, email + plan detail */
 	.cfg-user-row {
 		align-items: flex-start;
@@ -810,7 +855,7 @@ export const CONFIG_PAGE_SCRIPT = `
 					'<div class="cfg-two-col">' +
 						'<div class="cfg-card">' +
 							'<h2>Registered Background Workers</h2>' +
-							'<p class="cfg-sub">Optional URLs of extra worker instances (up to 3).</p>' +
+							'<p class="cfg-sub">Up to 3 extra deployments of this same app. They join the API rotation pool below: inference is spread across them, while accounts, sessions, credits, payments and CMS stay on this Worker.</p>' +
 							'<div style="display:grid;gap:8px;">' +
 								'<input id="cfg-worker-url-1" class="cfg-input" type="url" placeholder="Worker 1 URL (https://your-worker.workers.dev)" />' +
 								'<input id="cfg-worker-url-2" class="cfg-input" type="url" placeholder="Worker 2 URL (optional)" />' +
@@ -833,6 +878,48 @@ export const CONFIG_PAGE_SCRIPT = `
 							'</div>' +
 							'<div class="cfg-log" id="cfg-worker-log">Worker idle. Click "Start Worker" to begin polling /api/worker/poll.</div>' +
 						'</div>' +
+					'</div>' +
+
+					/* API ROTATION: the pool built from the URLs above */
+					'<div class="cfg-card" style="margin-top:20px;" id="cfg-relay-card">' +
+						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+							'<div>' +
+								'<h2>API Rotation &amp; Backup Worker Pool</h2>' +
+								'<p class="cfg-sub" style="margin-bottom:0;">Every AI route (<code>/api/image</code>, <code>/api/image-batch</code>, <code>/api/image-prompts</code>, <code>/api/script</code>, <code>/api/seo-plan</code>, <code>/api/voiceover</code>, <code>/image/gen</code>, <code>/tts</code>) can run on this Worker or on one of the registered backups above. Rotation spreads the Workers AI neuron bill and the inference load; accounts, credits, payments and CMS always stay on this Worker.</p>' +
+							'</div>' +
+							'<button type="button" class="cfg-btn" id="cfg-relay-refresh">Refresh Status</button>' +
+						'</div>' +
+						'<div class="cfg-relay-grid">' +
+							'<label class="cfg-relay-row"><input type="checkbox" id="cfg-relay-enabled" /> Rotate inference across the pool</label>' +
+							'<label class="cfg-relay-row"><input type="checkbox" id="cfg-relay-client" /> Rotate whole AI requests in the browser</label>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-relay-strategy">Rotation strategy</label>' +
+								'<select class="cfg-input" id="cfg-relay-strategy">' +
+									'<option value="round-robin">Round robin (even spread)</option>' +
+									'<option value="least-pending">Least pending (busiest Worker skipped)</option>' +
+									'<option value="weighted">Weighted (favour this Worker)</option>' +
+								'</select>' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-relay-weight">This Worker\u2019s weight</label>' +
+								'<input class="cfg-input" id="cfg-relay-weight" type="number" min="0" max="10" step="1" value="1" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-relay-attempts">Max endpoints tried per call</label>' +
+								'<input class="cfg-input" id="cfg-relay-attempts" type="number" min="1" max="5" step="1" value="3" />' +
+							'</div>' +
+							'<div>' +
+								'<label class="cfg-label" for="cfg-relay-timeout">Relay timeout (seconds)</label>' +
+								'<input class="cfg-input" id="cfg-relay-timeout" type="number" min="5" max="240" step="5" value="100" />' +
+							'</div>' +
+						'</div>' +
+						'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">' +
+							'<button type="button" class="cfg-btn cfg-btn-primary" id="cfg-relay-save">Save Rotation</button>' +
+							'<button type="button" class="cfg-btn" id="cfg-relay-test">Test Endpoints Now</button>' +
+						'</div>' +
+						'<div class="cfg-msg" id="cfg-relay-msg"></div>' +
+						'<div id="cfg-relay-status"></div>' +
+						'<p class="cfg-relay-hint">Set the same <code>RELAY_SECRET</code> environment variable on every Worker in the pool so relay tokens cannot be forged. Without it the built-in fallback secret is used (reported below).</p>' +
 					'</div>' +
 
 				'</section>' +
@@ -1083,6 +1170,7 @@ export const CONFIG_PAGE_SCRIPT = `
 			if (panel) panel.classList.toggle("active", id === tabName);
 		});
 		if (unlockedPw) {
+			if (tabName === "general") { loadRelayConfig(); loadRelayStatus(false); }
 			if (tabName === "guests") loadGuests();
 			if (tabName === "plans") loadCreditUsers();
 			if (tabName === "accounts") loadCreditUsers();
@@ -1209,6 +1297,161 @@ export const CONFIG_PAGE_SCRIPT = `
 			.catch(function() {
 				msg.className = "cfg-msg err";
 				msg.textContent = "Network error.";
+			});
+	});
+
+	// --- API ROTATION (src/modules/api-relay.ts) ---
+	/*
+	 * The pool is this Worker + the URLs saved in the card above. The panel
+	 * shows the live health of every member (a failing backup is circuit
+	 * broken for 30 s -> 5 min and skipped, never retried on every request)
+	 * and writes the rotation policy to the config:relay KV key with the same admin
+	 * password the other mutations use.
+	 */
+	function relayMsg(text, kind) {
+		var el = document.getElementById("cfg-relay-msg");
+		if (!el) return;
+		el.className = "cfg-msg" + (kind ? " " + kind : "");
+		el.textContent = text || "";
+	}
+
+	function relayStateBadge(row) {
+		var state = row.state || "ready";
+		if (row.reachable === false) state = "offline";
+		return '<span class="cfg-relay-state ' + esc(state) + '">' + esc(state) + '</span>';
+	}
+
+	function renderRelayStatus(data) {
+		var box = document.getElementById("cfg-relay-status");
+		if (!box) return;
+		var rows = (data && data.endpoints) || [];
+		if (!rows.length) {
+			box.innerHTML = '<div class="cfg-relay-hint">No pool members yet \u2014 save a worker URL above.</div>';
+			return;
+		}
+		var html = '<table class="cfg-relay-table"><thead><tr>' +
+			'<th>Endpoint</th><th>State</th><th>Served</th><th>Avg ms</th><th>Probe</th><th>Last error</th>' +
+			'</tr></thead><tbody>';
+		rows.forEach(function(row) {
+			var served = (row.successes || 0) + "/" + (row.failures || 0);
+			var avg = row.ewmaMs ? String(Math.round(row.ewmaMs)) : (row.latencyMs ? String(row.latencyMs) : "\u2014");
+			var probe = row.local ? "local" : (row.reachable === true ? "OK " + (row.probeMs || 0) + " ms"
+				: row.reachable === false ? "unreachable" : "not probed");
+			html += '<tr>' +
+				'<td><code>' + esc(row.local ? "This Worker" : row.url) + '</code>' +
+					(row.coolingUntil && row.coolingUntil > Date.now() ? '<div class="cfg-relay-hint">cooling until ' + esc(new Date(row.coolingUntil).toLocaleTimeString()) + '</div>' : '') +
+				'</td>' +
+				'<td>' + relayStateBadge(row) + '</td>' +
+				'<td>' + esc(served) + '</td>' +
+				'<td>' + esc(avg) + '</td>' +
+				'<td>' + esc(probe) + (row.probeError && row.reachable === false ? ' <span class="cfg-relay-hint">' + esc(row.probeError) + '</span>' : '') + '</td>' +
+				'<td>' + esc(row.lastError || "\u2014") + '</td>' +
+			'</tr>';
+		});
+		html += '</tbody></table>';
+		if (data && data.usingDefaultSecret) {
+			html += '<div class="cfg-relay-hint" style="color:#fbbf24;">RELAY_SECRET is not set \u2014 the built-in fallback signs relay tokens. Set the same RELAY_SECRET on every Worker to make them unforgeable.</div>';
+		}
+		box.innerHTML = html;
+	}
+
+	function loadRelayConfig() {
+		fetch("/api/relay/config", { credentials: "same-origin" })
+			.then(function(r) { return r.ok ? r.json() : null; })
+			.then(function(d) {
+				if (!d || !d.config) return;
+				var enabled = document.getElementById("cfg-relay-enabled");
+				var client = document.getElementById("cfg-relay-client");
+				var strategy = document.getElementById("cfg-relay-strategy");
+				var weight = document.getElementById("cfg-relay-weight");
+				var attempts = document.getElementById("cfg-relay-attempts");
+				var timeout = document.getElementById("cfg-relay-timeout");
+				if (enabled) enabled.checked = d.config.enabled !== false;
+				if (client) client.checked = d.config.clientRotation !== false;
+				if (strategy) strategy.value = d.config.strategy || "round-robin";
+				if (weight) weight.value = String(d.config.localWeight == null ? 1 : d.config.localWeight);
+				if (attempts) attempts.value = String(d.config.maxAttempts || 3);
+				if (timeout) timeout.value = String(Math.round((d.config.timeoutMs || 100000) / 1000));
+			})
+			.catch(function() {});
+	}
+
+	function loadRelayStatus(probe) {
+		var box = document.getElementById("cfg-relay-status");
+		if (box && !box.innerHTML) box.innerHTML = '<div class="cfg-relay-hint">Loading pool status\u2026</div>';
+		fetch("/api/relay/status" + (probe ? "?probe=1" : ""), { credentials: "same-origin" })
+			.then(function(r) { return r.ok ? r.json() : null; })
+			.then(function(d) {
+				if (!d) { relayMsg("Could not read the relay status.", "err"); return; }
+				renderRelayStatus(d);
+			})
+			.catch(function() { relayMsg("Network error while reading relay status.", "err"); });
+	}
+
+	document.getElementById("cfg-relay-refresh").addEventListener("click", function() {
+		loadRelayConfig();
+		loadRelayStatus(true);
+	});
+
+	document.getElementById("cfg-relay-test").addEventListener("click", function() {
+		var btn = document.getElementById("cfg-relay-test");
+		btn.disabled = true;
+		relayMsg("Probing every registered worker\u2026");
+		fetch("/api/relay/test", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pw: unlockedPw })
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				btn.disabled = false;
+				if (res.ok && res.body && res.body.success) {
+					renderRelayStatus(res.body);
+					var up = (res.body.endpoints || []).filter(function(e) { return e.reachable !== false; }).length;
+					var total = (res.body.endpoints || []).length;
+					relayMsg(up + " of " + total + " endpoints answered. Rotation uses the healthy ones.", "ok");
+				} else {
+					relayMsg((res.body && res.body.error) || "Probe failed.", "err");
+				}
+			})
+			.catch(function() {
+				btn.disabled = false;
+				relayMsg("Network error while probing.", "err");
+			});
+	});
+
+	document.getElementById("cfg-relay-save").addEventListener("click", function() {
+		var btn = document.getElementById("cfg-relay-save");
+		btn.disabled = true;
+		relayMsg("Saving rotation policy\u2026");
+		var payload = {
+			pw: unlockedPw,
+			enabled: !!document.getElementById("cfg-relay-enabled").checked,
+			clientRotation: !!document.getElementById("cfg-relay-client").checked,
+			strategy: document.getElementById("cfg-relay-strategy").value,
+			localWeight: Number(document.getElementById("cfg-relay-weight").value),
+			maxAttempts: Number(document.getElementById("cfg-relay-attempts").value),
+			timeoutMs: Number(document.getElementById("cfg-relay-timeout").value) * 1000
+		};
+		fetch("/api/relay/config", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(payload),
+			credentials: "same-origin"
+		})
+			.then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+			.then(function(res) {
+				btn.disabled = false;
+				if (res.ok && res.body && res.body.success) {
+					relayMsg("Saved. New model calls use this policy immediately.", "ok");
+					loadRelayStatus(true);
+				} else {
+					relayMsg((res.body && res.body.error) || "Failed to save rotation policy.", "err");
+				}
+			})
+			.catch(function() {
+				btn.disabled = false;
+				relayMsg("Network error.", "err");
 			});
 	});
 
@@ -2148,6 +2391,8 @@ export const CONFIG_PAGE_SCRIPT = `
 					document.getElementById("cfg-unlocked-view").style.display = "block";
 					renderThemeGrid();
 					loadWorkersList();
+					loadRelayConfig();
+					loadRelayStatus(false);
 					loadCreditUsers();
 					loadGuests();
 					loadGatewayConfig();

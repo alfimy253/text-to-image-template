@@ -52,6 +52,16 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   Durable Object or migration. Existing KV quotas remain best-effort under concurrency; review
   [#261 implementation, compatibility and limits](bug-fix-session-261.md) before deploying. See
   also the [progressive pipeline audit](progressive-image-pipeline-audit.md).
+- **API rotation across backup Workers.** The up-to-three backup Worker URLs registered on the
+  settings page were previously stored only. They now form a live **API pool** with the primary
+  deployment: every AI route (`/image/:i`, `/image/gen`, `/api/image`, `/api/image-batch`,
+  `/api/image-prompts`, `/api/script`, `/api/seo-plan`, `/api/voiceover`, `/tts`) runs its model
+  call on whichever member the policy picks, so the 10,000-neurons/day Workers AI allowance and
+  the inference load are spread instead of spent on one deployment. Rotation has three strategies
+  (round robin, least pending, weighted), per-member health with a 30 s → 5 min circuit breaker,
+  automatic failover back to the primary, and an optional browser mode that rotates the whole AI
+  request with a signed, path-scoped ticket. Accounts, sessions, credits, payments, CMS and render
+  jobs never leave the primary Worker. See [api-relay-rotation.md](api-relay-rotation.md).
 - **Local usage record.** Bug fix #261 counts today's delivered images, scripts, voiceovers and
   MP4 exports in this browser (`localStorage` per tab + a two-day counts cookie) and shows them in
   the credits popover with a clear button. It is display/history only: records are editable and
@@ -255,6 +265,13 @@ Bindings in `wrangler.json`:
   and the studio can still be opened through its primary CTA. Account/render routes and CMS/payment
   writes answer `503` without KV. Public CMS listing/pages are empty/404 without stored pages.)
 
+Optional environment variables for API rotation (no new binding is required):
+
+- `RELAY_SECRET` — HMAC secret for relay tokens and browser tickets. **Use the same value on every
+  Worker in the pool.** Without it a built-in fallback is used and the settings page warns about it.
+- `RELAY_ENABLED=false` — keep one deployment out of the pool (it still serves its own traffic).
+- `RELAY_WORKERS=https://a.workers.dev,https://b.workers.dev` — pool members without a KV write.
+
 The settings page is password-gated and uses **`/{current-day}/config/uvxyz`**, where
 `{current-day}` is the unpadded day of month (1–31) in **Asia/Taipei**. For example, on
 2026-10-16 the URL is **`/16/config/uvxyz`**; it changes at midnight Asia/Taipei. The old bare
@@ -263,8 +280,9 @@ for every visitor (Appearance → *Studio / Aerial / Stellar / Night Lab / Warm 
 Neo Brutalist* → **Save theme**), manages **plans
 & credits** (set an account to `free` or `paid_user`, optionally reset today's counters), reviews
 **guest credits by IP** (masked address, today's usage, remaining images, reset), registers
-background worker URLs, and can switch a tab into "Background worker" mode to consume the render
-queue. Its other tabs edit the **Local Payment Gateway** instructions, review paginated **Payment
+background worker URLs, configures the **API Rotation & Backup Worker Pool** (enable rotation,
+strategy, weights, timeout, browser rotation, live per-worker health and a *Test Endpoints* probe),
+and can switch a tab into "Background worker" mode to consume the render queue. Its other tabs edit the **Local Payment Gateway** instructions, review paginated **Payment
 Transactions** and approve verified transaction numbers, and manage **CMS Pages** with the Add
 Page editor/live preview. The landing page uses the same theme tokens as the studio, so the chosen
 skin covers the whole site.
@@ -302,7 +320,11 @@ skin covers the whole site.
 | `GET`/`POST`/`DELETE /api/config/cms` · `POST /api/config/cms/delete` | Password-gated CMS list / create-or-update / delete; `POST` accepts an optional page `id`, and duplicate slugs return `409` |
 | `POST /api/render` · `GET /api/render/:jobId` | Submit a render job / poll and download |
 | `GET /api/worker/poll` · `POST /api/worker/deliver` · `POST /api/worker/failed` | Background worker queue |
-| `GET`/`POST /api/config/workers` | Registered worker URLs (max 3, `POST` needs the settings password) |
+| `GET`/`POST /api/config/workers` | Registered worker URLs (max 3, `POST` needs the settings password); these URLs form the API rotation pool |
+| `GET /api/relay/pool` | Rotation pool for the studio (`local` + verified backups) and, for a signed-in caller, a 3-minute ticket scoped to the AI paths |
+| `GET /api/relay/status` · `GET /api/relay/config` · `GET /api/relay/ping` | Pool + health + probe results / current rotation policy / "relay-capable deployment" probe |
+| `POST /api/relay/config` · `POST /api/relay/test` | Save the rotation policy / force a fresh probe of every backup — both need the settings password |
+| `POST /api/relay/ai` | Worker-to-worker inference hop: one model call, HMAC-token authenticated, never relayed again |
 | `GET`/`POST /api/config/theme` | Current UI theme / set it (`default`, `strata`, `stellar`, `nightlab`, `paper`, `swiss`, `neo`); the GET is open, the POST needs the settings password |
 | `GET`/`POST /api/config/users` | Accounts with email, plan label + today's usage (legacy rows are healed with their email + plan on read) / set `usertype` (`free`, `paid_user`), reset counters — both need the settings password |
 | `GET`/`POST /api/config/ipcredits` | Guest credits table (masked IP, usage, remaining) / delete one IP row (reset) — both need the settings password |
@@ -332,6 +354,9 @@ skin covers the whole site.
   the README, userflow and system rules describe the verified current behavior.
 - **`kv-scale-test.md`** — measured KV behaviour (operations per request, list-page caps,
   free-tier allowance maths) with the reproduction commands.
+- **`api-relay-rotation.md`** — Session #265: the backup-worker pool, the
+  `POST /api/relay/ai` wire protocol, rotation strategies, health/circuit breaking, browser
+  rotation and its ticket/CORS rules, configuration, runbook and limits.
 - **`bug-audit.md`** — the current bug and inconsistency audit, with severity and fixes.
 - **`bug-fix-session-206.md`** — Bug Fix Session #206: plan-based URLs (`/free`, `/studio`,
   `/paid`), freemium guest access, the per-IP credits table and its verification evidence.

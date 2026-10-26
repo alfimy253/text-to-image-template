@@ -44,6 +44,15 @@ import {
 	sharedImageTaskQueue
 } from "./modules/image-batch";
 import { handleVoiceover } from "./modules/voiceover";
+import {
+	applyRelayCors,
+	handleRelayRoutes,
+	invalidateRelayCache,
+	relayPreflightResponse,
+	relayTicketIdentity,
+	RELAY_TICKET_HEADER,
+	withRelayedAi
+} from "./modules/api-relay";
 
 /*
  * =============================================================
@@ -161,8 +170,67 @@ function applyTheme(html: string, theme: string) {
 export default {
 	async fetch(request, env, ctx: any) {
 
+		/*
+		 * The relay layer wraps the whole router:
+		 *
+		 *   - a CORS preflight for an AI path is answered before routing,
+		 *   - every other answer passes through `applyRelayCors`, which only
+		 *     grants cross-origin reads to a caller holding a signed ticket,
+		 *   - `handleRequest` below is the original single-file router, with
+		 *     `env` upgraded so `env.AI` is the rotation runtime.
+		 */
+		const preflight =
+			relayPreflightResponse(request);
+
+		if (preflight) {
+			return preflight;
+		}
+
+		const response =
+			await handleRequest(
+				request,
+				env,
+				ctx
+			);
+
+		return await applyRelayCors(request, response, env);
+
+	}
+
+};
+
+
+/*
+ * The original router. `env` is upgraded inside: `withRelayedAi()` replaces
+ * only the AI binding, so every existing `env.AI.run()` call site (images,
+ * prompt writing, script, seo-plan, voiceover, the demo route) participates in
+ * the rotation pool without being rewritten.
+ */
+async function handleRequest(request: any, env: any, ctx: any) {
+
 		const url =
 			new URL(request.url);
+
+		/*
+		 * API rotation (src/modules/api-relay.ts): a lazily-evaluated pool of
+		 * this Worker plus the up-to-3 backup Worker URLs registered on the
+		 * settings page. Nothing happens here until a route touches env.AI.
+		 *
+		 * `baseEnv` keeps the untouched bindings: the inbound
+		 * `POST /api/relay/ai` endpoint MUST run on the raw binding, otherwise a
+		 * relayed call would be relayed again (and a pool member that also
+		 * received the request could bounce it back).
+		 */
+		const baseEnv = env;
+
+		/*
+		 * A request carrying a rotation ticket was deliberately sent here by
+		 * the browser, so this member runs the inference instead of relaying
+		 * it back to the Worker the studio just left.
+		 */
+		env = withRelayedAi(env, request, {
+			preferLocal: !!request.headers.get(RELAY_TICKET_HEADER)
+		});
 
 		// Capability negotiation is non-billable. Old clients keep legacy routes.
 		if (request.method === "GET" && url.pathname === "/api/pipeline-capabilities") {
@@ -184,7 +252,9 @@ export default {
 			 * render at once.
 			 */
 			return new Response(JSON.stringify({ version: 261, binaryImages: true, chunkVoiceover: true,
-				singleAttemptScript: true, compactPrompts: true, imageChunks: 2, imageSlots: 6 }), {
+				singleAttemptScript: true, compactPrompts: true, imageChunks: 2, imageSlots: 6,
+				/* API rotation across backup Workers (src/modules/api-relay.ts). */
+				apiRelay: 1 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});
 		}
@@ -740,6 +810,42 @@ export default {
 
 		const MAX_RENDER_JOBS =
 			10;
+
+		/* =====================================================
+		 * API ROTATION ROUTES (src/modules/api-relay.ts)
+		 *
+		 * GET  /api/relay/pool     pool + short-lived client ticket (studio)
+		 * GET  /api/relay/status   pool, health and probe results (admin)
+		 * GET/POST /api/relay/config  rotation policy (POST = password)
+		 * POST /api/relay/test     force a fresh probe of every backup
+		 * GET  /api/relay/ping     "I am a relay-capable deployment"
+		 * POST /api/relay/ai       one model call, executed here (token)
+		 *
+		 * Dispatched with the RAW bindings (`baseEnv`): a relayed call must
+		 * never be relayed again.
+		 * ===================================================== */
+
+		const relayResponse =
+			await handleRelayRoutes(
+				request,
+				url,
+				baseEnv,
+				{
+					selfOrigin: url.origin,
+					configPassword: CONFIG_PASSWORD,
+					identity: () => creditSessionUser(request, baseEnv),
+					guest: () => hasFreemiumCookie(request),
+					waitUntil: (promise) => {
+						if (ctx && typeof ctx.waitUntil === "function") {
+							ctx.waitUntil(promise);
+						}
+					}
+				}
+			);
+
+		if (relayResponse) {
+			return relayResponse;
+		}
 
 		// INSTRUCT model for the
 		// narration script. The old
@@ -2287,6 +2393,14 @@ export default {
 					)
 				);
 
+				/*
+				 * The rotation pool is cached for ~20 s inside every isolate;
+				 * drop it here so a newly registered backup starts receiving
+				 * model calls on the next request instead of the next cache
+				 * expiry.
+				 */
+				invalidateRelayCache();
+
 				return json(
 					{
 						success: true,
@@ -3065,9 +3179,7 @@ export default {
 				status: 404
 			}
 		);
-	}
-
-};
+}
 
 
 // =============================================================
@@ -4217,6 +4329,25 @@ async function authSessionFromRequest(
 	request: any,
 	env: any
 ): Promise<any> {
+
+	/*
+	 * Browser rotation ticket (src/modules/api-relay.ts).
+	 *
+	 * A request the studio rotated to a backup Worker carries no session
+	 * cookie for that origin, so the signed ticket is its credential. Tickets
+	 * are scoped to the AI paths (`RELAY_AI_PATHS`): `readRelayTicket()`
+	 * returns null for every other route, so a ticket can never authorize an
+	 * account, settings, payment, CMS or render route.
+	 */
+	const relayed =
+		await relayTicketIdentity(
+			request,
+			env
+		);
+
+	if (relayed) {
+		return relayed;
+	}
 
 	if (!env || !env.KV_BINDING) {
 		return null;
