@@ -312,8 +312,10 @@ function createStudioOffloadRuntime(win) {
 							body: JSON.stringify(Object.assign({ prompt: prompt }, frame)) }, 165000, g.options, async function (response) {
 								if (!response.ok) return responseError(response);
 								var contentType = response.headers.get("Content-Type") || "";
-								if (!/^image\/(png|jpeg|webp)(;|$)/i.test(contentType)) throw new Error("Image response was not an image");
-								return response.blob();
+								if (!/^(image\/(png|jpeg|webp)|video\/mp4)(;|$)/i.test(contentType)) throw new Error("Image response was not an image");
+								var imageBlob = await response.blob();
+								try { imageBlob.stockSource = JSON.parse(decodeURIComponent(response.headers.get("X-Pixabay-Source") || "%7B%7D")); } catch (_) {}
+								return imageBlob;
 							});
 						check(g.options);
 						if (!blob.size) throw new Error("Empty image response");

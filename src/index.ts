@@ -1,3 +1,5 @@
+export { PixabayRateLimiter } from "./modules/pixabay";
+import { handlePixabayApi } from "./modules/pixabay";
 /*
  * YouTube Vibe Studio — Cloudflare Worker entry.
  *
@@ -14,7 +16,6 @@
  * Route, API and KV logic is implemented below.
  */
 
-import { MODEL, prompts } from "./prompts";
 import { createHTML } from "./page";
 import { CONFIG_PAGE_SCRIPT } from "./client/config-page-js";
 import {
@@ -261,7 +262,7 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			return new Response(JSON.stringify({ version: 261, binaryImages: true, chunkVoiceover: true,
 				singleAttemptScript: true, compactPrompts: true, imageChunks: 2, imageSlots: 6,
 				/* API rotation across backup Workers (src/modules/api-relay.ts). */
-				apiRelay: 1 }), {
+				apiRelay: 1, mediaProvider: "pixabay", per_page: 3 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});
 		}
@@ -397,85 +398,25 @@ async function handleRequest(request: any, env: any, ctx: any) {
 		// AI IMAGE GENERATION
 		// =====================================================
 
-		const match =
-			url.pathname.match(
-				/^\/image\/(\d+)$/
-			);
-
-
-		if (
-			request.method === "GET" &&
-			match
-		) {
-
-			const index =
-				Number(match[1]);
-
-
-			if (
-				!Number.isInteger(index) ||
-				index < 0 ||
-				index >= prompts.length
-			) {
-
-				return json(
-					{
-						success: false,
-						error:
-							"Invalid image index"
-					},
-					400
-				);
-			}
-
-
+		if (request.method === "GET" && /^\/image\/\d+$/.test(url.pathname)) {
+			return json({ success: false, error: "AI demo images were removed. Use Pixabay media search." }, 410);
+		}
+		if (request.method === "GET" && ["/api/media/search", "/api/media/asset"].includes(url.pathname)) {
+			// Same primary-origin boundary as the existing stock import routes.
+			const access = await imageCreditHooks(request, env);
+			if (access.blocked) return access.blocked;
+			if (url.pathname === "/api/media/search") return handlePixabayApi(request, env);
+			const reservation = access.open ? null : await access.consume(1);
+			if (reservation && !reservation.allowed) return json({ success: false, error: "Daily stock import allowance exhausted", credits: reservation.summary }, 429);
 			try {
-
-				const result =
-					await env.AI.run(
-						MODEL,
-						{
-							prompt:
-								prompts[index]
-						}
-					);
-
-
-				return new Response(
-					result,
-					{
-						status: 200,
-
-						headers: {
-							"Content-Type":
-								"image/png",
-
-							"Cache-Control":
-								"no-store",
-
-							"X-Image-Index":
-								String(index)
-						}
-					}
-				);
-
-			}
-			catch (error) {
-
-				return json(
-					{
-						success: false,
-
-						error:
-							error instanceof Error
-								? error.message
-								: String(error)
-					},
-					500
-				);
+				const response = await handlePixabayApi(request, env);
+				if (!response.ok && reservation) await access.refund(1);
+				return response;
+			} catch (error) {
+				if (reservation) await access.refund(1);
+				throw error;
 			}
 		}
-
 
 		// =====================================================
 		// AI IMAGE GENERATION - single image (accordion AI panel)
@@ -604,8 +545,7 @@ async function handleRequest(request: any, env: any, ctx: any) {
 								}, IMAGE_ATTEMPT_TIMEOUT_MS);
 							runImageModel(
 								env,
-								prompt +
-									", 16:9 landscape, a completely text-free image",
+								prompt,
 								{
 									/*
 									 * Bug fix (image throughput): the
@@ -1253,15 +1193,15 @@ async function handleRequest(request: any, env: any, ctx: any) {
 		}
 
 		/*
-		 * AI IMAGE PROMPTS + AI IMAGES (one request each, no polling):
+		 * TEXT-LLM STOCK KEYWORDS + PIXABAY PHOTO/VIDEO DELIVERY (no polling):
 		 *   POST /api/image-prompts  -> {prompts: [...]} in the body
 		 *   POST /api/image-batch    -> application/x-ndjson stream of
 		 *                               {type:"image"} events, one per
 		 *                               rendered scene (see
 		 *                               src/modules/image-batch.ts)
 		 * The prompt count follows the script length (1 min -> 10,
-		 * 2-3 min -> 14, 4-6 min -> 20) and every prompt carries the
-		 * user-chosen video image style. The instruct model runs inside
+		 * 2-3 min -> 14, 4-6 min -> 20), including exactly two video slots.
+		 * The text model plans short stock-search keywords from the whole script inside
 		 * the POST, so the browser never polls a background job; the old
 		 * /api/image-prompts/<id> job URL now answers 410 Gone.
 		 */
@@ -1270,6 +1210,8 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			url.pathname === "/api/image-prompts"
 		) {
 
+			const plannerAccess = await imageCreditHooks(request, env);
+			if (plannerAccess.blocked) return plannerAccess.blocked;
 			return handleGenerateImagePrompts(
 				request,
 				env,
@@ -5116,7 +5058,9 @@ async function imageCreditHooks(
 		!env.KV_BINDING
 	) {
 
-		return { open: true };
+		return env?.PIXABAY_ALLOW_UNMETERED === "true"
+			? { open: true }
+			: { blocked: json({ success: false, error: "Media authorization storage is unavailable" }, 503) };
 
 	}
 
@@ -5149,12 +5093,12 @@ async function imageCreditHooks(
 								success: false,
 								authenticated: false,
 								error:
-									"Sign in to generate AI images \u2014 every free account gets " +
+									"Sign in to import Pixabay media \u2014 every free account gets " +
 									creditFormatNumber(
 										CREDIT_PLANS.free
 											.limits.images
 									) +
-									" images per day. No account? Open /free for the same 10,000 images per day."
+									" stock image imports per day. No account? Open /free. Pixabay API rate limits also apply."
 							},
 							401
 						)
@@ -5177,7 +5121,7 @@ async function imageCreditHooks(
 		 * with it (same fail-open rule as before). Browser records
 		 * never authorize or deny a paid request.
 		 */
-		return { open: true };
+		return { blocked: json({ success: false, error: "Media authorization unavailable. Please retry later." }, 503) };
 
 	}
 

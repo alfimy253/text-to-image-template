@@ -105,14 +105,15 @@ export const RELAY_ERROR_KIND_HEADER = "x-yvs-relay-error-kind";
  * (`/api/config/*`, `/api/payments/*`, `/api/session`, `/api/credits`, CMS,
  * render jobs) is intentionally absent and can never be reached with a ticket.
  */
+function permitsNonVisualModel(model: string): boolean {
+	return !/image|diffusion|flux|sdxl|dreamshaper/i.test(model) &&
+		(isInstructModel(model) || /melotts|aura|whisper|tts/i.test(model));
+}
+
 export const RELAY_AI_PATHS = [
-	"/api/image",
-	"/api/image-batch",
-	"/api/image-prompts",
 	"/api/script",
 	"/api/seo-plan",
 	"/api/voiceover",
-	"/image/gen",
 	"/tts"
 ];
 
@@ -1116,6 +1117,7 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 		if (typeof model !== "string" || !RELAY_MODEL_PATTERN.test(model)) {
 			throw new Error("Invalid model slug");
 		}
+		if (!permitsNonVisualModel(model)) throw new Error("AI image generation is disabled; use Pixabay");
 
 		let llm: LlmConfig | null = null;
 		if (isInstructModel(model)) {
@@ -1277,6 +1279,10 @@ export async function handleRelayAiCall(
 	const input = parsed && typeof parsed.input === "object" && parsed.input !== null ? parsed.input : {};
 	if (!RELAY_MODEL_PATTERN.test(model) || (payload.m && payload.m !== model)) {
 		return jsonResponse({ success: false, error: "Invalid model slug" }, 400);
+	}
+
+	if (!permitsNonVisualModel(model)) {
+		return jsonResponse({ success: false, error: "AI image generation is disabled; use Pixabay" }, 410);
 	}
 
 	const ai = env && env.AI;

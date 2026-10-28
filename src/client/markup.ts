@@ -104,7 +104,7 @@ export const PAGE_MARKUP = `
 						</a>
 					</div>
 					<div class="landing-microcopy">
-						<span>Made for creators</span><i aria-hidden="true"></i><span>10,000 free AI images daily</span><i aria-hidden="true"></i><span>Rendered in your browser</span>
+						<span>Made for creators</span><i aria-hidden="true"></i><span>Pixabay stock images and videos</span><i aria-hidden="true"></i><span>Rendered in your browser</span>
 					</div>
 				</div>
 
@@ -205,7 +205,7 @@ export const PAGE_MARKUP = `
 						<p>For creators trying ideas and shipping their first videos.</p>
 						<ul class="landing-plan-list">
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> video projects</span></li>
-							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>10,000</b> AI images every day</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span>Pixabay stock photos and video search</span></li>
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> AI script generation</span></li>
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> voiceovers</span></li>
 						</ul>
@@ -221,7 +221,7 @@ export const PAGE_MARKUP = `
 						<p>For channel builders who generate every single day.</p>
 						<ul class="landing-plan-list">
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> video projects</span></li>
-							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>10,000</b> AI images every day</span></li>
+							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span>Pixabay stock photos and video search</span></li>
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> AI script generation</span></li>
 							<li><span class="landing-plan-check" aria-hidden="true">✓</span><span><b>Unlimited</b> voiceovers</span></li>
 						</ul>
@@ -230,7 +230,7 @@ export const PAGE_MARKUP = `
 					</article>
 				</div>
 				<p class="landing-plans-reset">All credits renew every day at midnight (UTC+8).</p>
-			<p class="landing-plans-guest">No account yet? <a href="/free">Open the free studio <span aria-hidden="true">↗</span></a> — 10 AI images a day, counted per IP address.</p>
+			<p class="landing-plans-guest">No account yet? <a href="/free">Open the free studio <span aria-hidden="true">↗</span></a> — 10 Pixabay images a day, counted per IP address.</p>
 			</section>
 
 			<section class="landing-cta">
@@ -352,7 +352,7 @@ export const PAGE_MARKUP = `
 	     An editable table: one row is one video. Column 1 is the
 	     script, column 2 the video image style (the same ten
 	     options as the script modal), column 3 the minimum length
-	     in minutes, column 4 the AI image resolution (480 / 540 /
+	     in minutes, column 4 the stock image resolution (480 / 540 /
 	     720 / 1024 px long edge), column 5 the frame orientation
 	     (square / landscape / portrait), columns 6-7 Preview +
 	     Export. Rows are independent of the "Video N" accordions
@@ -368,17 +368,17 @@ export const PAGE_MARKUP = `
 				<strong>Quick batch table</strong>
 				<span class="card-note" id="batch-note">One row \u2014 one video</span>
 				<button type="button" class="upload-btn small batch-add-row" id="batch-add-row" title="Add another row (10 rows at most)">\uff0b Add Row</button>
-				<button type="button" class="app-generate batch-generate" id="batch-generate" title="Generate every row that has a script and is not finished yet: voiceover, AI images and the animation, three rows at a time">\u2726 Generate</button>
+				<button type="button" class="app-generate batch-generate" id="batch-generate" title="Generate every row that has a script and is not finished yet: voiceover, Pixabay images and the animation, three rows at a time">\u2726 Generate</button>
 
 			</div>
 
 			<p class="va-note batch-hint">
 				Type or paste a script in the first box, pick the video image
-				style, the minimum minutes, the AI image resolution and the frame
+				style, the minimum minutes, the stock image resolution and the frame
 				orientation, then press
 				<strong>\u2726 Generate</strong> at the top right of the table.
 				Every row that has a script is spoken (MP3), illustrated with
-				AI images and animated; a row that is empty is skipped, and so is
+				Pixabay images and animated; a row that is empty is skipped, and so is
 				a row that is already finished (its Preview and Export buttons are
 				live \u2014 it is never generated or billed twice). Three rows
 				render at the same time. Until a row is finished its last two
@@ -387,6 +387,7 @@ export const PAGE_MARKUP = `
 				moment, and the export is built in this browser.
 			</p>
 
+			<p class="va-note">Stock photos from <a href="https://pixabay.com/" target="_blank" rel="noopener noreferrer">Pixabay</a> · 3 results per search. Source dimensions vary; resolution controls the output frame.</p>
 			<div class="table-scroll">
 
 				<table class="batch-table batch-table-edit">

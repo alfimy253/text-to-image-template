@@ -1,5 +1,14 @@
 # Quick batch table — functionality, hanging-code audit and system requirements
 
+> **Media-source decision — 2026-10-29 (supersedes conflicting media requirements below).**
+> We use **Pixabay images and Pixabay videos**, not AI-generated images.
+> No Cloudflare/SDXL/FLUX or other AI image provider is part of the target architecture,
+> including fallbacks. **Runtime status: LLM-planned Pixabay keywords and mixed photo/video flows
+> are implemented locally; editor prompt controls are removed.** Deployment/live-provider checks remain; old AI-image descriptions are legacy history,
+> not the new media policy. Cloudflare hosting/KV, text AI, TTS, manual uploads and local
+> templates are not removed by this decision. See the authoritative
+> [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
+
 Session #243 companion document. It explains how the **Quick batch table** (`#view-table`,
 "Table" view of the studio) actually works, records the **leftover code this audit found and what
 was done with it**, and states the **system requirements** the table depends on. Canonical rules
@@ -151,11 +160,11 @@ payload with zero behaviour, so it is now gone.
 | `BATCH_RUN_CONCURRENCY` | 3 rows in flight at once | `app-js.ts` |
 | `BATCH_RESOLUTIONS` / `BATCH_DEFAULT_RESOLUTION` | `[480, 540, 720, 1024]` / `1024` (long edge, px) | `app-js.ts` + `src/modules/image-batch.ts` |
 | `BATCH_ORIENTATIONS` / `BATCH_DEFAULT_ORIENTATION` | `square \| landscape \| portrait` / `landscape` | `app-js.ts` |
-| `IMAGE_BATCH_CONCURRENCY` | 4 images in parallel inside one request | `src/modules/image-batch.ts` |
+| `IMAGE_BATCH_CONCURRENCY` | 3 per-row image starts per 3-second window (legacy AI pipeline) | `src/modules/image-batch.ts` |
 | `IMAGE_BATCH_MAX_PROMPTS` | 20 per request | `src/modules/image-batch.ts` |
 | Prompt count by length | 1 min → 10, 2–3 min → 14, 4–6 min → 20 | `src/modules/image-prompts.ts` |
 | Voiceover | 8,000 characters, chunked at 500 | `src/index.ts` |
-| AI images per day | 50 free · 1,200 paid · 10 guest/IP | README limits table |
+| Legacy AI images per day | 10,000 per free / paid / guest actor; not a Pixabay quota | `IMAGE_DAILY_LIMIT`, `src/index.ts` |
 
 ### 3.4 Behavioural requirements
 

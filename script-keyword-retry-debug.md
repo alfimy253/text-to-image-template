@@ -1,5 +1,14 @@
 # AI SEO keyword planning + script keyword retry — debug record (Session #243)
 
+> **Media-source decision — 2026-10-29 (supersedes conflicting media requirements below).**
+> We use **Pixabay images and Pixabay videos**, not AI-generated images.
+> No Cloudflare/SDXL/FLUX or other AI image provider is part of the target architecture,
+> including fallbacks. **Runtime status: LLM-planned Pixabay keywords and mixed photo/video flows
+> are implemented locally; editor prompt controls are removed.** Deployment/live-provider checks remain; old AI-image descriptions are legacy history,
+> not the new media policy. Cloudflare hosting/KV, text AI, TTS, manual uploads and local
+> templates are not removed by this decision. See the authoritative
+> [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
+
 This document covers **why `POST /api/seo-plan` was failing** ("SEO plan failed: …" in the
 walkthrough modal) and the **retry contract of every keyword function** in
 `src/modules/script-seo.ts`, including the two retry loops that used to abort instead of

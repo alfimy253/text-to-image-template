@@ -1,5 +1,109 @@
 # YouTube Vibe Studio — System Rules
 
+> **Media-source decision — 2026-10-29 (supersedes conflicting media requirements below).**
+> We use **Pixabay images and Pixabay videos**, not AI-generated images.
+> No Cloudflare/SDXL/FLUX or other AI image provider is part of the target architecture,
+> including fallbacks. **Runtime status: LLM-planned Pixabay keywords and mixed photo/video flows
+> are implemented locally; editor prompt controls are removed.** Deployment/live-provider checks remain; old AI-image descriptions are legacy history,
+> not the new media policy. Cloudflare hosting/KV, text AI, TTS, manual uploads and local
+> templates are not removed by this decision. See the authoritative
+> [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
+
+## Governing media rule — whole-script Pixabay keywords + two clips (2026-10-29)
+
+This addendum supersedes the earlier deterministic-photo-only pipeline and manual editor
+Pixabay picker. **Text LLM planning is enabled for search keywords; AI image generation is
+still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallback is allowed.
+
+### Planner contract
+
+- `buildStockSearchInstruction()` in `src/modules/image-prompts.ts` sends the **entire narration
+  script** on each chunk call. Both layouts send full `script`; it wins over legacy summaries.
+- Scenes portray broad concrete ideas from the **whole script**, not literal isolated sentences.
+  The model returns typed stock searches: `{scenes:[{type:"image"|"video",keywords:"..."}]}`.
+  Instruction asks for 2–5 keywords; validation permits at most six words / 100 characters.
+  Long art prompts, wrong types/counts and malformed JSON fail validation.
+- Every LLM instruction explicitly requires **exactly two Pixabay video scenes in the complete
+  video**. Reserved zero-based slots are `1` and `total - 2`; the server enforces types across
+  chunk boundaries/retries. All other slots are stock photos.
+- Totals remain **10/14/20 scenes**, now **8+2 / 12+2 / 18+2 photos+clips** for 1 / 2–3 / 4–6
+  minutes. Two clips are included in these totals, not added on top. A space-constrained editor
+  can request a smaller validated total (minimum four), still with exactly two clip slots.
+- One text call per request, 45-second budget, 2,048 output tokens; browser retries are bounded.
+  Script input above **20,000 characters** is rejected, not silently truncated. Provider context
+  limits still apply. `/api/image-prompts` retains its compatibility name and is now authorized.
+
+### Pixabay API, infrastructure and safety
+
+- Provider search explicitly accepts `per_page` and requires **`per_page=3`** for photos AND
+  videos; other page sizes return 400. It is a per-search-page limit, not a whole-video limit.
+- Scene tokens carry `{q,type,page,index,scene}`. The selected type chooses real Pixabay photos
+  or MP4 clips. Empty/missing clips never fall back to stills or generated media.
+- `POST /api/image` binary and `/api/image-batch` NDJSON carry both image bytes and MP4 bytes
+  with source metadata. Existing source search/ID-import APIs remain available, but there is
+  no manual prompt/search panel in editor accordions. `/image/:i` demo inference remains 410.
+- Stock requests stay primary-origin; text/TTS rotation remains separate. Image inference is
+  rejected at relay boundaries. The API key stays in a server secret/ignored local `.dev.vars`.
+- Cache searches 24 hours; coalesce identical requests. `PIXABAY_RATE_LIMITER` Durable Object
+  budgets **90 uncached requests per rolling 60 seconds per hashed key** and shares provider
+  cooldown. Default documented Pixabay capacity is 100/60s/key; actual headers/account limits
+  are authoritative. No key/backup rotation to evade rate limits.
+- `wrangler.json` defines the Durable Object binding/SQLite migration. This supersedes older
+  statements that this app has no Durable Objects. No production deployment was performed.
+- Account/guest authorization fails closed on storage failure. `PIXABAY_ALLOW_UNMETERED="true"`
+  is local/test-only opt-out. Existing 10,000/day counter means stock-import fair use, not
+  provider capacity or AI billing. Failed deliveries refund import units; listings do not.
+- Server downloads selected assets before same-origin Blob delivery. Validate HTTPS Pixabay/CDN
+  hosts and redirects, MIME and file signatures. Limits: **8 MiB/photo / 16 MiB/clip**; materialize
+  downloads serially per isolate. Keep source provenance and display Pixabay source links.
+
+### Quick Batch processing — mixed media
+
+1. Narration -> TTS MP3 -> Web Audio duration -> captions.
+2. Whole-script LLM planning -> up to three typed search selections/chunk -> Pixabay searches
+   with `per_page=3` -> validated server downloads -> binary or legacy NDJSON delivery.
+3. Sort by global scene index; decode images and probe clips. MP4s become real `type:"mp4"`
+   slides with `videoEl` and duration. A completed row requires **two distinct imported clips**.
+4. Fit all planned scenes into narration using integer 30-fps frame windows: bound clip windows
+   by actual duration, distribute remaining frames across photos. Both clips remain in the
+   finished timeline rather than the later clip being lost to audio truncation.
+5. Preview uses variable scene durations and video seeking/drawing. Export uses the existing
+   shared H.264/AAC WebCodecs/muxer engine; restore shared state afterward. Preview and Export
+   unlock together only for a complete row. Missing clips produce a visible unfinished error.
+6. Cleanup revokes Blob URLs and releases video decoders.
+
+### Editor/accordion processing — automatic scenes only
+
+- **Remove the image prompt/search section:** no textarea, Photos/Videos selector, Search button
+  or candidate-results cards. Keep gallery, manual Upload Image/GIF/MP4, templates and automatic
+  media progress. Script/SEO controls remain.
+- Automatic script flow uses the same whole-script keyword planner, then imports photos and
+  two short silent MP4 clips. Probe actual duration/decodability, enforce caps, record scene
+  index/source, and reject stale completions. Restore scene order after out-of-order delivery.
+- Reruns replace only prior automatic scenes and release their resources; preserve manual
+  uploads. Do not accumulate four automatic clips after two runs.
+- Planned export verifies two distinct required clips are still present. With narration, fit
+  scenes into its timeline so both clips appear. Clip audio stays silent; narration is master.
+- Existing bounded frame presentation / seek fallback still handles detached or stalled clips.
+  No server-side video encoding was added. Manual-upload-only projects/templates remain valid.
+
+### Preserved caps and verification
+
+10 projects / 10 Quick Batch rows, three rows in flight, 25 stills + 5 GIFs + 5 MP4 clips per
+editor video, max 60 seconds per imported clip; automatic planning needs two free clip slots.
+Existing frame/orientation options and browser codec/memory safeguards remain. Frame options
+control output, not source-stock dimensions.
+
+`npm run test:pixabay`: **44/44 passing**, including whole-script planning, all scene totals,
+typed binary/NDJSON delivery, Quick Batch/editor mixed export, removed controls, reruns and
+missing-clip refusal. Tests mock browser-media/WebCodecs boundaries, not a real playable file.
+Wrangler dry-run passes; the same 30 pre-existing router TypeScript diagnostics remain. The
+historical full test suite has superseded contracts and is not claimed green. Live-provider,
+production secret/migration and real-device MP4 smoke tests remain release checks.
+
+Full API/deployment details: [Pixabay implementation reference](pixabay-media-migration.md).
+
+
 > Every rule below was verified against the current working tree on **2026-10-16**. Each
 > high-level rule is followed by
 > **indented** sub-points: the technical detail that implements it, then the restrictions,
@@ -351,46 +455,14 @@
 
 ---
 
-## RULE 6 — AI images: one fixed SDXL model, two entry points, no size control
+## RULE 6 — Pixabay stock photos and videos (replaces SDXL generation)
 
-- Model: `MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0"` (`src/prompts.ts`), used by
-  both image routes through `env.AI.run(MODEL, { prompt })`.
-- `GET /image/:index` — the demo slots.
-  - `index` must be an integer inside `prompts[]` (currently 2 entries) or `400`.
-  - Response headers: `Content-Type: image/png`, `Cache-Control: no-store`, `X-Image-Index`.
-    - Restriction: the studio's visible UI no longer uses this route, yet the page still calls
-      it twice on load: the legacy card builder does
-      `prompts.forEach((_, index) => fetchAIImage(index))` into the (later hidden) `#gallery`.
-      That is **two Workers AI image generations per page view** whose output is never shown.
-      `fetchAIImage` only early-returns when its DOM nodes are absent — and they are present.
-- `GET /image/gen?prompt=&variant=` — the per-video AI panel.
-  - `prompt` is required (`400 "Missing prompt"` otherwise); `variant` is echoed back in
-    `X-Image-Variant`; also `Cache-Control: no-store`.
-  - Dispatched through the shared Node.js-style non-blocking `sharedImageTaskQueue`
-    (`src/modules/image-queue.ts`, keyed per user/IP group — see RULE 28). The server appends
-    `", 16:9 landscape, a completely text-free image"` to the prompt, condenses prompts to
-    `IMAGE_MODEL_PROMPT_MAX_CHARS = 1800`, sends `IMAGE_NEGATIVE_PROMPT` banning both text/scripts
-    and anatomical/structural distortion (`distorted, deformed, bad anatomy, extra/fused fingers,
-    warped perspective, bent architecture, …`), sets `guidance: 7.5` on 20-step SDXL base, heals
-    odd sub-1024 dimensions via `sdxlSafeDimensions()`, falls back to
-    `@cf/bytedance/stable-diffusion-xl-lightning` and `@cf/black-forest-labs/flux-1-schnell`, and
-    renders at `IMAGE_WIDTH = 1024` / `IMAGE_HEIGHT = 576` (16:9) defaults. The panel's hint says
-    **landscape 16:9 · 1024×576** for exactly that reason; the old "480 px landscape" wording (and
-    the unused `AI_IMAGE_WIDTH = 854` / `AI_IMAGE_HEIGHT = 480` pair next to it) never described a
-    rendered file. See `toberesolved.md` A1-A3.
-  - Client behaviour: each submit schedules **2 parallel requests** (`variant` 1 and 2, dispatched
-    through `manualImageTaskQueue` inside `Promise.all`, not one after the other).
-    - Restriction: while *this* video's script & style walkthrough is rendering its images
-      (`project._imageFlowActive`), its **✨ Generate 2 Images** button is disabled
-      (`setVaAiGenerateEnabled(n, false)`, re-enabled in `finalizeImagePromptFlow()`), and
-      `submitAiImages(n)` refuses a programmatic click. The lock is per video: another
-      accordion's button stays live and may generate at the same time.
-    - The results panel keeps at most 4 cards; generating again while it holds 4 clears it
-      first (revoking the object URLs).
-    - "+ Add to Video" wraps the PNG in a `File` and pushes it as a normal still image, so it
-      counts against the 25-image cap of that video.
-    - If both variants fail the client `alert`s the last error; if one fails the status line
-      reads "1 of 2 failed: <error>".
+The governing Pixabay addendum at the top of this file defines the current media contract.
+`runImageModel()` is now a compatibility wrapper around stock-photo retrieval, not inference.
+The active text LLM plans whole-script search keywords and assigns exactly two video scenes.
+Both automated layout pipelines import mixed stock photos/clips; manual prompt controls are removed. No SDXL/Lightning/FLUX fallback
+or demo inference remains enabled. See the addendum for `per_page=3`, API routes, caps,
+authorization, server-side downloads, caching, the Durable Object budget and deployment gates.
 
 ---
 
@@ -2609,3 +2681,26 @@ Full session record: `bug-fix-session-271.md`. This rule is the binding contract
 - **Tests.** `tests/llm-openrouter.test.mjs` (24 cases) and `tests/api-relay.test.mjs` (34 cases)
   must stay green; the relay suite pins `provider: "cloudflare"` so the two rotations are tested
   independently. `npm test` = **260** cases.
+
+## Hang-safety QA addendum — 2026-10-29
+
+The mixed Pixabay pipeline must not depend on an indefinitely pending media operation:
+
+- Provider fetch **and streamed bodies** are bounded (metadata 20 s, assets 30 s).
+  Cache operations have a 2 s budget and fail soft; shared rate-budget calls have a 5 s
+  deadline and fail closed. Do not await a stalled body cancellation while holding the
+  serialized asset lock. Cancelled waiters return promptly but do not break queue ordering.
+- Metadata coalescing is shared work: aborting one subscriber must not abort other subscribers
+  or prematurely delete the in-flight entry. Caller search waits are capped at 35 s including
+  shared-budget/cache overhead; queued asset waits cap at five minutes and observe cancellation.
+- Audio queue/flush waits have 15 s / 30 s bounds; encoder configuration/cleanup belongs inside
+  `try/finally`. AAC support probing is capped at 5 s. Preserve the explicit silent-export warning
+  for unsupported AAC rather than freezing the render queue.
+- MP4 playback startup has a 5 s deadline before seek-capture fallback. Editor photo/audio decode
+  has a 10 s / 20 s deadline. A rejected or timed-out Quick Batch photo decode must not become Ready.
+- Real `VideoFrame` objects include a duration so MP4 muxing retains the last frame.
+- QA must include playable real-codec output, not only JSDOM/media mocks. See
+  [the hang audit and reproducible playable proof](qa-preview/README.md). Current local evidence:
+  **56/56 focused tests; two real Chromium exports; 450/450 decoded frames in each**.
+  These short exports deliberately use labeled fixture providers and are silent (headless AAC
+  unsupported); they do **not** certify live LLM/Pixabay/TTS calls or production deployment.
