@@ -192,6 +192,68 @@ test('planner rejects wrong types, prose prompts, missing scenes and malformed J
 		await assert.rejects(generateImagePrompts({AI:{run:async()=>({response})}},'text',input), /planner/);
 	}
 });
+test('planner recovers the scene JSON from fences, prose wrappers and control characters', async () => {
+	const entry = (type, keywords) => ({ type, keywords });
+	const plan = [entry('image', 'forest trees'), entry('video', 'community people'), entry('image', 'green leaves')];
+	const json = JSON.stringify({ scenes: plan });
+	const input = { topic: 'forest', script: 'Forest conservation matters. Trees help communities. Conclusion.', minutes: 1, batch: { offset: 0, count: 3 } };
+	const variants = [
+		'```json\n' + json + '\n```',
+		'```json\n' + json + '\n```\nLet me know if you need adjustments!',
+		'Here are the stock search keywords:\n' + json + '\nHope this helps!',
+		json + ' I hope {this} helps.',
+		json.replace('"forest trees"', '"forest\ntrees"'),
+		'{"scenes":[' + plan.map(JSON.stringify).join(',') + ',]}'
+	];
+	for (const response of variants) {
+		const tokens = await generateImagePrompts({ AI: { run: async () => ({ response }) } }, 'text', input);
+		assert.equal(tokens.length, 3, 'reply variant must plan three scenes: ' + response.slice(0, 40));
+		assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).type), ['image', 'video', 'image']);
+		assert.equal(JSON.parse(tokens[0].slice(8)).q, 'forest trees');
+	}
+	/* Unreadable wrapper shapes are unwrapped instead of becoming "invalid JSON". */
+	for (const raw of [
+		[{ role: 'assistant', content: json }],
+		{ choices: [{ message: { content: [{ type: 'text', text: json }] } }] },
+		{ text: json },
+		{ response: { scenes: plan } }
+	]) {
+		const tokens = await generateImagePrompts({ AI: { run: async () => raw } }, 'text', input);
+		assert.equal(tokens.length, 3);
+	}
+});
+test('planner reports an empty reply distinctly and keeps rejecting prose-only answers', async () => {
+	const input = { topic: 'forest', script: 'Forest conservation.', minutes: 1, batch: { offset: 0, count: 3 } };
+	await assert.rejects(generateImagePrompts({ AI: { run: async () => ({ response: '' }) } }, 'text', input), /empty reply/);
+	await assert.rejects(generateImagePrompts({ AI: { run: async () => ({ response: '' }) } }, 'text', input), /planner/);
+	await assert.rejects(generateImagePrompts({ AI: { run: async () => ({ response: 'Sure! Try forest, trees and nature.' }) } }, 'text', input), /invalid JSON/);
+	/* A truncated reply salvages complete scenes but still reports the true count. */
+	await assert.rejects(generateImagePrompts({ AI: { run: async () => ({ response: '{"scenes":[{"type":"image","keywords":"forest trees"},{"type":"video","keywords":"community people"},{"type":"ima' }) } }, 'text', input), /wrong scene count/);
+});
+test('a reply planning the whole video is sliced to the requested chunk slots', async () => {
+	const entry = (type, keywords) => ({ type, keywords });
+	const full = Array.from({ length: 10 }, (_, scene) => entry([1, 8].includes(scene) ? 'video' : 'image', 'forest scene ' + scene));
+	const planner = { AI: { run: async () => ({ response: JSON.stringify({ scenes: full }) }) } };
+	const tokens = await generateImagePrompts(planner, 'text', {
+		topic: 'forest', script: 'Beginning. The whole middle idea. Conclusion.', minutes: 1,
+		batch: { offset: 6, count: 3 }
+	});
+	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).scene), [6, 7, 8]);
+	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).type), ['image', 'image', 'video']);
+	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).q), ['forest scene 6', 'forest scene 7', 'forest scene 8']);
+});
+test('a retry attempt tightens the instruction toward JSON-only output', async () => {
+	const prompts = [];
+	const entry = (type, keywords) => ({ type, keywords });
+	const reply = { response: { scenes: [entry('image', 'forest trees'), entry('video', 'community people'), entry('image', 'green leaves')] } };
+	const planner = { AI: { run: async (model, input) => { prompts.push(input.prompt); return reply; } } };
+	const base = { topic: 'forest', script: 'Forest conservation.', minutes: 1 };
+	await generateImagePrompts(planner, 'text', { ...base, batch: { offset: 0, count: 3, attempt: 0 } });
+	await generateImagePrompts(planner, 'text', { ...base, batch: { offset: 0, count: 3, attempt: 1 } });
+	assert.doesNotMatch(prompts[0], /RETRY/);
+	assert.match(prompts[1], /RETRY: an earlier attempt did not return parseable JSON/);
+	assert.match(prompts[1], /no prose before or after/);
+});
 test('scene video token returns MP4 bytes with source metadata over binary transport', async t => {
 	fixture(t); const token='pixabay:'+JSON.stringify({q:'flowers',type:'video',page:1,index:0,scene:1});
 	const response=await handleImageBinary(post('/api/image',{prompt:token}),env(),credits);
