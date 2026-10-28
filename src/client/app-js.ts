@@ -2292,6 +2292,15 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	 * capture instead of waiting for frames that never come.
 	 */
 
+	async function mediaDeadline(work, milliseconds, message) {
+		let timer = null;
+		try {
+			return await Promise.race([work, new Promise(function (_, reject) {
+				timer = setTimeout(function () { reject(new Error(message)); }, milliseconds);
+			})]);
+		} finally { if (timer) clearTimeout(timer); }
+	}
+
 	async function prepareClip(
 		video
 	) {
@@ -2313,7 +2322,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				true;
 
 
-			await video.play();
+			await mediaDeadline(video.play(), 5000, "Clip playback did not start; switching to seek capture.");
 
 
 			await waitForClipFrame(
@@ -2330,6 +2339,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 
 		catch (playError) {
+			video.pause();
 
 
 			console.error(
@@ -2830,7 +2840,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 							color:#6b7280;
 						"
 					>
-						AI Generated
+						Pixabay stock
 					</span>
 
 
@@ -3001,7 +3011,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 
 	/*
-	 * Start AI image generation.
+	 * Legacy demo initialization (no active inference route).
 	 */
 
 	prompts.forEach(
@@ -4017,6 +4027,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			null;
 
 
+		const audioConfig = { codec: "mp4a.40.2", sampleRate: sampleRate, numberOfChannels: numberOfChannels, bitrate: bitrate };
+		if (typeof AudioEncoder.isConfigSupported === "function") {
+			const support = await mediaDeadline(AudioEncoder.isConfigSupported(audioConfig), 5000, "Audio codec check timed out.");
+			if (!support.supported) throw new Error("This browser cannot encode AAC audio. Rendering a silent video instead.");
+		}
+
 		const audioEncoder =
 			new AudioEncoder({
 
@@ -4059,22 +4075,6 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			});
 
 
-		audioEncoder.configure({
-
-			codec:
-				"mp4a.40.2",
-
-			sampleRate:
-				sampleRate,
-
-			numberOfChannels:
-				numberOfChannels,
-
-			bitrate:
-				bitrate
-
-		});
-
 
 		let offset =
 			0;
@@ -4085,6 +4085,9 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 
 		try {
+			audioEncoder.configure(audioConfig);
+
+
 
 			while (
 				offset < totalFrames
@@ -4181,10 +4184,15 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				 * Backpressure.
 				 */
 
+				const audioWaitStarted = Date.now();
 				while (
 					audioEncoder.encodeQueueSize >
 					40
 				) {
+					if (encoderError) throw encoderError;
+					if (audioEncoder.state === "closed" || Date.now() - audioWaitStarted > 15000) {
+						throw new Error("The audio encoder stopped accepting samples. Rendering a silent video instead.");
+					}
 
 					await new Promise(
 						resolve =>
@@ -4247,7 +4255,17 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			}
 
 
-			await audioEncoder.flush();
+			let audioFlushTimer = null;
+			try {
+				await Promise.race([
+					audioEncoder.flush(),
+					new Promise(function (_, reject) {
+						audioFlushTimer = setTimeout(function () {
+							reject(new Error("Finalizing audio took longer than 30 seconds. Rendering a silent video instead."));
+						}, 30000);
+					})
+				]);
+			} finally { if (audioFlushTimer) clearTimeout(audioFlushTimer); }
 
 
 			if (encoderError) {
@@ -6526,6 +6544,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		if (project._manualControllers) project._manualControllers.forEach(function (controller) { controller.abort(); });
 
 		for (const ctrlKey of [
+			"_stockSearchController",
 			"_imageBatchController",
 			"_imagePromptCreateController",
 			"_seoPlanController",
@@ -6701,19 +6720,13 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				'</div>' +
 				'</div>' +
 				'<div class="va-section">' +
-				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
+				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div><a href="https://pixabay.com/" target="_blank" rel="noopener noreferrer">Stock media from Pixabay</a>' +
 				'<button type="button" class="upload-btn" id="va-upload-btn-' + n + '" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
 				'<span class="va-note">Max 5 GIF \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
 				'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
+				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include two stock video clips.</span>' +
 				'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
-				'</div>' +
-				'<div class="va-section">' +
-				'<div class="va-section-title">AI Images \u2014 Cloudflare</div>' +
-				'<textarea class="va-ai-prompt" id="va-ai-prompt-' + n + '" rows="3" placeholder="Describe the image (always landscape 16:9, 1024\u00d7576)"></textarea>' +
-				'<button type="button" class="upload-btn small" id="va-ai-btn-' + n + '" onclick="submitAiImages(' + n + ')">\u2728 Generate 2 Images</button>' +
-				'<span class="va-note" id="va-ai-status-' + n + '">2 images per submit \u00b7 landscape 16:9 \u00b7 1024\u00d7576</span>' +
-				'<div class="va-ai-results" id="va-ai-results-' + n + '"></div>' +
 				'</div>' +
 				'<div class="va-section">' +
 				'<div class="va-section-title">Audio \u2014 one MP3 (the video is as long as the MP3)</div>' +
@@ -7046,7 +7059,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	//   column 2  the video image style - the SAME ten options the
 	//             script modal offers, in the same order
 	//   column 3  the minimum length in minutes
-	//   column 4  the AI image resolution: 480, 540, 720 or 1024 px
+	//   column 4  the Pixabay image resolution: 480, 540, 720 or 1024 px
 	//             (the LONG edge; passed to both image calls)
 	//   column 5  the frame orientation: square 1:1, landscape 16:9
 	//             or portrait 9:16 (passed to both image calls)
@@ -7067,7 +7080,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	// as soon as one of them finishes.
 	//
 	// A row is finished when all four steps are through - the spoken
-	// MP3, the AI images, and the animation that stitches them - and
+	// MP3, the Pixabay images, and the animation that stitches them - and
 	// only then do Preview and Export enable, always together.
 	//
 	// Rows are deliberately independent of the "Video N" accordions:
@@ -7788,7 +7801,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	};
 
 	/*
-	 * The two new per-row columns: the rendered size of the AI images and
+	 * The two new per-row columns: the rendered size of the Pixabay images and
 	 * the frame orientation. The resolution is the LONG edge in pixels; the
 	 * short edge follows the orientation (16:9 for landscape / portrait,
 	 * 1:1 for square) so 480 / 540 / 720 stay honest names.
@@ -7894,8 +7907,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		queued: "Queued",
 		voice: "Speaking the script (MP3)",
 		timing: "Measuring the narration",
-		prompts: "Writing the image prompts",
-		images: "Rendering the AI images",
+		prompts: "Preparing Pixabay search terms",
+		images: "Fetching Pixabay images",
 		animate: "Animating the slides",
 		done: "Finished",
 		error: "Stopped"
@@ -7979,7 +7992,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 	}
 
-	/* mp3 + AI images + animation - the one definition of "finished". */
+	/* mp3 + Pixabay images + animation - the one definition of "finished". */
 	function batchRowFinished(row) {
 
 		return !!(
@@ -8037,6 +8050,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		row.objectUrls = [];
 		for (const slide of row.slides || []) {
+			if (slide.videoEl) { try { slide.videoEl.pause(); slide.videoEl.removeAttribute("src"); slide.videoEl.load(); } catch (_) {} }
 			if (slide.img && typeof slide.img.close === "function") { try { slide.img.close(); } catch (closeError) {} }
 		}
 
@@ -8612,20 +8626,20 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					'<select class="batch-style-select" data-batch-field="style" aria-label="Video image style for row ' + index + '" title="Same ten styles as the script modal">' +
 						batchStyleOptionsHTML(row.style) +
 					"</select>" +
-					'<div class="batch-row-sub">used for every AI image in this row</div>' +
+					'<div class="batch-row-sub">render treatment; stock appearance varies</div>' +
 				"</td>" +
 				'<td class="batch-cell batch-cell-min">' +
 					'<input type="number" class="batch-minutes-input" data-batch-field="minutes" min="' + BATCH_MIN_MINUTES + '" max="' + BATCH_MAX_MINUTES + '" step="1" value="' + minutes + '" aria-label="Minimum length in minutes for row ' + index + '">' +
 					'<div class="batch-row-sub">min</div>' +
 					"</td>" +
 				'<td class="batch-cell batch-cell-resolution">' +
-					'<select class="batch-resolution-select" data-batch-field="resolution" aria-label="AI image resolution for row ' + index + '" title="Long edge of every AI image in this row. The label is the size the worker really requests.">' +
+					'<select class="batch-resolution-select" data-batch-field="resolution" aria-label="Output frame resolution for row ' + index + '" title="Output frame long edge. Pixabay source dimensions vary.">' +
 					batchResolutionOptionsHTML(row.resolution) +
 					"</select>" +
 					'<div class="batch-row-sub">' + frame.width + "\u00d7" + frame.height + "</div>" +
 					"</td>" +
 				'<td class="batch-cell batch-cell-orientation">' +
-					'<select class="batch-orientation-select" data-batch-field="orientation" aria-label="Frame orientation for row ' + index + '" title="Frame shape of every AI image in this row">' +
+					'<select class="batch-orientation-select" data-batch-field="orientation" aria-label="Frame orientation for row ' + index + '" title="Output frame shape; guides stock search orientation">' +
 					batchOrientationOptionsHTML(row.orientation) +
 					"</select>" +
 					'<div class="batch-row-sub">frame</div>' +
@@ -9161,13 +9175,13 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	async function requestBatchPrompts(row, batch) {
 
 		const caps = await studioOffload.capabilities();
-		const compact = caps.compactPrompts ? studioOffload.compactIdea(row.script, batchRowTopic(row)) : null;
+		const compact = null;
 		if (caps.compactPrompts) {
 			const owner = { controller: null }; row._promptOwner = owner;
 			const response = await studioOffload.jsonRequest("/api/image-prompts", {
 				method: "POST", headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ topic: batchRowTopic(row), minutes: row.minutes, style: row.style, batch: batch,
-					resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value, scriptIdea: compact })
+					resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value, script: String(row.script || "") })
 			}, 60000, {
 				isCancelled: function () { return Boolean(row.stopRequested); },
 				setController: function (controller) { owner.controller = controller; },
@@ -9228,7 +9242,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 				if (!response.ok || !data.success) {
 
-					const error = new Error((data && data.error) || ("Image prompts failed (HTTP " + response.status + ")"));
+					const error = new Error((data && data.error) || ("Stock search terms failed (HTTP " + response.status + ")"));
 					error.retryable = response.status >= 500 || response.status === 429 || response.ok;
 					throw error;
 
@@ -9244,7 +9258,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				if (!prompts.length) {
 
 					throw new Error(
-						"The image-prompt model returned no scene prompts"
+						"No Pixabay scene selections were prepared"
 					);
 
 				}
@@ -9446,7 +9460,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				onImage: function (blob, index) {
 					if (row.stopRequested) return;
 					const url = createStudioObjectUrl(blob); row.objectUrls.push(url);
-					images.push({ blob: blob, url: url, index: index });
+					images.push({ blob: blob, url: url, index: index, stockSource: blob.stockSource || null });
 				}
 			});
 			refreshCredits();
@@ -9625,6 +9639,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 							return decodeTask.then(
 								function (blob) {
+									blob.stockSource = event.source || null;
 
 									if (row.stopRequested) {
 										return;
@@ -9690,7 +9705,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						 * Session #244: a stream that stops sending lines must not
 						 * hang the row open. Each read gets an idle budget; a stall
 						 * is a retryable timeout, so the step is retried quietly
-						 * instead of leaving the row "Rendering the AI images"
+						 * instead of leaving the row "Fetching Pixabay images"
 						 * forever (or surfacing an abort message).
 						 */
 						const chunk =
@@ -9839,6 +9854,27 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 	}
 
+	/* Fit every planned scene inside narration so neither required clip is truncated away. */
+	function fitStockSceneTimeline(slides, seconds) {
+		if (!slides.length || !Number.isFinite(seconds) || seconds <= 0) return slides;
+		const totalFrames = Math.max(slides.length, Math.round(seconds * 30));
+		const windowFrames = Math.max(1, Math.floor(totalFrames / slides.length));
+		let used = 0;
+		const stills = slides.filter(function (slide) { return slide.type !== "mp4"; });
+		slides.forEach(function (slide) {
+			if (slide.type === "mp4") {
+				const frames = Math.min(Math.max(1, Math.floor(slide.duration * 30)), windowFrames);
+				slide._partialSec = frames / 30; used += frames;
+			}
+		});
+		let remaining = totalFrames - used;
+		stills.forEach(function (slide, index) {
+			const frames = Math.floor(remaining / (stills.length - index));
+			slide._partialSec = frames / 30; remaining -= frames;
+		});
+		return slides;
+	}
+
 	/* Step 4: the animation - decoded <img> slides in play order. */
 	async function buildBatchSlides(row, images) {
 
@@ -9851,6 +9887,21 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 				throw batchError("The row was stopped", "AbortError");
 
+			}
+
+			if (images[index].blob.type === "video/mp4") {
+				const video = document.createElement("video");
+				try {
+					const duration = await probeMp4Duration(video, images[index].url);
+					if (row.stopRequested) throw batchError("The row was stopped", "AbortError");
+					if (!Number.isFinite(duration) || duration <= 0 || duration > MP4_MAX_DURATION_S) throw new Error("Pixabay clip exceeds the supported duration");
+					slides.push({ id: "batch-" + row.id + "-clip-" + index, cardId: "", type: "mp4", img: video, videoEl: video, duration: duration });
+				} catch (error) {
+					video.removeAttribute("src"); video.load();
+					slides.forEach(function (slide) { if (slide.videoEl) { slide.videoEl.removeAttribute("src"); slide.videoEl.load(); } });
+					throw error;
+				}
+				continue;
 			}
 
 			const img =
@@ -9874,11 +9925,11 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 					await Promise.race([
 						img.decode(),
-						new Promise(function (resolve) {
+						new Promise(function (_, reject) {
 
 							decodeTimer =
 								setTimeout(
-									resolve,
+									function () { reject(new Error("Pixabay photo decoding timed out; retry this row.")); },
 									BATCH_SLIDE_DECODE_MS
 								);
 
@@ -9890,7 +9941,9 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			}
 			catch (loadError) {
 
-				console.warn("[batch-table] slide " + (index + 1) + " decode warning", loadError);
+				img.src = "";
+				slides.forEach(function (slide) { if (slide.videoEl) { slide.videoEl.removeAttribute("src"); slide.videoEl.load(); } });
+				throw new Error("Pixabay photo " + (index + 1) + " could not be decoded: " + (loadError.message || "invalid image"));
 
 			}
 			finally {
@@ -9930,6 +9983,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		}
 
+		fitStockSceneTimeline(slides, row.audio && row.audio.duration);
 		return slides;
 
 	}
@@ -10012,7 +10066,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 			row.prompts = [];
 			row.images = [];
-			setBatchStage(row, "prompts", "Writing the first three scene prompts");
+			setBatchStage(row, "prompts", "Preparing the first three Pixabay selections");
 			/*
 			 * Two chunks in flight when the Worker advertises it (bug fix:
 			 * image generation felt serial). Each chunk is three images, so
@@ -10052,6 +10106,11 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			} finally {
 				if (row._promptOwner && row._promptOwner.controller) row._promptOwner.controller.abort();
 				row._promptOwner = null;
+			}
+
+			const clips = row.images.filter(function (media) { return media.blob.type === "video/mp4"; });
+			if (clips.length !== 2 || new Set(clips.map(function (media) { return (media.stockSource || media.blob.stockSource || {}).id; })).size !== 2) {
+				throw new Error("The scene plan requires two distinct Pixabay video clips; retry with different scene keywords.");
 			}
 
 			row.slides =
@@ -10105,13 +10164,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				batchErrorBrief(rowError)
 			);
 
-			row.error = "";
-
-			setBatchStage(
-				row,
-				"ready",
-				""
-			);
+			row.error = stopped ? "" : batchErrorBrief(rowError);
+			setBatchStage(row, stopped ? "ready" : "error", row.error);
 
 		}
 
@@ -10718,34 +10772,17 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			const timestampMs =
 				batchPreviewTimeMs();
 
-			const slideSeconds =
-				typeof slideDurationSec === "function"
-					? Math.max(1, slideDurationSec(row.slides[0]) || 9)
-					: 9;
-
-			const totalSeconds =
-				row.slides.length * slideSeconds;
-
-			const loopMs =
-				totalSeconds * 1000;
-
-			const localMs =
-				loopMs > 0
-					? timestampMs % loopMs
-					: 0;
-
-			const index =
-				Math.min(
-					row.slides.length - 1,
-					Math.floor(localMs / (slideSeconds * 1000))
-				);
-
-			const slide =
-				row.slides[index];
-
-			/* The same Ken Burns move the exporter makes: slow zoom-in. */
-			const phase =
-				(localMs % (slideSeconds * 1000)) / (slideSeconds * 1000);
+			const durations = row.slides.map(function (slide) { return slideDurationSec(slide); });
+			const totalSeconds = durations.reduce(function (sum, seconds) { return sum + seconds; }, 0);
+			const localSeconds = totalSeconds > 0 ? timestampMs / 1000 % totalSeconds : 0;
+			let index = 0, sceneStart = 0;
+			while (index < row.slides.length - 1 && localSeconds >= sceneStart + durations[index]) { sceneStart += durations[index]; index++; }
+			const slide = row.slides[index];
+			const phase = (localSeconds - sceneStart) / durations[index];
+			if (slide.type === "mp4" && !slide.videoEl.seeking) {
+				const targetTime = Math.min(localSeconds - sceneStart, Math.max(0, slide.duration - 0.001));
+				if (Math.abs(slide.videoEl.currentTime - targetTime) > 0.1) { try { slide.videoEl.currentTime = targetTime; } catch (_) {} }
+			}
 
 			const zoom =
 				1 + 0.08 * phase;
@@ -10763,14 +10800,14 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			if (
 				slide &&
 				slide.img &&
-				slide.img.naturalWidth
+				(slide.img.naturalWidth || slide.img.videoWidth) && (slide.type !== "mp4" || slide.videoEl.readyState >= 2)
 			) {
 
 				const sourceWidth =
-					slide.img.naturalWidth;
+					slide.img.naturalWidth || slide.img.videoWidth;
 
 				const sourceHeight =
-					slide.img.naturalHeight;
+					slide.img.naturalHeight || slide.img.videoHeight;
 
 				const cover =
 					Math.max(
@@ -12025,6 +12062,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				const asset = {
 					kind: "mp4",
 					file: file,
+					stockSource: file.stockSource || null,
 					videoEl: probed,
 					duration: clipDuration,
 					url: clipURL,
@@ -12049,6 +12087,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 							? "gif"
 							: "image",
 					file: file,
+					stockSource: file.stockSource || null,
 					url:
 						createStudioObjectUrl(
 							file
@@ -12858,6 +12897,13 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		const project =
 			videoProjects[n - 1];
 
+		if (project._requiresStockClips) {
+			const clips = project.assets.filter(function (a) { return a.imagePromptFlowId && a.kind === "mp4"; });
+			if (clips.length !== 2 || new Set(clips.map(function (a) { return a.stockSource && a.stockSource.id; })).size !== 2) {
+				throw new Error("This planned video requires two distinct Pixabay clips. Retry the scene flow before export.");
+			}
+		}
+
 		const slides =
 			[];
 
@@ -12872,9 +12918,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				getAudioContext();
 
 			const decoded =
-				await context.decodeAudioData(
-					arrayBuffer.slice(0)
-				);
+				await mediaDeadline(context.decodeAudioData(arrayBuffer.slice(0)), 20000, "Editor audio decoding timed out; retry this video.");
 
 			project.audio = {
 				name:
@@ -12988,7 +13032,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			}
 			else {
 
-				await img.decode();
+				await mediaDeadline(img.decode(), 10000, "Editor photo decoding timed out; retry this video.");
 
 				slides.push(
 					{
@@ -13006,6 +13050,9 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		}
 
+		if (project.assets.filter(function (asset) { return asset.imagePromptFlowId && asset.kind === "mp4"; }).length === 2) {
+			fitStockSceneTimeline(slides, project.audio && project.audio.duration);
+		}
 		return slides;
 
 	}
@@ -13395,511 +13442,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	// (the 40% right panel of each accordion)
 	// =========================================================
 
-	const AI_IMAGES_PER_PROMPT =
-		2;
-
-	/*
-	 * Historical DISPLAY hint for the
-	 * generated images: 854x480 (16:9).
-	 *
-	 * Neither constant is read anywhere
-	 * any more - the AI panel crops with
-	 * CSS (.va-ai-img, aspect-ratio
-	 * 854 / 480) - and they never
-	 * reached the model. The route that
-	 * really renders the images
-	 * (runImageModel() in
-	 * src/modules/image-batch.ts) asks
-	 * SDXL for 1024x576 landscape, so
-	 * 854x480 is NOT the size of a
-	 * generated file. Session #211 left
-	 * them in place (dead code, listed in
-	 * toberesolved.md) but corrected the
-	 * copy around them.
-	 */
-	const AI_IMAGE_WIDTH =
-		854;
-
-	const AI_IMAGE_HEIGHT =
-		480;
-
-	/*
-	 * The Cloudflare worker's
-	 * /image/gen route (see the
-	 * worker's fetch handler): same
-	 * env.AI.run(MODEL, {prompt}) as
-	 * the existing fetchAIImage(),
-	 * but with the prompt taken from
-	 * this accordion's form. Each
-	 * submit = AI_IMAGES_PER_PROMPT
-	 * requests (variant 1, 2) = 2
-	 * images, sent together
-	 * (Promise.all), not one after the
-	 * other. Every image is 1024x576
-	 * landscape 16:9 (the worker's
-	 * IMAGE_WIDTH / IMAGE_HEIGHT
-	 * defaults).
-	 */
-	const AI_ENDPOINT =
-		(prompt, variant) =>
-			"/image/gen?prompt=" +
-				encodeURIComponent(
-					prompt
-				) +
-				"&variant=" +
-				variant;
-
-	/*
-	 * Submits the prompt from this
-	 * accordion's right panel and
-	 * accumulates the returned images
-	 * in its results list.
-	 */
-	async function submitAiImages(
-		n
-	) {
-
-		const promptEl =
-			document.getElementById(
-				"va-ai-prompt-" + n
-			);
-
-		const btn =
-			document.getElementById(
-				"va-ai-btn-" + n
-			);
-
-		const statusEl =
-			document.getElementById(
-				"va-ai-status-" + n
-			);
-
-		const resultsEl =
-			document.getElementById(
-				"va-ai-results-" + n
-			);
-
-		if (
-			!promptEl ||
-			!resultsEl
-		) {
-			return;
-		}
-
-		/*
-		 * Session #211: while THIS video's script & style walkthrough is
-		 * rendering its own images, a manual submit would open a second
-		 * stream into the same gallery and spend the same credits twice.
-		 * The button is disabled for the duration; this guard also covers
-		 * a keyboard / programmatic click.
-		 */
-		const flowProject =
-			videoProjects[n - 1];
-
-		if (flowProject && flowProject._imageFlowActive) {
-
-			if (statusEl) {
-				statusEl.textContent =
-					"The script & image-style window is generating this video's AI images — the manual button unlocks when it finishes.";
-			}
-
-			return;
-
-		}
-
-		const prompt =
-			promptEl.value.trim();
-
-		if (!prompt) {
-			alert(
-				"Enter an image prompt first."
-			);
-			return;
-		}
-
-		/*
-		 * Daily image credits (10,000 per day on every plan).
-		 * The worker enforces the real limit; this pre-check
-		 * just avoids a doomed pair of requests.
-		 */
-		if (
-			creditState &&
-			creditState.remaining &&
-			creditState.remaining.images !== null &&
-			creditState.remaining.images <= 0
-		) {
-			const quotaMessage =
-				"Daily image credits used up (" +
-				creditFormatNumber(
-					creditImagesLimit()
-				) +
-				" per day on the " +
-				creditPlanLabel() +
-				" plan). Credits renew at midnight (UTC+8)." +
-				(PLAN_MODE === "freemium"
-					? " Create a free account for 10,000 images per day."
-					: "");
-			if (statusEl) {
-				statusEl.textContent = quotaMessage;
-			}
-			alert(quotaMessage);
-			return;
-		}
-
-		/*
-		 * Max 4 images in the results
-		 * panel. If it already holds 4
-		 * and the user generates again,
-		 * clear it first, then show the
-		 * new pair.
-		 */
-		if (resultsEl.children.length >= 4) {
-
-			Array.from(
-				resultsEl.children
-			).forEach(
-				(card) => {
-					if (card._displayUrl) {
-						releaseStudioObjectUrl(
-							card._displayUrl
-						);
-					}
-				}
-			);
-
-			resultsEl.innerHTML =
-				"";
-
-		}
-
-		if (btn) {
-			btn.disabled =
-				true;
-		}
-
-		if (statusEl) {
-			statusEl.textContent =
-				"Generating...";
-		}
-
-		let failures =
-			0;
-
-		let lastError =
-			"";
-
-		/*
-		 * Both variants are requested at the same time, so a click
-		 * produces the pair together instead of one after the other.
-		 * (A 401/429 fails both, which the summary below reports once.)
-		 */
-		const variants = [];
-		for (let variant = 1; variant <= AI_IMAGES_PER_PROMPT; variant++) {
-			variants.push(variant);
-		}
-
-		let outcomes = [];
-
-		try {
-
-			outcomes = await Promise.all(variants.map(function (variant) {
-				return manualImageTaskQueue.enqueue(
-					"manual-video-" + n,
-					async function () {
-						try {
-							const response = await studioOffload.mediaResponse(AI_ENDPOINT(prompt, variant), {}, {
-								isCancelled: function () { return Boolean(flowProject && flowProject._deleted); },
-								setController: function (controller) {
-									if (flowProject) { if (!flowProject._manualControllers) flowProject._manualControllers = new Set(); flowProject._manualControllers.add(controller); }
-								},
-								clearController: function (controller) { if (flowProject && flowProject._manualControllers) flowProject._manualControllers.delete(controller); }
-							});
-							if (!response.ok) {
-								/* The worker returns {success:false, error:"..."}. */
-								let message = "Image generation failed";
-								try {
-									const errJson = await response.json();
-									if (errJson && errJson.error) message = errJson.error;
-									/* 429 carries the authoritative counters. */
-									if (errJson && errJson.credits) applyCredits(errJson.credits);
-								}
-								catch (jsonError) {
-									/* keep default */
-								}
-								const httpError = new Error(message);
-								httpError.status = response.status;
-								throw httpError;
-							}
-							const blob = await response.blob();
-							if (flowProject && flowProject._deleted) {
-								return { ok: false, status: 0, cancelled: true, message: "The video was deleted" };
-							}
-							const liveIdx = flowProject ? videoProjects.indexOf(flowProject) + 1 : n;
-							if (liveIdx > 0) {
-								addAiResultCard(liveIdx, prompt, variant, blob);
-							}
-							return { ok: true };
-						}
-						catch (aiError) {
-							console.error(aiError);
-							return {
-								ok: false,
-								status: aiError && aiError.status ? aiError.status : 0,
-								message: aiError instanceof Error ? aiError.message : String(aiError)
-							};
-						}
-					},
-					{
-						meta: {
-							kind: "manual-ai",
-							videoIndex: n,
-							project: flowProject || null
-						},
-						isCancelled: function () {
-							return Boolean(flowProject && flowProject._deleted);
-						}
-					}
-				).catch(function (queueError) {
-					return {
-						ok: false,
-						cancelled: true,
-						status: 0,
-						message: queueError instanceof Error ? queueError.message : String(queueError)
-					};
-				});
-			}));
-
-		}
-		finally {
-
-			if (btn) {
-				btn.disabled =
-					false;
-			}
-
-		}
-
-		let cancelledCount = 0;
-
-		outcomes.forEach(function (outcome) {
-			if (outcome.ok) return;
-			if (outcome.cancelled) {
-				cancelledCount++;
-				return;
-			}
-			failures++;
-			lastError = outcome.message;
-		});
-
-		if (cancelledCount === AI_IMAGES_PER_PROMPT) {
-			return;
-		}
-
-		if (statusEl) {
-			statusEl.textContent =
-				failures
-					? failures +
-						" of " +
-						AI_IMAGES_PER_PROMPT +
-						" failed: " +
-						lastError
-					: "Done \u2014 landscape 16:9 \u00b7 1024\u00d7576";
-		}
-
-		/*
-		 * Pick up the counters the worker just wrote
-		 * (and the remaining images after a partial
-		 * success).
-		 */
-		refreshCredits();
-
-		if (failures === AI_IMAGES_PER_PROMPT) {
-			alert(
-				"Image generation failed: " +
-					lastError
-			);
-		}
-
-	}
-
-	/*
-	 * One generated image card:
-	 * 480px landscape preview, an
-	 * "Add to Video" button (adds it
-	 * to this accordion's gallery)
-	 * and a fullscreen button.
-	 */
-	function addAiResultCard(
-		n,
-		prompt,
-		variant,
-		blob
-	) {
-
-		const resultsEl =
-			document.getElementById(
-				"va-ai-results-" + n
-			);
-
-		if (!resultsEl) {
-			return;
-		}
-
-		const url =
-			createStudioObjectUrl(
-				blob
-			);
-
-		const card =
-			document.createElement(
-				"div"
-			);
-
-		card.className =
-			"va-ai-card";
-
-		/*
-		 * Remember the object URL so the
-		 * results panel can revoke it
-		 * when it clears itself.
-		 */
-		card._displayUrl =
-			url;
-
-		const img =
-			new Image();
-
-		img.className =
-			"va-ai-img";
-
-		img.src =
-			url;
-
-		img.alt =
-			prompt;
-
-		const name =
-			"ai-video" +
-			n +
-			"-v" +
-			variant +
-			"-" +
-			Date.now() +
-			".png";
-
-		const file =
-			new File(
-				[blob],
-				name,
-				{
-					type:
-						blob.type ||
-						"image/png",
-				}
-			);
-
-		const label =
-			document.createElement(
-				"div"
-			);
-
-		label.className =
-			"va-ai-label";
-
-		label.textContent =
-			"Image " +
-			variant +
-			" of " +
-			AI_IMAGES_PER_PROMPT;
-
-		label.title =
-			prompt;
-
-		const row =
-			document.createElement(
-				"div"
-			);
-
-		row.className =
-			"va-ai-actions";
-
-		const addBtn =
-			document.createElement(
-				"button"
-			);
-
-		addBtn.type =
-			"button";
-
-		addBtn.className =
-			"upload-btn small";
-
-		addBtn.textContent =
-			"+ Add to Video";
-
-		addBtn.addEventListener(
-			"click",
-			() =>
-				addAiToVideo(
-					n,
-					file,
-					blob
-				)
-		);
-
-		const fsBtn =
-			document.createElement(
-				"button"
-			);
-
-		fsBtn.type =
-			"button";
-
-		fsBtn.className =
-			"upload-btn small";
-
-		fsBtn.textContent =
-			"Fullscreen";
-
-		fsBtn.addEventListener(
-			"click",
-			() =>
-				showAiFullscreen(
-					url
-				)
-		);
-
-		row.appendChild(
-			addBtn
-		);
-
-		row.appendChild(
-			fsBtn
-		);
-
-		card.appendChild(
-			img
-		);
-
-		card.appendChild(
-			label
-		);
-
-		card.appendChild(
-			row
-		);
-
-		resultsEl.appendChild(
-			card
-		);
-
-	}
-
-	/*
-	 * Adds a generated image to this
-	 * accordion's own gallery (counts
-	 * against the image cap).
-	 */
+	/* Automatic mixed stock scenes are inserted into the shared media gallery. */
 	function addAiToVideo(
 		n,
 		file,
@@ -13945,6 +13488,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		const asset = {
 			kind: "image",
 			file: file,
+			stockSource: blob.stockSource || file.stockSource || null,
 			url: url,
 			card: null,
 			imagePromptFlowId: imagePromptFlowId ? String(imagePromptFlowId) : null,
@@ -13979,7 +13523,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 	/*
 	 * Fullscreen preview overlay for
-	 * a generated image.
+	 * a stock image.
 	 */
 	function showAiFullscreen(
 		url
@@ -14151,8 +13695,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			'<button type="button" class="auth-close" id="auth-close" aria-label="Close">&times;</button>' +
 			'<div class="auth-title" id="auth-title">\ud83c\udfac YouTube Vibe Studio</div>' +
 			'<div class="auth-sub" id="auth-sub">Sign in to use the studio</div>' +
-			'<div class="auth-plan-note">Every plan: 10,000 AI images every day \u00b7 unlimited videos, AI scripts and voiceovers. Server load is balanced automatically, so bursts queue instead of failing.</div>' +
-			'<div class="auth-guest-note">No account? <a href="/free">Open the free studio</a> \u2014 the same 10,000 AI images a day, counted per IP address.</div>' +
+			'<div class="auth-plan-note">Every plan: 10,000 stock image imports/day (app fair use; Pixabay rate limits also apply) \u00b7 unlimited videos, AI scripts and voiceovers. Server load is balanced automatically, so bursts queue instead of failing.</div>' +
+			'<div class="auth-guest-note">No account? <a href="/free">Open the free studio</a> \u2014 stock image search (Pixabay rate limits apply), counted per IP address.</div>' +
 			'<div class="auth-error" id="auth-error" role="alert"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
 			'<label for="auth-email">Email</label>' +
@@ -15145,7 +14689,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	//  image allowance is spent.
 	//
 	//  every plan unlimited videos / AI scripts / voiceovers,
-	//             10,000 AI images per day (free, paid_user
+	//             10,000 Pixabay images per day (free, paid_user
 	//             and the anonymous guest tier)
 	//  Every counter renews at midnight Asia/Taipei (UTC+8).
 	// =========================================================
@@ -15427,7 +14971,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		popover.appendChild(
 			creditRow(
-				"\\ud83d\\uddbc AI images",
+				"\\ud83d\\uddbc Pixabay images",
 				creditImagesValue()
 			)
 		);
@@ -17755,7 +17299,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 
 	// =========================================================
-	// MODULE 8b: seo-walkthrough + one-shot AI image generation
+	// MODULE 8b: seo-walkthrough + one-shot Pixabay image generation
 	//
 	// Generate SEO Script now runs a walkthrough:
 	//   1. The "Upload Image, GIF or MP4" button is disabled and
@@ -17957,39 +17501,6 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 	}
 
-	/*
-	 * The accordion's own "Generate 2 Images" button (the Cloudflare AI
-	 * Images panel). Session #211: while the script & style walkthrough of
-	 * THIS video is rendering its images, the manual button is locked -
-	 * a second stream would race the walkthrough's own /api/image-batch
-	 * call for the same gallery and the same credits. Other accordions keep
-	 * their own button enabled and may generate at the same time: this is
-	 * strictly per video (the va-ai-btn-<n> button), never global.
-	 */
-	function setVaAiGenerateEnabled(
-		n,
-		enabled
-	) {
-
-		const btn =
-			document.getElementById(
-				"va-ai-btn-" + n
-			);
-
-		if (!btn) {
-			return;
-		}
-
-		btn.disabled =
-			!enabled;
-
-		btn.title =
-			enabled
-				? ""
-				: "This video's AI images are being generated from the script & image-style window. The button unlocks when that flow finishes.";
-
-	}
-
 	function setScriptLoading(
 		n,
 		on
@@ -18173,7 +17684,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			'</div>' +
 			'<div id="seo-wt-loading-' + n + '">' +
 			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>AI is planning two SEO keyword sets for <b id="seo-wt-topic-' + n + '"></b>\\u2026</span></div>' +
-			'<span class="va-note">You can close this window while you wait \\u2014 the SEO plan and the script keep generating in the background, the modal re-opens itself when there is something to choose, and the finished script lands in Video ' + n + ' \\u00b7 Script. The Upload Image, GIF or MP4 button stays disabled until the generated images are in the gallery.</span>' +
+			'<span class="va-note">You can close this window while you wait \\u2014 the SEO plan and the script keep generating in the background, the modal re-opens itself when there is something to choose, and the finished script lands in Video ' + n + ' \\u00b7 Script. The Upload Image, GIF or MP4 button stays disabled until the Pixabay images are in the gallery.</span>' +
 			'</div>' +
 			'<div id="seo-wt-sets-' + n + '" style="display:none">' +
 			'<div class="va-note">Pick the keyword set that best targets your script topic. The script will say its long-tail keyword at least once and each short keyword at least twice. This window stays open for you \\u2014 other videos keep their own windows.</div>' +
@@ -18181,7 +17692,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			'</div>' +
 			'<div id="seo-wt-style-' + n + '" style="display:none">' +
 			'<div id="seo-wt-selected-' + n + '"></div>' +
-			'<label class="seo-wt-style-label" for="seo-wt-style-select-' + n + '">Video image style (used consistently for every AI-generated image)</label>' +
+			'<label class="seo-wt-style-label" for="seo-wt-style-select-' + n + '">Video treatment (Pixabay stock appearance varies)</label>' +
 			'<select id="seo-wt-style-select-' + n + '" aria-describedby="seo-wt-style-note-' + n + '">' + seoImageStyleOptionsHTML(selectedStyle) + '</select>' +
 			'<span class="va-note" id="seo-wt-style-note-' + n + '">Choose one visual style. The model will create broad scenes from the script idea, using this style consistently. Image count follows script length: 10 for 1 minute, 14 for 2\\u20133 minutes, 20 for 4\\u20136 minutes. Every scene prompt is written as three paragraphs of visual detail, so each image is fully art-directed instead of a one-line guess.</span>' +
 			'<span class="va-note">Nothing is lost if you close this window after pressing Generate: the script and its images keep running in the background for Video ' + n + '.</span>' +
@@ -18192,7 +17703,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			'</div>' +
 			'<div id="seo-wt-script-' + n + '" style="display:none">' +
 			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>Writing the Video ' + n + ' narration script from the selected keyword set\\u2026</span></div>' +
-			'<span class="va-note"><b>You can close this window while you wait for the SEO script.</b> Closing only hides this window \\u2014 it does not cancel anything. The script keeps generating, the plain narration text appears in Video ' + n + ' \\u00b7 Script, and the AI images start by themselves right after. Press \\u2728 Generate SEO Script again to bring this window back.</span>' +
+			'<span class="va-note"><b>You can close this window while you wait for the SEO script.</b> Closing only hides this window \\u2014 it does not cancel anything. The script keeps generating, the plain narration text appears in Video ' + n + ' \\u00b7 Script, and the Pixabay images start by themselves right after. Press \\u2728 Generate SEO Script again to bring this window back.</span>' +
 			'<span class="va-note" id="seo-wt-script-status-' + n + '">Waiting for the script\\u2026</span>' +
 			'</div>' +
 			'<div class="seo-wt-error" id="seo-wt-error-' + n + '"></div>' +
@@ -18902,7 +18413,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	/*
 	 * Step 3 + 4 of the walkthrough.
 	 *
-	 * One POST writes the scene prompts, one POST renders every image.
+	 * The text LLM plans stock keywords; delivery routes import photos and two MP4 clips.
 	 * No interval timers, no gallery watcher, no job URL to create or
 	 * destroy: the batch stream is both the progress and the completion
 	 * signal, so there is nothing to clean up afterwards.
@@ -18919,6 +18430,15 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			document.getElementById(
 				"va-ai-status-" + n
 			);
+		// Replace only prior automatic scenes on rerun; preserve manual uploads.
+		project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
+		project._requiresStockClips = true;
+		for (const asset of project.assets.filter(function (a) { return a.imagePromptFlowId; })) {
+			if (asset.videoEl) { try { asset.videoEl.pause(); asset.videoEl.removeAttribute("src"); asset.videoEl.load(); } catch (_) {} }
+			if (asset.card && asset.card.parentNode) asset.card.parentNode.removeChild(asset.card);
+			if (asset.url) releaseStudioObjectUrl(asset.url);
+		}
+		project.assets = project.assets.filter(function (a) { return !a.imagePromptFlowId; });
 		const availableImages =
 			Math.max(
 				0,
@@ -18935,7 +18455,6 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		 * runs (every exit path of this flow ends there). Other videos are
 		 * untouched and can still generate their own images at the same time.
 		 */
-		setVaAiGenerateEnabled(n, false);
 
 		/* A second run for this video cancels the previous one's prompt/batch streams. */
 		if (project._imagePromptCreateController) {
@@ -18947,7 +18466,6 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			project._imageBatchController = null;
 		}
 
-		project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
 		const myFlowSeq = project._imageFlowSeq;
 
 		project.imagePrompts = null;
@@ -18959,20 +18477,20 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		project._imageFlowStopReason = "";
 		project._imageFlowStartedAt = Date.now();
 
-		if (availableImages <= 0) {
+		if (availableImages < 2 || videoCounts(project).clips > MAX_MP4_UPLOADS - 2) {
 			await finalizeImagePromptFlow(
 				n,
-				"This video already has the maximum of " + MAX_IMAGE_UPLOADS + " still images, so no more AI images can be added."
+				"Make room for at least two photos and two Pixabay video clips in this gallery."
 			);
 			return;
 		}
 
 		if (statusEl) {
 			statusEl.textContent =
-				"Writing your " + style + " scene prompts from the script…";
+				"Planning Pixabay scene keywords from the full script…";
 		}
 
-		const target = Math.min(imageSceneTarget(project._seoMinutes || 1), availableImages);
+		const target = Math.min(imageSceneTarget(project._seoMinutes || 1), availableImages + 2);
 		project.imagePrompts = [];
 		project.imagePromptTarget = target;
 		project.imagePromptFlowId = "imgflow-" + n + "-" + myFlowSeq + "-" + Date.now().toString(36);
@@ -18989,7 +18507,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				},
 				request: async function (batch) {
 					const caps = await studioOffload.capabilities();
-					const compact = caps.compactPrompts ? studioOffload.compactIdea(project.script, project._seoTopic) : null;
+					const compact = null;
 					const sendPrompt = caps.compactPrompts ? async function (url, init, timeout, owner, key, consume) {
 						const response = await studioOffload.jsonRequest(url, init, timeout, {
 							isCancelled: isCancelled,
@@ -19003,7 +18521,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
 							topic: project._seoTopic || "my video", minutes: project._seoMinutes || 1,
-							style: style, script: compact ? undefined : (project.script || ""), scriptIdea: compact || undefined, keywordSet: project.selectedSeoSet || null,
+							style: style, script: project.script || "", sceneTotal: target, keywordSet: project.selectedSeoSet || null,
 							batch: batch
 						})
 					}, IMAGE_PROMPT_REQUEST_TIMEOUT_MS, project, "_imagePromptCreateController", async function (response) {
@@ -19031,7 +18549,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			if (isCancelled()) return;
 			project._imageFlowStopReason = project._imageFlowStopReason ||
 				(batchIsAbortError(error) ? "Scene prompt request was interrupted after bounded retries." :
-					"Image prompts could not be generated or rendered: " + (error.message || String(error)));
+					"Stock search terms could not be generated or rendered: " + (error.message || String(error)));
 		}
 		if (isCancelled()) return;
 		const finalN = videoProjects.indexOf(project) + 1;
@@ -19045,6 +18563,35 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	 * it arrives, so a 10-image batch is on screen in one pass instead of
 	 * trickling in every 20 seconds.
 	 */
+	async function insertStockScene(n, blob, flowId, sceneIndex, stale) {
+		const project = videoProjects[n - 1];
+		if (!project || stale()) return false;
+		if (project.assets.some(function (a) { return a.imagePromptFlowId === flowId && a.sceneIndex === sceneIndex; })) return true;
+		const file = new File([blob], "pixabay-scene-" + sceneIndex + (blob.type === "video/mp4" ? ".mp4" : ".jpg"), { type: blob.type });
+		file.stockSource = blob.stockSource || null;
+		if (blob.type !== "video/mp4") {
+			const inserted = addAiToVideo(n, file, blob, flowId, true);
+			if (inserted) project.assets[project.assets.length - 1].sceneIndex = sceneIndex;
+			return inserted;
+		}
+		if (videoCounts(project).clips >= MAX_MP4_UPLOADS) return false;
+		const url = createStudioObjectUrl(blob), video = document.createElement("video");
+		try {
+			const duration = await probeMp4Duration(video, url);
+			if (stale() || project._deleted || videoCounts(project).clips >= MAX_MP4_UPLOADS) { releaseStudioObjectUrl(url); video.removeAttribute("src"); video.load(); return false; }
+			if (!Number.isFinite(duration) || duration <= 0 || duration > MP4_MAX_DURATION_S) throw new Error("Unsupported Pixabay clip duration");
+			const asset = { kind: "mp4", file: file, stockSource: blob.stockSource, videoEl: video, duration: duration,
+				url: url, card: null, imagePromptFlowId: flowId, sceneIndex: sceneIndex };
+			project.assets.push(asset);
+			const liveN = videoProjects.indexOf(project) + 1;
+			buildVaCard(liveN, asset); updateVideoStatus(liveN);
+			return true;
+		} catch (error) {
+			project.assets = project.assets.filter(function (a) { if (a.url !== url) return true; if (a.card && a.card.parentNode) a.card.parentNode.removeChild(a.card); return false; });
+			releaseStudioObjectUrl(url); video.removeAttribute("src"); video.load(); throw error;
+		}
+	}
+
 	async function runBinaryEditorImages(n, prompts, flowId, project, ownerFlowSeq, sceneOffset) {
 		const seq = typeof ownerFlowSeq === "number" ? ownerFlowSeq : project._imageFlowSeq;
 		const stale = function () { return Boolean(project._deleted || !project._imageFlowActive || project._imageFlowSeq !== seq); };
@@ -19054,23 +18601,15 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				priority: function () { return project.el && project.el.contains(document.activeElement) ? 2 : 0; },
 				setController: function (controller) { if (!stale()) project._imageBatchController = controller; else controller.abort(); },
 				clearController: function (controller) { if (project._imageBatchController === controller) project._imageBatchController = null; },
-				onImage: function (blob, index) {
+				onImage: async function (blob, index) {
 					if (stale()) return;
 					const liveN = videoProjects.indexOf(project) + 1;
 					if (liveN <= 0) return;
-					const name = "ai-video" + liveN + "-seo-" + ((Number(sceneOffset) || 0) + index + 1) + "-" + Date.now() + ".png";
-					const file = typeof File === "function" ? new File([blob], name, { type: blob.type }) : blob;
-					if (!file.name) { try { file.name = name; } catch (nameError) {} }
-					if (!addAiToVideo(liveN, file, blob, flowId, true)) {
-						project._imageFlowStopReason = "The video gallery reached its image limit.";
-						if (project._imageBatchController) project._imageBatchController.abort();
-						return;
-					}
+					if (!await insertStockScene(liveN, blob, flowId, (Number(sceneOffset) || 0) + index, stale)) throw new Error("The media gallery is full or the flow was cancelled");
 					project.aiImagesDone = (project.aiImagesDone || 0) + 1;
-
 					recordStudioUsage("images", "ok", 1);
 					const status = document.getElementById("va-ai-status-" + liveN);
-					if (status) status.textContent = project.aiImagesDone + " AI images added; generating the next scenes…";
+					if (status) status.textContent = project.aiImagesDone + " Pixabay scenes imported…";
 				}
 			});
 						if (!stale()) {
@@ -19123,7 +18662,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		if (statusEl) {
 			statusEl.textContent =
-				"Rendering all " + total + " AI images at once…";
+				"Rendering all " + total + " Pixabay images at once…";
 		}
 
 		const controller =
@@ -19153,7 +18692,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		};
 
 		const progressText = function () {
-			return "Rendering " + total + " AI image" + (total === 1 ? "" : "s") + " in parallel — " +
+			return "Rendering " + total + " Pixabay image" + (total === 1 ? "" : "s") + " in parallel — " +
 				added + " added" +
 				(failed ? ", " + failed + " failed" : "") +
 				(skipped ? ", " + skipped + " skipped" : "") + "…";
@@ -19170,7 +18709,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			if (event.type === "start") {
 				if (curStatusEl) {
 					curStatusEl.textContent =
-						"Rendering " + event.count + " AI images in parallel" +
+						"Rendering " + event.count + " Pixabay images in parallel" +
 						(event.width && event.height ? " (" + event.width + "×" + event.height + ")" : "") + "…";
 				}
 				return;
@@ -19196,19 +18735,13 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					const decodeJob = decodeBase64ImageOffThread(event.data, event.mime);
 					galleryCommitChain = galleryCommitChain.then(function () {
 						return decodeJob.then(
-							function (blob) {
+							async function (blob) {
+								blob.stockSource = event.source || null;
 								if (isStaleFlow()) return;
 								const liveN = videoProjects.indexOf(project) + 1;
 								if (liveN <= 0) return;
 								try {
-									const file = new File(
-										[blob],
-										"ai-video" + liveN + "-seo-" + (eventIndex + 1) + "-" + Date.now() + ".png",
-										{ type: blob.type || "image/png" }
-									);
-									const inserted = liveN === n
-										? addAiToVideo(n, file, blob, flowId, true)
-										: addAiToVideo(liveN, file, blob, flowId, true);
+									const inserted = await insertStockScene(liveN, blob, flowId, eventIndex, isStaleFlow);
 									if (inserted) {
 										added++;
 
@@ -19403,6 +18936,14 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			);
 		const flowId =
 			project.imagePromptFlowId;
+		const plannedAssets = project.assets.filter(function (a) { return a.imagePromptFlowId === flowId; }).sort(function (a, b) { return a.sceneIndex - b.sceneIndex; });
+		let orderedIndex = 0;
+		project.assets = project.assets.map(function (a) { return a.imagePromptFlowId === flowId ? plannedAssets[orderedIndex++] : a; });
+		if (gallery) project.assets.forEach(function (a) { if (a.card) gallery.appendChild(a.card); });
+		const requiredClips = plannedAssets.filter(function (a) { return a.kind === "mp4"; });
+		if (!finalReason && (requiredClips.length !== 2 || new Set(requiredClips.map(function (a) { return a.stockSource && a.stockSource.id; })).size !== 2)) {
+			finalReason = "Both required Pixabay video clips could not be imported. Retry the scene flow; delivered media was kept.";
+		}
 		const actualCount =
 			project.assets.filter(function (asset) {
 				return flowId && asset && asset.imagePromptFlowId === flowId && asset.card && (!gallery || asset.card.parentNode === gallery);
@@ -19420,7 +18961,6 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		project._imageFlowFinalizing = false;
 		setVaUploadEnabled(n, true);
 		/* The walkthrough's images are done: the manual button unlocks. */
-		setVaAiGenerateEnabled(n, true);
 		const scriptButton =
 			document.getElementById(
 				"va-script-btn-" + n
@@ -19429,16 +18969,16 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		let statusMessage;
 		if (finalReason) {
-			statusMessage = "AI image flow stopped: " + finalReason + " " + actualCount + " image(s) added to the gallery.";
+			statusMessage = "Pixabay image flow stopped: " + finalReason + " " + actualCount + " image(s) added to the gallery.";
 		}
 		else if (imageTarget < promptCount) {
-			statusMessage = "AI image flow finished — " + actualCount + " of " + promptCount + " prompted image(s) added (the video gallery allows up to " + MAX_IMAGE_UPLOADS + " still images).";
+			statusMessage = "Pixabay image flow finished — " + actualCount + " of " + promptCount + " prompted image(s) added (the video gallery allows up to " + MAX_IMAGE_UPLOADS + " still images).";
 		}
 		else if (failures > 0) {
-			statusMessage = "AI image flow finished — " + actualCount + " image(s) added; " + failures + " prompt(s) failed.";
+			statusMessage = "Pixabay image flow finished — " + actualCount + " image(s) added; " + failures + " prompt(s) failed.";
 		}
 		else {
-			statusMessage = "AI images done — " + actualCount + " image(s) in the gallery.";
+			statusMessage = "Pixabay images done — " + actualCount + " image(s) in the gallery.";
 		}
 		statusMessage += " Upload Image, GIF or MP4 is enabled again.";
 		const statusEl =
@@ -19993,9 +19533,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				getAudioContext();
 
 			const decoded =
-				await context.decodeAudioData(
-					await blob.arrayBuffer()
-				);
+				await mediaDeadline(context.decodeAudioData(await blob.arrayBuffer()), 20000, "Narration duration decoding timed out.");
 
 			return Math.round(
 				decoded.duration * 1000
@@ -22073,8 +21611,9 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						new VideoFrame(
 							canvas,
 							{
-								timestamp:
-									timestamp
+								timestamp: timestamp,
+								// Preserve the final frame's duration in the real MP4 muxer.
+								duration: Math.round(1_000_000 / FPS)
 							}
 						);
 

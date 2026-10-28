@@ -1,5 +1,35 @@
 # YouTube Vibe Studio
 
+> **Media-source decision — 2026-10-29 (supersedes conflicting media requirements below).**
+> We use **Pixabay images and Pixabay videos**, not AI-generated images.
+> No Cloudflare/SDXL/FLUX or other AI image provider is part of the target architecture,
+> including fallbacks. **Runtime status: LLM-planned Pixabay keywords and mixed photo/video flows
+> are implemented locally; editor prompt controls are removed.** Deployment/live-provider checks remain; old AI-image descriptions are legacy history,
+> not the new media policy. Cloudflare hosting/KV, text AI, TTS, manual uploads and local
+> templates are not removed by this decision. See the authoritative
+> [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
+
+## Media direction: Pixabay keywords, photos and two clips
+
+The text LLM reads the full narration and plans short Pixabay scene search keywords that
+portray the general idea of the entire script. It does **not** generate images. Each automatic
+video contains exactly **two Pixabay video scenes**, with remaining scenes using stock photos:
+8+2 / 12+2 / 18+2 for the existing 10/14/20-scene totals.
+
+Both Quick Batch and editor automatically import and process the mixed media. The editor's
+manual image-prompt/search section has been removed; normal uploads and the media gallery
+remain. Narration remains the audio master, and scene timing keeps both clips in the export.
+Every stock search still explicitly uses `per_page=3`.
+
+See [the implementation reference](pixabay-media-migration.md) for the whole-script planner,
+limits, APIs and deployment checks. `npm run test:pixabay` passes **44 tests** with mocked
+browser-media boundaries. Production deployment and live-account/real-device smoke checks
+remain outstanding. The inventory below describes pre-migration behavior where it discusses
+AI-generated images or the removed manual prompt panel.
+
+## Existing runtime feature inventory (pre-Pixabay migration)
+
+
 A creator landing page and video studio served by one Cloudflare Worker. The studio runs
 **entirely in the browser**: turn images, GIFs, MP4 clips and an MP3 into a finished MP4 with a
 title, timestamp captions written from a plain narration script and a MeloTTS
@@ -451,3 +481,11 @@ download and direct gallery insertion were also smoke-tested.
 `npm run check` still stops on the **30 pre-existing TypeScript errors in `src/index.ts`**;
 the standalone Wrangler dry-run succeeds. This revision does not claim to fix those unrelated
 legacy type errors or to verify live Cloudflare model availability.
+
+## Playable mixed-media QA
+
+[Hang audit and sample exports](qa-preview/README.md): actual Chromium exports from Quick Batch
+and the editor, plus independent decode/playback checks. Both contain eight photo scenes and
+two moving clips. These are **labeled local-provider fixtures, not live Pixabay/LLM/TTS output**;
+AAC is unsupported in the test browser, so samples exercise the explicit silent-video fallback.
+The live QA preview server on port 8765 shows both playable MP4s and the verification report.

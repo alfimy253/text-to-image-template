@@ -1,6 +1,6 @@
 {
 	"name": "text-to-image-template",
-	"description": "Generate images based on text prompts.",
+	"description": "Browser video studio with Pixabay stock media, SEO scripts and voiceovers.",
 	"cloudflare": {
 		"label": "Text to Image App",
 		"products": [
@@ -29,6 +29,7 @@
 		"e2e:dev": "wrangler dev --config wrangler.e2e.jsonc",
 		"test": "node --import tsx --test tests/*.test.mjs",
 		"e2e:accounting": "wrangler dev --local --config wrangler.accounting-e2e.jsonc",
-		"e2e:accounting:smoke": "node bench/session-261-accounting-smoke.mjs"
+		"e2e:accounting:smoke": "node bench/session-261-accounting-smoke.mjs",
+		"test:pixabay": "node --import tsx --test tests/pixabay-media.test.mjs tests/pixabay-studio-flow.test.mjs tests/session-264-editor-render.test.mjs"
 	}
 }

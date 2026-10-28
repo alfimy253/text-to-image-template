@@ -1,13 +1,24 @@
 # New Modular Requirements & Architecture (`new_requirements.md`)
 
-**Last Updated:** 2026-10-25  
-**Scope:** plain narration scripts, the image-prompt quality guard, the Quick Batch table and the local render app (see §7); SEO overlap rules and template-editor controls (see §6); Modular Payment Screenshot Upload, `/account` & `/upgrade` Flows, Configurable Local Payment Gateway, Full-Page Dynamic Site Configuration, Admin Payment Verification (`paid_user` Upgrade), and Basic Flat CMS (Max 8 Pages).
+> **Media-source decision — 2026-10-29 (supersedes conflicting media requirements below).**
+> We use **Pixabay images and Pixabay videos**, not AI-generated images.
+> No Cloudflare/SDXL/FLUX or other AI image provider is part of the target architecture,
+> including fallbacks. **Runtime status: LLM-planned Pixabay keywords and mixed photo/video flows
+> are implemented locally; editor prompt controls are removed.** Deployment/live-provider checks remain; old AI-image descriptions are legacy history,
+> not the new media policy. Cloudflare hosting/KV, text AI, TTS, manual uploads and local
+> templates are not removed by this decision. See the authoritative
+> [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
 
-**Latest request:** [SRT removed from the script path, a paragraph-based prompt guard, script retry + stacked modals, an editable Quick Batch table whose Preview/Export unlock together, and a key-gated free-TTS render app](#script-batch-render-requirements) — full requirements and acceptance criteria in §7.
+## Latest media requirement — LLM stock keywords + two clips (2026-10-29)
 
-**Previous request:** [SEO overlap/no long-tail length rule, 5–7 ring-image uploads, removal of the design accordion, layer/rotation controls, and the Graphics dropdown](#seo-template-requirements) — full requirements and acceptance criteria in §6.
+Use the text LLM to plan concise Pixabay search keywords from the **entire script**. Scenes
+must convey the general idea of the whole narration. Every planner instruction requires
+exactly two video slots across the full plan; all other scenes retrieve stock photos.
+Both layouts process the mixed media, preserving the existing 10/14/20 total scene counts.
+The editor accordion's manual image prompt/search section is removed. AI image generation
+and provider fallbacks remain prohibited. `per_page=3` is unchanged. See
+[pixabay-media-migration.md](pixabay-media-migration.md) for current implementation and tests.
 
----
 
 ## 1. Design Goals & Safety Principles
 

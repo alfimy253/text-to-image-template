@@ -1,5 +1,8 @@
+import { pixabaySceneImage, type PixabayEnv } from "./pixabay";
 /*
- * Batched AI image generation (`src/modules/image-batch.ts`)
+ * Pixabay image import through the existing streamed/binary scene protocol.
+ * No inference or image-model fallback is executed. Historical transport notes:
+ * Batched image delivery (`src/modules/image-batch.ts`)
  *
  * One request renders EVERY prompted image for a video, instead of the old
  * "one image per GET /image/gen, spaced 20 s apart" queue.
@@ -52,7 +55,7 @@ export {
 	IMAGE_LOAD_MAX_ATTEMPTS
 };
 
-export const IMAGE_MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0";
+export const IMAGE_MODEL = "pixabay";
 
 /* A video gallery holds 25 stills; no batch may exceed the 20-prompt maximum. */
 export const IMAGE_BATCH_MAX_PROMPTS = 20;
@@ -211,7 +214,7 @@ export const IMAGE_NEGATIVE_PROMPT =
  */
 export const IMAGE_PROMPT_TIMEOUT_MS = 150000;
 
-type AiEnv = {
+type AiEnv = PixabayEnv & {
 	AI?: {
 		run: (model: string, input: Record<string, unknown>) => Promise<unknown>;
 	};
@@ -220,6 +223,7 @@ type AiEnv = {
 export interface ImageModelResult {
 	bytes: Uint8Array;
 	mime: string;
+	source?: { provider: string; id: number; pageURL: string; user: string; type?: string; duration?: number };
 }
 
 export interface ImageCreditHooks {
@@ -507,10 +511,7 @@ export function sdxlSafeDimensions(
 	return { width: 1024, height: 1024 };
 }
 
-export const IMAGE_FALLBACK_MODELS: readonly string[] = [
-	"@cf/bytedance/stable-diffusion-xl-lightning",
-	"@cf/black-forest-labs/flux-1-schnell"
-];
+export const IMAGE_FALLBACK_MODELS: readonly string[] = [];
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -536,8 +537,8 @@ function errorMessage(error: unknown): string {
 }
 
 /*
- * One model call. Shared by the batch route and the single-image
- * `/image/gen` route so both always use the same 16:9 size and guard rails.
+ * Compatibility entrypoint shared by binary, batch and `/image/gen`.
+ * Fetches Pixabay stock bytes; requested dimensions guide orientation only.
  */
 export async function runImageModel(
 	env: AiEnv,
@@ -556,130 +557,12 @@ export async function runImageModel(
 		governor?: ImageLoadGovernor | null;
 	} = {}
 ): Promise<ImageModelResult> {
-	if (!env || !env.AI) throw new Error("AI binding not configured");
-	/* Captured once: the guard above narrows the binding for every closure below. */
-	const ai = env.AI;
-	const reqWidth = options.width || IMAGE_WIDTH;
-	const reqHeight = options.height || IMAGE_HEIGHT;
-	const modelPrompt = condensePromptForModel(prompt, IMAGE_MODEL_PROMPT_MAX_CHARS);
-
-	const decodeValidated = async (raw: unknown): Promise<ImageModelResult> => {
-		const bytes = await toImageBytes(raw);
-		if (!bytes || !bytes.length) {
-			throw new Error("The image model returned an empty image");
-		}
-		const mime = detectImageMime(bytes);
-		if (!mime) {
-			throw new Error("The image model returned non-image bytes (" + bytes.byteLength + " B)");
-		}
-		return { bytes, mime };
-	};
-
-	const buildSdxlInput = (
-		w: number,
-		h: number,
-		steps: number,
-		guidance?: number
-	): Record<string, unknown> => {
-		const input: Record<string, unknown> = {
-			prompt: modelPrompt,
-			negative_prompt: IMAGE_NEGATIVE_PROMPT,
-			width: w,
-			height: h,
-			num_steps: steps
-		};
-		if (typeof guidance === "number") input.guidance = guidance;
-		if (typeof options.seed === "number") input.seed = options.seed;
-		return input;
-	};
-
-	const checkAbort = () => { if (options.signal?.aborted) throw createBatchAbortError(); };
-	checkAbort();
-
-	const governor =
-		options.governor === undefined ? sharedImageLoadGovernor : options.governor;
-
-	/*
-	 * Every provider call — primary, dimension-healed retry and each fallback —
-	 * passes through here, so the shared governor sees the real fleet pressure
-	 * (including fallback chains) instead of only the outer batch result.
-	 */
-	const runProvider = async (
-		slug: string,
-		input: Record<string, unknown>
-	): Promise<ImageModelResult> => {
-		checkAbort();
-		try {
-			const raw = await ai.run(slug, input);
-			const decoded = await decodeValidated(raw);
-			if (governor) governor.noteSuccess();
-			return decoded;
-		} catch (error) {
-			if (governor && !(error instanceof Error && error.name === "AbortError")) {
-				governor.observeFailure(error);
-			}
-			throw error;
-		}
-	};
-
-	let primaryError: unknown = null;
-	try {
-		return await runProvider(
-			IMAGE_MODEL,
-			buildSdxlInput(reqWidth, reqHeight, 20, IMAGE_GUIDANCE_SCALE)
-		);
-	} catch (err) {
-		primaryError = err;
-	}
-
-	checkAbort();
-	const safeDims = sdxlSafeDimensions(reqWidth, reqHeight);
-	if (safeDims.width !== reqWidth || safeDims.height !== reqHeight) {
-		try {
-			return await runProvider(
-				IMAGE_MODEL,
-				buildSdxlInput(safeDims.width, safeDims.height, 20, IMAGE_GUIDANCE_SCALE)
-			);
-		} catch (alignedErr) {
-			primaryError = primaryError || alignedErr;
-		}
-	}
-
-	const fallbacks =
-		options.fallbackModels === undefined
-			? IMAGE_FALLBACK_MODELS
-			: options.fallbackModels;
-
-	for (const fbSlug of fallbacks) {
-		checkAbort();
-		if (!fbSlug || fbSlug === IMAGE_MODEL) continue;
-		try {
-			const fbInput: Record<string, unknown> =
-				fbSlug === "@cf/black-forest-labs/flux-1-schnell"
-					? {
-							prompt: condensePromptForModel(
-								modelPrompt +
-									" Strictly follow the specified visual style with coherent perspective, natural proportions, intact anatomy, crisp undistorted forms, and no text, words, letters, or watermarks.",
-								IMAGE_MODEL_PROMPT_MAX_CHARS
-							),
-							steps: 4
-						}
-					: buildSdxlInput(safeDims.width, safeDims.height, 4);
-			return await runProvider(fbSlug, fbInput);
-		} catch {
-			/* Keep primaryError as the authoritative error if all fallbacks fail. */
-		}
-	}
-
-	throw primaryError instanceof Error
-		? primaryError
-		: new Error(errorMessage(primaryError));
+	return pixabaySceneImage(env, prompt, options);
 }
 
 /*
- * One batch prompt sent to SDXL. The studio's scene prompts are three-paragraph
- * descriptions, so paragraph breaks are kept (the image model reads them as
- * sentence boundaries) while everything else is normalised to single spaces.
+ * Compatibility transport strings: either concise search terms or a validated
+ * Pixabay page/index selection token. No text is sent to an image model.
  */
 export const IMAGE_PROMPT_MAX_CHARS = 1800;
 
@@ -886,8 +769,8 @@ export async function handleImageBatch(
 	pacing: ImageBatchPacingOptions = {}
 ): Promise<Response> {
 	const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-	if (!env || !env.AI) {
-		return json({ success: false, error: "AI binding not configured", prompts: [] }, 503);
+	if (!env?.PIXABAY_API_KEY) {
+		return json({ success: false, error: "Pixabay API key is not configured", prompts: [] }, 503);
 	}
 	const sanitized = sanitizePrompts(body.prompts);
 	if ("error" in sanitized) {
@@ -1133,6 +1016,7 @@ export async function handleImageBatch(
 											index: sceneIndex,
 											ok: true,
 											mime: result.mime,
+											source: result.source,
 											data: bytesToBase64(result.bytes),
 											bytes: result.bytes.length
 										}) + "\n"
@@ -1301,7 +1185,7 @@ function imageFailureResponse(
 	if (hintMs > 0) body.retryAfterMs = hintMs;
 	body.credits = credits;
 	return new Response(JSON.stringify(body), {
-		status: overload ? 503 : 502,
+		status: overload ? 503 : kind === "fatal" ? 422 : 502,
 		headers: { "Content-Type": "application/json", ...headers }
 	});
 }
@@ -1311,7 +1195,7 @@ export async function handleImageBinary(
 ): Promise<Response> {
 	const body = await request.json().catch(() => null);
 	if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Expected a JSON object" }, 400);
-	if (!env?.AI) return json({ error: "AI binding not configured" }, 503);
+	if (!env?.PIXABAY_API_KEY) return json({ error: "Pixabay API key is not configured" }, 503);
 	const input = body as Record<string, unknown>;
 	const prompts = sanitizePrompts([input.prompt]);
 	const frame = sanitizeImageFrame(input);
@@ -1344,7 +1228,7 @@ export async function handleImageBinary(
 		if (request.signal.aborted) throw createBatchAbortError();
 		return new Response(outcome.result.bytes as BodyInit, {
 			headers: { "Content-Type": outcome.result.mime, "Cache-Control": "no-store",
-				"X-Pipeline-Version": "261", "X-Image-Width": String(frame.width), "X-Image-Height": String(frame.height) }
+				"X-Pipeline-Version": "261", "X-Media-Provider": "pixabay", "X-Pixabay-Source": encodeURIComponent(JSON.stringify(outcome.result.source || {})), "X-Requested-Width": String(frame.width), "X-Requested-Height": String(frame.height) }
 		});
 	} catch (error) {
 		const summary = await credits.refund(1);

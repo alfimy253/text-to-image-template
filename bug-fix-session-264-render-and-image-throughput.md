@@ -1,5 +1,14 @@
 # Session #264 — editor-layout export hangs, and image throughput
 
+> **Media-source decision — 2026-10-29 (supersedes conflicting media requirements below).**
+> We use **Pixabay images and Pixabay videos**, not AI-generated images.
+> No Cloudflare/SDXL/FLUX or other AI image provider is part of the target architecture,
+> including fallbacks. **Runtime status: LLM-planned Pixabay keywords and mixed photo/video flows
+> are implemented locally; editor prompt controls are removed.** Deployment/live-provider checks remain; old AI-image descriptions are legacy history,
+> not the new media policy. Cloudflare hosting/KV, text AI, TTS, manual uploads and local
+> templates are not removed by this decision. See the authoritative
+> [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
+
 Two reports, one investigation:
 
 > "the editor layout videos failed video processing, it did not finish rendering the video"

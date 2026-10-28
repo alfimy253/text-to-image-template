@@ -1,5 +1,14 @@
 # Bug Fix Session #271 — worker-mode flows, rotation audit, and the OpenRouter instruct provider
 
+> **Media-source decision — 2026-10-29 (supersedes conflicting media requirements below).**
+> We use **Pixabay images and Pixabay videos**, not AI-generated images.
+> No Cloudflare/SDXL/FLUX or other AI image provider is part of the target architecture,
+> including fallbacks. **Runtime status: LLM-planned Pixabay keywords and mixed photo/video flows
+> are implemented locally; editor prompt controls are removed.** Deployment/live-provider checks remain; old AI-image descriptions are legacy history,
+> not the new media policy. Cloudflare hosting/KV, text AI, TTS, manual uploads and local
+> templates are not removed by this decision. See the authoritative
+> [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
+
 **Date:** 2026-10-26 · **Branch:** `arena/89a581b7-text-to-image-template`
 **Scope:** (1) the *deployment-without-a-frontend* ("worker mode") system + user flows,
 (2) a hang/leak audit of the #265 rotation, (3) a **second instruct-model API** that rotates

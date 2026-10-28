@@ -42,8 +42,7 @@ export const API_ROTATION_JS = String.raw`
 	 * never rewritten, so account, settings, payment and CMS traffic can
 	 * never be rotated (or leak) to another origin.
 	 */
-	var AI_PATHS = ["/api/image", "/api/image-batch", "/api/image-prompts",
-		"/api/script", "/api/seo-plan", "/api/voiceover", "/image/gen", "/tts"];
+	var AI_PATHS = ["/api/script", "/api/seo-plan", "/api/voiceover", "/tts"];
 
 	var nativeFetch = window.fetch.bind(window);
 	var state = {

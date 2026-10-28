@@ -1,0 +1,1 @@
+export const QA_SCRIPT='Fresh fruit connects our community. Bright markets bring families together around nourishing food. Choose colorful produce and share a healthy meal. Small choices support local growers and a healthier future.';
