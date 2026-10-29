@@ -3010,17 +3010,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	}
 
 
-	/*
-	 * Legacy demo initialization (no active inference route).
-	 */
-
-	prompts.forEach(
-		(_, index) => {
-
-			fetchAIImage(index);
-
-		}
-	);
+	/* The legacy demo image routes were removed; do not request them on
+	 * page load. The active studio uses Pixabay search instead. */
 
 
 	// =========================================================
@@ -16878,6 +16869,14 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			return;
 		}
 
+		/* /free is usable without an account; do not wait for a slow or
+		 * stalled session check before showing its studio. The server still
+		 * enforces guest credits and detects any signed-in account. */
+		if (PLAN_MODE === "freemium") {
+			authAccess = "freemium";
+			showStudioView();
+		}
+
 		try {
 
 			const response =
@@ -16896,14 +16895,18 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 			if (response.status === 503) {
 
-				/*
-				 * KV is not configured: keep the public
-				 * landing visible and allow the studio
-				 * through its primary action, matching
-				 * the previous open-access behavior.
-				 */
-				authAccess = "open";
-				resumeLandingEntry();
+				/* No account storage: /free still opens the studio directly.
+				 * The landing page keeps its existing open-access action. */
+				if (PLAN_MODE === "freemium") {
+					authAccess = "freemium";
+					hideAuthOverlay();
+					showStudioView();
+					refreshCredits();
+				}
+				else {
+					authAccess = "open";
+					resumeLandingEntry();
+				}
 				return;
 
 			}
@@ -20127,6 +20130,10 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		}
 
+		if (typeof Mp4Muxer === "undefined") {
+			alert("The MP4 export library is still loading or unavailable. Check your connection and try again.");
+			return "error";
+		}
 
 		// =====================================================
 		// CHOOSE WHERE THE MP4 IS WRITTEN

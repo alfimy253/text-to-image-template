@@ -272,6 +272,20 @@ async function handleRequest(request: any, env: any, ctx: any) {
 		// MAIN APPLICATION
 		// =====================================================
 
+		// Canonicalize the public page URLs without changing API or CMS paths.
+		// Preserve the query string (for example, an account mode or referral).
+		if (
+			request.method === "GET" &&
+			/^\/(?:free|studio|paid|account|upgrade|signup|login)\/$/.test(url.pathname)
+		) {
+			return redirectResponse(url.pathname.slice(0, -1) + url.search, 308);
+		}
+
+		// The landing-page auth links also work when opened in a new tab.
+		if (request.method === "GET" && (url.pathname === "/signup" || url.pathname === "/login")) {
+			return redirectResponse(url.pathname === "/signup" ? "/account?mode=signup" : "/account");
+		}
+
 		if (
 			request.method === "GET" &&
 			url.pathname === "/"

@@ -166,7 +166,7 @@ const INLINE_AUTH_WIDGET_JS = `
 	}
 
 	if (!authRoot) return;
-	var mode = "login";
+	var mode = new URLSearchParams(window.location.search).get("mode") === "signup" ? "signup" : "login";
 	var tabLogin = document.getElementById("ia-tab-login");
 	var tabSignup = document.getElementById("ia-tab-signup");
 	var emailWrap = document.getElementById("ia-email-wrap");
@@ -186,6 +186,7 @@ const INLINE_AUTH_WIDGET_JS = `
 		}
 	}
 
+	syncMode(mode);
 	if (tabLogin) tabLogin.addEventListener("click", function() { syncMode("login"); });
 	if (tabSignup) tabSignup.addEventListener("click", function() { syncMode("signup"); });
 
