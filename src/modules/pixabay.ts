@@ -3,7 +3,8 @@ export interface PixabayEnv {
 	PIXABAY_API_KEY?: string;
 	PIXABAY_RATE_LIMITER?: DurableObjectNamespace;
 }
-export const PIXABAY_PER_PAGE = 3;
+export const PIXABAY_PER_PAGE = 3; // Pixabay upstream minimum, including videos.
+export const PIXABAY_IMAGE_RESULTS = 2;
 export const PIXABAY_CACHE_SECONDS = 86400;
 export const PIXABAY_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const PIXABAY_MAX_VIDEO_BYTES = 16 * 1024 * 1024;
@@ -16,15 +17,11 @@ export class PixabayError extends Error {
 	constructor(message: string, public status = 502, public retryAfter = 0, public providerStatus?: number) { super(message); }
 }
 
-/** Safe correlation data for server-side provider diagnostics (never log API keys or prompts). */
+/** Safe correlation data for server-side provider diagnostics (never log API keys or full scripts). */
 export interface PixabayTrace { requestId?: string; sceneIndex?: number; attempt?: number }
 function diagnosticError(error: unknown, secret?: string): { name: string; message: string } {
 	const raw = error instanceof Error ? error.message : String(error ?? "Unknown error");
-	return { name: error instanceof Error ? error.name : "UnknownError", message: raw
-		.replace(/([?&]key=)[^&\s]+/gi, "$1[REDACTED]")
-		.replace(/Bearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
-		.replace(secret ? new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g") : /$^/, "[REDACTED]")
-		.slice(0, 500) };
+	return { name: error instanceof Error ? error.name : "UnknownError", message: redactProviderText(raw, secret).slice(0, 500) };
 }
 function traceLog(level: "info" | "warn" | "error", stage: string, trace: PixabayTrace | undefined, fields: Record<string, unknown> = {}): void {
 	const log = console[level] || console.error;
@@ -134,38 +131,47 @@ function edgeCache(): Cache | undefined {
 const localSearch = new Map<string, { until: number; data: SearchResult }>();
 const inFlight = new Map<string, Promise<SearchResult>>();
 const budgets = new Map<string, { start: number; calls: number; until: number }>();
-export interface SearchResult { provider: "pixabay"; per_page: 3; page: number; totalHits: number; hits: StockHit[] }
+export interface SearchResult { provider: "pixabay"; per_page: 2 | 3; page: number; totalHits: number; hits: StockHit[] }
 export interface SearchInput { q?: string; type?: MediaType; page?: number; per_page?: number; orientation?: string; id?: number }
 
-/** per_page is an explicit input, but the studio's contract permits only 3. */
+/** Photos expose at most two results; Pixabay itself requires at least three upstream. */
 export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?: AbortSignal, trace?: PixabayTrace): Promise<SearchResult> {
 	if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
 	const key = keyFor(env);
 	traceLog("info", "search.started", trace, { type: input.type || "image", page: input.page ?? 1, queryLength: normalizeSearchQuery(input.q).length });
-	if (input.per_page !== undefined && input.per_page !== PIXABAY_PER_PAGE) throw new PixabayError("per_page must be 3", 400);
+
 	const q = normalizeSearchQuery(input.q);
 	const type = input.type || "image";
 	if (type !== "image" && type !== "video") throw new PixabayError("type must be image or video", 400);
+	const resultLimit = type === "image" ? PIXABAY_IMAGE_RESULTS : PIXABAY_PER_PAGE;
+	// Accept the former image page size for existing API clients, but return only two.
+	if (input.per_page !== undefined && input.per_page !== resultLimit && !(type === "image" && input.per_page === PIXABAY_PER_PAGE)) throw new PixabayError("Invalid per_page for media type", 400);
 	const page = input.page ?? 1;
-	if (!Number.isInteger(page) || page < 1 || page > 167) throw new PixabayError("page must be 1-167", 400);
+	if (page !== 1) throw new PixabayError("Only page 1 is available", 400);
 	if (input.id !== undefined && (!Number.isSafeInteger(input.id) || input.id < 1)) throw new PixabayError("Invalid Pixabay ID", 400);
 	if (!q && !input.id) throw new PixabayError("Enter Pixabay search terms", 400);
 	const orientation = input.orientation === "portrait" ? "vertical" : input.orientation === "landscape" ? "horizontal" : "all";
+	traceLog("info", "search.keywords", trace, { type, page, orientation, keywords: redactProviderText(q, key) });
 	const params = new URLSearchParams({ q, per_page: "3", page: String(page), safesearch: "true" });
 	if (input.id) params.set("id", String(input.id));
 	if (type === "image") { params.set("image_type", "photo"); params.set("orientation", orientation); }
 	const fingerprint = await digest(key);
-	const cacheKey = `https://pixabay-cache.invalid/search/${fingerprint}/${type}?${params}`;
+	const cacheKey = `https://pixabay-cache.invalid/search/v2/${fingerprint}/${type}?${params}`;
 	const cache = edgeCache();
+	const local = localSearch.get(cacheKey);
+	if (local && local.until > Date.now()) { traceLog("info", "search.local-cache-hit", trace, { type, hits: local.data.hits.length }); return local.data; }
+	const pending = inFlight.get(cacheKey);
+	if (pending) { traceLog("info", "search.coalesced", trace, { type }); return waitForIO(pending, 35000, signal); }
 	const cached = await cacheMatch(cache, cacheKey, signal);
 	if (cached) {
 		try { const result = JSON.parse(new TextDecoder().decode(await readBounded(cached, 1024 * 1024, signal, CACHE_IO_MS))) as SearchResult; traceLog("info", "search.cache-hit", trace, { type, hits: result.hits?.length || 0 }); return result; }
 		catch (error) { if (signal?.aborted) throw error; /* Treat unreadable cache entries as misses. */ }
 	}
-	const local = localSearch.get(cacheKey);
-	if (local && local.until > Date.now()) { traceLog("info", "search.local-cache-hit", trace, { type, hits: local.data.hits.length }); return local.data; }
-	const pending = inFlight.get(cacheKey);
-	if (pending) { traceLog("info", "search.coalesced", trace, { type }); return waitForIO(pending, 35000, signal); }
+	// Another caller may have finished or started the same work during the cache lookup.
+	const localAfterCache = localSearch.get(cacheKey);
+	if (localAfterCache && localAfterCache.until > Date.now()) return localAfterCache.data;
+	const afterCache = inFlight.get(cacheKey);
+	if (afterCache) return waitForIO(afterCache, 35000, signal);
 	const work = (async (): Promise<SearchResult> => {
 		const now = Date.now();
 		let budget = budgets.get(fingerprint);
@@ -183,7 +189,7 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 		let response: Response;
 		const metadataSignal = AbortSignal.timeout(20000);
 		const providerStartedAt = Date.now();
-		traceLog("info", "provider-search.request", trace, { type, page, queryLength: q.length, timeoutMs: 20000 });
+		traceLog("info", "provider-search.request", trace, { type, page, orientation, keywords: redactProviderText(q, key), timeoutMs: 20000 });
 		try {
 			response = await waitForIO(fetch(`https://pixabay.com/api/${type === "video" ? "videos/" : ""}?${params}`, {
 				signal: metadataSignal, redirect: "error"
@@ -202,7 +208,7 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 		if (!response.ok) {
 			const providerBody = await providerErrorBody(response, key);
 			traceLog("error", "provider-search.rejected", trace, { status: response.status, statusText: response.statusText,
-				contentType: response.headers.get("Content-Type"), requestId: response.headers.get("X-Request-Id"), body: providerBody });
+				contentType: response.headers.get("Content-Type"), providerRequestId: response.headers.get("X-Request-Id"), body: providerBody });
 			cancelBody(response.body);
 			throw new PixabayError(response.status === 429 ? "Pixabay rate limit (429). Please wait." : "Pixabay rejected the search. Check server configuration.",
 				response.status === 429 ? 429 : 502, response.status === 429 ? Math.max(1, Math.ceil((budget.until - Date.now()) / 1000)) : 0, response.status);
@@ -222,7 +228,7 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 			throw new PixabayError("Pixabay returned an invalid search response");
 		}
 		const hits: StockHit[] = [];
-		for (const h of raw.hits.slice(0, 3)) {
+		for (const h of raw.hits.slice(0, PIXABAY_PER_PAGE)) {
 			if (!Number.isSafeInteger(h.id) || h.id < 1) continue;
 			const variant = type === "video" ? (h.videos?.small?.url ? h.videos.small : h.videos?.tiny) : null;
 			const url = providerURL(type === "image" ? h.largeImageURL || h.webformatURL : variant?.url);
@@ -235,8 +241,9 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 				width: Number(type === "image" ? h.imageWidth : variant?.width) || 0,
 				height: Number(type === "image" ? h.imageHeight : variant?.height) || 0,
 				...(type === "video" ? { duration } : {}) });
+			if (hits.length >= resultLimit) break;
 		}
-		const data: SearchResult = { provider: "pixabay", per_page: 3, page, totalHits: Number(raw.totalHits) || 0, hits };
+		const data: SearchResult = { provider: "pixabay", per_page: resultLimit as 2 | 3, page, totalHits: Number(raw.totalHits) || 0, hits };
 		traceLog("info", "provider-search.completed", trace, { status: response.status, totalHits: data.totalHits, acceptedHits: hits.length, type });
 		await cachePut(cache, cacheKey, new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=86400" } }));
 		if (localSearch.size >= 128) localSearch.delete(localSearch.keys().next().value!);
@@ -250,9 +257,9 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 	return waitForIO(work, 35000, signal);
 }
 function redactProviderText(value: string, secret?: string): string {
-	return value.replace(/([?&]key=)[^&\s"']+/gi, "$1[REDACTED]")
-		.replace(/Bearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
-		.replace(secret ? new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g") : /$^/, "[REDACTED]");
+	const safe = secret ? value.split(secret).join("[REDACTED]") : value;
+	return safe.replace(/([?&]key=)[^&\s"']+/gi, "$1[REDACTED]")
+		.replace(/Bearer\s+[^\s,;]+/gi, "Bearer [REDACTED]");
 }
 async function providerErrorBody(response: Response, secret?: string): Promise<string> {
 	try {
@@ -284,6 +291,7 @@ async function readBounded(response: Response, max: number, signal?: AbortSignal
 let downloadTail: Promise<void> = Promise.resolve();
 export async function downloadPixabay(hit: StockHit, signal?: AbortSignal, trace?: PixabayTrace): Promise<{ bytes: Uint8Array; mime: string }> {
 	if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+	const queuedAt = Date.now();
 	const previous = downloadTail;
 	let release!: () => void;
 	downloadTail = new Promise<void>(resolve => { release = resolve; });
@@ -291,6 +299,7 @@ export async function downloadPixabay(hit: StockHit, signal?: AbortSignal, trace
 	try {
 		traceLog("info", "download.queued", trace, { mediaType: hit.type, assetId: hit.id });
 		await waitForIO(previous, 300000, signal); acquired = true;
+		traceLog("info", "download.dequeued", trace, { mediaType: hit.type, assetId: hit.id, queueWaitMs: Date.now() - queuedAt });
 		return await downloadPixabayUnqueued(hit, signal, trace);
 	} finally {
 		// A cancelled waiter must not let successors overtake the active download.
@@ -341,7 +350,7 @@ async function downloadPixabayUnqueued(hit: StockHit, signal?: AbortSignal, trac
 	return { bytes, mime };
 }
 export function sceneSearchToken(q: string, scene: number): string {
-	return "pixabay:" + JSON.stringify({ q: normalizeSearchQuery(q), page: Math.floor(scene / 3) + 1, index: scene % 3 });
+	return "pixabay:" + JSON.stringify({ q: normalizeSearchQuery(q), page: 1, index: scene % PIXABAY_IMAGE_RESULTS, scene });
 }
 export async function pixabaySceneImage(env: PixabayEnv, token: string, options: { signal?: AbortSignal; width?: number; height?: number; trace?: PixabayTrace } = {}) {
 	let q = token, page = 1, index = 0, type: MediaType = "image";
@@ -349,9 +358,12 @@ export async function pixabaySceneImage(env: PixabayEnv, token: string, options:
 		try { const t = JSON.parse(token.slice(8)); q = t.q; page = t.page; index = t.index; type = t.type || "image"; }
 		catch { throw new PixabayError("Invalid stock scene selection", 400); }
 	}
-	if (!["image", "video"].includes(type) || typeof q !== "string" || !Number.isInteger(index) || index < 0 || index > 2) throw new PixabayError("Invalid stock scene selection", 400);
+	if (!["image", "video"].includes(type) || typeof q !== "string" || !Number.isInteger(index) || index < 0 || index > 2 || !Number.isInteger(page) || page < 1) throw new PixabayError("Invalid stock scene selection", 400);
+	// Old saved scene tokens may refer to later pages or the third photo.
+	page = 1;
+	if (type === "image") index %= PIXABAY_IMAGE_RESULTS;
 	traceLog("info", "scene.selection", options.trace, { mediaType: type, page, index, queryLength: q.length, width: options.width || 0, height: options.height || 0 });
-	const results = await searchPixabay(env, { q, page, type, per_page: 3,
+	const results = await searchPixabay(env, { q, page, type, per_page: type === "image" ? PIXABAY_IMAGE_RESULTS : PIXABAY_PER_PAGE,
 		orientation: (options.height || 0) > (options.width || 0) ? "portrait" : "landscape" }, options.signal, options.trace);
 	const hit = results.hits[index] || results.hits[0];
 	if (!hit) { traceLog("error", "scene.no-hit", options.trace, { mediaType: type, page, index, totalHits: results.totalHits }); throw new PixabayError("No suitable Pixabay media for this scene. Try different search terms or upload media.", 404); }
@@ -365,7 +377,7 @@ export async function handlePixabayApi(request: Request, env: PixabayEnv): Promi
 		const type = (u.searchParams.get("type") || "image") as MediaType;
 		const id = u.searchParams.has("id") ? Number(u.searchParams.get("id")) : undefined;
 		const result = await searchPixabay(env, { q: u.searchParams.get("q") || "", type, id,
-			page: Number(u.searchParams.get("page") || 1), per_page: Number(u.searchParams.get("per_page") || 3),
+			page: Number(u.searchParams.get("page") || 1), per_page: u.searchParams.has("per_page") ? Number(u.searchParams.get("per_page")) : undefined,
 			orientation: u.searchParams.get("orientation") || "landscape" }, request.signal);
 		if (u.pathname === "/api/media/asset") {
 			if (!id) throw new PixabayError("A Pixabay asset ID is required", 400);

@@ -6443,6 +6443,11 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			n
 		);
 
+		// A rebuilt accordion must preserve locks owned by an in-flight flow.
+		setVaUploadEnabled(n, !(project._seoPlanBusy || project._imageFlowActive || project._seoChoicePending));
+		const scriptButton = document.getElementById("va-script-btn-" + n);
+		if (scriptButton) scriptButton.disabled = Boolean(project._seoPlanBusy || project._imageFlowActive);
+
 	}
 
 	/* Closes the transient per-video windows (they are not renumbered). */
@@ -6555,7 +6560,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			return Boolean(
 				meta &&
 				meta.kind === "editor-video" &&
-				(meta.project === project || meta.videoIndex === n)
+				(meta.project ? meta.project === project : meta.videoIndex === n)
 			);
 		}, "The video was deleted");
 
@@ -6563,7 +6568,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			return Boolean(
 				meta &&
 				meta.kind === "manual-ai" &&
-				(meta.project === project || meta.videoIndex === n)
+				(meta.project ? meta.project === project : meta.videoIndex === n)
 			);
 		}, "The video was deleted");
 
@@ -9234,7 +9239,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				if (!response.ok || !data.success) {
 
 					const error = new Error((data && data.error) || ("Stock search terms failed (HTTP " + response.status + ")"));
-					error.retryable = response.status >= 500 || response.status === 429 || response.ok;
+					error.retryable = response.status === 408 || response.status >= 500 || response.status === 429 || response.ok;
 					throw error;
 
 				}
@@ -18018,7 +18023,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		/* Sets from an earlier click are still waiting for a choice. */
 		if (
 			Array.isArray(project.seoSets) &&
-			project.seoSets.length === 2 &&
+			project.seoSets.length >= 1 &&
 			!project.selectedSeoSet
 		) {
 
@@ -18050,12 +18055,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				"va-script-speed-" + n
 			);
 
-		const btn =
+		let btn =
 			document.getElementById(
 				"va-script-btn-" + n
 			);
 
-		const statusEl =
+		let statusEl =
 			document.getElementById(
 				"va-script-status-" + n
 			);
@@ -18155,6 +18160,13 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						() => ({})
 					);
 
+			// An accordion can be deleted/renumbered while the plan is in flight.
+			const liveN = videoProjects.indexOf(project) + 1;
+			if (project._deleted || liveN <= 0) return;
+			n = liveN;
+			btn = document.getElementById("va-script-btn-" + n);
+			statusEl = document.getElementById("va-script-status-" + n);
+
 			/*
 			 * ONE set is enough to continue: the worker answers
 			 * partial: true with a single validated set when the
@@ -18212,6 +18224,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		}
 		catch (planError) {
+
+			const liveN = videoProjects.indexOf(project) + 1;
+			if (project._deleted || liveN <= 0) return;
+			n = liveN;
+			btn = document.getElementById("va-script-btn-" + n);
+			statusEl = document.getElementById("va-script-status-" + n);
 
 			console.warn("[seo-plan] failed", {
 				videoIndex: n,
@@ -18312,7 +18330,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		const project =
 			videoProjects[n - 1];
 
-		if (!project || !project.selectedSeoSet) {
+		if (!project || !project.selectedSeoSet || project._imageFlowActive) {
 			return;
 		}
 
@@ -18352,6 +18370,11 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				project._seoMinutes || 1,
 				project._seoSpeed || "medium"
 			);
+
+		// Continue with the original project, not the old accordion number.
+		const liveN = videoProjects.indexOf(project) + 1;
+		if (project._deleted || liveN <= 0) return;
+		n = liveN;
 
 		if (!ok) {
 
@@ -18537,7 +18560,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						const data = await seoResponseJson(response);
 						if (!response.ok || !data.success) {
 							const error = new Error((data && data.error) || ("Scene prompt request failed (HTTP " + response.status + ")"));
-							error.retryable = response.status >= 500 || response.status === 429 || response.ok;
+							error.retryable = response.status === 408 || response.status >= 500 || response.status === 429 || response.ok;
 							error.status = response.status;
 							/* #263: a load answer carries the wait the server wants. */
 							error.kind = (data && data.kind) || "";
@@ -19085,7 +19108,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		) {
 
 			const error = new Error((data && data.error) || ("HTTP " + response.status));
-			error.retryable = !single || response.status >= 500 || response.status === 429;
+			error.retryable = response.status === 408 || response.status === 429 || response.status >= 500 || response.ok;
 			throw error;
 
 		}
@@ -19312,6 +19335,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		let lastError =
 			null;
+		let attemptsMade = 0;
 
 		btn.disabled = true;
 
@@ -19346,6 +19370,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				try {
 					if (project._deleted || videoProjects.indexOf(project) < 0) return false;
 
+					attemptsMade = attempt;
 					const data =
 						await requestSeoScriptOnce(
 							videoProjects.indexOf(project) + 1,
@@ -19402,10 +19427,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 							SCRIPT_RETRY_LIMIT +
 							")\u2026";
 
-						if (statusEl) {
-							statusEl.textContent =
-								retryLine;
-						}
+						const liveStatus = document.getElementById("va-script-status-" + (videoProjects.indexOf(project) + 1));
+						if (liveStatus) liveStatus.textContent = retryLine;
 
 						setSeoWalkthroughScriptStatus(
 							videoProjects.indexOf(project) + 1,
@@ -19423,14 +19446,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				/* Every attempt failed: now the UI may show the error. */
 				const failureLine =
 					"Script failed after " +
-					(SCRIPT_RETRY_LIMIT + 1) +
-					" attempts: " +
+					attemptsMade +
+					(attemptsMade === 1 ? " attempt: " : " attempts: ") +
 					(lastError.message || lastError);
 
-				if (statusEl) {
-					statusEl.textContent =
-						failureLine;
-				}
+				const liveStatus = document.getElementById("va-script-status-" + (videoProjects.indexOf(project) + 1));
+				if (liveStatus) liveStatus.textContent = failureLine;
 
 				setSeoWalkthroughError(
 					videoProjects.indexOf(project) + 1,
@@ -19442,7 +19463,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				console.error("[script-seo] failed", {
 					videoIndex: n,
 					ms: Date.now() - scriptStartedAt,
-					attempts: SCRIPT_RETRY_LIMIT + 1,
+					attempts: attemptsMade,
 					error: (lastError && lastError.message) || String(lastError)
 				});
 
@@ -19454,10 +19475,9 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			const liveN = videoProjects.indexOf(project) + 1;
 			if (!project._deleted && liveN > 0) setScriptLoading(liveN, false);
 
-			if (!project._imageFlowActive) {
-
-				btn.disabled = false;
-
+			if (!project._deleted && liveN > 0 && !project._imageFlowActive) {
+				const liveBtn = document.getElementById("va-script-btn-" + liveN);
+				if (liveBtn) liveBtn.disabled = false;
 			}
 
 		}

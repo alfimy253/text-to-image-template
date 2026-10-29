@@ -8,6 +8,9 @@
 > not the new media policy. Cloudflare hosting/KV, text AI, TTS, manual uploads and local
 > templates are not removed by this decision. See the authoritative
 > [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
+> Automatic scenes use keyword searches on page 1 only: up to two usable photos per keyword
+> (one selected per scene), or up to three clips for video slots. The server requests three
+> upstream because that is Pixabay’s minimum; see the reference for diagnostics and latency.
 
 > Reconstructed from a full code read of the working tree on **2026-10-16**; §11 and the theme
 > sections were revised on **2026-10-23** for Bug Fix Session #240. CMS, payments, the account

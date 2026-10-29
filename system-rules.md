@@ -53,17 +53,20 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
   Script input above **20,000 characters** is rejected, not silently truncated. Provider context
   limits still apply. `/api/image-prompts` retains its compatibility name and is now authorized.
 
+### Script and keyword debug (current implementation)
+
+- The editor writes an SEO script; Quick Batch accepts a typed or pasted script. Both pass the full narration to the stock planner. Browser and Worker count Unicode words with the same punctuation/emoji rules; editor renumbering keeps in-flight work tied to its project. See [script-image-debug-audit.md](script-image-debug-audit.md) for fixes, retry behavior, tests and remaining risks.
+
 ### Pixabay API, infrastructure and safety
 
-- Provider search explicitly accepts `per_page` and requires **`per_page=3`** for photos AND
-  videos; other page sizes return 400. It is a per-search-page limit, not a whole-video limit.
+- Photo searches expose **at most two usable hits** on page 1; video searches expose up to three. Pixabay requires `per_page=3` upstream for both. Image API accepts `per_page=2` or legacy `3` (still returns two); video accepts `3`. Other sizes and pages return 400. One selected hit is imported per scene; these are not whole-video limits.
 - Scene tokens carry `{q,type,page,index,scene}`. The selected type chooses real Pixabay photos
   or MP4 clips. Empty/missing clips never fall back to stills or generated media.
 - `POST /api/image` binary and `/api/image-batch` NDJSON carry both image bytes and MP4 bytes
   with source metadata. Existing source search/ID-import APIs remain available, but there is
   no manual prompt/search panel in editor accordions. `/image/:i` demo inference remains 410.
 - Stock requests stay primary-origin; text/TTS rotation remains separate. Image inference is
-  rejected at relay boundaries. The API key stays in a server secret/ignored local `.dev.vars`.
+  rejected at relay boundaries. The key belongs in a server secret/ignored local `.dev.vars`; the existing checked-in `wrangler.json` key is exposed and must be rotated and moved to a secret (see the migration reference).
 - Cache searches 24 hours; coalesce identical requests. `PIXABAY_RATE_LIMITER` Durable Object
   budgets **90 uncached requests per rolling 60 seconds per hashed key** and shares provider
   cooldown. Default documented Pixabay capacity is 100/60s/key; actual headers/account limits
@@ -79,8 +82,10 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
 - Image diagnostics use `[image]` / `[pixabay]` structured logs and carry a request ID through
   validation, credit reservation/refund, retries, Pixabay search, asset selection/download, and
   final response. Failed upstream searches log status, rate-limit headers, provider request ID,
-  and a bounded/scrubbed response-body excerpt; never log the API key, full search phrase, or
-  submitted prompt. The binary error body/header returns the request ID so browser-console and
+  and a bounded/scrubbed response-body excerpt; never log the API key or full script. Every
+  normalized Pixabay search term and planned scene keyword is logged in the Worker console;
+  restrict access and retention because user-derived keywords may be sensitive. The binary
+  error body/header returns the request ID so browser-console and
   Worker logs can be correlated. The studio logs scene failures and reports the actionable error
   plus request ID instead of hiding every 502 behind the generic batch-stopped message.
 
@@ -88,7 +93,7 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
 
 1. Narration -> TTS MP3 -> Web Audio duration -> captions.
 2. Whole-script LLM planning -> up to three typed search selections/chunk -> Pixabay searches
-   with `per_page=3` -> validated server downloads -> binary or legacy NDJSON delivery.
+   on page 1 (upstream `per_page=3`, at most two returned photos) -> validated server downloads -> binary or legacy NDJSON delivery.
 3. Sort by global scene index; decode images and probe clips. MP4s become real `type:"mp4"`
    slides with `videoEl` and duration. A completed row requires **two distinct imported clips**.
 4. Fit all planned scenes into narration using integer 30-fps frame windows: bound clip windows
@@ -488,7 +493,7 @@ The governing Pixabay addendum at the top of this file defines the current media
 `runImageModel()` is now a compatibility wrapper around stock-photo retrieval, not inference.
 The active text LLM plans whole-script search keywords and assigns exactly two video scenes.
 Both automated layout pipelines import mixed stock photos/clips; manual prompt controls are removed. No SDXL/Lightning/FLUX fallback
-or demo inference remains enabled. See the addendum for `per_page=3`, API routes, caps,
+or demo inference remains enabled. See the addendum for first-page Pixabay search limits, API routes, caps,
 authorization, server-side downloads, caching, the Durable Object budget and deployment gates.
 
 ---
