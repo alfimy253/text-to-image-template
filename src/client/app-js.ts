@@ -10084,7 +10084,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			const rowImageCaps = await studioOffload.capabilities();
 			try {
 				await runProgressiveImagePipeline({
-					total: imageSceneTarget(row.minutes),
+					total: imageSceneTarget(row.script, row.minutes),
 					isCancelled: function () { return Boolean(row.stopRequested); },
 					parallelRenders: Math.max(1, Math.min(4, Number(rowImageCaps.imageChunks) || 1)),
 					request: function (batch) { return requestBatchPrompts(row, batch); },
@@ -10093,7 +10093,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						if (row._promptOwner && row._promptOwner.controller) row._promptOwner.controller.abort();
 					},
 					render: async function (prompts, offset) {
-						setBatchStage(row, "images", row.images.length + " of " + imageSceneTarget(row.minutes));
+						setBatchStage(row, "images", row.images.length + " of " + imageSceneTarget(row.script, row.minutes));
 						if (offset === 0) startUnprocessedRows(row);
 						// Never retry a consumed image batch: it could charge for or duplicate delivered images.
 						const images = await requestBatchImages(row, prompts);
@@ -17700,7 +17700,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			'<div id="seo-wt-selected-' + n + '"></div>' +
 			'<label class="seo-wt-style-label" for="seo-wt-style-select-' + n + '">Video treatment (Pixabay stock appearance varies)</label>' +
 			'<select id="seo-wt-style-select-' + n + '" aria-describedby="seo-wt-style-note-' + n + '">' + seoImageStyleOptionsHTML(selectedStyle) + '</select>' +
-			'<span class="va-note" id="seo-wt-style-note-' + n + '">Choose one visual style. The model will create broad scenes from the script idea, using this style consistently. Image count follows script length: 10 for 1 minute, 14 for 2\\u20133 minutes, 20 for 4\\u20136 minutes. Every scene prompt is written as three paragraphs of visual detail, so each image is fully art-directed instead of a one-line guess.</span>' +
+			'<span class="va-note" id="seo-wt-style-note-' + n + '">Choose one visual style. The model will search Pixabay for broad scenes that fit the script, using the long-tail and short SEO keywords as search terms. Scene count follows the script word count: 6 scenes up to 130 words, 8 up to 240 words, 10 up to 500 words (10 beyond that); every plan includes two Pixabay video scenes and the rest are stock photos.</span>' +
 			'<span class="va-note">Nothing is lost if you close this window after pressing Generate: the script and its images keep running in the background for Video ' + n + '.</span>' +
 			'<div class="seo-wt-actions">' +
 			'<button type="button" class="upload-btn" onclick="confirmSeoStyleAndGenerate(' + n + ')">\\u2728 Generate Script &amp; Images</button>' +
@@ -18496,7 +18496,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				"Planning Pixabay scene keywords from the full script…";
 		}
 
-		const target = Math.min(imageSceneTarget(project._seoMinutes || 1), availableImages + 2);
+		const target = Math.min(imageSceneTarget(project.script || "", project._seoMinutes || 1), availableImages + 2);
 		project.imagePrompts = [];
 		project.imagePromptTarget = target;
 		project.imagePromptFlowId = "imgflow-" + n + "-" + myFlowSeq + "-" + Date.now().toString(36);

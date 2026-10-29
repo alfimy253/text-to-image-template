@@ -21,14 +21,34 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
   script** on each chunk call. Both layouts send full `script`; it wins over legacy summaries.
 - Scenes portray broad concrete ideas from the **whole script**, not literal isolated sentences.
   The model returns typed stock searches: `{scenes:[{type:"image"|"video",keywords:"..."}]}`.
-  Instruction asks for 2–5 keywords; validation permits at most six words / 100 characters.
-  Long art prompts, wrong types/counts and malformed JSON fail validation.
+  Every `keywords` value is a **stock search term of 1–5 words** (≤100 characters), never an
+  image prompt: sentences, art direction, camera/lens notes, mood paragraphs, style words and
+  negative prompts are rejected by `cleanSceneKeywords()`. The instruction says "write search
+  terms, NOT image prompts" and offers the script's own **long-tail + short SEO keywords** as
+  candidate search vocabulary.
+- **Scene count comes from the script WORD COUNT** (Session #275), computed once by
+  `sceneCountForScript()` / `countScriptWords()` and mirrored by the browser's
+  `imageSceneTarget()`: **≤130 words → 6 scenes**, **>130 and ≤240 → 8 scenes**,
+  **>240 and ≤500 → 10 scenes**, **>500 words → 10 scenes** (the rule set ends at ten).
+  The older 10/14/20-by-duration tiers survive only as a legacy ceiling in
+  `imagePromptCountForMinutes()` and never raise the word-count total. Cue numbers, WEBVTT
+  markers and `-->` timestamps are not words. A caller may request a **smaller** validated
+  `sceneTotal` (the editor's free gallery room, minimum four) but never a larger one.
 - Every LLM instruction explicitly requires **exactly two Pixabay video scenes in the complete
   video**. Reserved zero-based slots are `1` and `total - 2`; the server enforces types across
   chunk boundaries/retries. All other slots are stock photos.
-- Totals remain **10/14/20 scenes**, now **8+2 / 12+2 / 18+2 photos+clips** for 1 / 2–3 / 4–6
-  minutes. Two clips are included in these totals, not added on top. A space-constrained editor
-  can request a smaller validated total (minimum four), still with exactly two clip slots.
+- Totals are **6 / 8 / 10 scenes** = **4+2 / 6+2 / 8+2 photos+clips** for ≤130 / ≤240 / ≤500
+  script words (10 scenes beyond 500 words). Two clips are included in these totals, not added
+  on top. A space-constrained editor can request a smaller validated total (minimum four), still
+  with exactly two clip slots.
+- **Scene-count reconciliation (Session #275).** The reply is aligned to the requested slots
+  deterministically: explicit `.scene` ids, a whole-video plan of exactly `total`, a whole-video
+  plan of **any other length** (proportional slot mapping with nearest same-type entries), a
+  chunk-relative reply, a greedy same-type subsequence, then the reply's own order. Media types
+  stay server-controlled, so a photo slot is never filled by a video entry. A reply that fills
+  only part of a chunk returns that **valid prefix** (the browser advances by the accepted count
+  and continues) instead of throwing; `Scene keyword planner returned the wrong scene count` now
+  means the reply contained no usable scene at all.
 - One text call per request, 45-second budget, 2,048 output tokens; browser retries are bounded.
   Script input above **20,000 characters** is rejected, not silently truncated. Provider context
   limits still apply. `/api/image-prompts` retains its compatibility name and is now authorized.
@@ -1773,6 +1793,19 @@ cites `kv-scale-test.md` §8, the last section of that document.
 | 7.5 | `README.md` and `userflow.md` claimed three themes and a single-canvas studio. | Feature bullet, limits, `userflow.md` §11 and the header counts updated. |
 | 7.6 | No document said what the studio deliberately *lacks*. | RULE 22 and `bug-fix-session-240.md` §6 name the dropped reference widgets (timeline, rail, metrics, in-bar picker, preview fake widgets, bulk operations). |
 
+### Register addendum — Bug Fix Session #275 (2026-10-29)
+
+> The scene-count rule moved from the requested **duration** (10/14/20) to the narration's
+> **word count** (6/8/10) and the planner stopped failing on replies whose length differed from
+> the request. Everything it invalidated is listed here.
+
+| # | Drift | Resolution |
+| --- | --- | --- |
+| 8.1 | The governing media rule, `pixabay-media-migration.md`, `README.md`, `userflow.md` and `quick-batch-table-system-requirements.md` all stated 10/14/20-by-duration totals. | All state the word-count brackets: **≤130 → 6, ≤240 → 8, ≤500 → 10, >500 → 10**, with 4+2 / 6+2 / 8+2 photos+clips. `new_requirements.md` keeps the old line with an explicit supersession note. |
+| 8.2 | The planner contract said "2–5 keywords … at most six words". | Now **1–5 word stock search terms** (≤100 chars) with `SCENE_KEYWORDS_MAX_WORDS = 5`; prose/image-prompt values are rejected and the SEO long-tail + shorts are offered as search vocabulary. |
+| 8.3 | No rule described how a model reply is matched to the requested chunk. | New reconciliation note in the media rule (§ "Scene-count reconciliation") and §3.2 of `bug-fix-session-275-scene-count-consistency.md`: priority-ordered candidates, server-controlled media types, valid-prefix batches. |
+| 8.4 | The editor note promised "10 for 1 minute, 14 for 2–3 minutes, 20 for 4–6 minutes". | Rewritten to the word-count rule and the two-video guarantee (`src/client/app-js.ts`). |
+
 ## RULE 24 — The Generate SEO Script walkthrough: two selectable keyword sets, an image style, then queued AI images
 
 > Added with this revision. RULE 7's keyword contract is unchanged; RULE 24 only changes
@@ -2359,7 +2392,7 @@ resource implications, compatibility and rollout checks.
 
 - Both editor and Quick Batch use `runProgressiveImagePipeline`: request at most three prompts,
   render that chunk while requesting the next, drain both, repeat. One lookahead only; totals
-  remain 10/14/20, capped by free editor gallery slots.
+  follow the script word count (#275: 6 / 8 / 10), capped by free editor gallery slots.
 - `POST /api/image-prompts` accepts optional `batch:{offset,count,attempt,previous}`. Batch mode
   validates count 1–3 and the absolute range, makes **one** AI call with a **45 s** wait budget,
   and returns `batch:{offset,requested,nextOffset}`. Browser request + JSON timeout is **60 s**;

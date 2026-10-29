@@ -11,10 +11,12 @@
 
 ## Media direction: Pixabay keywords, photos and two clips
 
-The text LLM reads the full narration and plans short Pixabay scene search keywords that
+The text LLM reads the full narration and plans short Pixabay **search terms (1–5 words)** that
 portray the general idea of the entire script. It does **not** generate images. Each automatic
-video contains exactly **two Pixabay video scenes**, with remaining scenes using stock photos:
-8+2 / 12+2 / 18+2 for the existing 10/14/20-scene totals.
+video contains exactly **two Pixabay video scenes**, with remaining scenes using stock photos.
+The scene total follows the **script word count**: **≤130 words → 6 scenes**, **≤240 → 8**,
+**≤500 → 10** (10 beyond 500 words) — i.e. 4+2 / 6+2 / 8+2 photos+clips. The script's own
+long-tail and short SEO keywords are offered to the planner as search vocabulary.
 
 Both Quick Batch and editor automatically import and process the mixed media. The editor's
 manual image-prompt/search section has been removed; normal uploads and the media gallery
@@ -22,7 +24,9 @@ remain. Narration remains the audio master, and scene timing keeps both clips in
 Every stock search still explicitly uses `per_page=3`.
 
 See [the implementation reference](pixabay-media-migration.md) for the whole-script planner,
-limits, APIs and deployment checks. `npm run test:pixabay` passes **44 tests** with mocked
+limits, APIs and deployment checks, and
+[bug-fix-session-275-scene-count-consistency.md](bug-fix-session-275-scene-count-consistency.md)
+for the word-count scene rule and the wrong-scene-count debug. `npm run test:pixabay` passes **44 tests** with mocked
 browser-media boundaries. Production deployment and live-account/real-device smoke checks
 remain outstanding. The inventory below describes pre-migration behavior where it discusses
 AI-generated images or the removed manual prompt panel.
@@ -66,7 +70,8 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   selected set, then the **browser-managed progressive pipeline** requests up to **three** scene
   prompts, starts rendering them, and requests the next prompt batch concurrently. One batch
   of lookahead bounds buffering; there is no job URL, polling, or server-side video management.
-  Totals remain **10 / 14 / 20** for 1 / 2–3 / 4–6 minutes. Each prompt request makes one model
+  Totals are **6 / 8 / 10** scenes by script word count (≤130 / ≤240 / ≤500), capped by the
+  free editor gallery slots. Each prompt request makes one model
   call (45 s budget); the browser retries transient prompt failures up to twice with a 60 s
   request/body timeout, waiting the server's `Retry-After`/`retryAfterMs` hint (bounded at 15 s)
   instead of a fixed 500 ms. Paid images are never automatically replayed. **Bug fix #263** retries
@@ -352,7 +357,7 @@ skin covers the whole site.
 | `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session or `yvs_free` guest (10,000 images/day on every plan); `401` for a cold anonymous request when KV is bound, `429` at the limit, `503` + `Retry-After` when the image fleet is shedding load, `X-Credit-*` headers on success |
 | `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated **plain-text** script (`{script, format:"plain"}` — no `srt` key is returned) plus keyword counts; accepts a user-selected `keywordSet` from `/api/seo-plan`, which is re-validated and skips the planner. Negotiated `singleAttempt:true,attempt:0–2` performs one writer call; browser owns retries |
 | `POST /api/seo-plan` | Two different validated SEO keyword sets (title + headings + 1 long-tail + 4 shorts each) for a topic, for the walkthrough's Select step |
-| `POST /api/image-prompts` | Synchronous scene prompts: optional `batch:{offset,count:1–3,attempt:0–2,previous}` performs one model call; `200 {prompts,count,expectedCount,batch?,style,minutes}`. Browser manages progressive 10/14/20 totals and retries. Without `batch`, legacy all-prompts/top-up behavior remains; `400` invalid input, `502` model failure, `503` no AI binding. The old `GET`/`DELETE /api/image-prompts/:id` job URL answers `410` |
+| `POST /api/image-prompts` | Synchronous scene prompts: optional `batch:{offset,count:1–3,attempt:0–2,previous}` performs one model call; `200 {prompts,count,expectedCount,batch?,style,minutes}`. Browser manages the progressive 6/8/10 word-count totals and retries. Without `batch`, legacy all-prompts/top-up behavior remains; `400` invalid input, `502` model failure, `503` no AI binding. The old `GET`/`DELETE /api/image-prompts/:id` job URL answers `410` |
 | `GET /api/pipeline-capabilities` | No-store version 261 negotiation; missing/failed support falls back before paid work. No new binding or migration is required. |
 | `POST /api/image` | One prompt plus resolution/orientation → binary image, one KV credit reservation; no browser auto-replay, observable-failure refund. Quota checks are best-effort under concurrency (KV is not atomic). |
 | `POST /api/image-batch` | One request, every image: `{prompts: string[]}` (≤20) → `application/x-ndjson` with `start`/`tick`/`image`/`done` events. Renders in parallel at 1024×576, 1 image credit per prompt up front (account or `/free` guest allowance) refunded for failures; `401` anonymous, `429` no credits, `400` invalid prompts |

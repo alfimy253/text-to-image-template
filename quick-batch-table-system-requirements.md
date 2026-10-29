@@ -79,7 +79,7 @@ shorten the backoff; `window.__BATCH_ROWS` remains the live row array.
 | --- | --- | --- |
 | `voice` | `POST /api/voiceover {text, lang:"en"}` | MP3 blob → `row.mp3`, `row.mp3Url` |
 | `timing` | `decodeBatchAudio(row, blob)` | `row.audio` (duration) + `row.subtitles` from the script |
-| `prompts` | `POST /api/image-prompts {topic, minutes, style, resolution, orientation, script, batch:{offset,count,attempt,previous}}` (count ≤3; repeated progressively) | `row.prompts` — 10 / 14 / 20 prompts by length, each written for the row's frame |
+| `prompts` | `POST /api/image-prompts {topic, minutes, style, resolution, orientation, script, batch:{offset,count,attempt,previous}}` (count ≤3; repeated progressively) | `row.prompts` — 6 / 8 / 10 prompts by script word count (≤130 / ≤240 / ≤500 words, #275), each carrying a 1–5 word Pixabay search term |
 | `images` | `POST /api/image {prompt, resolution, orientation}` (one binary image/job; bounded browser scheduling overlaps prompt lookahead; legacy NDJSON fallback) | `row.images` + one object URL per image, rendered at the row's frame |
 | `animate` | `buildBatchSlides(row)` | `row.slides`, `row.animated = true` |
 | `done` | — | `batchRowFinished(row)` true → Preview + Export unlock |
