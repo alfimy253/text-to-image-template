@@ -59,7 +59,7 @@ visually confirm both labeled clips and subtitles.
 Provider metadata fetch/body deadline remains 20 s; asset fetch/body deadline remains 30 s.
 Subscriber search waits are bounded at 35 s to include shared-budget/cache overhead.
 Queued asset waits have a 5-minute ceiling and abort immediately on caller cancellation.
-Cache TTL, shared 90/min budget, `per_page=3`, download byte caps and two-clip validation remain unchanged.
+Cache TTL, shared 90/min budget, upstream `per_page=3`, download byte caps and two-clip validation remain unchanged. The current search contract now returns at most two usable photos on page 1 (up to three clips); see `pixabay-media-migration.md`.
 The **local QA preview server** additionally implements HTTP byte ranges, verified by real MP4 playback/seek tests.
 
 ## Validation

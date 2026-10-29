@@ -40,17 +40,17 @@ function fixture(t, options = {}) {
 	return calls;
 }
 
-test('Pixabay search encodes q, fixes per_page=3, photo+safesearch, and truncates hits', async t => {
+test('Pixabay requests the upstream minimum of three and exposes two first-page photos', async t => {
 	const calls = fixture(t); const result = await searchPixabay(env(), { q: 'yellow flowers & sun', per_page: 3 });
-	assert.equal(result.hits.length, 3); assert.equal(result.provider, 'pixabay');
+	assert.equal(result.hits.length, 2); assert.equal(result.per_page, 2); assert.equal(result.page, 1); assert.equal(result.provider, 'pixabay');
 	assert.equal(calls[0].url.searchParams.get('per_page'), '3');
 	assert.equal(calls[0].url.searchParams.get('q'), 'yellow flowers & sun');
 	assert.equal(calls[0].url.searchParams.get('image_type'), 'photo');
 	assert.equal(calls[0].url.searchParams.get('safesearch'), 'true');
 	assert.ok(!JSON.stringify(result).includes('test-key'));
 });
-test('search rejects non-three page sizes, invalid type/page/id and empty queries', async () => {
-	for (const input of [{ q: 'rose', per_page: 20 }, { q: 'rose', page: 0 }, { q: 'rose', type: 'other' }, { id: -1 }, {}]) {
+test('search rejects unsupported page sizes, pages beyond the first, invalid type/id and empty queries', async () => {
+	for (const input of [{ q: 'rose', per_page: 20 }, { q: 'rose', page: 0 }, { q: 'rose', page: 2 }, { q: 'rose', type: 'other' }, { id: -1 }, {}]) {
 		await assert.rejects(searchPixabay(env(), input), e => e.status === 400);
 	}
 });
@@ -309,7 +309,7 @@ test('public media routes fail closed without authorization storage unless local
 	const request = new Request('https://studio.test/api/media/search?q=flowers&per_page=3');
 	assert.equal((await worker.fetch(request, e, {})).status, 503);
 	const allowed = await worker.fetch(request, { ...e, PIXABAY_ALLOW_UNMETERED: 'true' }, {});
-	assert.equal(allowed.status, 200); assert.equal((await allowed.json()).hits.length, 3);
+	assert.equal(allowed.status, 200); assert.equal((await allowed.json()).hits.length, 2);
 });
 test('no-result binary images are permanent failures, not retry storms', async t => {
 	const calls = fixture(t, { empty: true });
@@ -501,7 +501,7 @@ test('cancelling one metadata subscriber preserves the coalesced request for oth
 test('cache write errors do not fail a valid provider download or metadata search', async t => {
  fixture(t);const previous=globalThis.caches;t.after(()=>{globalThis.caches=previous});
  globalThis.caches={default:{match:async()=>undefined,put:async()=>{throw new Error('cache unavailable')}}};
- assert.equal((await searchPixabay(env(),{q:'cache failure unique'})).hits.length,3);
+ assert.equal((await searchPixabay(env(),{q:'cache failure unique'})).hits.length,2);
  assert.deepEqual((await downloadPixabay({id:503,type:'image',url:'https://cdn.pixabay.com/photo/503.png'})).bytes,png);
 });
 test('an unresponsive cache write is bounded and releases the download queue', async t => {
@@ -602,7 +602,7 @@ test('planner prevents false wrong-scene-count failures across real 8B reply sha
 		q: 'smiling community harvest',
 		type: 'image',
 		page: 1,
-		index: 0,
+		index: 1,
 		scene: 9
 	});
 });
@@ -721,4 +721,79 @@ test('binary provider failures log upstream diagnostics with a request ID and ke
 	assert.match(diagnostics, /secret provider diagnostic/);
 	assert.match(diagnostics, /pixabay-debug-test/);
 	assert.doesNotMatch(diagnostics, /test-key-/);
+});
+
+
+test('image searches accept two results and never expose more than two even from cache', async t => {
+ const calls = fixture(t), e = env();
+ const first = await searchPixabay(e, {q:'two photo search', type:'image', per_page:2});
+ const second = await searchPixabay(e, {q:'two photo search', type:'image', per_page:3});
+ assert.deepEqual(first.hits.map(h => h.id), [1,2]);
+ assert.deepEqual(second, first);
+ assert.equal(calls.length, 1);
+ assert.equal(calls[0].url.searchParams.get('page'), '1');
+ assert.equal(calls[0].url.searchParams.get('per_page'), '3');
+});
+test('scene selections stay on the first page, including old scene tokens', async t => {
+ const calls = fixture(t), e = env();
+ assert.deepEqual(JSON.parse(sceneSearchToken('flowers', 9).slice(8)), {q:'flowers',page:1,index:1,scene:9});
+ await runImageModel(e, 'pixabay:' + JSON.stringify({q:'legacy flowers', page:4, index:2, type:'image'}));
+ const search = calls.find(c => c.url.pathname === '/api/');
+ assert.equal(search.url.searchParams.get('page'), '1');
+ assert.ok(calls.some(c => c.url.pathname === '/photo/1.png'));
+});
+test('every search logs normalized keywords and upstream attempts, including failures, without leaking the provider key', async t => {
+ const calls = fixture(t, {error: 403}); const originalInfo = console.info, originalError = console.error, originalWarn = console.warn, entries = [];
+ console.info = (...args) => entries.push(args); console.error = (...args) => entries.push(args); console.warn = (...args) => entries.push(args);
+ t.after(() => {console.info = originalInfo; console.error = originalError; console.warn = originalWarn});
+ const e = {...env(), PIXABAY_API_KEY: 's.e[c]ret+key'};
+ const query = 'flowers ' + e.PIXABAY_API_KEY;
+ await assert.rejects(searchPixabay(e, {q:query}, undefined, {requestId:'keyword-trace',sceneIndex:3}));
+ assert.equal(calls.length, 1);
+ for (const name of ['[pixabay] search.keywords', '[pixabay] provider-search.request']) {
+  const record = entries.find(([stage]) => stage === name)?.[1];
+  assert.equal(record?.keywords, 'flowers [REDACTED]');
+  assert.equal(record?.requestId, 'keyword-trace'); assert.equal(record?.sceneIndex, 3);
+ }
+ assert.ok(entries.some(([stage, data]) => stage === '[pixabay] provider-search.rejected' && data.status === 403 && data.requestId === 'keyword-trace'));
+ assert.ok(!JSON.stringify(entries).includes(e.PIXABAY_API_KEY));
+});
+
+test('cache hits still log every keyword search without a new provider request', async t => {
+ const calls = fixture(t), originalInfo = console.info, entries = [];
+ console.info = (...args) => entries.push(args); t.after(() => {console.info = originalInfo});
+ const e = env();
+ await searchPixabay(e, {q:'  garden  flowers  '});
+ await searchPixabay(e, {q:'  garden  flowers  '});
+ assert.equal(calls.length, 1);
+ assert.equal(entries.filter(([name,fields]) => name === '[pixabay] search.keywords' && fields.keywords === 'garden flowers').length, 2);
+ assert.equal(entries.filter(([name]) => name === '[pixabay] provider-search.request').length, 1);
+});
+
+test('keyword planner always logs selected keywords without exposing the key', async t => {
+ const original = console.info, entries = [];
+ console.info = (...args) => entries.push(args); t.after(() => {console.info = original});
+ const planner = {run: async () => ({response: JSON.stringify({scenes:[{scene:0,type:'image',keywords:'garden flowers'}]})})};
+ const input = {topic:'garden',script:'Garden narration.',minutes:1,batch:{offset:0,count:1}};
+ await generateImagePrompts({AI:planner,PIXABAY_API_KEY:'garden'}, 'text', input);
+ assert.ok(entries.some(([name,fields]) => name === '[image-prompts] planned.keyword' && fields.keywords === '[REDACTED] flowers'));
+});
+
+test('local metadata cache avoids a subsequent stalled edge-cache lookup', async t => {
+ fixture(t); const previous = globalThis.caches; t.after(() => {globalThis.caches = previous});
+ let matches = 0;
+ globalThis.caches = {default:{match:async()=>{matches++; if (matches > 1) return new Promise(()=>{}); return undefined},put:async()=>{}}};
+ const e = env(), input = {q:'fast local cache flower'};
+ await searchPixabay(e,input);
+ assert.equal((await promptly(searchPixabay(e,input))).hits.length,2);
+ assert.equal(matches,1);
+});
+
+test('media search API defaults to two photos and rejects later pages', async t => {
+ fixture(t); const e = env();
+ const first = await handlePixabayApi(new Request('https://studio.test/api/media/search?q=rose'), e);
+ const body = await first.json();
+ assert.equal(first.status, 200); assert.equal(body.page, 1); assert.equal(body.per_page, 2); assert.equal(body.hits.length, 2);
+ const later = await handlePixabayApi(new Request('https://studio.test/api/media/search?q=rose&page=2'), e);
+ assert.equal(later.status, 400); assert.match((await later.json()).error, /page 1/);
 });

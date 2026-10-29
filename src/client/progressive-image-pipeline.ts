@@ -11,29 +11,20 @@ export const PROGRESSIVE_IMAGE_PIPELINE_JS = `
 var IMAGE_SCENE_WORD_BRACKETS = [[130, 6], [240, 8], [500, 10]];
 var IMAGE_SCENE_COUNT_MIN = 4;
 var IMAGE_SCENE_COUNT_MAX = 10;
-/*
- * This is JavaScript inside a template literal: regex escapes must survive
- * both template expansion and the HTML parser. The token test recognizes
- * ASCII alphanumerics and non-ASCII text without Unicode property escapes.
- */
-var IMAGE_SPACE_SPLIT = new RegExp("[" + String.fromCharCode(32, 9, 10, 13) + "]+");
+/* Match the Worker's Unicode letter/number tokenization exactly, including
+ * punctuation-separated words and ignoring emoji. Escapes survive the template. */
+var IMAGE_WORD_PATTERN = /[\\p{L}\\p{N}][\\p{L}\\p{N}'’_-]*/gu;
 function imageScriptWordCount(script) {
-	var lines = String(script || "").split(String.fromCharCode(10));
+	var lines = String(script || "").split(String.fromCharCode(65279)).join("").split(String.fromCharCode(10));
 	var kept = [];
 	for (var i = 0; i < lines.length; i++) {
-		var line = lines[i].split(String.fromCharCode(13)).join("").trim();
-		if (!line) continue;
-		if (line.slice(0, 6).toUpperCase() === "WEBVTT") continue;
-		if (line.indexOf("--" + ">") !== -1) continue;
-		if (/^[0-9]+$/.test(line)) continue;
+		var line = lines[i].trim();
+		if (!line || line.slice(0, 6).toUpperCase() === "WEBVTT") continue;
+		if (line.indexOf("--" + ">") !== -1 || /^[0-9]+$/.test(line)) continue;
 		kept.push(line);
 	}
-	var words = kept.join(" ").split(IMAGE_SPACE_SPLIT).filter(function (token) {
-		// Keep the escapes in the emitted script: a literal NUL is replaced by
-		// the HTML parser and would make this regex (and the whole app) invalid.
-		return /[A-Za-z0-9]/.test(token) || /[^\\u0000-\\u007F]/.test(token);
-	});
-	return words.length;
+	var words = kept.join(" ").match(IMAGE_WORD_PATTERN);
+	return words ? words.length : 0;
 }
 function imageSceneTarget(script, minutes) {
 	var words = imageScriptWordCount(script);
@@ -177,11 +168,11 @@ async function runProgressiveImagePipeline(options) {
 			}
 		}
 		const requested = await next;
-		check();
 		if (renderFailure) {
 			await drainRenders();
 			throw renderFailure;
 		}
+		check();
 		// Already-started images are fully drained before a later prompt error surfaces.
 		if (requested.error) {
 			await drainRenders();

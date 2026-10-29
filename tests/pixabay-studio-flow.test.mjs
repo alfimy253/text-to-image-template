@@ -277,3 +277,38 @@ test('a missing Pixabay API key reports the real configuration error, not a fake
 	assert.ok(imageRequests > 0, 'the flow did ask for images');
 });
 
+
+test('both layouts plan the same eight scenes for punctuation-separated words and emoji', async t => {
+ const {w, plannerCalls} = setup(t);
+ const script = 'forest🌲garden '.repeat(66);
+ while (w.__BATCH_ROWS.length) w.removeBatchRow(w.__BATCH_ROWS[0].id);
+ const row = w.addBatchRow({script, minutes:1});
+ await deadline(w.runBatchRow(row));
+ assert.equal(w.batchRowFinished(row), true); assert.equal(row.images.length,8);
+ assert.ok(plannerCalls.every(prompt => prompt.includes(script)));
+ w.addVideoAccordion(); const project=w.__VIDEO_PROJECTS[0];
+ project.script=script; project._seoTopic='forest'; project._seoMinutes=1; project._imageFlowActive=true;
+ await deadline(w.startImagePromptFlow(1));
+ assert.equal(project.assets.length,8); assert.equal(project.assets.filter(a=>a.kind==='mp4').length,2);
+ assert.deepEqual(Array.from(project.assets, a=>a.sceneIndex), [0,1,2,3,4,5,6,7]);
+});
+
+test('editor and Quick Batch retry transient HTTP 408 keyword-planning failures', async t => {
+ const {w}=setup(t); const original=w.fetch; let promptRequests=0, failed=0;
+ w.fetch=async (input,init={})=>{
+  if (new URL(String(input),'https://studio.test').pathname==='/api/image-prompts') {
+   promptRequests++;
+   if (failed++ === 0) return Response.json({success:false,error:'planner timed out'}, {status:408});
+  }
+  return original(input,init);
+ };
+ w.addVideoAccordion(); const project=w.__VIDEO_PROJECTS[0];
+ project.script='Gardens connect people.'; project._seoTopic='garden'; project._seoMinutes=1; project._imageFlowActive=true;
+ await deadline(w.startImagePromptFlow(1));
+ assert.equal(project.assets.length,6); assert.ok(promptRequests>=3);
+ failed=0; promptRequests=0;
+ while (w.__BATCH_ROWS.length) w.removeBatchRow(w.__BATCH_ROWS[0].id);
+ const row=w.addBatchRow({script:'Gardens connect people.',minutes:1});
+ await deadline(w.runBatchRow(row));
+ assert.equal(w.batchRowFinished(row),true); assert.equal(row.images.length,6); assert.ok(promptRequests>=3);
+});

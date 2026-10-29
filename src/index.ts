@@ -263,7 +263,7 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			return new Response(JSON.stringify({ version: 261, binaryImages: true, chunkVoiceover: true,
 				singleAttemptScript: true, compactPrompts: true, imageChunks: 2, imageSlots: 6,
 				/* API rotation across backup Workers (src/modules/api-relay.ts). */
-				apiRelay: 1, mediaProvider: "pixabay", per_page: 3 }), {
+				apiRelay: 1, mediaProvider: "pixabay", per_page: 2, video_per_page: 3 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});
 		}

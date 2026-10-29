@@ -21,12 +21,12 @@ long-tail and short SEO keywords are offered to the planner as search vocabulary
 Both Quick Batch and editor automatically import and process the mixed media. The editor's
 manual image-prompt/search section has been removed; normal uploads and the media gallery
 remain. Narration remains the audio master, and scene timing keeps both clips in the export.
-Every stock search still explicitly uses `per_page=3`.
+Photo searches return up to **two usable images from page 1** per keyword; each scene imports one selected image. Video searches return up to three clips from page 1. Pixabay requires `per_page=3` upstream, so the server requests three and caps photo results locally. Every planned and searched keyword is logged in the Worker console; see [search debugging](pixabay-media-migration.md#search-debugging-and-latency).
 
 See [the implementation reference](pixabay-media-migration.md) for the whole-script planner,
 limits, APIs and deployment checks, and
 [bug-fix-session-275-scene-count-consistency.md](bug-fix-session-275-scene-count-consistency.md)
-for the word-count scene rule and the wrong-scene-count debug. `npm run test:pixabay` passes **44 tests** with mocked
+for the word-count scene rule and the wrong-scene-count debug. See also [the script and image keyword deep-debug audit](script-image-debug-audit.md) for both layouts and the reproduced fixes. `npm run test:pixabay` exercises the flow with mocked
 browser-media boundaries. Production deployment and live-account/real-device smoke checks
 remain outstanding. The inventory below describes pre-migration behavior where it discusses
 AI-generated images or the removed manual prompt panel.
@@ -276,7 +276,7 @@ the strings that carry the rules (the full inventory, with the constant each one
 | Quick batch table columns | `Script` · `Video style` · `Min` · `Resolution` (`480px` / `540px` / `720px` / `1024px`, with a live `W×H` hint underneath) · `Orientation` (`Square 1:1` / `Landscape 16:9` / `Portrait 9:16`) · `Preview` · `Export` |
 | Quick batch table hint + tooltips | *… pick the video image style, the minimum minutes, the AI image resolution and the frame orientation … a row that is empty is skipped, and so is a row that is already finished … Three rows render at the same time.* · Generate tooltip: *Generate every row that has a script and is not finished yet … three rows at a time* · busy label `■ Stop generating` |
 | Settings page, Appearance | `Current theme: Night Lab.` · `Preview only — press Save theme to apply it for everyone.` · `Saved — reload the studio page to see the new theme.` |
-| Blocking alerts | only for hard failures and cap breaches (e.g. `You can add at most 25 images (jpg, png, jpeg).`); the AI script instead reports `Script failed after 3 attempts: <error>` in its status line (two retries happen first, silently) so a retry can start immediately |
+| Blocking alerts | only for hard failures and cap breaches (e.g. `You can add at most 25 images (jpg, png, jpeg).`); the AI script reports the actual number of attempts and the error in its status line (transient failures may receive up to two retries) so a retry can start immediately |
 
 Status lines (`#va-status-N`, `#va-script-status-N`, `#va-ai-status-N`) are the normal progress
 channel; the script line ends with `Script ready — N lines (<speed> speech, <minutes> min) · SEO:

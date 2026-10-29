@@ -1,4 +1,4 @@
-import { sceneSearchToken, normalizeSearchQuery } from "./pixabay";
+import { normalizeSearchQuery, PIXABAY_IMAGE_RESULTS } from "./pixabay";
 /*
  * Pixabay scene-selection planning. The legacy route/function names are kept
  * so both studio layouts and older tabs can use the same progressive pipeline.
@@ -66,6 +66,7 @@ export interface ImagePromptInput {
 }
 
 type AiEnv = {
+	PIXABAY_API_KEY?: string;
 	AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> };
 };
 
@@ -1600,7 +1601,9 @@ export async function generateImagePrompts(
 		if (!ok) {
 			throw new Error("Scene keyword planner must return concise 1-5 word search keywords and the assigned media types");
 		}
-		const ordinal = slots[i].type === "video" ? positions.indexOf(slots[i].scene) : slots[i].scene % 3;
+		const ordinal = slots[i].type === "video" ? positions.indexOf(slots[i].scene) : slots[i].scene % PIXABAY_IMAGE_RESULTS;
+		const key = env.PIXABAY_API_KEY?.trim();
+		console.info("[image-prompts] planned.keyword", { scene: slots[i].scene, type: slots[i].type, offset, attempt, keywords: key ? normalizeSearchQuery(keywords).split(key).join("[REDACTED]") : normalizeSearchQuery(keywords) });
 		return "pixabay:" + JSON.stringify({ q: normalizeSearchQuery(keywords), type: slots[i].type,
 			page: 1, index: ordinal, scene: slots[i].scene });
 	});
@@ -1740,7 +1743,8 @@ export async function handleGenerateImagePrompts(
 		resolution: frame.resolution,
 		orientation: frame.orientation,
 		topicChars: input.topic.length,
-		scriptIdeaChars: (input.scriptIdea || "").length
+		scriptChars: (input.script || "").length,
+		batch: input.batch ? { offset: input.batch.offset, count: input.batch.count, attempt: input.batch.attempt } : undefined
 	});
 
 	try {

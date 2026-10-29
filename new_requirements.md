@@ -19,7 +19,7 @@ Both layouts process the mixed media, preserving the existing 10/14/20 total sce
 > count (≤130 / ≤240 / ≤500 words) in both layouts. See `system-rules.md` and
 > `pixabay-media-migration.md`; this line records the earlier requirement only.
 The editor accordion's manual image prompt/search section is removed. AI image generation
-and provider fallbacks remain prohibited. `per_page=3` is unchanged. See
+and provider fallbacks remain prohibited. Photo searches expose at most two usable first-page images per keyword (Pixabay upstream requires `per_page=3`); video searches expose up to three first-page clips. See
 [pixabay-media-migration.md](pixabay-media-migration.md) for current implementation and tests.
 
 
