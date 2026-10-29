@@ -189,14 +189,30 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 		let response: Response;
 		const metadataSignal = AbortSignal.timeout(20000);
 		const providerStartedAt = Date.now();
-		traceLog("info", "provider-search.request", trace, { type, page, orientation, keywords: redactProviderText(q, key), timeoutMs: 20000 });
+			traceLog("info", "provider-search.request", trace, { type, page, orientation, keywords: redactProviderText(q, key), timeoutMs: 20000 });
 		try {
 			response = await waitForIO(fetch(`https://pixabay.com/api/${type === "video" ? "videos/" : ""}?${params}`, {
 				signal: metadataSignal, redirect: "error"
 			}), 20000, metadataSignal);
 		} catch (error) {
-			traceLog("error", "provider-search.fetch-failed", trace, { error: diagnosticError(error, key) });
-			throw new PixabayError("Pixabay search is unavailable. Please retry later.");
+			/* Caller cancellation is not a provider failure: surface it unchanged. */
+			if (error instanceof DOMException && error.name === "AbortError") throw error;
+			const upstream = diagnosticError(error, key);
+			const isTimeout = /timeout/i.test(upstream.name) || /timeout/i.test(upstream.message);
+			traceLog("error", "provider-search.fetch-failed", trace, { error: upstream, timeout: isTimeout });
+			/*
+			 * Deep debug: the previous message collapsed every upstream failure
+			 * (DNS, TLS, "Failed to fetch", timeout, proxy rejection) into one
+			 * opaque sentence, so request a523c7cb88bdd9a5 could only be
+			 * diagnosed by matching its requestId in Worker logs. Keep the
+			 * requestId correlation and name the upstream cause in the message
+			 * itself (the key is redacted by diagnosticError).
+			 */
+			throw new PixabayError(
+				"Pixabay search is unavailable (" + upstream.name + ": " + upstream.message + "). " +
+				(isTimeout ? "The Pixabay request timed out." : "The Pixabay endpoint could not be reached.") +
+				" Please retry later."
+			);
 		}
 		traceLog(response.ok ? "info" : "warn", "provider-search.response", trace, { status: response.status, ok: response.ok,
 			rateLimitRemaining: response.headers.get("X-RateLimit-Remaining"), rateLimitReset: response.headers.get("X-RateLimit-Reset"), elapsedMs: Date.now() - providerStartedAt });
