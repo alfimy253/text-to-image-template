@@ -27,10 +27,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 import { BROWSER_OFFLOAD_JS } from "../src/client/browser-offload.ts";
-import {
-	IMAGE_DAILY_LIMIT,
-	default as workerModule
-} from "../src/index.ts";
+import { default as workerModule } from "../src/index.ts";
 import {
 	ImageLoadGovernor,
 	IMAGE_LOAD_COOLDOWN_BASE_MS,
@@ -42,7 +39,7 @@ import {
 	sharedImageLoadGovernor
 } from "../src/modules/image-load.ts";
 import { ImageTaskQueue } from "../src/modules/image-queue.ts";
-import { handleImageBatch, handleImageBinary } from "../src/modules/image-batch.ts";
+import { handleImageBatch, handleImageBinary, IMAGE_DAILY_LIMIT } from "../src/modules/image-batch.ts";
 
 const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const worker = workerModule.default || workerModule;
@@ -600,6 +597,30 @@ test("#262 the browser pauses media fan-out for Retry-After while control work c
 /* ------------------------------------------------------------------ */
 /* 7. Plan ceiling                                                     */
 /* ------------------------------------------------------------------ */
+
+test("#274 the main Worker module exports only functions (workerd export-map contract)", async () => {
+	/*
+	 * With Durable Object bindings configured, workerd validates EVERY named
+	 * export of the main module at boot and refuses anything that is not a
+	 * function/ExportedHandler. A stray `export const IMAGE_DAILY_LIMIT =
+	 * 10000` made `wrangler dev` / the deployment die with:
+	 *   TypeError: Incorrect type for map entry 'IMAGE_DAILY_LIMIT' ...
+	 */
+	const mod = await import("../src/index.ts");
+	const names = Object.keys(mod);
+	assert.ok(names.includes("default"), "the fetch handler stays exported");
+	for (const name of names) {
+		const value = mod[name];
+		/* A named export must be a function (the DO class) or an ExportedHandler object. */
+		const valid =
+			typeof value === "function" ||
+			(Boolean(value) && typeof value === "object" && typeof value.fetch === "function");
+		assert.ok(
+			valid,
+			`src/index.ts export '${name}' must be a function/ExportedHandler (got ${typeof value})`
+		);
+	}
+});
 
 test("#262 every plan reports the same 10,000 image/day ceiling", async () => {
 	assert.equal(IMAGE_DAILY_LIMIT, 10000);

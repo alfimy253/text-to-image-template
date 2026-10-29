@@ -280,7 +280,6 @@ function createStudioOffloadRuntime(win) {
 	async function responseError(response) {
 		var data = await response.json().catch(function () { return {}; });
 		var error = new Error(data.error || ("Generation failed (HTTP " + response.status + ")"));
-		error.retryable = response.status >= 500 || response.status === 429;
 		error.status = response.status;
 		/* #262: server-declared load cooldown (header wins, JSON is the fallback). */
 		var header = null;
@@ -289,6 +288,13 @@ function createStudioOffloadRuntime(win) {
 		if (!(hint > 0) && data && Number(data.retryAfterMs) > 0) hint = Number(data.retryAfterMs);
 		error.retryAfterMs = hint > 0 ? hint : 0;
 		error.kind = data && data.kind ? String(data.kind) : "";
+		/*
+		 * #274: 5xx and 429 are load answers and get bounded retries — unless
+		 * the server explicitly declared the answer fatal (e.g. the Pixabay API
+		 * key is not configured): retrying a permanent failure only delays the
+		 * real error message the user needs to see.
+		 */
+		error.retryable = (response.status >= 500 || response.status === 429) && error.kind !== "fatal";
 		if (response.status === 503 && error.retryAfterMs > 0) noteBackoff(error.retryAfterMs);
 		throw error;
 	}

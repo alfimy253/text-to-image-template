@@ -39,9 +39,9 @@ import { APP_JS } from "../src/client/app-js.ts";
 import { handleGenerateImagePrompts } from "../src/modules/image-prompts.ts";
 import {
 	IMAGE_BATCH_CONCURRENCY,
-	IMAGE_BATCH_WAVE_INTERVAL_MS
+	IMAGE_BATCH_WAVE_INTERVAL_MS,
+	IMAGE_DAILY_LIMIT
 } from "../src/modules/image-batch.ts";
-import { IMAGE_DAILY_LIMIT } from "../src/index.ts";
 import { sharedImageLoadGovernor } from "../src/modules/image-load.ts";
 
 const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);

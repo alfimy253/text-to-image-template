@@ -996,7 +996,8 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
 | `Daily credits` · `Video projects Unlimited` · `AI images N / limit left today` · `AI scripts Unlimited` · `Voiceovers Unlimited` · `Used today: n images · n scripts · n voiceovers` · `Renews in Nh Nm (midnight UTC+8)` | credits pill + popover (`.credit-pill`, `.credit-popover`) | `CREDIT_PLANS`, `creditSummary()`, `creditResetsAt()` (RULE 20) |
 | `Create a free account — 10,000 images/day` | guest credits popover (`.credit-signup`) | the `free` plan's image limit vs the guest's identical 10,000 (RULE 21) |
 | `Daily image credits used up (N images/day on the <plan> plan). Credits renew at midnight (UTC+8).` + `Create a free account for 10,000 images per day.` (guests) | `429` body, shown in `#va-ai-status-N` and the quota alert | the same plan limits + the guest upgrade path (RULE 20/21) |
-| `The image server is busy right now — images pause for about N s and then continue.` | image flow stop reason (`project._imageFlowStopReason`) | `{kind:"overload", retryAfterMs}` from `503`/stream events (RULE 28) |
+| `The image server is busy right now — images pause for about N s and then continue.` | image flow stop reason (`project._imageFlowStopReason`) — **only** when the failure carries `kind:"overload"` | `{kind:"overload", retryAfterMs}` from `503`/stream events (RULE 28/31); a `503` without `kind` shows its own `error.message` (#274) |
+| `Pixabay API key is not configured` | image flow stop reason when the Worker runs without its `PIXABAY_API_KEY` secret | `503` + `{error, kind:"fatal"}` from `POST /api/image` — never retried, never described as server load (#274) |
 | `Sign in to generate AI images — every free account gets 10,000 images per day. No account? Open /free for the same 10,000 images per day.` | `401` body from `/image/gen` | the `free` and guest image limits |
 | `every plan (Free, Paid paid_user, Guest): 10,000 AI images/day. … Counters renew every day at midnight (UTC+8).` | settings page, Accounts Credits (`.cfg-sub`) | `CREDIT_PLANS` + `creditResetsAt()` (RULE 20) |
 | `Guest credits by IP` / `Visitors who never sign in (GET /free) get 10,000 AI images per day. …` | settings page, guest table (`.cfg-group-title`, `.cfg-note`) | `GUEST_PLAN`, the `ipcredits:` table (RULE 21) |
@@ -2446,7 +2447,10 @@ Canonical implementation, limits, verification and rollout: [bug-fix-session-261
   request's `IoContext` (`abortableSleep`), per the #251 fix.
 - **HTTP contract.** `POST /api/image` answers `503` + `Retry-After` with
   `{error, kind:"overload", retryAfterMs, load, credits}` when the fleet is shedding load (other
-  failures stay `502`, cancellations `499`), refunding exactly once. `GET /image/gen` mirrors that
+  failures stay `502`, cancellations `499`), refunding exactly once. One deliberate exception
+  (**#274**): a missing `PIXABAY_API_KEY` answers `503` with `{error, kind:"fatal"}` and **no**
+  `Retry-After` — it is a deployment problem that waiting cannot fix, so the browser must not
+  retry it or re-label it as load. `GET /image/gen` mirrors the load contract
   (`503` + `Retry-After` + `kind`/`retryAfterMs`/`load`, otherwise `500`). `/api/image-batch`
   streams `{type:"image", ok:false, kind, retryAfterMs}` per failed scene and includes
   `overloadFailures`, `retryAfterMs` and `load` in `done`, and `load` in `start`.
@@ -2454,7 +2458,10 @@ Canonical implementation, limits, verification and rollout: [bug-fix-session-261
   (`responseError` reads `Retry-After`) and holds **media** jobs until it elapses
   (`noteBackoff`, `stats().backoffMs`) while the reserved control lane keeps flowing. The editor
   surfaces "The image server is busy right now — images pause for about N s and then continue."
-  instead of a raw provider string. Never auto-replay a failed paid image (RULE 30).
+  **only** for server-declared `kind:"overload"` answers; every other failure (including a bare
+  `503` such as "Pixabay API key is not configured", `kind:"fatal"`) shows its own `error.message`
+  instead (**#274** — a flow that has stopped for good must not promise a pause-and-continue
+  recovery). Never auto-replay a failed paid image (RULE 30).
 - **What this is not.** The governor is in-memory per isolate: it never denies a request, is not a
   quota, and does not synchronise across isolates or PoPs. KV credit counters stay best-effort
   (RULE 30). If fleet-wide admission control becomes a requirement it needs a server-side
