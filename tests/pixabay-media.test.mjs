@@ -2,7 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { searchPixabay, downloadPixabay, sceneSearchToken, PixabayRateLimiter, handlePixabayApi } from '../src/modules/pixabay.ts';
-import { generateImagePrompts, handleGenerateImagePrompts } from '../src/modules/image-prompts.ts';
+import {
+	generateImagePrompts,
+	handleGenerateImagePrompts,
+	countScriptWords,
+	sceneCountForScript,
+	sceneCountCeiling,
+	SCENE_COUNT_MAX,
+	SCENE_COUNT_WORD_BRACKETS
+} from '../src/modules/image-prompts.ts';
 import { handleImageBinary, handleImageBatch, runImageModel, IMAGE_FALLBACK_MODELS } from '../src/modules/image-batch.ts';
 import workerModule from '../src/index.ts';
 const worker = workerModule.default || workerModule;
@@ -52,6 +60,148 @@ test('identical concurrent/repeated searches share one 24-hour cached request', 
 	await searchPixabay(e, { q: 'yellow flowers', per_page: 3 });
 	assert.equal(calls.length, 1);
 });
+/*
+ * #275 — the planner's scene total now follows the script WORD COUNT
+ * (<=130 -> 6, <=240 -> 8, <=500 -> 10). Tests that exercise the ten-scene
+ * plan give the planner a long enough script so the ceiling is 10.
+ */
+const longScript = (words = 400) => Array.from({ length: words }, (_, i) => 'word' + i).join(' ') + '.';
+test('#275 scene count follows the script word count (6 / 8 / 10) on the server', () => {
+	assert.deepEqual(SCENE_COUNT_WORD_BRACKETS.map((b) => [b.maxWords, b.scenes]), [[130, 6], [240, 8], [500, 10]]);
+	const script = (words) => Array.from({ length: words }, (_, i) => 'word' + i).join(' ') + '.';
+	const cases = [[0, 6], [5, 6], [129, 6], [130, 6], [131, 8], [239, 8], [240, 8], [241, 10], [499, 10], [500, 10], [501, 10], [1200, 10]];
+	for (const [words, scenes] of cases) {
+		const text = script(words);
+		assert.equal(countScriptWords(text), words, 'word count for ' + words);
+		assert.equal(sceneCountForScript(text), scenes, 'scene count for ' + words + ' words');
+		assert.equal(sceneCountCeiling(text, 1), scenes, 'a one-minute video never lowers the word-count total');
+		assert.equal(sceneCountCeiling(text, 6), scenes, 'a six-minute video never raises the word-count total');
+	}
+	assert.equal(SCENE_COUNT_MAX, 10);
+	/* Cue numbers, WEBVTT markers and timestamps are not narration words. */
+	const srt = '1\n00:00:01,000 --> 00:00:03,000\nHello there friend\n\n2\n00:00:04,000 --> 00:00:06,000\nGood bye';
+	assert.equal(countScriptWords(srt), 5);
+	assert.equal(sceneCountForScript(srt), 6);
+});
+
+test('#275 the planner plans the script-derived total and validates an explicit sceneTotal against it', async () => {
+	const planner = (seen) => ({ AI: { run: async (_m, input) => {
+		const slots = JSON.parse(input.prompt.match(/Requested slots of \d+ total: ([^\n]+)/)[1]);
+		seen.push(slots);
+		return { response: JSON.stringify({ scenes: slots.map((s) => ({ scene: s.scene, type: s.type, keywords: 'garden scene ' + s.scene })) }) };
+	} } });
+	const words = (n) => Array.from({ length: n }, (_, i) => 'word' + i).join(' ') + '.';
+
+	for (const [scriptWords, expected] of [[90, 6], [200, 8], [400, 10]]) {
+		const seen = [];
+		const response = await handleGenerateImagePrompts(
+			post('/api/image-prompts', { topic: 'gardening', script: words(scriptWords), minutes: 1 }),
+			planner(seen),
+			'text-planner'
+		);
+		assert.equal(response.status, 200);
+		const body = await response.json();
+		assert.equal(body.expectedCount, expected);
+		assert.equal(body.prompts.length, expected);
+		assert.deepEqual(seen[0].map((s) => s.scene), Array.from({ length: expected }, (_, i) => i));
+		assert.equal(seen[0].filter((s) => s.type === 'video').length, 2);
+		assert.deepEqual(seen[0].filter((s) => s.type === 'video').map((s) => s.scene), [1, expected - 2]);
+	}
+
+	/* A smaller validated total (the editor's remaining gallery room) still wins. */
+	const small = await handleGenerateImagePrompts(
+		post('/api/image-prompts', { topic: 'gardening', script: words(400), minutes: 1, sceneTotal: 5,
+			batch: { offset: 0, count: 3, attempt: 0 } }),
+		planner([]),
+		'text-planner'
+	);
+	assert.equal(small.status, 200);
+	assert.equal((await small.json()).expectedCount, 5);
+
+	/* A larger total than this script's rule is rejected, not silently clamped. */
+	const tooBig = await handleGenerateImagePrompts(
+		post('/api/image-prompts', { topic: 'gardening', script: words(90), minutes: 1, sceneTotal: 10 }),
+		planner([]),
+		'text-planner'
+	);
+	assert.equal(tooBig.status, 400);
+	assert.match((await tooBig.json()).error, /scene limit of 6/);
+});
+
+test('#275 a whole-video plan of the wrong length is mapped onto the requested slots instead of failing', async () => {
+	const entry = (type, scene) => ({ scene, type, keywords: 'garden scene ' + scene });
+	const script = Array.from({ length: 400 }, (_, i) => 'word' + i).join(' ') + '.';
+	const report = (total, offset, count, scenes) => generateImagePrompts(
+		{ AI: { run: async () => ({ response: JSON.stringify({ scenes }) }) } },
+		'text',
+		{ topic: 'garden', script, minutes: 1, totalScenes: total,
+			batch: { offset, count, attempt: 0, previous: [] } }
+	);
+
+	for (const total of [6, 8, 10]) {
+		for (let offset = 0; offset < total; offset += 3) {
+			const count = Math.min(3, total - offset);
+			/* Every realistic whole-video miscount: one, two and three scenes over/under. */
+			for (const length of [total - 3, total - 2, total - 1, total, total + 1, total + 2, total + 3]) {
+				if (length < 1) continue;
+				const whole = Array.from({ length }, (_, s) => entry(s === 1 || s === length - 2 ? 'video' : 'image', s));
+				const tokens = await report(total, offset, count, whole);
+				const decoded = tokens.map((t) => JSON.parse(t.slice(8)));
+				assert.deepEqual(decoded.map((s) => s.scene), Array.from({ length: count }, (_, i) => offset + i),
+					'scene numbers must stay glued to the requested slots (' + total + '/' + length + ')');
+				assert.equal(new Set(decoded.map((s) => s.q)).size, count, 'each slot gets its own search term');
+				assert.equal(tokens.length, count);
+			}
+		}
+	}
+
+	/* A chunk reply that renumbers its own scenes is still aligned to the requested offsets. */
+	const renumbered = await report(10, 6, 3, [
+		{ scene: 0, type: 'image', keywords: 'watering seedlings' },
+		{ scene: 1, type: 'image', keywords: 'wooden garden beds' },
+		{ scene: 2, type: 'video', keywords: 'sharing the harvest' }
+	]);
+	assert.deepEqual(renumbered.map((t) => JSON.parse(t.slice(8)).scene), [6, 7, 8]);
+	assert.deepEqual(renumbered.map((t) => JSON.parse(t.slice(8)).type), ['image', 'image', 'video']);
+});
+
+test('#275 the planner instruction asks for 1-5 word search terms and reuses the SEO keywords', async () => {
+	const prompts = [];
+	const planner = { AI: { run: async (_m, input) => {
+		prompts.push(input.prompt);
+		const slots = JSON.parse(input.prompt.match(/Requested slots of \d+ total: ([^\n]+)/)[1]);
+		return { response: JSON.stringify({ scenes: slots.map((s) => ({ scene: s.scene, type: s.type, keywords: 'garden scene ' + s.scene })) }) };
+	} } };
+	await generateImagePrompts(planner, 'text', {
+		topic: 'garden', script: 'Grow food together in a sunny neighborhood garden every single week.',
+		minutes: 1, keywordSet: { longTail: 'neighborhood vegetable garden', short: ['garden', 'compost', 'harvest', 'seeds'] },
+		batch: { offset: 0, count: 3, attempt: 0 }
+	});
+	const prompt = prompts[0];
+	assert.match(prompt, /SHORT STOCK SEARCH TERM of 1-5 words/);
+	assert.match(prompt, /search terms, NOT image prompts/i);
+	assert.match(prompt, /no sentences, art direction, camera or lens instructions/i);
+	assert.ok(!/2-5 simple search keywords/.test(prompt), 'the old 2-5 art-prompt wording is gone');
+	assert.match(prompt, /neighborhood vegetable garden/);
+	for (const keyword of ['garden', 'compost', 'harvest', 'seeds']) assert.match(prompt, new RegExp(keyword));
+	assert.match(prompt, /EXACTLY 6 scenes because the script is 11 word/);
+	/* Six-word prose is an image prompt, not a search term: a reply made only of those is rejected. */
+	await assert.rejects(
+		generateImagePrompts({ AI: { run: async () => ({ response: JSON.stringify({ scenes: [
+			{ type: 'image', keywords: 'a calm misty morning over the forest lake' },
+			{ type: 'video', keywords: 'slow motion drone shot over water' },
+			{ type: 'image', keywords: 'soft golden hour light on leaves' }] }) }) } }, 'text',
+		{ topic: 'garden', script: 'Grow food together.', minutes: 1, batch: { offset: 0, count: 3 } }),
+		/1-5 word search terms/
+	);
+	const fiveWords = await generateImagePrompts({ AI: { run: async () => ({ response: JSON.stringify({ scenes: [
+		{ scene: 0, type: 'image', keywords: 'sunny neighborhood vegetable garden' },
+		{ scene: 1, type: 'video', keywords: 'gardening neighbors working together' },
+		{ scene: 2, type: 'image', keywords: 'fresh compost soil' }] }) }) } }, 'text',
+	{ topic: 'garden', script: 'Grow food together.', minutes: 1, batch: { offset: 0, count: 3 } });
+	assert.equal(fiveWords.length, 3);
+});
+
 test('LLM scene planner reads the entire script and assigns exactly two stock video scenes', async () => {
 	const instructions = [];
 	const planner = { AI: { run: async (model, input) => {
@@ -59,7 +209,7 @@ test('LLM scene planner reads the entire script and assigns exactly two stock vi
 		const slots = JSON.parse(input.prompt.match(/Requested slots of \d+ total: ([^\n]+)/)[1]);
 		return { response: { scenes: slots.map(slot => ({ type: slot.type, keywords: 'garden flowers ' + slot.scene })) } };
 	} } };
-	const script = 'OPENING context. MIDDLE important conservation idea. ENDING conclusion.';
+	const script = longScript(400);
 	const input = { topic: 'yellow flowers', script, minutes: 1, style: 'Cinematic Film' };
 	const tokens = await generateImagePrompts(planner, 'text-planner', input);
 	const scenes = tokens.map(token => JSON.parse(token.slice(8)));
@@ -187,10 +337,34 @@ test('scene planner enforces two videos across all durations and across batch bo
 });
 test('planner rejects wrong types, prose prompts, missing scenes and malformed JSON', async () => {
 	const input={topic:'forest',script:'Forest conservation.',minutes:1,batch:{offset:0,count:3}};
-	for (const response of ['oops', JSON.stringify({scenes:[]}), JSON.stringify({scenes:[0,1,2].map(() => ({type:'image',keywords:'forest'}))}),
-		JSON.stringify({scenes:[{type:'image',keywords:'a long paragraph with far too many words describing a picture'},{type:'video',keywords:'forest'},{type:'image',keywords:'nature'}]})]) {
+	for (const response of ['oops', JSON.stringify({scenes:[]}),
+		JSON.stringify({scenes:[0,1,2].map(() => ({type:'image',keywords:'a long paragraph with far too many words describing a picture'}))})]) {
 		await assert.rejects(generateImagePrompts({AI:{run:async()=>({response})}},'text',input), /planner/);
 	}
+	/* A mixed reply keeps only the entries that are real 1-5 word search terms. */
+	const mixed = await generateImagePrompts({AI:{run:async()=>({response:JSON.stringify({scenes:[
+		{type:'image',keywords:'a long paragraph with far too many words describing a picture'},
+		{type:'video',keywords:'forest'},
+		{type:'image',keywords:'nature'}]})})}},'text',input);
+	assert.deepEqual(mixed.map((token) => JSON.parse(token.slice(8)).type), ['image','video']);
+	assert.ok(mixed.every((token) => JSON.parse(token.slice(8)).q.split(' ').length <= 5));
+	/*
+	 * #275 — media types stay server-controlled. A chunk that needs a video
+	 * scene cannot be filled by image entries, and the reply is rejected with
+	 * the media-type message instead of a misleading count error.
+	 */
+	await assert.rejects(
+		generateImagePrompts({AI:{run:async()=>({response:JSON.stringify({scenes:[0,1,2].map(() => ({type:'image',keywords:'forest'}))})})}},'text',
+			{...input, batch:{offset:1,count:2}}),
+		/media types/
+	);
+	/*
+	 * #275 — an under-generated but correctly typed reply is no longer fatal:
+	 * the valid prefix is returned and the browser asks for the next offset.
+	 */
+	const short = await generateImagePrompts({AI:{run:async()=>({response:JSON.stringify({scenes:[{type:'image',keywords:'forest'}]})})}},'text',input);
+	assert.equal(short.length, 1);
+	assert.equal(JSON.parse(short[0].slice(8)).type, 'image');
 });
 test('planner recovers the scene JSON from fences, prose wrappers and control characters', async () => {
 	const entry = (type, keywords) => ({ type, keywords });
@@ -227,15 +401,22 @@ test('planner reports an empty reply distinctly and keeps rejecting prose-only a
 	await assert.rejects(generateImagePrompts({ AI: { run: async () => ({ response: '' }) } }, 'text', input), /empty reply/);
 	await assert.rejects(generateImagePrompts({ AI: { run: async () => ({ response: '' }) } }, 'text', input), /planner/);
 	await assert.rejects(generateImagePrompts({ AI: { run: async () => ({ response: 'Sure! Try forest, trees and nature.' }) } }, 'text', input), /invalid JSON/);
-	/* A truncated reply salvages complete scenes but still reports the true count. */
-	await assert.rejects(generateImagePrompts({ AI: { run: async () => ({ response: '{"scenes":[{"type":"image","keywords":"forest trees"},{"type":"video","keywords":"community people"},{"type":"ima' }) } }, 'text', input), /wrong scene count/);
+	/*
+	 * #275 — a truncated reply salvages its complete, correctly typed scenes and
+	 * the browser continues at the next offset instead of losing the video.
+	 */
+	const truncated = await generateImagePrompts({ AI: { run: async () => ({ response: '{"scenes":[{"type":"image","keywords":"forest trees"},{"type":"video","keywords":"community people"},{"type":"ima' }) } }, 'text', input);
+	assert.deepEqual(truncated.map((token) => JSON.parse(token.slice(8)).scene), [0, 1]);
+	assert.deepEqual(truncated.map((token) => JSON.parse(token.slice(8)).type), ['image', 'video']);
+	/* A reply with no recoverable scene at all is still a count failure. */
+	await assert.rejects(generateImagePrompts({ AI: { run: async () => ({ response: JSON.stringify({ scenes: [] }) }) } }, 'text', input), /wrong scene count/);
 });
 test('a reply planning the whole video is sliced to the requested chunk slots', async () => {
 	const entry = (type, keywords) => ({ type, keywords });
 	const full = Array.from({ length: 10 }, (_, scene) => entry([1, 8].includes(scene) ? 'video' : 'image', 'forest scene ' + scene));
 	const planner = { AI: { run: async () => ({ response: JSON.stringify({ scenes: full }) }) } };
 	const tokens = await generateImagePrompts(planner, 'text', {
-		topic: 'forest', script: 'Beginning. The whole middle idea. Conclusion.', minutes: 1,
+		topic: 'forest', script: longScript(400), minutes: 1,
 		batch: { offset: 6, count: 3 }
 	});
 	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).scene), [6, 7, 8]);
@@ -330,7 +511,7 @@ test('an unresponsive cache write is bounded and releases the download queue', a
 });
 
 test('planner prevents false wrong-scene-count failures across real 8B reply shapes and over-generation patterns', async () => {
-	const baseInput = { topic: 'community garden', script: 'Paragraph one.\n\nParagraph two.\n\nParagraph three.\n\nParagraph four.', minutes: 1 };
+	const baseInput = { topic: 'community garden', script: longScript(400), minutes: 1 };
 	const chunk0 = { ...baseInput, batch: { offset: 0, count: 3 } };
 	const valid3 = [
 		{ scene: 0, type: 'image', keywords: 'sunny community garden' },
@@ -447,7 +628,7 @@ test('planner prompt unwraps previous pixabay tokens, anchors slot skeleton afte
 	const prevToken = 'pixabay:' + JSON.stringify({ q: 'morning garden flowers', type: 'image', page: 1, index: 0, scene: 0 });
 	await generateImagePrompts(planner, 'text', {
 		topic: 'gardening',
-		script: 'First paragraph.\n\nSecond paragraph.',
+		script: longScript(400),
 		minutes: 1,
 		batch: { offset: 3, count: 3, attempt: 1, previous: [prevToken], previousError: 'Scene keyword planner returned the wrong scene count' }
 	});
@@ -467,15 +648,27 @@ test('planner prompt unwraps previous pixabay tokens, anchors slot skeleton afte
 	const badJsonBody = await badJsonRes.json();
 	assert.equal(badJsonBody.kind, 'transient');
 
+	/* #275 — an empty scene plan is still a wrong-count planner failure. */
 	const wrongCountRes = await handleGenerateImagePrompts(
 		post('/api/image-prompts', { topic: 'gardening', script: 'Grow food.', minutes: 1, batch: { offset: 0, count: 3, attempt: 0 } }),
-		{ AI: { run: async () => ({ response: JSON.stringify({ scenes: [{ type: 'image', keywords: 'garden soil' }] }) }) } },
+		{ AI: { run: async () => ({ response: JSON.stringify({ scenes: [] }) }) } },
 		'text'
 	);
 	assert.equal(wrongCountRes.status, 502);
 	const wrongCountBody = await wrongCountRes.json();
 	assert.equal(wrongCountBody.kind, 'transient');
 	assert.match(wrongCountBody.error, /wrong scene count/);
+
+	/* #275 — an under-generated reply is delivered as a short batch, not an error. */
+	const shortRes = await handleGenerateImagePrompts(
+		post('/api/image-prompts', { topic: 'gardening', script: 'Grow food.', minutes: 1, batch: { offset: 0, count: 3, attempt: 0 } }),
+		{ AI: { run: async () => ({ response: JSON.stringify({ scenes: [{ type: 'image', keywords: 'garden soil' }] }) }) } },
+		'text'
+	);
+	assert.equal(shortRes.status, 200);
+	const shortBody = await shortRes.json();
+	assert.equal(shortBody.prompts.length, 1);
+	assert.equal(shortBody.count, 1);
 });
 
 test('scene token falls back to hits[0] when a distinct query returns fewer than 3 filtered hits', async t => {

@@ -1248,7 +1248,7 @@ paragraph), and matches `system-rules.md` *RULE 24 — BATCH IMAGE PIPELINE*.
 - **Why:** `waitUntil` can only extend an invocation for 30 seconds after the response, while the
   prompt job asked for up to 20 scenes with three attempts; a killed job left the KV record
   `pending` forever and the client had no deadline, so the UI waited forever with uploads
-  disabled. Strict "exactly 10/14/20 prompts" validation and the serial 20-second image queue
+  disabled. Strict "exactly 10/14/20 prompts" validation and the serial 20-second image queue (the count rule is now the script word count: 6/8/10 — see Session #275)
   made every near-miss (9 of 10 prompts, one slow render) look like "AI images are broken".
 - **Now:** `POST /api/image-prompts` answers synchronously with the prompts (topped up when
   short, never fatal) and `POST /api/image-batch` renders all of them in parallel and streams the
@@ -1363,7 +1363,7 @@ Editor and Quick Batch now share browser-only prompt/image orchestration:
 1. Request up to three scene prompts using `batch:{offset,count,attempt,previous}`.
 2. Render that chunk immediately while requesting the next prompt batch; allow only one
    lookahead, then wait for both before advancing.
-3. Continue to 10/14/20 total scenes (or the editor's remaining gallery capacity). Short answers
+3. Continue to the script's word-count total (6 / 8 / 10 scenes, Session #275) or the editor's remaining gallery capacity. Short answers
    advance by actual accepted count. Prompt retries retain their offset; already-consumed image
    chunks are never replayed automatically.
 4. Drain images and finalize once. Earlier images survive later prompt failure. Editor reports

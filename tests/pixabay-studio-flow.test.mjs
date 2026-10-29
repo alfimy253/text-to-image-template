@@ -72,7 +72,11 @@ test('Quick Batch recreates Pixabay search -> image imports -> slides -> Preview
 	const row = w.addBatchRow({ script: 'Yellow flowers in the garden.', minutes: 1, orientation: 'portrait', resolution: 720 });
 	await deadline(w.runBatchRow(row));
 	assert.equal(w.batchRowFinished(row), true);
-	assert.equal(row.images.length, 10); assert.equal(row.slides.length, 10);
+	/*
+	 * #275 — scene count follows the script word count: a five-word script plans
+	 * 6 scenes (4 photos + 2 clips) on both sides of the wire.
+	 */
+	assert.equal(row.images.length, 6); assert.equal(row.slides.length, 6);
 	assert.equal(row.slides.filter(s => s.type === 'mp4').length, 2);
 	assert.equal(row.slides.reduce((frames, slide) => frames + Math.round(slide._partialSec * 30), 0), 30, 'both clips fit within the 1s test narration');
 	assert.ok(row.prompts.every(p => p.startsWith('pixabay:')));
@@ -100,12 +104,12 @@ test('editor automatic LLM-keyword flow imports eight photos and two videos in s
 	project._seoTopic = 'yellow flowers'; project._seoMinutes = 1; project._imageFlowActive = true;
 	project.selectedSeoSet = { longTail: 'yellow flowers', short: ['garden', 'flowers', 'yellow', 'plants'] };
 	await deadline(w.startImagePromptFlow(1));
-	assert.equal(project.assets.length, 10);
-	assert.equal(project.aiImagesDone, 10);
+	assert.equal(project.assets.length, 6);
+	assert.equal(project.aiImagesDone, 6);
 	assert.ok(project.assets.every(a => a.stockSource?.provider === 'pixabay'));
 	assert.equal(project._imageFlowActive, false);
 	assert.equal(project.assets.filter(a => a.kind === 'mp4').length, 2);
-	assert.deepEqual(Array.from(project.assets, a => a.sceneIndex), [0,1,2,3,4,5,6,7,8,9]);
+	assert.deepEqual(Array.from(project.assets, a => a.sceneIndex), [0,1,2,3,4,5]);
 	assert.ok(plannerCalls.every(prompt => prompt.includes(project.script)));
 	await deadline(w.runGenerationQueue());
 	assert.equal(project.status, 'done'); assert.ok(stats().encoded > 0);
@@ -117,7 +121,7 @@ test('rerunning editor planning replaces prior automatic media rather than accum
 	project._imageFlowActive=true; await deadline(w.startImagePromptFlow(1));
 	const prior=project.assets.map(a=>a.url);
 	project._imageFlowActive=true; await deadline(w.startImagePromptFlow(1));
-	assert.equal(project.assets.length,10); assert.equal(project.assets.filter(a=>a.kind==='mp4').length,2);
+	assert.equal(project.assets.length,6); assert.equal(project.assets.filter(a=>a.kind==='mp4').length,2);
 	assert.ok(project.assets.every(a=>!prior.includes(a.url)));
 });
 test('planned editor export refuses a missing required clip instead of silently making a photo-only video', async t => {
@@ -133,8 +137,8 @@ test('legacy NDJSON editor delivery also probes two clips and restores planned s
 	const {w}=setup(t,{binaryImages:false}); w.addVideoAccordion(); const project=w.__VIDEO_PROJECTS[0];
 	project.script='Gardening connects the whole community.'; project._seoTopic='garden'; project._seoMinutes=1;
 	project._imageFlowActive=true; await deadline(w.startImagePromptFlow(1));
-	assert.equal(project.assets.length,10); assert.equal(project.assets.filter(a=>a.kind==='mp4').length,2);
-	assert.deepEqual(Array.from(project.assets,a=>a.sceneIndex),[0,1,2,3,4,5,6,7,8,9]);
+	assert.equal(project.assets.length,6); assert.equal(project.assets.filter(a=>a.kind==='mp4').length,2);
+	assert.deepEqual(Array.from(project.assets,a=>a.sceneIndex),[0,1,2,3,4,5]);
 });
 
 function audioBufferFixture(){return {sampleRate:8000,numberOfChannels:1,length:1024,getChannelData:()=>new Float32Array(1024)}}
@@ -187,8 +191,8 @@ test('editor startImagePromptFlow recovers from a transient wrong-scene-count at
 				if (slots[0].scene === 0) {
 					firstChunkCalls += 1;
 					if (firstChunkCalls === 1) {
-						/* Simulate an 8B model returning only 1 scene on attempt 0. */
-						return { response: JSON.stringify({ scenes: [{ type: 'image', keywords: 'garden flowers' }] }) };
+						/* Simulate an 8B model returning no usable scene at all on attempt 0. */
+						return { response: JSON.stringify({ scenes: [] }) };
 					}
 				}
 				return {
@@ -228,11 +232,11 @@ test('editor startImagePromptFlow recovers from a transient wrong-scene-count at
 	assert.equal(retryBatches.length, 1);
 	assert.equal(retryBatches[0].attempt, 1);
 	assert.match(retryBatches[0].previousError, /wrong scene count/);
-	assert.equal(project.assets.length, 10);
+	assert.equal(project.assets.length, 6);
 	assert.equal(project.assets.filter((a) => a.kind === 'mp4').length, 2);
 	const statusText = w.document.getElementById('va-ai-status-1').textContent;
 	assert.doesNotMatch(statusText, /flow stopped/i);
-	assert.match(statusText, /10 image\(s\) in the gallery/);
+	assert.match(statusText, /6 image\(s\) in the gallery/);
 });
 
 test('a missing Pixabay API key reports the real configuration error, not a fake "server busy, then continue" stop', async t => {

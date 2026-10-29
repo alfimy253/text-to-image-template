@@ -15,6 +15,9 @@ Use the text LLM to plan concise Pixabay search keywords from the **entire scrip
 must convey the general idea of the whole narration. Every planner instruction requires
 exactly two video slots across the full plan; all other scenes retrieve stock photos.
 Both layouts process the mixed media, preserving the existing 10/14/20 total scene counts.
+> **Superseded 2026-10-29 (Session #275):** the totals are now **6 / 8 / 10** by script word
+> count (≤130 / ≤240 / ≤500 words) in both layouts. See `system-rules.md` and
+> `pixabay-media-migration.md`; this line records the earlier requirement only.
 The editor accordion's manual image prompt/search section is removed. AI image generation
 and provider fallbacks remain prohibited. `per_page=3` is unchanged. See
 [pixabay-media-migration.md](pixabay-media-migration.md) for current implementation and tests.

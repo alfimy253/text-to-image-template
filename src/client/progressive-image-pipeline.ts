@@ -1,9 +1,48 @@
 /** Shared browser-only orchestration. No Worker timers, jobs, KV or video state. */
 export const PROGRESSIVE_IMAGE_PIPELINE_JS = `
-function imageSceneTarget(minutes) {
-	return Number(minutes) <= 1 ? 10 : Number(minutes) <= 3 ? 14 : 20;
+/*
+ * #275 — scene count from the SCRIPT WORD COUNT, identical to
+ * sceneCountForScript() in src/modules/image-prompts.ts:
+ *   <=130 words -> 6 scenes, <=240 -> 8, <=500 -> 10, longer -> 10.
+ * The duration tier (10/14/20) is only a legacy ceiling; it never raises the
+ * word-count total. Keeping one rule on both sides is what stops the browser
+ * and the planner from planning different scene counts.
+ */
+var IMAGE_SCENE_WORD_BRACKETS = [[130, 6], [240, 8], [500, 10]];
+var IMAGE_SCENE_COUNT_MIN = 4;
+var IMAGE_SCENE_COUNT_MAX = 10;
+/*
+ * This file is a JS-in-a-template-literal, so regex escapes are built from
+ * strings instead of typed inline. The token test below mirrors the server's
+ * Unicode word finder (letters and digits, apostrophes, hyphens, underscores).
+ */
+var IMAGE_SPACE_SPLIT = new RegExp("[" + String.fromCharCode(32, 9, 10, 13) + "]+");
+function imageScriptWordCount(script) {
+	var lines = String(script || "").split(String.fromCharCode(10));
+	var kept = [];
+	for (var i = 0; i < lines.length; i++) {
+		var line = lines[i].split(String.fromCharCode(13)).join("").trim();
+		if (!line) continue;
+		if (line.slice(0, 6).toUpperCase() === "WEBVTT") continue;
+		if (line.indexOf("--" + ">") !== -1) continue;
+		if (/^[0-9]+$/.test(line)) continue;
+		kept.push(line);
+	}
+	var words = kept.join(" ").split(IMAGE_SPACE_SPLIT).filter(function (token) {
+		return /[A-Za-z0-9]/.test(token) || /[^\u0000-\u007F]/.test(token);
+	});
+	return words.length;
 }
-
+function imageSceneTarget(script, minutes) {
+	var words = imageScriptWordCount(script);
+	var fromScript = IMAGE_SCENE_COUNT_MAX;
+	for (var i = 0; i < IMAGE_SCENE_WORD_BRACKETS.length; i++) {
+		if (words <= IMAGE_SCENE_WORD_BRACKETS[i][0]) { fromScript = IMAGE_SCENE_WORD_BRACKETS[i][1]; break; }
+	}
+	var m = Number(minutes);
+	var fromMinutes = !isFinite(m) || m <= 1 ? 10 : m <= 3 ? 14 : 20;
+	return Math.max(IMAGE_SCENE_COUNT_MIN, Math.min(fromScript, fromMinutes, IMAGE_SCENE_COUNT_MAX));
+}
 async function runProgressiveImagePipeline(options) {
 	const prompts = [];
 	let renderFailure = null;

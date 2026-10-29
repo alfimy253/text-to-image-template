@@ -2,13 +2,34 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
 import { PROGRESSIVE_IMAGE_PIPELINE_JS } from "../src/client/progressive-image-pipeline.ts";
-import { handleGenerateImagePrompts, IMAGE_PROMPT_FALLBACK_MODELS, IMAGE_PROMPT_MAX_CHARS } from "../src/modules/image-prompts.ts";
+import { handleGenerateImagePrompts, IMAGE_PROMPT_FALLBACK_MODELS, IMAGE_PROMPT_MAX_CHARS,
+	countScriptWords, sceneCountForScript } from "../src/modules/image-prompts.ts";
 
 function pipeline() {
 	const context = vm.createContext({ setTimeout: (fn) => queueMicrotask(fn) });
 	vm.runInContext(PROGRESSIVE_IMAGE_PIPELINE_JS, context);
 	return context.runProgressiveImagePipeline;
 }
+test("#275 the browser's scene target matches the Worker's word-count rule exactly", () => {
+	const context = vm.createContext({});
+	vm.runInContext(PROGRESSIVE_IMAGE_PIPELINE_JS, context);
+	const script = (words) => Array.from({ length: words }, (_, i) => "word" + i).join(" ") + ".";
+	for (const words of [0, 1, 40, 129, 130, 131, 200, 239, 240, 241, 400, 500, 501, 900]) {
+		const text = script(words);
+		assert.equal(context.imageScriptWordCount(text), countScriptWords(text), "word count parity for " + words);
+		assert.equal(context.imageSceneTarget(text, 1), sceneCountForScript(text), "1-minute parity for " + words);
+		assert.equal(context.imageSceneTarget(text, 3), sceneCountForScript(text), "3-minute parity for " + words);
+		assert.equal(context.imageSceneTarget(text, 6), sceneCountForScript(text), "6-minute parity for " + words);
+	}
+	/* The documented brackets: <=130 -> 6, <=240 -> 8, <=500 -> 10, longer -> 10. */
+	for (const [words, scenes] of [[130, 6], [131, 8], [240, 8], [241, 10], [500, 10], [501, 10]]) {
+		assert.equal(context.imageSceneTarget(script(words), 1), scenes, words + " words -> " + scenes + " scenes");
+	}
+	/* An empty script still plans the smallest bracket, and SRT cue numbers/timestamps never count. */
+	assert.equal(context.imageSceneTarget("", 1), 6);
+	assert.equal(context.imageScriptWordCount("1\n00:00:01,000 --> 00:00:03,000\nHello there friend\n\n2\n00:00:04,000 --> 00:00:06,000\nGood bye"), 5);
+});
+
 function deferred() {
 	let resolve;
 	const promise = new Promise((r) => { resolve = r; });
