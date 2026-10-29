@@ -61,6 +61,21 @@ export const IMAGE_MODEL = "pixabay";
 export const IMAGE_BATCH_MAX_PROMPTS = 20;
 
 /*
+ * ONE shared daily image ceiling for every actor (free, paid_user, guest):
+ * 10,000 images/day is a fair-use ceiling, not a throttle (RULE 20/31).
+ *
+ * This constant lives HERE, not in `src/index.ts`: the Worker's main module
+ * export map is validated by workerd whenever Durable Object bindings are
+ * configured, and only functions/ExportedHandlers are accepted there. The
+ * old `export const IMAGE_DAILY_LIMIT = 10000` in `index.ts` made every
+ * boot fail with:
+ *   TypeError: Incorrect type for map entry 'IMAGE_DAILY_LIMIT':
+ *   the provided value is not of type 'function or ExportedHandler'.
+ * Sub-module exports are internal after bundling, so they are unaffected.
+ */
+export const IMAGE_DAILY_LIMIT = 10000;
+
+/*
  * Paced wave generation per video/row: render at most 3 images per 3-second
  * window (`IMAGE_BATCH_CONCURRENCY = 3` every `IMAGE_BATCH_WAVE_INTERVAL_MS = 3000` ms,
  * with at least `IMAGE_BATCH_MIN_COOLDOWN_MS` of breathing room between waves)
@@ -770,7 +785,13 @@ export async function handleImageBatch(
 ): Promise<Response> {
 	const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
 	if (!env?.PIXABAY_API_KEY) {
-		return json({ success: false, error: "Pixabay API key is not configured", prompts: [] }, 503);
+		/*
+		 * Not load: waiting cannot conjure a key. `kind: "fatal"` tells the
+		 * browser this 503 must not be retried and must not be re-labelled
+		 * "the image server is busy — pause and continue" (RULE 31 distinguishes
+		 * declared load `kind:"overload"` + Retry-After from everything else).
+		 */
+		return json({ success: false, error: "Pixabay API key is not configured", kind: "fatal", prompts: [] }, 503);
 	}
 	const sanitized = sanitizePrompts(body.prompts);
 	if ("error" in sanitized) {
@@ -1195,7 +1216,13 @@ export async function handleImageBinary(
 ): Promise<Response> {
 	const body = await request.json().catch(() => null);
 	if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Expected a JSON object" }, 400);
-	if (!env?.PIXABAY_API_KEY) return json({ error: "Pixabay API key is not configured" }, 503);
+	/*
+	 * A missing provider key is a deployment problem, not fleet load: answer
+	 * with `kind: "fatal"` so the browser fails fast and surfaces this exact
+	 * message instead of burning three retry rounds on a 503 it mistakes for
+	 * "server busy, retry in ~5 s".
+	 */
+	if (!env?.PIXABAY_API_KEY) return json({ error: "Pixabay API key is not configured", kind: "fatal" }, 503);
 	const input = body as Record<string, unknown>;
 	const prompts = sanitizePrompts([input.prompt]);
 	const frame = sanitizeImageFrame(input);

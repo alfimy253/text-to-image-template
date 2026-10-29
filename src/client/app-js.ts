@@ -9289,11 +9289,17 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	 * #262: a load rejection is not the user's mistake. Turn the server's
 	 * Retry-After hint into one short, actionable sentence instead of leaking a
 	 * raw provider string (the browser already honours the wait itself).
+	 *
+	 * #274: ONLY a server-declared load answer (kind "overload", RULE 31) may
+	 * use the reassuring "pause and continue" wording. A bare 503 with no kind
+	 * is not load — it is a configuration/authorization failure (missing
+	 * PIXABAY_API_KEY, KV outage) that will never "continue", so show its real
+	 * message instead of promising a recovery the flow does not perform.
 	 */
 	function describeImageLoadFailure(error) {
 		const retryMs = error && Number(error.retryAfterMs) > 0 ? Number(error.retryAfterMs) : 0;
 		const overload = Boolean(
-			error && (error.kind === "overload" || error.status === 503)
+			error && error.kind === "overload"
 		);
 		if (overload) {
 			const seconds = retryMs > 0 ? Math.max(1, Math.ceil(retryMs / 1000)) : 5;

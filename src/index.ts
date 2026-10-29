@@ -39,6 +39,7 @@ import {
 	handleImageBatch,
 	handleImageBinary,
 	IMAGE_ATTEMPT_TIMEOUT_MS,
+	IMAGE_DAILY_LIMIT,
 	type ImageModelResult,
 	runImageModel,
 	sharedImageLoadGovernor,
@@ -3959,14 +3960,15 @@ const CREDIT_USERTYPES = [
 
 /*
  * ONE daily AI-image allowance for every actor (free, paid_user,
- * guest). Server load is handled by concurrency + backoff in
- * `modules/image-load.ts`, not by a per-window or per-plan quota,
- * so the day limit is a fair-use ceiling and not a throttle:
- * 10,000 images/day is far more than a person can click, and it
- * stops a runaway loop from spending a whole month's budget.
+ * guest) — see IMAGE_DAILY_LIMIT in `modules/image-batch.ts`.
+ * Server load is handled by concurrency + backoff, not by a
+ * per-window or per-plan quota, so the day limit is a fair-use
+ * ceiling and not a throttle: 10,000 images/day is far more than
+ * a person can click, and it stops a runaway loop from spending a
+ * whole month's budget. It must NOT be `export`ed from this main
+ * module — workerd rejects non-function named exports at boot when
+ * Durable Object bindings are configured (see the module comment).
  */
-export const IMAGE_DAILY_LIMIT =
-	10000;
 
 const CREDIT_PLANS = {
 	free: {

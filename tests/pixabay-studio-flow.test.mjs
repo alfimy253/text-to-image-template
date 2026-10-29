@@ -235,3 +235,41 @@ test('editor startImagePromptFlow recovers from a transient wrong-scene-count at
 	assert.match(statusText, /10 image\(s\) in the gallery/);
 });
 
+test('a missing Pixabay API key reports the real configuration error, not a fake "server busy, then continue" stop', async t => {
+	const { w } = setup(t);
+	let imageRequests = 0;
+	const baseFetch = w.fetch;
+	w.fetch = async (input, init = {}) => {
+		const url = new URL(String(input), 'https://studio.test');
+		if (url.pathname === '/api/image') {
+			imageRequests += 1;
+			/* Byte-for-byte what POST /api/image answers without the key (verified on wrangler dev). */
+			return new Response(JSON.stringify({ error: 'Pixabay API key is not configured' }), {
+				status: 503,
+				headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+			});
+		}
+		return baseFetch(input, init);
+	};
+	/* Compress the client's bounded retry waits so the three rounds finish fast. */
+	const native = w.setTimeout.bind(w);
+	w.setTimeout = (fn, ms, ...args) => native(fn, ms >= 500 && ms <= 5000 ? 5 : ms, ...args);
+
+	w.addVideoAccordion();
+	const project = w.__VIDEO_PROJECTS[0];
+	project._seoTopic = 'garden';
+	project._seoMinutes = 1;
+	project.script = 'Grow fresh food together in a sunny neighborhood garden.';
+	project._imageFlowActive = true;
+	await deadline(w.startImagePromptFlow(1));
+
+	const statusText = w.document.getElementById('va-ai-status-1').textContent;
+	assert.equal(project.assets.length, 0, 'no image can be imported without the key');
+	assert.match(statusText, /Pixabay API key is not configured/, 'the real cause must reach the user');
+	assert.doesNotMatch(statusText, /pause for about \d+ s and then continue/,
+		'the flow stopped for good — it must not promise a pause-and-continue recovery');
+	assert.match(statusText, /0 image\(s\) added to the gallery/);
+	assert.match(statusText, /Upload Image, GIF or MP4 is enabled again/);
+	assert.ok(imageRequests > 0, 'the flow did ask for images');
+});
+

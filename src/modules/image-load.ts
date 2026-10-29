@@ -168,6 +168,8 @@ const FATAL_PATTERNS: readonly RegExp[] = [
 	/invalid prompt/i,
 	/prompt (?:is )?too long/i,
 	/binding not configured/i,
+	/* A missing API key never becomes present by retrying (see image-batch.ts). */
+	/api key (?:is )?not configured/i,
 	/unsupported (?:model|parameter)/i
 ];
 
