@@ -286,7 +286,7 @@ export async function pixabaySceneImage(env: PixabayEnv, token: string, options:
 	if (!["image", "video"].includes(type) || typeof q !== "string" || !Number.isInteger(index) || index < 0 || index > 2) throw new PixabayError("Invalid stock scene selection", 400);
 	const results = await searchPixabay(env, { q, page, type, per_page: 3,
 		orientation: (options.height || 0) > (options.width || 0) ? "portrait" : "landscape" }, options.signal);
-	const hit = results.hits[index];
+	const hit = results.hits[index] || results.hits[0];
 	if (!hit) throw new PixabayError("No suitable Pixabay media for this scene. Try different search terms or upload media.", 404);
 	const image = await downloadPixabay(hit, options.signal);
 	return { ...image, source: { provider: "pixabay", id: hit.id, pageURL: hit.pageURL, user: hit.user, type, duration: hit.duration } };
