@@ -491,6 +491,110 @@ export function repairJsonControlChars(source: string): string {
 }
 
 /*
+ * Balanced `open`/`close` slice starting at `from`, string-literal aware, so a
+ * reply with prose or stray braces AFTER the JSON cannot extend the extract.
+ */
+function sliceBalanced(source: string, open: string, close: string, from: number): string {
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let i = from; i < source.length; i++) {
+		const ch = source[i];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (ch === "\\") escaped = true;
+			else if (ch === '"') inString = false;
+			continue;
+		}
+		if (ch === '"') {
+			inString = true;
+			continue;
+		}
+		if (ch === open) depth++;
+		else if (ch === close) {
+			depth--;
+			if (depth === 0) return source.slice(from, i + 1);
+		}
+	}
+	return "";
+}
+
+/*
+ * Complete `{"type":...,"keywords":...}` objects recovered from a reply that
+ * was cut off mid-entry. The scene-count check downstream still decides
+ * whether the salvaged entries are enough.
+ */
+function salvageSceneObjects(repaired: string): Record<string, unknown>[] {
+	const scenes: Record<string, unknown>[] = [];
+	let i = repaired.indexOf("{");
+	while (i !== -1) {
+		const objectText = sliceBalanced(repaired, "{", "}", i);
+		if (!objectText) {
+			/* Unclosed wrapper (truncated reply): keep scanning inner objects. */
+			i = repaired.indexOf("{", i + 1);
+			continue;
+		}
+		try {
+			const entry = JSON.parse(objectText);
+			if (entry && typeof entry === "object" && !Array.isArray(entry) &&
+				typeof (entry as Record<string, unknown>).keywords === "string") {
+				scenes.push(entry as Record<string, unknown>);
+			}
+		} catch {
+			/* Skip malformed object fragment. */
+		}
+		i = repaired.indexOf("{", i + objectText.length);
+	}
+	return scenes;
+}
+
+/*
+ * The scene keyword planner reply is ONE JSON object, but instruct models wrap
+ * it in prose ("Here are the searches: {...}"), fence it in markdown, emit
+ * literal newlines inside string values, leave trailing commas, or truncate
+ * mid-array. Recover the JSON before declaring the reply invalid — the same
+ * treatment `parseImagePrompts` gives legacy prompt batches — so a usable plan
+ * is never lost to formatting noise. Only a reply with no recoverable JSON at
+ * all is "invalid JSON".
+ */
+function extractScenePlanJson(text: string): unknown {
+	let source = String(text || "").trim();
+	/* A fenced block that contains JSON wins over surrounding chatter. */
+	if (source.indexOf("```") !== -1) {
+		const parts = source.split("```");
+		for (let i = 1; i < parts.length; i += 2) {
+			const block = (parts[i] || "").replace(/^[a-zA-Z0-9_-]+\s*\r?\n/, "").trim();
+			if (block.indexOf("{") !== -1 || block.indexOf("[") !== -1) {
+				source = block;
+				break;
+			}
+		}
+	}
+	const repaired = repairJsonControlChars(source);
+	const candidates: string[] = [repaired];
+	const objStart = repaired.indexOf("{");
+	if (objStart !== -1) {
+		const objectText = sliceBalanced(repaired, "{", "}", objStart);
+		if (objectText) candidates.push(objectText);
+	}
+	const arrStart = repaired.indexOf("[");
+	if (arrStart !== -1) {
+		const arrayText = sliceBalanced(repaired, "[", "]", arrStart);
+		if (arrayText) candidates.push(arrayText);
+	}
+	for (const candidate of candidates) {
+		try {
+			return JSON.parse(candidate);
+		} catch {
+			/* Try the next framing. */
+		}
+	}
+	const salvaged = salvageSceneObjects(repaired);
+	if (salvaged.length) return { scenes: salvaged };
+	throw new Error("Scene keyword planner returned invalid JSON");
+}
+
+/*
  * When a large prompt batch hits `max_tokens` mid-array
  * (`{"prompts":["scene 1...","scene 2...","truncated...`), extract every
  * COMPLETE JSON string element inside the array and drop only the unfinished
@@ -714,18 +818,43 @@ function rescuePromptList(raw: string): string[] {
 /*
  * `env.AI.run()` text models usually answer `{response: "..."}`, but newer
  * Llama post-processors on Workers AI can auto-parse valid JSON into
- * `{response: {prompts: [...]}}` (an object) or chat-completion `{choices}`.
+ * `{response: {prompts: [...]}}` (an object) or chat-completion `{choices}`,
+ * and the provider rotation may hand back chat transcripts. Anything this
+ * function cannot read would surface as "invalid JSON" downstream, so every
+ * known text shape is unwrapped here.
  */
+function contentText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		/* OpenAI-style content parts: [{type:"text", text:"..."}]. */
+		return content
+			.map((part) => (part && typeof part === "object" ? String((part as Record<string, unknown>).text ?? "") : ""))
+			.filter((text) => !!text)
+			.join("");
+	}
+	return "";
+}
+
 function aiText(result: unknown): string {
 	if (!result) return "";
 	if (typeof result === "string") return result;
-	if (Array.isArray(result)) return JSON.stringify(result);
+	if (Array.isArray(result)) {
+		const first = result[0] as Record<string, unknown>;
+		if (first && typeof first === "object" && (first.message || first.role)) {
+			const message = (first.message && typeof first.message === "object"
+				? first.message
+				: first) as Record<string, unknown>;
+			return contentText(message.content);
+		}
+		return JSON.stringify(result);
+	}
 	const obj = result as Record<string, unknown>;
 	if (typeof obj.response === "string") return obj.response;
 	if (obj.response && typeof obj.response === "object") {
 		return JSON.stringify(obj.response);
 	}
 	if (typeof obj.output_text === "string") return obj.output_text;
+	if (typeof obj.result === "string") return obj.result;
 	if (obj.result && typeof obj.result === "object") {
 		const inner = obj.result as Record<string, unknown>;
 		if (typeof inner.response === "string") return inner.response;
@@ -733,11 +862,12 @@ function aiText(result: unknown): string {
 			return JSON.stringify(inner.response);
 		}
 	}
+	if (typeof obj.text === "string") return obj.text;
 	if (Array.isArray(obj.choices) && obj.choices.length > 0) {
 		const first = obj.choices[0] as Record<string, unknown>;
 		if (first && first.message && typeof first.message === "object") {
-			const content = (first.message as Record<string, unknown>).content;
-			if (typeof content === "string") return content;
+			const content = contentText((first.message as Record<string, unknown>).content);
+			if (content) return content;
 		}
 		if (first && typeof first.text === "string") return first.text;
 	}
@@ -780,7 +910,7 @@ export function buildStockSearchInstruction(input: ImagePromptInput, total: numb
 		"You plan Pixabay stock searches for a narrated video. Read the ENTIRE SCRIPT as context.",
 		"Every scene must portray a broad, concrete visual idea about the overall script, not literally illustrate an isolated sentence.",
 		"Vary the scenes across the main subject, people/actions, setting and overall message while staying coherent with the whole narration.",
-		"Return JSON only: {\"scenes\":[{\"type\":\"image\",\"keywords\":\"short stock search keywords\"}]}. Preserve the assigned slot order and type.",
+		"Return JSON only — no prose before or after the object, no markdown code fences: {\"scenes\":[{\"type\":\"image\",\"keywords\":\"short stock search keywords\"}]}. Preserve the assigned slot order and type.",
 		"Use 2-5 simple search keywords per scene (maximum 6 words / 100 characters). No art-generation prompts, camera instructions, paragraphs, invented details or negative prompts.",
 		"The COMPLETE video has exactly TWO Pixabay VIDEO scenes, all remaining scenes are Pixabay PHOTO images. The video slots are scene 1 and scene " + (total - 2) + " (zero-based).",
 		"Both video searches must portray the general idea of the entire script and retrieve real silent stock footage, at most 60 seconds per clip. Do not replace a required video with a photo.",
@@ -805,14 +935,34 @@ export async function generateImagePrompts(
 	const positions = [1, total - 2];
 	const slots = Array.from({ length: count }, (_, i) => ({ scene: offset + i,
 		type: positions.includes(offset + i) ? "video" : "image" }));
-	const instruction = buildStockSearchInstruction(input, total, slots);
+	const baseInstruction = buildStockSearchInstruction(input, total, slots);
+	/*
+	 * The browser retries a failed batch (attempt 0-2). After a bad reply the
+	 * same request is re-asked with an explicit "JSON only" reminder, which is
+	 * what stops a chatty model from repeating the same wrapper forever.
+	 */
+	const instruction = baseInstruction + (input.batch && Number(input.batch.attempt) > 0
+		? "\nRETRY: an earlier attempt did not return parseable JSON. Return ONLY the JSON object — no prose before or after it, no markdown code fences."
+		: "");
 	const raw = await withTimeout(env.AI.run(model, { prompt: instruction, max_tokens: 2048, temperature: 0.4 }),
 		IMAGE_PROMPT_BATCH_TIMEOUT_MS, "Pixabay scene keyword planning");
-	let parsed: any;
-	try { parsed = JSON.parse(aiText(raw).replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim()); }
-	catch { throw new Error("Scene keyword planner returned invalid JSON"); }
-	const scenes = Array.isArray(parsed) ? parsed : parsed?.scenes;
-	if (!Array.isArray(scenes) || scenes.length !== count) throw new Error("Scene keyword planner returned the wrong scene count");
+	const reply = aiText(raw).trim();
+	if (!reply) throw new Error("Scene keyword planner returned an empty reply");
+	const parsed: any = extractScenePlanJson(reply);
+	const planned = Array.isArray(parsed) ? parsed : parsed?.scenes;
+	if (!Array.isArray(planned)) throw new Error("Scene keyword planner returned the wrong scene count");
+	/*
+	 * A reply that planned the COMPLETE video instead of the requested chunk
+	 * ("do not add the other video slots to this chunk" is a common miss) is
+	 * still usable: take the requested slot range and let the per-scene checks
+	 * below validate it like any other answer. Every returned token is still
+	 * validated — a wrong slot type is never silently accepted.
+	 */
+	const scenes =
+		planned.length !== count && planned.length === total && offset + count <= planned.length
+			? planned.slice(offset, offset + count)
+			: planned;
+	if (scenes.length !== count) throw new Error("Scene keyword planner returned the wrong scene count");
 	return scenes.map((scene: any, i: number) => {
 		const keywords = typeof scene?.keywords === "string" ? scene.keywords.trim().replace(/\s+/g, " ") : "";
 		if (scene?.type !== slots[i].type || !keywords || keywords.length > 100 || keywords.split(/\s+/).length > 6 || /[\r\n{}<>]/.test(keywords)) {
