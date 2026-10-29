@@ -261,10 +261,15 @@ export function parseRetryAfterMs(error: unknown): number | null {
 export function classifyImageFailure(error: unknown): ImageFailureClassification {
 	const message = readErrorMessage(error);
 	const status = Number((error as { status?: number })?.status);
+	const providerStatus = Number((error as { providerStatus?: number })?.providerStatus);
 	const providerDelay = Number((error as { retryAfter?: number })?.retryAfter) * 1000;
 	const retryAfterMs = providerDelay > 0 ? providerDelay : parseRetryAfterMs(error);
-	if (status >= 400 && status < 500 && status !== 429 && status !== 408) {
+	if ((status >= 400 && status < 500 && status !== 429 && status !== 408) ||
+		(providerStatus >= 400 && providerStatus < 500 && providerStatus !== 429 && providerStatus !== 408)) {
 		return { kind: "fatal", retryable: false, retryAfterMs: null, reason: message.slice(0, 160) };
+	}
+	if (providerStatus === 429 || [502, 503, 504].includes(providerStatus)) {
+		return { kind: "overload", retryable: true, retryAfterMs, reason: message.slice(0, 160) || "Pixabay provider overloaded" };
 	}
 
 	if (OVERLOAD_PATTERNS.some((pattern) => pattern.test(message))) {

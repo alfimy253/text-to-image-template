@@ -18629,10 +18629,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 						return r.error && (r.error.kind === "overload" || r.error.status === 503);
 					})
 						? describeImageLoadFailure(firstFailure && firstFailure.error)
-						: "The image batch could not complete; delivered images were kept.";
+						: ((firstFailure && firstFailure.error && firstFailure.error.message) || "The image batch could not complete; delivered images were kept.") +
+							(firstFailure && firstFailure.error && firstFailure.error.requestId ? " (request " + firstFailure.error.requestId + ")" : "");
 				}
 			}
 		} catch (error) {
+			console.error("[seo-image-flow] binary batch failed", { videoIndex: n, flowId: flowId, sceneOffset: Number(sceneOffset) || 0, error: String(error && error.message || error).slice(0, 500) });
 			if (!stale()) project._imageFlowStopReason = "Image generation was interrupted; delivered images were kept.";
 		} finally { refreshCredits(); }
 	}
