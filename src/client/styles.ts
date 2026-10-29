@@ -2075,8 +2075,47 @@ export const APP_CSS = `
 		}
 
 
-		.va-script-actions {
+		.va-image-retry {
 
+			margin-top:
+				10px;
+
+			padding:
+				6px 14px;
+
+			font-size:
+				0.85rem;
+
+			color:
+				#22d3ee;
+
+			background:
+				transparent;
+
+			border:
+				1px solid
+				#22d3ee;
+
+			border-radius:
+				6px;
+
+			cursor:
+				pointer;
+		}
+
+
+		.va-image-retry:hover {
+
+			background:
+				#22d3ee;
+
+			color:
+				#020617;
+		}
+
+
+
+		.va-script-actions {
 			justify-content:
 				flex-end;
 		}

@@ -797,3 +797,49 @@ test('media search API defaults to two photos and rejects later pages', async t 
  const later = await handlePixabayApi(new Request('https://studio.test/api/media/search?q=rose&page=2'), e);
  assert.equal(later.status, 400); assert.match((await later.json()).error, /page 1/);
 });
+
+test('a Pixabay fetch failure names the upstream cause instead of an opaque message', async t => {
+  const native = globalThis.fetch;
+  t.after(() => { globalThis.fetch = native; });
+  globalThis.fetch = async () => { throw Object.assign(new Error('Failed to fetch'), { name: 'TypeError' }); };
+  await assert.rejects(searchPixabay(env(), { q: 'garden flowers' }), (error) => {
+    assert.equal(error.status, 502);
+    assert.match(error.message, /Pixabay search is unavailable \(TypeError: Failed to fetch\)/);
+    assert.match(error.message, /The Pixabay endpoint could not be reached/);
+    assert.match(error.message, /Please retry later/);
+    return true;
+  });
+});
+
+test('a Pixabay fetch timeout is labelled as a timeout in the error', async t => {
+  const native = globalThis.fetch;
+  t.after(() => { globalThis.fetch = native; });
+  globalThis.fetch = async () => { throw Object.assign(new Error('Generation request timed out'), { name: 'TimeoutError' }); };
+  await assert.rejects(searchPixabay(env(), { q: 'garden flowers' }), (error) => {
+    assert.equal(error.status, 502);
+    assert.match(error.message, /TimeoutError: Generation request timed out/);
+    assert.match(error.message, /The Pixabay request timed out/);
+    return true;
+  });
+});
+
+test('a caller abort is rethrown unchanged instead of being relabelled as provider failure', async t => {
+  const native = globalThis.fetch;
+  t.after(() => { globalThis.fetch = native; });
+  const abort = new DOMException('Cancelled', 'AbortError');
+  globalThis.fetch = async () => { throw abort; };
+  await assert.rejects(searchPixabay(env(), { q: 'garden flowers' }), (error) => error === abort);
+});
+
+test('the fetch-failure diagnostic redacts the Pixabay API key', async t => {
+  const native = globalThis.fetch;
+  t.after(() => { globalThis.fetch = native; });
+  const key = 's.e[c]ret+key-99';
+  globalThis.fetch = async () => { throw Object.assign(new Error('Failed to fetch https://pixabay.com/api/?key=' + key), { name: 'TypeError' }); };
+  await assert.rejects(searchPixabay({ PIXABAY_API_KEY: key }, { q: 'garden flowers' }), (error) => {
+    assert.equal(error.status, 502);
+    assert.ok(!error.message.includes(key));
+    assert.match(error.message, /\[REDACTED\]/);
+    return true;
+  });
+});

@@ -6722,6 +6722,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
 				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include two stock video clips.</span>' +
+				'<div class="va-seo-keywords" id="va-image-keywords-' + n + '" style="display:none"></div>' +
+				'<button type="button" class="upload-btn small" id="va-image-retry-' + n + '" onclick="retryImagePromptFlow(' + n + ')" style="display:none" title="Run the Pixabay image search for this video again: re-plan scene keywords from the script and re-import matching photos and clips into this gallery">Retry Pixabay search</button>' +
 				'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
 				'</div>' +
 				'<div class="va-section">' +
@@ -18454,7 +18456,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		n
 	) {
 
-		const project =
+				const project =
 			videoProjects[n - 1];
 		if (!project) return;
 
@@ -18523,8 +18525,13 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		}
 
 		const target = Math.min(imageSceneTarget(project.script || "", project._seoMinutes || 1), availableImages + 2);
-		project.imagePrompts = [];
-		project.imagePromptTarget = target;
+\t\tproject.imagePrompts = [];
+\t\tproject.imagePromptTarget = target;
+/* Hide last time's search terms and retry button until this flow plans new ones. */
+const flowKeywords = document.getElementById("va-image-keywords-" + n);
+if (flowKeywords) { flowKeywords.style.display = "none"; flowKeywords.innerHTML = ""; }
+const flowRetry = document.getElementById("va-image-retry-" + n);
+if (flowRetry) flowRetry.style.display = "none";
 		project.imagePromptFlowId = "imgflow-" + n + "-" + myFlowSeq + "-" + Date.now().toString(36);
 		const isCancelled = function () {
 			return Boolean(project._deleted || project._imageFlowSeq !== myFlowSeq || !project._imageFlowActive);
@@ -18533,7 +18540,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			await runProgressiveImagePipeline({
 				total: target,
 				isCancelled: isCancelled,
-				onPrompts: function (prompts) { project.imagePrompts = prompts; },
+				onPrompts: function (prompts) { project.imagePrompts = prompts; renderImageKeywords(n); },
 				cancelPrompts: function () {
 					if (project._imagePromptCreateController) project._imagePromptCreateController.abort();
 				},
@@ -18991,10 +18998,13 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		const failures =
 			Number(project._aiImageFailures) || 0;
 
-		project.imagePrompts = null;
-		project._imageFlowFinalizing = false;
-		setVaUploadEnabled(n, true);
-		/* The walkthrough's images are done: the manual button unlocks. */
+\t\tproject._imageFlowFinalizing = false;
+\t\tsetVaUploadEnabled(n, true);
+/* A finished or stopped flow may be re-run from this same script. */
+const retryBtn =
+	document.getElementById("va-image-retry-" + n);
+if (retryBtn) retryBtn.style.display = (project.imagePromptFlowId && !project._imageFlowActive) ? "" : "none";
+/* The walkthrough's images are done: the manual button unlocks. */
 		const scriptButton =
 			document.getElementById(
 				"va-script-btn-" + n
@@ -19027,12 +19037,68 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			promptsExpected: promptCount,
 			imagesTarget: imageTarget,
 			failures: failures,
-			ms: Date.now() - (project._imageFlowStartedAt || Date.now())
-		});
-	}
+\t\t\tms: Date.now() - (project._imageFlowStartedAt || Date.now())
+\t\t});
+\t}
 
-	/*
-	 * A failed /api/script is retried TWICE more by the browser before
+/*
+ * Decode one \`pixabay:{q,...}\` planning token into the Pixabay search term
+ * this script generated for that scene.
+ */
+function imagePromptKeyword(token) {
+	if (typeof token !== "string") return "";
+	let q = "";
+	if (token.startsWith("pixabay:")) {
+		try {
+			const parsed = JSON.parse(token.slice(8));
+			q = parsed && typeof parsed === "object" && typeof parsed.q === "string" ? parsed.q : "";
+		} catch { /* keep the raw token as a fallback label */ }
+	}
+	return escapeHTML(q || token);
+}
+
+/*
+ * Show the Pixabay search keywords generated from this video's script under
+ * its AI status line, so the user can see exactly what was searched (and
+ * retry it from the same terms).
+ */
+function renderImageKeywords(n) {
+	const project = videoProjects[n - 1];
+	if (!project) return;
+	const box = document.getElementById("va-image-keywords-" + n);
+	if (!box) return;
+	const prompts = Array.isArray(project.imagePrompts) ? project.imagePrompts : [];
+	if (!prompts.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+	box.innerHTML =
+		'<div class="va-seo-heading">Pixabay search keywords from this script</div>' +
+		'<div class="va-seo-row">' +
+		prompts.map(function (token) {
+			return '<span class="va-seo-chip" title="Pixabay stock search term planned from this script">' +
+				imagePromptKeyword(token) + "</span>";
+		}).join("") +
+		"</div>";
+	box.style.display = "";
+}
+
+/*
+ * Re-run the Pixabay image search for this video: a new keyword plan from
+ * the script, then a fresh batch import into this gallery. Shown whenever
+ * this video has had an image flow; disabled while a flow is active.
+ */
+async function retryImagePromptFlow(n) {
+	const project = videoProjects[n - 1];
+	if (!project || project._imageFlowActive) return;
+	project._imageFlowActive = true;
+	project._imageFlowStopReason = "";
+	const statusEl = document.getElementById("va-ai-status-" + n);
+	if (statusEl) statusEl.textContent = "Retrying Pixabay image search…";
+	const btn = document.getElementById("va-image-retry-" + n);
+	if (btn) btn.style.display = "none";
+	await startImagePromptFlow(n);
+}
+
+/*
+ * A failed /api/script is retried TWICE more by the browser before
 	 * the video accordion shows an error: three attempts in total
 	 * (1 + SCRIPT_RETRY_LIMIT retries). Negotiated #261 calls make one server inference per request;
 	 * only legacy calls retain server retries. These browser retries cover
