@@ -95,13 +95,16 @@ Review https://pixabay.com/service/terms/ and https://pixabay.com/service/licens
 - Planner: `src/modules/image-prompts.ts`.
 - Search/downloads/budget: `src/modules/pixabay.ts`.
 - Media transports: `src/modules/image-batch.ts`, `src/client/browser-offload.ts`.
+- Failure tracing: `[image]` / `[pixabay]` request-correlated structured logs; bounded provider
+  status/body diagnostics with key/prompt redaction; client console errors and request IDs in the
+  surfaced binary-flow error message.
 - Both layout pipelines/renderer wiring: `src/client/app-js.ts`.
 - Routing/authorization: `src/index.ts`.
 - Rate-limiter binding/SQLite migration: `wrangler.json`.
 
 The supplied credential remains only in ignored `.dev.vars`; `.dev.vars.example` is a placeholder. For production, install `PIXABAY_API_KEY` through `npx wrangler secret put PIXABAY_API_KEY` and apply the checked-in Durable Object migration during deployment. No production deployment or live-account verification was performed.
 
-**Focused tests:** `npm run test:pixabay` — **64/64 passing**. Coverage includes whole-script LLM instructions with post-script slot skeletons and unwrapped prior queries, two clip slots across all durations/chunk boundaries, strict planner validation with JSON and scene-count recovery (fences, prose wrappers, bare arrays, preamble echoes, alternate wrapper keys, NDJSON, over-generated chunks, single-slot tail objects, truncation, retry-tightened instructions with `previousError` feedback), single-hit Pixabay fallback, binary/NDJSON mixed media, both layouts through export, removed accordion controls, safe reruns and refusal to export with a missing required clip. Browser decode/WebCodecs/muxer edges are mocked: these tests are not a real-device playable-MP4 verification. The historical broad suite still contains superseded contracts, and the same 30 pre-existing TypeScript router diagnostics remain.
+**Focused tests:** `npm run test:pixabay` — **66/66 passing**. Coverage includes whole-script LLM instructions with post-script slot skeletons and unwrapped prior queries, two clip slots across all durations/chunk boundaries, strict planner validation with JSON and scene-count recovery (fences, prose wrappers, bare arrays, preamble echoes, alternate wrapper keys, NDJSON, over-generated chunks, single-slot tail objects, truncation, retry-tightened instructions with `previousError` feedback), single-hit Pixabay fallback, request-correlated/scrubbed provider-error logs and permanent-403 no-retry behavior, binary/NDJSON mixed media, both layouts through export, removed accordion controls, safe reruns and refusal to export with a missing required clip. Browser decode/WebCodecs/muxer edges are mocked: these tests are not a real-device playable-MP4 verification. The historical broad suite still contains superseded contracts, and the same 30 pre-existing TypeScript router diagnostics remain.
 
 ## Real-media hang audit and preview (2026-10-29)
 

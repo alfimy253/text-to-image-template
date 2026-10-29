@@ -506,3 +506,26 @@ test('scene token falls back to hits[0] when a distinct query returns fewer than
 	assert.equal(source.type, 'video');
 });
 
+
+test('binary provider failures log upstream diagnostics with a request ID and keep credentials private', async t => {
+	const calls = fixture(t, { error: 403 });
+	const logged = [];
+	const originalError = console.error;
+	console.error = (...args) => logged.push(args);
+	t.after(() => { console.error = originalError; });
+	const request = new Request('https://studio.test/api/image', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', 'x-request-id': 'pixabay-debug-test' },
+		body: JSON.stringify({ prompt: sceneSearchToken('diagnostic flowers', 0) })
+	});
+	const response = await handleImageBinary(request, env(), credits);
+	const payload = await response.json();
+	assert.equal(response.status, 422, 'permanent upstream authorization errors are not returned as retryable failures');
+	assert.equal(payload.requestId, 'pixabay-debug-test');
+	assert.equal(calls.filter(call => call.url.hostname === 'pixabay.com').length, 1, 'do not retry a permanent provider 403');
+	const diagnostics = JSON.stringify(logged);
+	assert.match(diagnostics, /provider-search\.rejected/);
+	assert.match(diagnostics, /secret provider diagnostic/);
+	assert.match(diagnostics, /pixabay-debug-test/);
+	assert.doesNotMatch(diagnostics, /test-key-/);
+});

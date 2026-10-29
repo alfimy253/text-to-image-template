@@ -281,6 +281,7 @@ function createStudioOffloadRuntime(win) {
 		var data = await response.json().catch(function () { return {}; });
 		var error = new Error(data.error || ("Generation failed (HTTP " + response.status + ")"));
 		error.status = response.status;
+		error.requestId = data && data.requestId ? String(data.requestId) : (response.headers && response.headers.get ? response.headers.get("X-Request-Id") : "");
 		/* #262: server-declared load cooldown (header wins, JSON is the fallback). */
 		var header = null;
 		try { header = response.headers && response.headers.get ? response.headers.get("Retry-After") : null; } catch (_) { header = null; }
@@ -326,9 +327,11 @@ function createStudioOffloadRuntime(win) {
 						check(g.options);
 						if (!blob.size) throw new Error("Empty image response");
 						if (options.onImage) await options.onImage(blob, index);
+						if (win.console && win.console.info) win.console.info("[studio-image] scene delivered", { sceneIndex: index, bytes: blob.size, mediaType: blob.type, sourceId: blob.stockSource && blob.stockSource.id || null });
 						return { ok: true, blob: blob, index: index };
 					} catch (error) {
 						if (error && error.retryAfterMs > 0) noteBackoff(error.retryAfterMs);
+						if (win.console && win.console.error) win.console.error("[studio-image] scene request failed", { sceneIndex: index, status: Number(error && error.status) || 0, kind: error && error.kind || "", retryable: error && error.retryable, retryAfterMs: Number(error && error.retryAfterMs) || 0, requestId: error && error.requestId || "", error: String(error && error.message || error).slice(0, 500) });
 						if (options.onError) options.onError(error, index);
 						return { ok: false, error: error, index: index, retryAfterMs: error && error.retryAfterMs || 0 };
 					}

@@ -570,6 +570,7 @@ export async function runImageModel(
 		 * Defaults to the shared isolate governor; `null` opts out.
 		 */
 		governor?: ImageLoadGovernor | null;
+		trace?: { requestId?: string; sceneIndex?: number; attempt?: number };
 	} = {}
 ): Promise<ImageModelResult> {
 	return pixabaySceneImage(env, prompt, options);
@@ -682,7 +683,7 @@ async function generateOneWithRetry(
 	prompt: string,
 	frame?: ImageFrame,
 	signal?: AbortSignal,
-	options: { governor?: ImageLoadGovernor | null } = {}
+	options: { governor?: ImageLoadGovernor | null; requestId?: string; sceneIndex?: number } = {}
 ): Promise<{ ok: true; result: ImageModelResult } | ImageSceneFailure> {
 	const governor =
 		options.governor === undefined ? sharedImageLoadGovernor : options.governor;
@@ -696,9 +697,11 @@ async function generateOneWithRetry(
 			throw createBatchAbortError();
 		}
 		try {
+			console.info("[image] attempt.started", { requestId: options.requestId || "unavailable", sceneIndex: options.sceneIndex, attempt, provider: "pixabay", width: frame?.width || IMAGE_WIDTH, height: frame?.height || IMAGE_HEIGHT });
 			const result = await withTimeout(
 				runImageModel(env, prompt, {
 					signal,
+					trace: { requestId: options.requestId, sceneIndex: options.sceneIndex, attempt },
 					seed: Math.floor(Math.random() * 2147483647),
 					/* The row's own Resolution + Orientation columns. */
 					width: frame ? frame.width : IMAGE_WIDTH,
@@ -708,6 +711,7 @@ async function generateOneWithRetry(
 				IMAGE_ATTEMPT_TIMEOUT_MS,
 				"Image generation"
 			);
+			console.info("[image] attempt.succeeded", { requestId: options.requestId || "unavailable", sceneIndex: options.sceneIndex, attempt, provider: "pixabay", mime: result.mime, bytes: result.bytes.length, sourceId: result.source?.id });
 			return { ok: true, result };
 		} catch (error) {
 			if (
@@ -718,6 +722,7 @@ async function generateOneWithRetry(
 			}
 			const classification = classifyImageFailure(error);
 			lastError = errorMessage(error);
+			console.error("[image] attempt.failed", { requestId: options.requestId || "unavailable", sceneIndex: options.sceneIndex, attempt, provider: "pixabay", errorName: error instanceof Error ? error.name : "UnknownError", error: lastError.slice(0, 500), kind: classification.kind, retryable: classification.retryable, retryAfterMs: classification.retryAfterMs });
 			lastKind = classification.kind;
 			lastRetryAfterMs = classification.retryAfterMs;
 
@@ -741,6 +746,7 @@ async function generateOneWithRetry(
 				: delayFromHint(classification.retryAfterMs, attempt);
 			const delay = Math.min(backoff, remaining);
 			if (!(delay > 0)) break;
+			console.warn("[image] retry.scheduled", { requestId: options.requestId || "unavailable", sceneIndex: options.sceneIndex, nextAttempt: attempt + 1, delayMs: delay, kind: classification.kind });
 			await abortableRetryDelay(delay, signal);
 		}
 	}
@@ -1187,7 +1193,8 @@ function imageFailureResponse(
 	kind: ImageLoadFailureKind,
 	retryAfterMs: number | null,
 	credits: unknown,
-	governor: ImageLoadGovernor | null = sharedImageLoadGovernor
+	governor: ImageLoadGovernor | null = sharedImageLoadGovernor,
+	requestId?: string
 ): Response {
 	const overload = kind === "overload";
 	const load = governor ? governor.snapshot() : null;
@@ -1202,72 +1209,104 @@ function imageFailureResponse(
 		headers["Retry-After"] = String(Math.max(1, Math.ceil(hintMs / 1000)));
 	}
 	const body: Record<string, unknown> = { error, kind };
+	if (requestId) body.requestId = requestId;
 	if (overload) body.load = load;
 	if (hintMs > 0) body.retryAfterMs = hintMs;
 	body.credits = credits;
 	return new Response(JSON.stringify(body), {
 		status: overload ? 503 : kind === "fatal" ? 422 : 502,
-		headers: { "Content-Type": "application/json", ...headers }
+		headers: { "Content-Type": "application/json", ...(requestId ? { "X-Request-Id": requestId } : {}), ...headers }
 	});
 }
 
 export async function handleImageBinary(
 	request: Request, env: AiEnv, credits: ImageCreditHooks
 ): Promise<Response> {
-	const body = await request.json().catch(() => null);
-	if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Expected a JSON object" }, 400);
+	const requestId = request.headers.get("cf-ray") || request.headers.get("x-request-id") || crypto.randomUUID();
+	const startedAt = Date.now();
+	console.info("[image] request.started", { requestId, method: request.method, path: new URL(request.url).pathname, contentLength: request.headers.get("content-length") || "unknown", provider: "pixabay" });
+	let body: unknown;
+	try { body = await request.json(); }
+	catch (error) {
+		console.error("[image] request.invalid-json", { requestId, errorName: error instanceof Error ? error.name : "UnknownError", error: errorMessage(error).slice(0, 300) });
+		return json({ error: "Expected a JSON object", requestId }, 400);
+	}
+	if (!body || typeof body !== "object" || Array.isArray(body)) {
+		console.error("[image] request.invalid-body", { requestId, bodyType: body === null ? "null" : Array.isArray(body) ? "array" : typeof body });
+		return json({ error: "Expected a JSON object", requestId }, 400);
+	}
 	/*
 	 * A missing provider key is a deployment problem, not fleet load: answer
 	 * with `kind: "fatal"` so the browser fails fast and surfaces this exact
 	 * message instead of burning three retry rounds on a 503 it mistakes for
 	 * "server busy, retry in ~5 s".
 	 */
-	if (!env?.PIXABAY_API_KEY) return json({ error: "Pixabay API key is not configured", kind: "fatal" }, 503);
+	if (!env?.PIXABAY_API_KEY) {
+		console.error("[image] configuration.missing-pixabay-key", { requestId });
+		return json({ error: "Pixabay API key is not configured", kind: "fatal", requestId }, 503);
+	}
 	const input = body as Record<string, unknown>;
 	const prompts = sanitizePrompts([input.prompt]);
 	const frame = sanitizeImageFrame(input);
-	if ("error" in prompts) return json({ error: prompts.error }, 400);
-	if ("error" in frame) return json({ error: frame.error }, 400);
-	if (request.signal.aborted) return json({ error: "Image request cancelled" }, 499);
+	if ("error" in prompts) { console.error("[image] request.invalid-prompt", { requestId, error: prompts.error }); return json({ error: prompts.error, requestId }, 400); }
+	if ("error" in frame) { console.error("[image] request.invalid-frame", { requestId, error: frame.error }); return json({ error: frame.error, requestId }, 400); }
+	if (request.signal.aborted) { console.warn("[image] request.cancelled-before-authorization", { requestId }); return json({ error: "Image request cancelled", requestId }, 499); }
+	const sceneMatch = prompts[0].match(/^pixabay:(.*)$/);
+	let sceneIndex: number | undefined;
+	if (sceneMatch) { try { sceneIndex = JSON.parse(sceneMatch[1]).index; } catch { /* validation below reports invalid selection */ } }
+	console.info("[image] request.validated", { requestId, sceneIndex, width: frame.width, height: frame.height, promptLength: prompts[0].length });
 	let reservation;
-	try { reservation = await credits.consume(1); }
-	catch { return json({ error: "Credit authorization unavailable. Please retry later." }, 503); }
+	try { console.info("[image] credits.consume.started", { requestId, amount: 1 }); reservation = await credits.consume(1); console.info("[image] credits.consume.completed", { requestId, allowed: reservation.allowed, granted: reservation.granted }); }
+	catch (error) { console.error("[image] credits.consume.failed", { requestId, errorName: error instanceof Error ? error.name : "UnknownError", error: errorMessage(error).slice(0, 500) }); return json({ error: "Credit authorization unavailable. Please retry later.", requestId }, 503); }
 	if (!reservation.allowed || reservation.granted < 1) {
-		return json({ error: reservation.error || "Daily image credits are exhausted", credits: reservation.summary }, 429);
+		console.warn("[image] credits.denied", { requestId, granted: reservation.granted, hasError: Boolean(reservation.error) });
+		return json({ error: reservation.error || "Daily image credits are exhausted", credits: reservation.summary, requestId }, 429);
 	}
 	try {
 		const outcome = await sharedImageTaskQueue.enqueue({
 			groupId: "binary-" + ++batchGroupSequence,
 			signal: request.signal,
-			execute: () => generateOneWithRetry(env, prompts[0], frame, request.signal)
+			execute: () => generateOneWithRetry(env, prompts[0], frame, request.signal, { requestId, sceneIndex })
 		});
 		if (!outcome.ok) {
+			console.error("[image] request.failed", { requestId, sceneIndex, stage: "provider-pipeline", error: outcome.error, kind: outcome.kind, retryAfterMs: outcome.retryAfterMs, elapsedMs: Date.now() - startedAt });
 			/* Refund before answering: a scene that never rendered is never billed. */
-			const summary = await credits.refund(1);
+			let summary: unknown = null;
+			try { summary = await credits.refund(1); console.info("[image] credits.refund.completed", { requestId, amount: 1 }); }
+			catch (refundError) { console.error("[image] credits.refund.failed", { requestId, amount: 1, error: errorMessage(refundError).slice(0, 500) }); }
 			const failure = outcome as ImageSceneFailure;
 			return imageFailureResponse(
 				failure.error,
 				failure.kind,
 				failure.retryAfterMs,
-				summary
+				summary,
+				sharedImageLoadGovernor,
+				requestId
 			);
 		}
 		if (request.signal.aborted) throw createBatchAbortError();
+		console.info("[image] request.completed", { requestId, sceneIndex, status: 200, mime: outcome.result.mime, bytes: outcome.result.bytes.length, elapsedMs: Date.now() - startedAt });
 		return new Response(outcome.result.bytes as BodyInit, {
-			headers: { "Content-Type": outcome.result.mime, "Cache-Control": "no-store",
+			headers: { "Content-Type": outcome.result.mime, "Cache-Control": "no-store", "X-Request-Id": requestId,
 				"X-Pipeline-Version": "261", "X-Media-Provider": "pixabay", "X-Pixabay-Source": encodeURIComponent(JSON.stringify(outcome.result.source || {})), "X-Requested-Width": String(frame.width), "X-Requested-Height": String(frame.height) }
 		});
 	} catch (error) {
-		const summary = await credits.refund(1);
+		let summary: unknown = null;
+		try { summary = await credits.refund(1); console.info("[image] credits.refund.completed", { requestId, amount: 1 }); }
+		catch (refundError) { console.error("[image] credits.refund.failed", { requestId, amount: 1, error: errorMessage(refundError).slice(0, 500) }); }
 		if (request.signal.aborted || (error as Error)?.name === "AbortError") {
-			return json({ error: "Image request cancelled", credits: summary }, 499);
+			console.warn("[image] request.cancelled", { requestId, elapsedMs: Date.now() - startedAt });
+			return json({ error: "Image request cancelled", credits: summary, requestId }, 499);
 		}
 		const classification = classifyImageFailure(error);
+		console.error("[image] request.unhandled-error", { requestId, errorName: error instanceof Error ? error.name : "UnknownError", error: errorMessage(error).slice(0, 500), kind: classification.kind, retryAfterMs: classification.retryAfterMs, elapsedMs: Date.now() - startedAt });
 		return imageFailureResponse(
 			errorMessage(error),
 			classification.kind,
 			classification.retryAfterMs,
-			summary
+			summary,
+			sharedImageLoadGovernor,
+			requestId
 		);
 	}
 }

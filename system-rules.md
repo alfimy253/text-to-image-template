@@ -56,6 +56,13 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
 - Server downloads selected assets before same-origin Blob delivery. Validate HTTPS Pixabay/CDN
   hosts and redirects, MIME and file signatures. Limits: **8 MiB/photo / 16 MiB/clip**; materialize
   downloads serially per isolate. Keep source provenance and display Pixabay source links.
+- Image diagnostics use `[image]` / `[pixabay]` structured logs and carry a request ID through
+  validation, credit reservation/refund, retries, Pixabay search, asset selection/download, and
+  final response. Failed upstream searches log status, rate-limit headers, provider request ID,
+  and a bounded/scrubbed response-body excerpt; never log the API key, full search phrase, or
+  submitted prompt. The binary error body/header returns the request ID so browser-console and
+  Worker logs can be correlated. The studio logs scene failures and reports the actionable error
+  plus request ID instead of hiding every 502 behind the generic batch-stopped message.
 
 ### Quick Batch processing — mixed media
 
