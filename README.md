@@ -46,8 +46,9 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
 ## What it does
 
 - **Public landing page.** A responsive introduction explains the studio; the top **Sign up** link
-  and bottom **Log in** menu open the existing KV-backed account flow. A signed-out visitor can
-  explore the landing page before entering the studio.
+  and bottom **Log in** menu open the existing KV-backed account flow. These are also direct links
+  to `/signup` and `/login`, which open the corresponding form on `/account`. A signed-out visitor
+  can explore the landing page before entering the studio.
 - **Videos stack, not one timeline.** Press **+ Add Video** to create up to **10** independent
   "Video N" accordions, each with its own images/GIFs/MP4s, MP3, title, quality, script and AI
   image panel — and a **🗑 Delete Video** button in the header that removes the video and
@@ -166,12 +167,14 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   is spent, and the settings page can promote an account to `paid_user` (or reset its counters).
   The landing page documents both plans and follows the active theme.
 - **Freemium access (`/free`).** No account? `GET /free` opens the same studio with a **guest**
-  plan: **10 AI images per day**, unlimited videos, AI scripts and voiceovers. Guest counters are
+  plan: **10,000 Pixabay image imports per day**, unlimited videos, AI scripts and voiceovers (Pixabay
+  provider rate limits also apply). Guest counters are
   keyed by a salted hash of the visitor's IP address (`ipcredits:<hash>`, 2-day TTL), so the limit
   is per network and cannot be reset by clearing cookies. With KV bound, anonymous image
   generation is only unlocked by the `yvs_free=1` cookie that `/free` sets; everything else stays
-  sign-up-first. (Without a KV binding the gate is skipped and generation is unmetered — the same
-  open-access mode as the other routes.)
+  sign-up-first. Without a KV binding the studio can still open, but accounts are unavailable.
+  Stock-media access also fails closed unless `PIXABAY_ALLOW_UNMETERED=true` is explicitly enabled
+  for local testing.
   The settings page has a **Guest credits by IP** table (masked address, usage, remaining, last
   seen, reset). See `bug-fix-session-206.md`.
 - **Plan-based URLs.** `/free` (everyone), `/studio` (`free_user` / `paid_user`) and `/paid`
@@ -346,9 +349,10 @@ skin covers the whole site.
 | Route | Purpose |
 | --- | --- |
 | `GET /` | Public landing page; studio view when signed in or opened from the CTA |
-| `GET /free` | Freemium studio for everyone; sets `yvs_free=1` so guests can spend 10 image credits/day per IP |
+| `GET /free` | Freemium studio for everyone; sets `yvs_free=1` so guests can spend 10,000 image credits/day per IP, subject to Pixabay rate limits |
 | `GET /studio` | Account studio (`free_user` / `paid_user`); guests are redirected to `/free` |
 | `GET /paid` | Paid-tier studio (`paid_user` only); guests → `/free`, free accounts → `/studio` |
+| `GET /signup` · `GET /login` | Direct links to the corresponding signed-out account form on `/account` |
 | `GET /account` | Account dashboard: inline auth when signed out; profile, credits, plan, recent receipts and studio/payment actions when signed in |
 | `GET /upgrade` | Public local-gateway instructions; inline auth when signed out, screenshot uploader/history when signed in |
 | `GET /{current-day}/config/uvxyz` | Settings / background-worker page; current Asia/Taipei day only (e.g. `/16/config/uvxyz` on 2026-10-16) |

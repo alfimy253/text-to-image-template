@@ -52,13 +52,16 @@ export const PAGE_MARKUP = `
 		crossorigin
 	>
 
+	<!-- Optional fonts must not block the studio or account controls. -->
 	<link
 		href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800;900&family=JetBrains+Mono:wght@400;700&family=Oswald:wght@400;700&family=Source+Sans+Pro:wght@300;400;600;900&display=swap"
-		rel="stylesheet"
+		rel="stylesheet" media="print" onload="this.media='all'"
 	>
+	<noscript><link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800;900&family=JetBrains+Mono:wght@400;700&family=Oswald:wght@400;700&family=Source+Sans+Pro:wght@300;400;600;900&display=swap" rel="stylesheet"></noscript>
 
 
-	<script src="https://unpkg.com/mp4-muxer@5.1.3/build/mp4-muxer.js"></script>
+	<!-- The export library is not needed for navigation or sign-in. -->
+	<script defer src="https://unpkg.com/mp4-muxer@5.1.3/build/mp4-muxer.js"></script>
 
 
 	<style>__APP_CSS__</style>
@@ -84,7 +87,7 @@ export const PAGE_MARKUP = `
 				<a href="/account">Account</a><!--__CMS_TOP_LINKS__-->
 			</nav>
 
-			<a class="landing-signup" href="#signup" data-auth-open="signup">
+			<a class="landing-signup" href="/signup" data-auth-open="signup">
 				Sign up <span aria-hidden="true">↗</span>
 			</a>
 		</header>
@@ -230,7 +233,7 @@ export const PAGE_MARKUP = `
 					</article>
 				</div>
 				<p class="landing-plans-reset">All credits renew every day at midnight (UTC+8).</p>
-			<p class="landing-plans-guest">No account yet? <a href="/free">Open the free studio <span aria-hidden="true">↗</span></a> — 10 Pixabay images a day, counted per IP address.</p>
+			<p class="landing-plans-guest">No account yet? <a href="/free">Open the free studio <span aria-hidden="true">↗</span></a> — up to 10,000 Pixabay image imports a day, counted per IP address. Pixabay rate limits also apply.</p>
 			</section>
 
 			<section class="landing-cta">
@@ -241,7 +244,7 @@ export const PAGE_MARKUP = `
 
 		<footer class="landing-footer">
 			<div class="landing-footer-brand"><span class="landing-brand-mark" aria-hidden="true">V</span><div><b>VIBE STUDIO</b><span>Make your next idea move.</span></div></div>
-			<nav class="landing-footer-menu" aria-label="Account menu"><a href="/free">Try the free studio <span aria-hidden="true">↗</span></a><a href="/upgrade">Upgrade</a><!--__CMS_FOOTER_LINKS__--><span>Already have an account?</span><a href="#login" data-auth-open="login">Log in <span aria-hidden="true">↗</span></a></nav>
+			<nav class="landing-footer-menu" aria-label="Account menu"><a href="/free">Try the free studio <span aria-hidden="true">↗</span></a><a href="/upgrade">Upgrade</a><!--__CMS_FOOTER_LINKS__--><span>Already have an account?</span><a href="/login" data-auth-open="login">Log in <span aria-hidden="true">↗</span></a></nav>
 			<div class="landing-footer-bottom"><span>© 2026 YouTube Vibe Studio</span><span>Built for the stories you want to tell.</span></div>
 		</footer>
 	</div>

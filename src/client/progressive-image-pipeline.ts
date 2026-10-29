@@ -12,9 +12,9 @@ var IMAGE_SCENE_WORD_BRACKETS = [[130, 6], [240, 8], [500, 10]];
 var IMAGE_SCENE_COUNT_MIN = 4;
 var IMAGE_SCENE_COUNT_MAX = 10;
 /*
- * This file is a JS-in-a-template-literal, so regex escapes are built from
- * strings instead of typed inline. The token test below mirrors the server's
- * Unicode word finder (letters and digits, apostrophes, hyphens, underscores).
+ * This is JavaScript inside a template literal: regex escapes must survive
+ * both template expansion and the HTML parser. The token test recognizes
+ * ASCII alphanumerics and non-ASCII text without Unicode property escapes.
  */
 var IMAGE_SPACE_SPLIT = new RegExp("[" + String.fromCharCode(32, 9, 10, 13) + "]+");
 function imageScriptWordCount(script) {
@@ -29,7 +29,9 @@ function imageScriptWordCount(script) {
 		kept.push(line);
 	}
 	var words = kept.join(" ").split(IMAGE_SPACE_SPLIT).filter(function (token) {
-		return /[A-Za-z0-9]/.test(token) || /[^\u0000-\u007F]/.test(token);
+		// Keep the escapes in the emitted script: a literal NUL is replaced by
+		// the HTML parser and would make this regex (and the whole app) invalid.
+		return /[A-Za-z0-9]/.test(token) || /[^\\u0000-\\u007F]/.test(token);
 	});
 	return words.length;
 }
