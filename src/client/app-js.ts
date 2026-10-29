@@ -9187,14 +9187,14 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				setController: function (controller) { owner.controller = controller; },
 				clearController: function (controller) { if (owner.controller === controller) owner.controller = null; }
 			});
-			const data = await response.json();
-			if (!response.ok || !data.success) {
-				const error = new Error(data.error || "Scene prompt request failed");
-				error.retryable = response.status >= 500 || response.status === 429 || response.ok;
+			const data = await response.json().catch(function () { return null; });
+			if (!response.ok || !data || !data.success || !Array.isArray(data.prompts)) {
+				const error = new Error((data && data.error) || ("Scene prompt request failed (HTTP " + response.status + ")"));
+				error.retryable = response.status === 408 || response.status >= 500 || response.status === 429 || response.ok;
 				/* #263: keep the server's load answer so the retry can wait it out. */
 				error.status = response.status;
-				error.kind = data.kind || "";
-				error.retryAfterMs = Number(data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
+				error.kind = (data && data.kind) || "";
+				error.retryAfterMs = data && Number(data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
 				throw error;
 			}
 			return data.prompts;

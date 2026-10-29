@@ -27,6 +27,7 @@ async function runProgressiveImagePipeline(options) {
 		}
 	}
 	async function requestNext(offset) {
+		let lastError = null;
 		/*
 		 * #263: a prompt batch used to die after three ~500 ms retries (1.5 s of
 		 * patience against a fleet that asks for seconds). Because the lookahead
@@ -42,8 +43,12 @@ async function runProgressiveImagePipeline(options) {
 			try {
 				/* Prompt batches stay small (3 scenes) so the LLM stays inside its token budget. */
 				const count = Math.min(3, total - offset);
-				const result = await options.request({ offset, count, attempt,
-					previous: prompts.slice(-4).map(function (p) { return p.slice(0, 160); }) });
+				const reqBatch = { offset, count, attempt,
+					previous: prompts.slice(-4).map(function (p) { return p.slice(0, 160); }) };
+				if (attempt > 0 && lastError && lastError.message) {
+					reqBatch.previousError = String(lastError.message).slice(0, 200);
+				}
+				const result = await options.request(reqBatch);
 				check();
 				const seen = new Set(prompts);
 				const batch = (Array.isArray(result) ? result : []).filter(function (p) {
@@ -64,6 +69,7 @@ async function runProgressiveImagePipeline(options) {
 				}
 				return batch;
 			} catch (error) {
+				lastError = error;
 				check();
 				const status = error && Number(error.status);
 				/* 429/408 are load answers: retry them, but never 400/401/403. */

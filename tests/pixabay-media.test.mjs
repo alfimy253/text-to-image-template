@@ -328,3 +328,181 @@ test('an unresponsive cache write is bounded and releases the download queue', a
  globalThis.caches={default:{match:async()=>undefined,put:()=>new Promise(()=>{})}};
  assert.deepEqual((await promptly(downloadPixabay({id:504,type:'image',url:'https://cdn.pixabay.com/photo/504.png'}),3000)).bytes,png);
 });
+
+test('planner prevents false wrong-scene-count failures across real 8B reply shapes and over-generation patterns', async () => {
+	const baseInput = { topic: 'community garden', script: 'Paragraph one.\n\nParagraph two.\n\nParagraph three.\n\nParagraph four.', minutes: 1 };
+	const chunk0 = { ...baseInput, batch: { offset: 0, count: 3 } };
+	const valid3 = [
+		{ scene: 0, type: 'image', keywords: 'sunny community garden' },
+		{ scene: 1, type: 'video', keywords: 'neighbors planting vegetables' },
+		{ scene: 2, type: 'image', keywords: 'rich compost soil' }
+	];
+
+	/* 1. Bare JSON array wrapped in prose, preamble slot echoes, alternate keys, NDJSON, keyed maps, loose JSON, keyword arrays, and "photo" alias. */
+	const chunk0Variants = [
+		'Here are the 3 scenes:\n' + JSON.stringify(valid3) + '\nHope this helps!',
+		'For requested slots [{"scene":0,"type":"image"},{"scene":1,"type":"video"},{"scene":2,"type":"image"}]:\n' + JSON.stringify({ scenes: valid3 }),
+		'Example: {"scenes":[{"type":"image","keywords":"short stock search keywords"}]}\nResult:\n' + JSON.stringify({ scenes: valid3 }),
+		JSON.stringify({ slots: valid3 }),
+		JSON.stringify({ searches: valid3 }),
+		JSON.stringify({ prompts: valid3 }),
+		valid3.map((s) => JSON.stringify(s)).join('\n'),
+		JSON.stringify({ scene_0: valid3[0], scene_1: valid3[1], scene_2: valid3[2] }),
+		"{'scenes':[{'type':'Photo','keywords':['sunny','community','garden']},{'type':'VIDEO','keywords':'neighbors planting vegetables'},{'type':'image','keywords':'rich compost soil'}]}",
+		/* Over-generation: model appended the second global video slot (scene 8) to chunk 0 (4 entries instead of 3). */
+		JSON.stringify({ scenes: [...valid3, { scene: 8, type: 'video', keywords: 'harvesting fresh produce' }] }),
+		JSON.stringify([
+			{ type: 'image', keywords: 'sunny community garden' },
+			{ type: 'video', keywords: 'neighbors planting vegetables' },
+			{ type: 'image', keywords: 'rich compost soil' },
+			{ type: 'video', keywords: 'harvesting fresh produce' }
+		])
+	];
+	for (const response of chunk0Variants) {
+		const tokens = await generateImagePrompts({ AI: { run: async () => ({ response }) } }, 'text', chunk0);
+		assert.equal(tokens.length, 3, 'variant must resolve 3 scenes: ' + response.slice(0, 60));
+		const decoded = tokens.map((t) => JSON.parse(t.slice(8)));
+		assert.deepEqual(decoded.map((d) => d.scene), [0, 1, 2]);
+		assert.deepEqual(decoded.map((d) => d.type), ['image', 'video', 'image']);
+		assert.equal(decoded[0].q, 'sunny community garden');
+	}
+
+	/* 2. Multi-turn chat array picks the assistant message instead of a leading user/system prompt. */
+	const chatTokens = await generateImagePrompts({
+		AI: {
+			run: async () => [
+				{ role: 'user', content: 'Return JSON: {"scenes":[{"type":"image","keywords":"short stock search keywords"}]}' },
+				{ role: 'assistant', content: JSON.stringify({ scenes: valid3 }) }
+			]
+		}
+	}, 'text', chunk0);
+	assert.equal(chatTokens.length, 3);
+
+	/* 3. Image-only middle chunk (offset 3, count 3) recovers when the 8B model inserts the 2 global video slots around it. */
+	const chunk1Tokens = await generateImagePrompts({
+		AI: {
+			run: async () => ({
+				response: JSON.stringify({
+					scenes: [
+						{ scene: 1, type: 'video', keywords: 'gardeners working together' },
+						{ scene: 3, type: 'image', keywords: 'watering green seedlings' },
+						{ scene: 4, type: 'image', keywords: 'wooden garden beds' },
+						{ scene: 5, type: 'image', keywords: 'fresh tomato harvest' },
+						{ scene: 8, type: 'video', keywords: 'sharing garden harvest' }
+					]
+				})
+			})
+		}
+	}, 'text', { ...baseInput, batch: { offset: 3, count: 3, previous: chatTokens } });
+	assert.deepEqual(chunk1Tokens.map((t) => JSON.parse(t.slice(8)).scene), [3, 4, 5]);
+	assert.deepEqual(chunk1Tokens.map((t) => JSON.parse(t.slice(8)).type), ['image', 'image', 'image']);
+
+	/* 4. Imperfect whole-video plan (9 or 11 entries instead of 10) slices cleanly when offset..offset+count matches slot types. */
+	const elevenScenes = Array.from({ length: 11 }, (_, s) => ({
+		type: [1, 8].includes(s) ? 'video' : 'image',
+		keywords: 'garden scene ' + s
+	}));
+	const slicedFromEleven = await generateImagePrompts(
+		{ AI: { run: async () => ({ response: JSON.stringify({ scenes: elevenScenes }) }) } },
+		'text',
+		{ ...baseInput, batch: { offset: 6, count: 3 } }
+	);
+	assert.deepEqual(slicedFromEleven.map((t) => JSON.parse(t.slice(8)).scene), [6, 7, 8]);
+	assert.deepEqual(slicedFromEleven.map((t) => JSON.parse(t.slice(8)).type), ['image', 'image', 'video']);
+
+	/* 5. Single-slot final chunk (offset 9, count 1) accepts an unwrapped single scene object. */
+	const tailTokens = await generateImagePrompts(
+		{ AI: { run: async () => ({ response: JSON.stringify({ scene: 9, type: 'image', keywords: 'smiling community harvest' }) }) } },
+		'text',
+		{ ...baseInput, batch: { offset: 9, count: 1 } }
+	);
+	assert.equal(tailTokens.length, 1);
+	assert.deepEqual(JSON.parse(tailTokens[0].slice(8)), {
+		q: 'smiling community harvest',
+		type: 'image',
+		page: 1,
+		index: 0,
+		scene: 9
+	});
+});
+
+test('planner prompt unwraps previous pixabay tokens, anchors slot skeleton after script, and marks planner errors transient', async () => {
+	const captured = [];
+	const planner = {
+		AI: {
+			run: async (_m, input) => {
+				captured.push(input);
+				return {
+					response: JSON.stringify({
+						scenes: [
+							{ type: 'image', keywords: 'garden soil' },
+							{ type: 'image', keywords: 'green sprouts' },
+							{ type: 'image', keywords: 'sunny greenhouse' }
+						]
+					})
+				};
+			}
+		}
+	};
+	const prevToken = 'pixabay:' + JSON.stringify({ q: 'morning garden flowers', type: 'image', page: 1, index: 0, scene: 0 });
+	await generateImagePrompts(planner, 'text', {
+		topic: 'gardening',
+		script: 'First paragraph.\n\nSecond paragraph.',
+		minutes: 1,
+		batch: { offset: 3, count: 3, attempt: 1, previous: [prevToken], previousError: 'Scene keyword planner returned the wrong scene count' }
+	});
+	assert.equal(captured.length, 1);
+	assert.ok(captured[0].prompt.includes('"morning garden flowers"'), 'previous query should be unwrapped');
+	assert.ok(!captured[0].prompt.includes('pixabay:'), 'raw pixabay token must not leak into LLM prompt');
+	assert.ok(captured[0].prompt.indexOf('END OF SCRIPT.') > captured[0].prompt.indexOf('Second paragraph.'));
+	assert.match(captured[0].prompt, /Previous attempt failed with: Scene keyword planner returned the wrong scene count/);
+
+	/* HTTP handler marks invalid-JSON and wrong-count planner misses as transient (retryable), never fatal. */
+	const badJsonRes = await handleGenerateImagePrompts(
+		post('/api/image-prompts', { topic: 'gardening', script: 'Grow food.', minutes: 1, batch: { offset: 0, count: 3, attempt: 0 } }),
+		{ AI: { run: async () => ({ response: 'not json at all' }) } },
+		'text'
+	);
+	assert.equal(badJsonRes.status, 502);
+	const badJsonBody = await badJsonRes.json();
+	assert.equal(badJsonBody.kind, 'transient');
+
+	const wrongCountRes = await handleGenerateImagePrompts(
+		post('/api/image-prompts', { topic: 'gardening', script: 'Grow food.', minutes: 1, batch: { offset: 0, count: 3, attempt: 0 } }),
+		{ AI: { run: async () => ({ response: JSON.stringify({ scenes: [{ type: 'image', keywords: 'garden soil' }] }) }) } },
+		'text'
+	);
+	assert.equal(wrongCountRes.status, 502);
+	const wrongCountBody = await wrongCountRes.json();
+	assert.equal(wrongCountBody.kind, 'transient');
+	assert.match(wrongCountBody.error, /wrong scene count/);
+});
+
+test('scene token falls back to hits[0] when a distinct query returns fewer than 3 filtered hits', async t => {
+	const native = globalThis.fetch;
+	t.after(() => { globalThis.fetch = native; });
+	const mp4Bytes = Uint8Array.from([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
+	globalThis.fetch = async (input) => {
+		const u = new URL(String(input));
+		if (u.hostname === 'pixabay.com') {
+			return Response.json({
+				totalHits: 1,
+				hits: [{
+					id: 77,
+					pageURL: 'https://pixabay.com/videos/id-77/',
+					user: 'Artist',
+					duration: 15,
+					videos: { small: { url: 'https://cdn.pixabay.com/video/77.mp4', thumbnail: 'https://cdn.pixabay.com/video/77.jpg', width: 1280, height: 720, size: 1024 } }
+				}]
+			});
+		}
+		return new Response(mp4Bytes, { headers: { 'Content-Type': 'video/mp4' } });
+	};
+	const secondVideoToken = 'pixabay:' + JSON.stringify({ q: 'unique harvest scene', type: 'video', page: 1, index: 1, scene: 8 });
+	const response = await handleImageBinary(post('/api/image', { prompt: secondVideoToken }), env(), credits);
+	assert.equal(response.status, 200);
+	const source = JSON.parse(decodeURIComponent(response.headers.get('X-Pixabay-Source')));
+	assert.equal(source.id, 77);
+	assert.equal(source.type, 'video');
+});
+

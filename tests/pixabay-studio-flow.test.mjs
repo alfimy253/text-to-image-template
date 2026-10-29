@@ -174,3 +174,64 @@ test('editor preparation rejects a photo decode that never settles',async t=>{
  w.__VIDEO_PROJECTS[0].assets.push({kind:'image',url:'blob:stalled'});
  await assert.rejects(deadline(w.prepareVideo(1),1000),/Editor photo decoding timed out/);
 });
+
+test('editor startImagePromptFlow recovers from a transient wrong-scene-count attempt and passes previousError on retry', async t => {
+	const { w } = setup(t);
+	const retryBatches = [];
+	let firstChunkCalls = 0;
+	const flakyEnv = {
+		PIXABAY_API_KEY: 'px-retry-key',
+		AI: {
+			run: async (_m, input) => {
+				const slots = JSON.parse(input.prompt.match(/Requested slots of \d+ total: ([^\n]+)/)[1]);
+				if (slots[0].scene === 0) {
+					firstChunkCalls += 1;
+					if (firstChunkCalls === 1) {
+						/* Simulate an 8B model returning only 1 scene on attempt 0. */
+						return { response: JSON.stringify({ scenes: [{ type: 'image', keywords: 'garden flowers' }] }) };
+					}
+				}
+				return {
+					response: JSON.stringify({
+						scenes: slots.map((s) => ({ scene: s.scene, type: s.type, keywords: `garden scene ${s.scene}` }))
+					})
+				};
+			}
+		}
+	};
+	const baseFetch = w.fetch;
+	w.fetch = async (input, init = {}) => {
+		const url = new URL(String(input), 'https://studio.test');
+		if (url.pathname === '/api/image-prompts') {
+			const cloned = init?.body ? JSON.parse(String(init.body)) : {};
+			if (cloned.batch && cloned.batch.attempt > 0) retryBatches.push(cloned.batch);
+			return handleGenerateImagePrompts(
+				new Request(url, { ...init, signal: undefined }),
+				flakyEnv,
+				'text-planner'
+			);
+		}
+		return baseFetch(input, init);
+	};
+	const native = w.setTimeout.bind(w);
+	w.setTimeout = (fn, ms, ...args) => native(fn, ms >= 500 && ms <= 5000 ? 5 : ms, ...args);
+
+	w.addVideoAccordion();
+	const project = w.__VIDEO_PROJECTS[0];
+	project._seoTopic = 'garden';
+	project._seoMinutes = 1;
+	project.script = 'Grow fresh food together in a sunny neighborhood garden.';
+	project._imageFlowActive = true;
+	await deadline(w.startImagePromptFlow(1));
+
+	assert.equal(firstChunkCalls, 2, 'chunk 0 should fail once and succeed on retry');
+	assert.equal(retryBatches.length, 1);
+	assert.equal(retryBatches[0].attempt, 1);
+	assert.match(retryBatches[0].previousError, /wrong scene count/);
+	assert.equal(project.assets.length, 10);
+	assert.equal(project.assets.filter((a) => a.kind === 'mp4').length, 2);
+	const statusText = w.document.getElementById('va-ai-status-1').textContent;
+	assert.doesNotMatch(statusText, /flow stopped/i);
+	assert.match(statusText, /10 image\(s\) in the gallery/);
+});
+

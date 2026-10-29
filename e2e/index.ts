@@ -39,6 +39,33 @@ function mockAudioResponse(): Uint8Array {
 function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 	const prompt = String(input?.prompt || "");
 
+	// Pixabay stock scene keyword planner: honor requested slot order and media types.
+	const slotMatch = /Requested slots of \d+ total: ([^\n]+)/.exec(prompt);
+	if (slotMatch) {
+		try {
+			const slots = JSON.parse(slotMatch[1]) as { scene: number; type: string }[];
+			const topicMatch = /TOPIC:\s*([^\r\n]+)/i.exec(prompt);
+			const topicWords = (topicMatch ? topicMatch[1] : "nature landscape")
+				.replace(/[^a-zA-Z0-9\s]+/g, " ")
+				.trim()
+				.split(/\s+/)
+				.filter(Boolean)
+				.slice(0, 3)
+				.join(" ") || "nature landscape";
+			return {
+				response: JSON.stringify({
+					scenes: slots.map((slot) => ({
+						scene: slot.scene,
+						type: slot.type,
+						keywords: `${topicWords} scene ${slot.scene}`
+					}))
+				})
+			};
+		} catch {
+			/* Fall through if slot JSON was malformed in a negative test. */
+		}
+	}
+
 	// Progressive image prompts: honor the absolute scene range as well as count/style.
 	if (prompt.includes("AI IMAGE PROMPTS")) {
 		const count = Number((prompt.match(/exactly (\d+) image prompts/) || [])[1] || 10);
@@ -145,6 +172,7 @@ function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 }
 
 export const mockEnv = {
+	PIXABAY_ALLOW_UNMETERED: "true",
 	AI: {
 		run: async (model: string, input: Record<string, unknown>) => {
 			const m = String(model || "");
