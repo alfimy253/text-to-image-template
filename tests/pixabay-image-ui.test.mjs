@@ -56,6 +56,17 @@ function studioWindow() {
       return new Response(JSON.stringify({ success: true, prompts: prompts }),
         { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
+    if (path === '/api/media/search') {
+      const urlObj = new URL(url, 'https://studio.test');
+      return Response.json({ success: true, provider: 'pixabay', hits: [
+        { id: 700 + calls.filter((p) => p === '/api/media/search').length, type: urlObj.searchParams.get('type') || 'image',
+          pageURL: 'https://pixabay.com/photos/test/', user: 'Fixture artist', duration: 2 }
+      ] });
+    }
+    if (path === '/api/media/asset') {
+      return new Response(Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]),
+        { status: 200, headers: { 'Content-Type': 'image/png' } });
+    }
     if (path === '/api/image-batch') {
       const stream = new ReadableStream({
         start(controller) {
@@ -104,15 +115,28 @@ test('Pixabay search keywords planned from the script are shown in the video acc
    * stopped flow is exactly when the user needs the retry button. */
   assert.equal(w.document.getElementById('va-ai-status-1').textContent.indexOf('Pixabay image flow stopped'), 0);
 
-  /* Retrying re-plans keywords from the script: the prompt endpoint is hit again. */
-  const before = calls.filter((p) => p === '/api/image-prompts').length;
+  /* Simulate a prior successful scene: retry must preserve it and only search missing scenes. */
+  const gallery = w.document.getElementById('va-gallery-1');
+  const existingCard = w.document.createElement('div');
+  existingCard.className = 'va-card';
+  gallery.appendChild(existingCard);
+  project.assets.push({ kind: 'image', sceneIndex: 0, imagePromptFlowId: project.imagePromptFlowId,
+    stockSource: { provider: 'pixabay', id: 700 }, url: 'blob:existing', card: existingCard,
+    file: { name: 'already-imported.jpg' } });
+
+  /* Retry searches Pixabay from the displayed keywords and inserts media into the gallery. */
+  const plansBefore = calls.filter((p) => p === '/api/image-prompts').length;
   await w.retryImagePromptFlow(1);
-  await new Promise((r) => setTimeout(r, 200));
-  const after = calls.filter((p) => p === '/api/image-prompts').length;
-  assert.equal(after, before + 2, 'retry re-ran the Pixabay keyword plan (two batches)');
+  assert.equal(calls.filter((p) => p === '/api/image-prompts').length, plansBefore, 'retry reuses the visible search keywords');
+  assert.equal(calls.filter((p) => p === '/api/media/search').length, 5, 'browser searches only scenes not already in the gallery');
+  assert.equal(calls.filter((p) => p === '/api/media/asset').length, 5, 'browser downloads one selected stock asset per missing scene');
+  assert.equal(project.assets.length, 6, 'retried images are inserted into the gallery without duplicating prior imports');
+  assert.ok(project.assets.every((asset) => asset.stockSource?.provider === 'pixabay'));
 
   const boxAgain = w.document.getElementById('va-image-keywords-1');
   assert.equal(boxAgain.style.display, '', 'keywords are still shown after the retry');
+  assert.equal(boxAgain.querySelectorAll('.va-pixabay-keyword-row').length, 6, 'all keyword rows remain visible');
+  assert.equal(boxAgain.querySelectorAll('[data-state="imported"]').length, 6, 'UI marks every successful result as added');
 });
 
 test('the keywords box and retry button are hidden before a flow runs', async t => {

@@ -6723,7 +6723,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
 				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include two stock video clips.</span>' +
 				'<div class="va-seo-keywords" id="va-image-keywords-' + n + '" style="display:none"></div>' +
-				'<button type="button" class="upload-btn small" id="va-image-retry-' + n + '" onclick="retryImagePromptFlow(' + n + ')" style="display:none" title="Run the Pixabay image search for this video again: re-plan scene keywords from the script and re-import matching photos and clips into this gallery">Retry Pixabay search</button>' +
+				'<button type="button" class="upload-btn small" id="va-image-retry-' + n + '" onclick="retryImagePromptFlow(' + n + ')" style="display:none" title="Search Pixabay again using the keywords shown below and add the matching photos and clips to this gallery">Retry Pixabay search</button>' +
 				'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
 				'</div>' +
 				'<div class="va-section">' +
@@ -18503,6 +18503,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		const myFlowSeq = project._imageFlowSeq;
 
 		project.imagePrompts = null;
+		project.imagePromptStates = {};
 		project.imagePromptTarget = 0;
 		project.imagePromptFlowId = null;
 		project.aiImagesDone = 0;
@@ -18540,7 +18541,13 @@ if (flowRetry) flowRetry.style.display = "none";
 			await runProgressiveImagePipeline({
 				total: target,
 				isCancelled: isCancelled,
-				onPrompts: function (prompts) { project.imagePrompts = prompts; renderImageKeywords(n); },
+				onPrompts: function (prompts) {
+					project.imagePrompts = prompts;
+					prompts.forEach(function (_, index) {
+						if (!project.imagePromptStates[String(index)]) setImagePromptState(project, index, "planned", "");
+					});
+					renderImageKeywords(n);
+				},
 				cancelPrompts: function () {
 					if (project._imagePromptCreateController) project._imagePromptCreateController.abort();
 				},
@@ -18644,11 +18651,18 @@ if (flowRetry) flowRetry.style.display = "none";
 					if (stale()) return;
 					const liveN = videoProjects.indexOf(project) + 1;
 					if (liveN <= 0) return;
-					if (!await insertStockScene(liveN, blob, flowId, (Number(sceneOffset) || 0) + index, stale)) throw new Error("The media gallery is full or the flow was cancelled");
+					const scene = (Number(sceneOffset) || 0) + index;
+					if (!await insertStockScene(liveN, blob, flowId, scene, stale)) throw new Error("The media gallery is full or the flow was cancelled");
 					project.aiImagesDone = (project.aiImagesDone || 0) + 1;
 					recordStudioUsage("images", "ok", 1);
+					setImagePromptState(project, scene, "imported", blob.type === "video/mp4" ? "clip added to gallery" : "photo added to gallery");
 					const status = document.getElementById("va-ai-status-" + liveN);
 					if (status) status.textContent = project.aiImagesDone + " Pixabay scenes imported…";
+				},
+				onError: function (error, index) {
+					if (stale()) return;
+					const scene = (Number(sceneOffset) || 0) + index;
+					setImagePromptState(project, scene, "failed", error && error.message ? error.message : String(error || "Pixabay import failed"));
 				}
 			});
 						if (!stale()) {
@@ -18764,6 +18778,7 @@ if (flowRetry) flowRetry.style.display = "none";
 			if (event.type === "image") {
 				if (!event.ok) {
 					failed++;
+					setImagePromptState(project, (Number(sceneOffset) || 0) + Number(event.index), "failed", event.error || "Pixabay import failed");
 					console.warn("[seo-image-flow] image failed", {
 						videoIndex: n,
 						index: event.index,
@@ -18785,12 +18800,13 @@ if (flowRetry) flowRetry.style.display = "none";
 									const inserted = await insertStockScene(liveN, blob, flowId, eventIndex, isStaleFlow);
 									if (inserted) {
 										added++;
-
+										setImagePromptState(project, eventIndex, "imported", blob.type === "video/mp4" ? "clip added to gallery" : "photo added to gallery");
 										recordStudioUsage("images", "ok", 1);
 
 									}
 									else {
 										skipped++;
+										setImagePromptState(project, eventIndex, "failed", "gallery limit reached or scene skipped");
 										project._imageFlowStopReason =
 											"The video gallery reached its " + MAX_IMAGE_UPLOADS + "-image limit.";
 										if (controller) {
@@ -18800,6 +18816,7 @@ if (flowRetry) flowRetry.style.display = "none";
 								}
 								catch (insertError) {
 									failed++;
+									setImagePromptState(project, eventIndex, "failed", insertError && insertError.message ? insertError.message : String(insertError));
 									console.error("[seo-image-flow] gallery insertion failed", {
 										videoIndex: liveN,
 										index: eventIndex,
@@ -18812,6 +18829,7 @@ if (flowRetry) flowRetry.style.display = "none";
 							function (decodeError) {
 								if (isStaleFlow()) return;
 								failed++;
+								setImagePromptState(project, eventIndex, "failed", decodeError && decodeError.message ? decodeError.message : String(decodeError));
 								console.error("[seo-image-flow] image decode failed", {
 									videoIndex: n,
 									index: eventIndex,
@@ -19042,26 +19060,39 @@ if (retryBtn) retryBtn.style.display = (project.imagePromptFlowId && !project._i
 \t}
 
 /*
- * Decode one \`pixabay:{q,...}\` planning token into the Pixabay search term
- * this script generated for that scene.
+ * Decode one \`pixabay:{q,...}\` planning token. The order in the returned
+ * prompt list is authoritative for gallery scene indices; token metadata is
+ * used for the media type and Pixabay's selected result index.
  */
-function imagePromptKeyword(token) {
-	if (typeof token !== "string") return "";
-	let q = "";
-	if (token.startsWith("pixabay:")) {
+function parseImagePromptToken(token, fallbackScene) {
+	const fallback = Math.max(0, Number(fallbackScene) || 0);
+	const parsed = { q: "", type: "image", index: fallback, scene: fallback };
+	if (typeof token === "string" && token.indexOf("pixabay:") === 0) {
 		try {
-			const parsed = JSON.parse(token.slice(8));
-			q = parsed && typeof parsed === "object" && typeof parsed.q === "string" ? parsed.q : "";
-		} catch { /* keep the raw token as a fallback label */ }
+			const value = JSON.parse(token.slice(8));
+			if (value && typeof value === "object") {
+				if (typeof value.q === "string") parsed.q = value.q.trim();
+				if (value.type === "video" || value.type === "image") parsed.type = value.type;
+				if (Number.isInteger(value.index) && value.index >= 0) parsed.index = value.index;
+				if (Number.isInteger(value.scene) && value.scene >= 0) parsed.scene = value.scene;
+			}
+		} catch (_) { /* Invalid structured tokens must not become bogus search queries. */ }
+	} else if (typeof token === "string") {
+		parsed.q = token.trim();
 	}
-	return escapeHTML(q || token);
+	return parsed;
 }
 
-/*
- * Show the Pixabay search keywords generated from this video's script under
- * its AI status line, so the user can see exactly what was searched (and
- * retry it from the same terms).
- */
+/* Keep a per-scene status beside every keyword so planning, actual search,
+ * asset download and gallery insertion failures are visible to the user. */
+function setImagePromptState(project, scene, state, detail) {
+	if (!project) return;
+	if (!project.imagePromptStates || typeof project.imagePromptStates !== "object") project.imagePromptStates = {};
+	project.imagePromptStates[String(scene)] = { state: String(state || "planned"), detail: String(detail || "") };
+	const liveN = videoProjects.indexOf(project) + 1;
+	if (liveN > 0) renderImageKeywords(liveN);
+}
+
 function renderImageKeywords(n) {
 	const project = videoProjects[n - 1];
 	if (!project) return;
@@ -19069,32 +19100,140 @@ function renderImageKeywords(n) {
 	if (!box) return;
 	const prompts = Array.isArray(project.imagePrompts) ? project.imagePrompts : [];
 	if (!prompts.length) { box.style.display = "none"; box.innerHTML = ""; return; }
-	box.innerHTML =
-		'<div class="va-seo-heading">Pixabay search keywords from this script</div>' +
-		'<div class="va-seo-row">' +
-		prompts.map(function (token) {
-			return '<span class="va-seo-chip" title="Pixabay stock search term planned from this script">' +
-				imagePromptKeyword(token) + "</span>";
-		}).join("") +
-		"</div>";
+	const states = project.imagePromptStates || {};
+	const rows = prompts.map(function (token, index) {
+		const parsed = parseImagePromptToken(token, index);
+		const state = states[String(index)] || { state: "planned", detail: "" };
+		const typeLabel = parsed.type === "video" ? "VIDEO" : "PHOTO";
+		const statusLabel = state.state === "imported" ? "in gallery" : state.state === "searching" ? "searching…" : state.state === "failed" ? "failed" : "planned";
+		const detail = state.detail ? " — " + state.detail : "";
+		return '<div class="va-seo-row va-pixabay-keyword-row"><span class="va-seo-label">Scene ' + (index + 1) + ' · ' + typeLabel + '</span>' +
+			'<span class="va-seo-chip" title="Pixabay search keyword">' + escapeHTML(parsed.q || String(token || "")) + '</span>' +
+			'<span class="va-pixabay-keyword-status" data-state="' + escapeHTML(state.state) + '">' + escapeHTML(statusLabel + detail) + '</span></div>';
+	}).join("");
+	box.innerHTML = '<div class="va-seo-heading">Pixabay search keywords (' + prompts.length + ' scenes)</div>' + rows;
 	box.style.display = "";
 }
 
 /*
- * Re-run the Pixabay image search for this video: a new keyword plan from
- * the script, then a fresh batch import into this gallery. Shown whenever
- * this video has had an image flow; disabled while a flow is active.
+ * Retry means actually search Pixabay in the browser using the already-visible
+ * scene keywords, download chosen assets through the same-origin Worker, and
+ * add successful results to the gallery. Re-plan only if no usable keyword
+ * list exists (for example, the planner itself failed).
  */
 async function retryImagePromptFlow(n) {
 	const project = videoProjects[n - 1];
 	if (!project || project._imageFlowActive) return;
+	if (!Array.isArray(project.imagePrompts) || !project.imagePrompts.length) {
+		project._imageFlowActive = true;
+		project._imageFlowStopReason = "";
+		const status = document.getElementById("va-ai-status-" + n);
+		if (status) status.textContent = "No planned search keywords are available; planning new Pixabay searches…";
+		return startImagePromptFlow(n);
+	}
+
 	project._imageFlowActive = true;
+	project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
+	project._imageFlowStartedAt = Date.now();
+	project._requiresStockClips = true;
 	project._imageFlowStopReason = "";
-	const statusEl = document.getElementById("va-ai-status-" + n);
-	if (statusEl) statusEl.textContent = "Retrying Pixabay image search…";
-	const btn = document.getElementById("va-image-retry-" + n);
-	if (btn) btn.style.display = "none";
-	await startImagePromptFlow(n);
+	project._aiImageFailures = 0;
+	project.imagePromptStates = {};
+	const seq = project._imageFlowSeq;
+	const stale = function () { return Boolean(project._deleted || project._imageFlowSeq !== seq || !project._imageFlowActive); };
+	const liveIndex = function () { return videoProjects.indexOf(project) + 1; };
+	const liveN = liveIndex();
+	const flowId = project.imagePromptFlowId || ("imgretry-" + liveN + "-" + seq + "-" + Date.now().toString(36));
+	const statusEl = document.getElementById("va-ai-status-" + liveN);
+	const btn = document.getElementById("va-image-retry-" + liveN);
+	project.imagePromptFlowId = flowId;
+	project.aiImagesDone = project.assets.filter(function (asset) { return asset.imagePromptFlowId === flowId; }).length;
+	if (btn) { btn.disabled = true; btn.style.display = ""; btn.textContent = "Searching Pixabay…"; }
+	// Keep successful paid imports and retry only scenes that are absent from the gallery.
+	for (let i = 0; i < project.imagePrompts.length; i++) {
+		const alreadyImported = project.assets.some(function (asset) { return asset.imagePromptFlowId === flowId && Number(asset.sceneIndex) === i; });
+		setImagePromptState(project, i, alreadyImported ? "imported" : "planned", alreadyImported ? "already in gallery" : "");
+	}
+
+	const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+	project._imageBatchController = controller;
+	let imported = 0;
+	let failed = 0;
+	try {
+		for (let i = 0; i < project.imagePrompts.length; i++) {
+			if (stale()) break;
+			const alreadyImported = project.assets.some(function (asset) { return asset.imagePromptFlowId === flowId && Number(asset.sceneIndex) === i; });
+			if (alreadyImported) continue;
+			const selection = parseImagePromptToken(project.imagePrompts[i], i);
+			if (!selection.q) {
+				failed++;
+				setImagePromptState(project, i, "failed", "missing search keyword");
+				continue;
+			}
+			setImagePromptState(project, i, "searching", "");
+			if (statusEl) statusEl.textContent = "Pixabay search " + (i + 1) + " of " + project.imagePrompts.length + ": " + selection.q;
+			console.info("[pixabay-retry] scene.search", { scene: i, type: selection.type, keyword: selection.q });
+			try {
+				const searchUrl = new URL("/api/media/search", window.location.href);
+				searchUrl.searchParams.set("q", selection.q);
+				searchUrl.searchParams.set("type", selection.type);
+				searchUrl.searchParams.set("page", "1");
+				searchUrl.searchParams.set("per_page", selection.type === "video" ? "3" : "2");
+				searchUrl.searchParams.set("orientation", "landscape");
+				const searchResponse = await fetch(searchUrl.pathname + searchUrl.search, controller ? { signal: controller.signal } : undefined);
+				const searchData = await searchResponse.json().catch(function () { return null; });
+				if (!searchResponse.ok || !searchData || !Array.isArray(searchData.hits)) throw new Error((searchData && searchData.error) || ("Pixabay search failed (HTTP " + searchResponse.status + ")"));
+				console.info("[pixabay-retry] scene.search-result", { scene: i, status: searchResponse.status, hits: searchData.hits.length });
+				const hit = searchData.hits[selection.index] || searchData.hits[0];
+				if (!hit || !hit.id) throw new Error("No Pixabay " + selection.type + " results for this keyword");
+
+				const assetUrl = new URL("/api/media/asset", window.location.href);
+				assetUrl.searchParams.set("id", String(hit.id));
+				assetUrl.searchParams.set("q", selection.q);
+				assetUrl.searchParams.set("type", selection.type);
+				assetUrl.searchParams.set("page", "1");
+				assetUrl.searchParams.set("per_page", selection.type === "video" ? "3" : "2");
+				assetUrl.searchParams.set("orientation", "landscape");
+				const assetResponse = await fetch(assetUrl.pathname + assetUrl.search, controller ? { signal: controller.signal } : undefined);
+				if (!assetResponse.ok) {
+					const errorData = await assetResponse.json().catch(function () { return null; });
+					throw new Error((errorData && errorData.error) || ("Pixabay asset download failed (HTTP " + assetResponse.status + ")"));
+				}
+				const mime = assetResponse.headers.get("content-type") || (selection.type === "video" ? "video/mp4" : "image/jpeg");
+				let blob = await assetResponse.blob();
+				if (mime.indexOf("video/") === 0 && blob.type !== "video/mp4") blob = new Blob([blob], { type: mime });
+				if (selection.type === "video" && blob.type !== "video/mp4") throw new Error("Pixabay returned a non-MP4 asset for a video scene");
+				if (selection.type === "image" && blob.type.indexOf("image/") !== 0) throw new Error("Pixabay returned a non-image asset for a photo scene");
+				console.info("[pixabay-retry] scene.downloaded", { scene: i, id: hit.id, type: selection.type, mime: blob.type, bytes: blob.size });
+				blob.stockSource = { provider: "pixabay", id: hit.id, pageURL: hit.pageURL || "", user: hit.user || "", type: selection.type, duration: hit.duration || 0 };
+				if (stale()) break;
+				const at = liveIndex();
+				if (at <= 0 || !await insertStockScene(at, blob, flowId, i, stale)) throw new Error("Could not add the downloaded asset to the gallery");
+				imported++;
+				project.aiImagesDone = imported;
+				recordStudioUsage("images", "ok", 1);
+				setImagePromptState(project, i, "imported", selection.type === "video" ? "clip added to gallery" : "photo added to gallery");
+				console.info("[pixabay-retry] scene.added-to-gallery", { scene: i, id: hit.id, type: selection.type, imported });
+			} catch (error) {
+				if (error && error.name === "AbortError") break;
+				failed++;
+				project._aiImageFailures++;
+				setImagePromptState(project, i, "failed", error && error.message ? error.message : String(error));
+				console.error("[pixabay-retry] scene failed", { scene: i, type: selection.type, keyword: selection.q, error: String(error && error.message || error).slice(0, 500) });
+			}
+		}
+	} finally {
+		refreshCredits();
+		if (!stale()) {
+			project._imageBatchController = null;
+			project._imageFlowActive = false;
+			if (liveIndex() > 0) await finalizeImagePromptFlow(liveIndex(), failed ? "Some Pixabay searches failed; successful assets were kept." : "");
+			if (btn) { btn.disabled = false; btn.textContent = "Retry Pixabay search"; }
+			if (statusEl && !failed) statusEl.textContent = imported
+				? "Pixabay retry finished: " + imported + " missing scene(s) added to the gallery; existing scenes were kept."
+				: "All planned Pixabay scenes are already in the gallery; no duplicate imports were billed.";
+		}
+	}
 }
 
 /*

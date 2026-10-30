@@ -7,7 +7,8 @@
 > are implemented locally; editor prompt controls are removed.** Deployment/live-provider checks remain; old AI-image descriptions are legacy history,
 > not the new media policy. Cloudflare hosting/KV, text AI, TTS, manual uploads and local
 > templates are not removed by this decision. See the authoritative
-> [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
+> [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md),
+> and the source-derived [system flow](SYSTEM_FLOW.md) for architecture and end-to-end request paths.
 
 ## Media direction: Pixabay keywords, photos and two clips
 
