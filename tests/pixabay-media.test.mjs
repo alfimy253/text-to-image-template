@@ -27,6 +27,7 @@ function fixture(t, options = {}) {
 	globalThis.fetch = async (input, init = {}) => {
 		const url = new URL(String(input)); calls.push({ url, init });
 		if (url.pathname.startsWith('/api/')) {
+			if (options.searchRedirect) return new Response(null, { status: 302, headers: { Location: 'https://evil.test/collect' } });
 			if (options.error) return new Response('secret provider diagnostic', { status: options.error, headers: { 'X-RateLimit-Reset': '60' } });
 			if (url.pathname.includes('videos')) return Response.json({ totalHits: 3, hits: [7,8,9].map(id => ({ id, pageURL: 'https://pixabay.com/videos/id-' + id + '/', user: 'Artist', duration: options.duration || 12, videos: { small: { url: 'https://cdn.pixabay.com/video/7.mp4', thumbnail: 'https://cdn.pixabay.com/video/7.jpg', width: 1280, height: 720, size: 1024 } } })) });
 			const id = Number(url.searchParams.get('id'));
@@ -796,6 +797,18 @@ test('media search API defaults to two photos and rejects later pages', async t 
  assert.equal(first.status, 200); assert.equal(body.page, 1); assert.equal(body.per_page, 2); assert.equal(body.hits.length, 2);
  const later = await handlePixabayApi(new Request('https://studio.test/api/media/search?q=rose&page=2'), e);
  assert.equal(later.status, 400); assert.match((await later.json()).error, /page 1/);
+});
+
+test('Pixabay metadata fetch uses a supported redirect mode and does not forward the API key to a redirect target', async t => {
+  const calls = fixture(t, { searchRedirect: true });
+  await assert.rejects(searchPixabay(env(), { q: 'redirect regression unique' }), (error) => {
+    assert.equal(error.status, 502);
+    assert.equal(error.providerStatus, 302);
+    assert.match(error.message, /Pixabay rejected the search/);
+    return true;
+  });
+  assert.equal(calls.length, 1, 'manual redirect handling must not fetch the foreign Location');
+  assert.equal(calls[0].init.redirect, 'manual');
 });
 
 test('a Pixabay fetch failure names the upstream cause instead of an opaque message', async t => {
