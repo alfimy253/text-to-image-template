@@ -2075,6 +2075,27 @@ export const APP_CSS = `
 		}
 
 
+		.va-pixabay-keyword-row {
+			justify-content: flex-start;
+			margin-top: 5px;
+		}
+
+		.va-pixabay-keyword-row .va-seo-label {
+			min-width: 112px;
+		}
+
+		.va-pixabay-keyword-status {
+			color: #9ca3af;
+			font-size: 0.72rem;
+			max-width: 100%;
+			overflow-wrap: anywhere;
+		}
+
+		.va-pixabay-keyword-status[data-state="imported"] { color: #34d399; }
+		.va-pixabay-keyword-status[data-state="searching"] { color: #fbbf24; }
+		.va-pixabay-keyword-status[data-state="failed"] { color: #f87171; }
+
+
 		.va-image-retry {
 
 			margin-top:

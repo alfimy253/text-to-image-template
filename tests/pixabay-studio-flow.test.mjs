@@ -312,3 +312,26 @@ test('editor and Quick Batch retry transient HTTP 408 keyword-planning failures'
  await deadline(w.runBatchRow(row));
  assert.equal(w.batchRowFinished(row),true); assert.equal(row.images.length,6); assert.ok(promptRequests>=3);
 });
+
+test('editor Retry Pixabay search reuses visible terms and adds a missing stock clip without re-importing successful scenes', async t => {
+	const { w } = setup(t); w.addVideoAccordion(); const project = w.__VIDEO_PROJECTS[0];
+	project.script = 'Garden flowers bring neighbors together in spring.';
+	project._seoTopic = 'garden flowers'; project._seoMinutes = 1; project._imageFlowActive = true;
+	project.selectedSeoSet = { longTail: 'garden flowers', short: ['garden', 'flowers', 'neighbors', 'spring'] };
+	await deadline(w.startImagePromptFlow(1));
+	assert.equal(project.assets.filter(asset => asset.kind === 'mp4').length, 2);
+	const missingClip = project.assets.find(asset => asset.kind === 'mp4');
+	const missingScene = missingClip.sceneIndex;
+	if (missingClip.card?.parentNode) missingClip.card.parentNode.removeChild(missingClip.card);
+	project.assets = project.assets.filter(asset => asset !== missingClip);
+	if (missingClip.url) w.URL.revokeObjectURL(missingClip.url);
+	assert.equal(project.assets.filter(asset => asset.kind === 'mp4').length, 1);
+
+	await deadline(w.retryImagePromptFlow(1));
+	const clips = project.assets.filter(asset => asset.kind === 'mp4');
+	assert.equal(clips.length, 2, 'the missing clip is searched and restored to the gallery');
+	assert.ok(clips.some(asset => asset.sceneIndex === missingScene), 'restored clip keeps its planned scene index');
+	assert.equal(project.assets.filter(asset => asset.imagePromptFlowId === project.imagePromptFlowId).length, 6,
+		'successful photos/clips remain and are not imported a second time');
+	assert.equal(project.imagePromptStates[String(missingScene)].state, 'imported');
+});
