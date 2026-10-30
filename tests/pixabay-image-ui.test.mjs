@@ -29,6 +29,7 @@ function studioWindow() {
   w.Image.prototype.decode = () => Promise.resolve();
 
   const calls = [];
+  let searchFailures = 0;
   w.fetch = async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input.url;
     const path = new URL(url, 'https://studio.test').pathname;
@@ -57,6 +58,10 @@ function studioWindow() {
         { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     if (path === '/api/media/search') {
+      if (searchFailures > 0) {
+        searchFailures--;
+        return Response.json({ success: false, error: 'Simulated Pixabay upstream redirect failure' }, { status: 502 });
+      }
       const urlObj = new URL(url, 'https://studio.test');
       return Response.json({ success: true, provider: 'pixabay', hits: [
         { id: 700 + calls.filter((p) => p === '/api/media/search').length, type: urlObj.searchParams.get('type') || 'image',
@@ -80,11 +85,11 @@ function studioWindow() {
     }
     return new Response('{}', { status: 404 });
   };
-  return { w, dom, calls };
+  return { w, dom, calls, failNextSearch: function () { searchFailures++; } };
 }
 
 test('Pixabay search keywords planned from the script are shown in the video accordion', async t => {
-  const { w, calls } = studioWindow();
+  const { w, calls, failNextSearch } = studioWindow();
   t.after(() => { domClose(w); });
   w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
   await new Promise((r) => setTimeout(r, 40));
@@ -124,13 +129,31 @@ test('Pixabay search keywords planned from the script are shown in the video acc
     stockSource: { provider: 'pixabay', id: 700 }, url: 'blob:existing', card: existingCard,
     file: { name: 'already-imported.jpg' } });
 
-  /* Retry searches Pixabay from the displayed keywords and inserts media into the gallery. */
+  /* Simulate the likely recovery case: one browser search gets the original
+   * redirect/provider error, while the other missing scenes import normally. */
   const plansBefore = calls.filter((p) => p === '/api/image-prompts').length;
-  await w.retryImagePromptFlow(1);
+  const inlineRetry = retry.getAttribute('onclick');
+  assert.equal(inlineRetry, 'retryImagePromptFlow(1)', 'visible control is wired to the browser retry flow');
+  const clickAction = w.eval('(function () { return ' + inlineRetry.replace(/;\s*$/, '') + '; })');
+  let clickPromise;
+  retry.addEventListener('click', function () { clickPromise = clickAction.call(retry); });
+  failNextSearch();
+  retry.click();
+  await clickPromise;
   assert.equal(calls.filter((p) => p === '/api/image-prompts').length, plansBefore, 'retry reuses the visible search keywords');
-  assert.equal(calls.filter((p) => p === '/api/media/search').length, 5, 'browser searches only scenes not already in the gallery');
-  assert.equal(calls.filter((p) => p === '/api/media/asset').length, 5, 'browser downloads one selected stock asset per missing scene');
-  assert.equal(project.assets.length, 6, 'retried images are inserted into the gallery without duplicating prior imports');
+  assert.equal(calls.filter((p) => p === '/api/media/search').length, 5, 'button click starts a browser search for every missing scene');
+  assert.equal(calls.filter((p) => p === '/api/media/asset').length, 4, 'only successful searches proceed to asset downloads');
+  assert.equal(project.imagePromptStates['1'].state, 'failed', 'simulated upstream failure remains attached to its scene');
+  assert.equal(project.assets.length, 5, 'successful scene imports are retained after one search fails');
+
+  /* A second real button click searches only the missing scene; it does not
+   * rerun the planner, duplicate successful imports, or reuse the old failure. */
+  retry.click();
+  await clickPromise;
+  assert.equal(calls.filter((p) => p === '/api/image-prompts').length, plansBefore, 'retry never re-plans available keywords');
+  assert.equal(calls.filter((p) => p === '/api/media/search').length, 6, 'next button click searches only the previously failed scene');
+  assert.equal(calls.filter((p) => p === '/api/media/asset').length, 5, 'successful search downloads its selected asset');
+  assert.equal(project.assets.length, 6, 'retried images are inserted without duplicating prior imports');
   assert.ok(project.assets.every((asset) => asset.stockSource?.provider === 'pixabay'));
 
   const boxAgain = w.document.getElementById('va-image-keywords-1');

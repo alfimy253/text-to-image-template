@@ -159,6 +159,46 @@ test('unsupported audio configuration still closes the created encoder', async t
  w.AudioEncoder=class {constructor(){this.state='unconfigured'}configure(){throw new Error('unsupported codec')}close(){closed=true;this.state='closed'}};
  await assert.rejects(w.encodeAudioTrack(audioBufferFixture(),0.1,64000),/unsupported codec/);assert.equal(closed,true);
 });
+test('Quick Batch does not mark two clips plus a partial photo set as complete after repeated Pixabay image failures', async t => {
+	const { w } = setup(t);
+	while (w.__BATCH_ROWS.length) w.removeBatchRow(w.__BATCH_ROWS[0].id);
+	const row = w.addBatchRow({ script: 'Short garden flowers connect neighbors.', minutes: 1 });
+	const nativeFetch = w.fetch;
+	let injectFailure = true;
+	let simulatedFailures = 0;
+	w.fetch = async (input, init = {}) => {
+		const url = new URL(String(input), 'https://studio.test');
+		if (url.pathname === '/api/image') {
+			const body = JSON.parse(String(init.body || '{}'));
+			if (injectFailure && String(body.prompt || '').includes('garden flowers 0')) {
+				simulatedFailures++;
+				return Response.json({ error: 'Pixabay search is unavailable (TypeError: simulated redirect failure)', kind: 'transient', requestId: 'simulated-table-search-failure' }, { status: 502 });
+			}
+		}
+		return nativeFetch(input, init);
+	};
+
+	await deadline(w.runBatchRow(row), 30000);
+	assert.equal(simulatedFailures, 3, 'browser exhausts its bounded per-scene retries for the failed photo');
+	assert.equal(row.images.length, 5, 'other scenes, including both required clips, were retained as partial progress');
+	assert.equal(row.images.filter(image => image.blob.type === 'video/mp4').length, 2);
+	assert.equal(w.batchRowFinished(row), false, 'partial delivery must not enable Preview/Export');
+	assert.equal(row.stage, 'error');
+	assert.match(row.error, /Pixabay image pipeline incomplete: 1 of 6 planned scenes/);
+
+	/* Quick Batch has no scene-only Pixabay retry control. Its documented
+	 * recovery action is the layout's Generate button, which reruns the
+	 * unfinished row; after the simulated outage clears it must complete. */
+	injectFailure = false;
+	w.document.querySelector('[data-layout="table"]').click();
+	w.document.getElementById('top-generate').click();
+	await deadline((async () => {
+		while (!w.batchRowFinished(row)) await new Promise(resolve => setTimeout(resolve, 10));
+	})(), 30000);
+	assert.equal(w.batchRowFinished(row), true);
+	assert.equal(row.images.length, 6);
+});
+
 test('Quick Batch refuses an undecodable photo instead of marking the row ready', async t=>{
  const {w}=harness();t.after(()=>w.close());w.Image.prototype.decode=()=>Promise.reject(new Error('bad image'));
  const row={id:1,audio:{duration:1}};

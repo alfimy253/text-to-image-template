@@ -192,7 +192,7 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 			traceLog("info", "provider-search.request", trace, { type, page, orientation, keywords: redactProviderText(q, key), timeoutMs: 20000 });
 		try {
 			response = await waitForIO(fetch(`https://pixabay.com/api/${type === "video" ? "videos/" : ""}?${params}`, {
-				signal: metadataSignal, redirect: "error"
+				signal: metadataSignal, redirect: "manual"
 			}), 20000, metadataSignal);
 		} catch (error) {
 			/* Caller cancellation is not a provider failure: surface it unchanged. */

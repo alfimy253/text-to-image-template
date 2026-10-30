@@ -10070,6 +10070,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 			row.prompts = [];
 			row.images = [];
+			const expectedImageCount = imageSceneTarget(row.script, row.minutes);
 			setBatchStage(row, "prompts", "Preparing the first three Pixabay selections");
 			/*
 			 * Two chunks in flight when the Worker advertises it (bug fix:
@@ -10082,7 +10083,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			const rowImageCaps = await studioOffload.capabilities();
 			try {
 				await runProgressiveImagePipeline({
-					total: imageSceneTarget(row.script, row.minutes),
+					total: expectedImageCount,
 					isCancelled: function () { return Boolean(row.stopRequested); },
 					parallelRenders: Math.max(1, Math.min(4, Number(rowImageCaps.imageChunks) || 1)),
 					request: function (batch) { return requestBatchPrompts(row, batch); },
@@ -10110,6 +10111,21 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			} finally {
 				if (row._promptOwner && row._promptOwner.controller) row._promptOwner.controller.abort();
 				row._promptOwner = null;
+			}
+
+			/* A partial requestImageChunk result is useful progress, not a
+			 * finished Quick Batch row. Otherwise the clip check below could
+			 * accept two clips plus an incomplete set of photos and enable
+			 * Preview/Export as if every planned scene had arrived. */
+			const deliveredSceneIndexes = new Set(row.images.map(function (image) { return Number(image.index); })
+				.filter(function (index) { return Number.isInteger(index) && index >= 0 && index < expectedImageCount; }));
+			if (deliveredSceneIndexes.size !== expectedImageCount) {
+				const missing = [];
+				for (let scene = 0; scene < expectedImageCount; scene++) {
+					if (!deliveredSceneIndexes.has(scene)) missing.push(scene + 1);
+				}
+				throw new Error("Pixabay image pipeline incomplete: " + missing.length + " of " + expectedImageCount +
+					" planned scenes did not return usable media (scene " + missing.join(", ") + "). Press Generate to retry this row.");
 			}
 
 			const clips = row.images.filter(function (media) { return media.blob.type === "video/mp4"; });
