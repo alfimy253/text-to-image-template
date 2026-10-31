@@ -1698,8 +1698,11 @@ export const CONFIG_PAGE_SCRIPT = `
 			var timer = setTimeout(function() {
 				if (settled) return;
 				settled = true;
-				reject(new Error("Render of " + ((job && (job.name || job.id)) || "job") +
-					" did not finish within " + Math.round(ms / 60000) + " min"));
+				if (job) job._workerTimedOut = true;
+				var error = new Error("Render of " + ((job && (job.name || job.id)) || "job") +
+					" did not finish within " + Math.round(ms / 60000) + " min");
+				error.name = "WorkerRenderTimeout";
+				reject(error);
 			}, ms);
 			Promise.resolve(promise).then(function(value) {
 				if (settled) return;
@@ -1713,6 +1716,29 @@ export const CONFIG_PAGE_SCRIPT = `
 				reject(error);
 			});
 		});
+	}
+
+	async function reportWorkerFailure(job, message) {
+		var controller = typeof AbortController === "function" ? new AbortController() : null;
+		var timer;
+		try {
+			var response = await Promise.race([
+				fetch("/api/worker/failed?job=" + encodeURIComponent(job.id), {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ error: message }),
+					credentials: "same-origin",
+					...(controller ? { signal: controller.signal } : {})
+				}),
+				new Promise(function (_, reject) {
+					timer = setTimeout(function () {
+						if (controller) controller.abort();
+						reject(new Error("Failure report timed out"));
+					}, 10000);
+				})
+			]);
+			if (!response.ok) throw new Error("Failure report HTTP " + response.status);
+		} finally { if (timer) clearTimeout(timer); }
 	}
 
 	function wlog(line) {
@@ -1741,32 +1767,43 @@ export const CONFIG_PAGE_SCRIPT = `
 					workerBusy = true;
 					setWorkerDot("busy", "Rendering " + (data.job.name || data.job.id) + "...");
 					wlog("Claimed job " + data.job.id);
+					var renderPromise = null;
+					var renderTimedOut = false;
 					try {
 						if (typeof window.workerRunJob !== "function") {
 							throw new Error("Studio renderer not ready yet");
 						}
 						/*
 						 * #271: a renderer that never settles used to leave the tab
-						 * "busy" forever, so this worker stopped polling and every later
-						 * job sat in the queue. The wait is now bounded; a job that
-						 * exceeds it is reported failed so another worker can take it.
+						 * "busy" forever. Report the failure on a deadline, but do not
+						 * reuse shared renderer state until the original work settles.
 						 */
-						await withWorkerDeadline(window.workerRunJob(data.job), WORKER_JOB_TIMEOUT_MS, data.job);
+						renderPromise = Promise.resolve(window.workerRunJob(data.job));
+						await withWorkerDeadline(renderPromise, WORKER_JOB_TIMEOUT_MS, data.job);
 						wlog("Delivered job " + data.job.id);
 					} catch (jobErr) {
+						renderTimedOut = !!(jobErr && jobErr.name === "WorkerRenderTimeout");
+						if (renderTimedOut) {
+							// A deadline does not cancel WebCodecs or restore shared state.
+							// Stop claiming jobs until this render actually settles.
+							setWorkerActive(false);
+							setWorkerDot("busy", "Render timed out; reload this tab if it does not stop.");
+						}
 						var emsg = (jobErr && jobErr.message) ? jobErr.message : String(jobErr);
 						wlog("Job failed: " + emsg);
 						try {
-							await fetch("/api/worker/failed?job=" + encodeURIComponent(data.job.id), {
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify({ error: emsg }),
-								credentials: "same-origin"
-							});
-						} catch (_) {}
+							await reportWorkerFailure(data.job, emsg);
+						} catch (reportError) {
+							wlog("Could not report job failure: " + ((reportError && reportError.message) || reportError));
+						}
 					}
-					workerBusy = false;
-					if (workerActive) setWorkerDot("idle", "Listening for jobs...");
+					if (renderTimedOut && renderPromise) {
+						// Keep the lock even if the operator presses Start again.
+						renderPromise.then(function () { workerBusy = false; }, function () { workerBusy = false; });
+					} else {
+						workerBusy = false;
+					}
+					if (workerActive && !workerBusy) setWorkerDot("idle", "Listening for jobs...");
 				}
 			}
 		} catch (e) {
@@ -1778,6 +1815,10 @@ export const CONFIG_PAGE_SCRIPT = `
 	}
 
 	function setWorkerActive(on) {
+		if (on && workerBusy) {
+			wlog("A previous render is still stopping. Wait or reload this tab before starting the worker.");
+			return;
+		}
 		workerActive = on;
 		clearTimeout(workerTimer);
 		var btn = document.getElementById("cfg-worker-toggle");
