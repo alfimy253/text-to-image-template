@@ -7813,6 +7813,34 @@ export const APP_CSS = `
 			color: #ef4444;
 		}
 
+		/* The table layout's script button: same note pipeline as the accordion. */
+		#studio-app .batch-row-ai {
+			margin-left: auto;
+			border: 1px solid var(--t-line, #2e3440);
+			border-radius: 6px;
+			background: transparent;
+			color: var(--t-muted, #9ca3af);
+			cursor: pointer;
+			font-size: 0.72rem;
+			line-height: 1;
+			padding: 4px 6px;
+		}
+
+		#studio-app .batch-row-ai:hover {
+			border-color: var(--t-accent, #6366f1);
+			color: var(--t-accent, #6366f1);
+		}
+
+		#studio-app .batch-row-ai:disabled {
+			opacity: 0.5;
+			cursor: default;
+		}
+
+		/* the delete button keeps its own right edge when the wand is present */
+		#studio-app .batch-row-ai + .batch-row-del {
+			margin-left: 4px;
+		}
+
 		#studio-app .batch-script-input,
 		#studio-app .batch-style-select,
 		#studio-app .batch-resolution-select,

@@ -17,12 +17,20 @@ import { PIXABAY_DIRECT_JS } from "./pixabay-direct";
 import { BROWSER_OFFLOAD_JS } from "./browser-offload";
 import { BROWSER_USAGE_JS } from "./usage-ledger";
 import { PROGRESSIVE_IMAGE_PIPELINE_JS } from "./progressive-image-pipeline";
+import { SCRIPT_NOTES_CLIENT_JS } from "./script-notes-client";
 
 export const APP_JS = `
 ${PIXABAY_DIRECT_JS}
 ${BROWSER_OFFLOAD_JS}
 ${BROWSER_USAGE_JS}
 ${PROGRESSIVE_IMAGE_PIPELINE_JS}
+${SCRIPT_NOTES_CLIENT_JS}
+	/*
+	 * Browser-side note memory (localStorage → cookie → in-page map).
+	 * See src/client/script-notes-client.ts and current_code_latest.md.
+	 */
+	const scriptNoteMemory =
+		createScriptNoteMemory(window);
 	// =========================================================
 	// DATA
 	// =========================================================
@@ -1505,7 +1513,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 									"The clip took too long to load."
 								)
 							),
-							CLIP_PROBE_TIMEOUT_MS
+							clipProbeTimeoutMs()
 						);
 
 
@@ -1704,6 +1712,69 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	}
 
 
+	/*
+	 * Probe a clip with a second (and third) chance.
+	 *
+	 * firstVideo is reused for attempt 1 so a caller that already built an
+	 * element keeps using the one that succeeded; a retry always starts from a
+	 * fresh element, because a video element whose load already failed is not
+	 * a reliable source for the next attempt.
+	 */
+	async function probeMp4DurationWithRetry(clipURL, attempts, firstVideo) {
+
+		const tries =
+			Math.max(1, Number(attempts) || CLIP_PROBE_ATTEMPTS);
+		let lastError =
+			null;
+
+		for (let attempt = 1; attempt <= tries; attempt++) {
+
+			const video =
+				attempt === 1 && firstVideo
+					? firstVideo
+					: document.createElement("video");
+
+			try {
+
+				const duration =
+					await probeMp4Duration(video, clipURL);
+				return duration;
+
+			} catch (error) {
+
+				lastError =
+					error;
+
+				console.warn("[clip] probe attempt " + attempt + " of " + tries + " failed", {
+					error: String(error && error.message || error).slice(0, 200)
+				});
+
+				try {
+					video.pause();
+					video.removeAttribute("src");
+					video.load();
+				} catch (resetError) {
+					/* a detached element has nothing to clean up */
+				}
+
+				if (attempt < tries) {
+					await new Promise(function (resolve) {
+						setTimeout(resolve, CLIP_PROBE_RETRY_DELAY_MS * attempt);
+					});
+				}
+
+			}
+
+		}
+
+		console.error("[clip] probe gave up", {
+			attempts: tries,
+			error: String(lastError && lastError.message || lastError).slice(0, 200)
+		});
+		throw lastError || new Error("The clip took too long to load.");
+
+	}
+
 	function clipHasFrame(
 		video
 	) {
@@ -1751,6 +1822,26 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 	const CLIP_PROBE_TIMEOUT_MS =
 		15000;
+
+	/*
+	 * A clip probe is a load, and loads fail transiently (a busy disk right
+	 * after an export, a container the browser needs a second attempt at).
+	 * One failure used to drop the file with "The clip took too long to
+	 * load." and give it no second chance - the same file was only probed
+	 * again when the user re-uploaded it. It is retried instead.
+	 */
+	const CLIP_PROBE_ATTEMPTS =
+		3;
+
+	const CLIP_PROBE_RETRY_DELAY_MS =
+		400;
+
+	/* Tests/debugging may shrink the deadline; production keeps 15 s. */
+	function clipProbeTimeoutMs() {
+		const override = typeof window !== "undefined" ? window.__CLIP_PROBE_TIMING : null;
+		const value = override && Number(override.timeoutMs);
+		return value > 0 ? value : CLIP_PROBE_TIMEOUT_MS;
+	}
 
 
 	function ensureClipCaptureHost() {
@@ -6530,6 +6621,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		project._deleted = true;
 		project._imageFlowActive = false;
 		project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
+		cancelImageAutoRetry(project, { quiet: true });
 		if (project._manualControllers) project._manualControllers.forEach(function (controller) { controller.abort(); });
 
 		for (const ctrlKey of [
@@ -7894,6 +7986,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 	const BATCH_STAGE_LABELS = {
 		empty: "Waiting for a script",
+		writing: "Writing the script (AI)",
 		ready: "Ready \u2014 press \u2726 Generate",
 		queued: "Queued",
 		voice: "Speaking the script (MP3)",
@@ -8182,6 +8275,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	 * so a silent retry changes nothing on screen.
 	 */
 	const BATCH_ACTIVE_STAGES = [
+		"writing",
 		"voice",
 		"timing",
 		"prompts",
@@ -8608,6 +8702,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				'<td class="batch-cell batch-cell-script">' +
 					'<div class="batch-row-head">' +
 						'<span class="batch-row-no">' + String(index).padStart(2, "0") + "</span>" +
+						'<button type="button" class="batch-row-ai" data-batch-generate="' + row.id + '" title="Write this row\u2019s narration with the note pipeline (uses the first line of the script cell as the topic)">\u2728</button>' +
 						'<button type="button" class="batch-row-del" data-batch-action="remove" data-batch-row="' + row.id + '" title="Remove this row">\u2715</button>' +
 					"</div>" +
 					'<textarea class="batch-script-input" data-batch-field="script" rows="5" spellcheck="false" aria-label="Script for row ' + index + '" placeholder="Paste or type the narration script for this row\u2026">' + script + "</textarea>" +
@@ -9889,7 +9984,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			if (images[index].blob.type === "video/mp4") {
 				const video = document.createElement("video");
 				try {
-					const duration = await probeMp4Duration(video, images[index].url);
+					const duration = await probeMp4DurationWithRetry(images[index].url, 2, video);
 					if (row.stopRequested) throw batchError("The row was stopped", "AbortError");
 					if (!Number.isFinite(duration) || duration <= 0 || duration > MP4_MAX_DURATION_S) throw new Error("Pixabay clip exceeds the supported duration");
 					slides.push({ id: "batch-" + row.id + "-clip-" + index, cardId: "", type: "mp4", img: video, videoEl: video, duration: duration });
@@ -11612,6 +11707,44 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		}
 
+		/*
+		 * The table layout's script button. A separate attribute from
+		 * data-batch-action on purpose: the table contract is "one action
+		 * button per row" and the remove cell must stay the only one.
+		 */
+		body.addEventListener(
+			"click",
+			function (event) {
+
+				const target =
+					event.target && event.target.closest
+						? event.target.closest("[data-batch-generate]")
+						: null;
+
+				if (!target) {
+					return;
+				}
+
+				const id =
+					target.getAttribute(
+						"data-batch-generate"
+					);
+
+				if (!id) {
+					return;
+				}
+
+				event.preventDefault();
+
+				generateBatchRowScript(id).catch(
+					function (error) {
+						console.error("[batch-table] script generation failed", String(error && error.message || error).slice(0, 200));
+					}
+				);
+
+			}
+		);
+
 	}
 
 	/* Exposed for tests / debugging: the live row list, same array. */
@@ -12020,9 +12153,10 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				try {
 
 					clipDuration =
-						await probeMp4Duration(
-							probed,
-							clipURL
+						await probeMp4DurationWithRetry(
+							clipURL,
+							CLIP_PROBE_ATTEMPTS,
+							probed
 						);
 
 				}
@@ -12035,7 +12169,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					alert(
 						"'" +
 							file.name +
-							"' could not be read as an MP4 clip. Try re-exporting it as a standard MP4 (H.264 + AAC)."
+							"' could not be read as an MP4 clip after " + CLIP_PROBE_ATTEMPTS + " attempts. Try re-exporting it as a standard MP4 (H.264 + AAC)."
 					);
 
 					continue;
@@ -16593,9 +16727,10 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					try {
 
 						clipDuration =
-							await probeMp4Duration(
-								probed,
-								url
+							await probeMp4DurationWithRetry(
+								url,
+								2,
+								probed
 							);
 
 					}
@@ -17483,12 +17618,18 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	const IMAGE_BATCH_IDLE_TIMEOUT_MS =
 		120000;
 
-	/* Exposed so tests / debugging can see the live timing. */
+	/* Exposed so tests / debugging can see (and shrink) the live timing. */
 	if (typeof window !== "undefined") {
 		window.__SEO_FLOW_TIMING = {
 			imagePromptRequestTimeoutMs: IMAGE_PROMPT_REQUEST_TIMEOUT_MS,
 			imageBatchIdleTimeoutMs: IMAGE_BATCH_IDLE_TIMEOUT_MS
 		};
+	}
+
+	function imageBatchIdleTimeoutMs() {
+		const override = typeof window !== "undefined" ? window.__SEO_FLOW_TIMING : null;
+		const value = override && Number(override.imageBatchIdleTimeoutMs);
+		return value > 0 ? value : IMAGE_BATCH_IDLE_TIMEOUT_MS;
 	}
 
 	async function seoFetchWithTimeout(url, options, timeoutMs, project, controllerKey, consumeResponse) {
@@ -18328,6 +18469,32 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		project.selectedSeoSet =
 			project.seoSets[idx];
 
+		/*
+		 * Fix for the serial planner→writer chain (#1): the pick the user just
+		 * made is written down in the browser immediately, so the script
+		 * request can carry the keyword set and the beat plan and the worker
+		 * never has to run the planner at all. The full note (with facts and
+		 * script) is refreshed after each successful generation.
+		 */
+		if (project.selectedSeoSet) {
+			try {
+				scriptNoteMemory.put({
+					topic: project._seoTopic || "",
+					sourceUrl: project.scriptSourceUrl || "",
+					minutes: project._seoMinutes || 1,
+					speed: project._seoSpeed || "medium",
+					keywordSet: project.selectedSeoSet,
+					outline: scriptNoteMemory.outlineFor(
+						project.selectedSeoSet,
+						project._seoMinutes || 1,
+						project._seoSpeed || "medium"
+					)
+				});
+			} catch (noteError) {
+				console.warn("[script-notes] browser note write failed", String(noteError && noteError.message || noteError).slice(0, 200));
+			}
+		}
+
 		const selected =
 			seoWtEl(
 				n,
@@ -18478,6 +18645,340 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	}
 
 	/*
+	 * =========================================================
+	 * AUTO-RETRY: a pipeline that ran out of patience tries again
+	 * =========================================================
+	 *
+	 * Every guard in this file used to end the same way: stop the flow and
+	 * print why. That is honest, but it makes the user the retry mechanism -
+	 * the 2-minute silence alarm (IMAGE_BATCH_IDLE_TIMEOUT_MS) aborted the
+	 * batch, a Pixabay 429 said "please wait before searching again" and then
+	 * waited for a click, and a clip that timed out once was dropped.
+	 *
+	 * Now a RETRYABLE stop reason schedules one visible retry instead:
+	 *
+	 *   - it re-runs ONLY the scenes that are still missing (the delivered
+	 *     ones are never re-requested, so no double billing and no duplicates);
+	 *   - it waits the wait the server asked for (retryAfterMs), clamped to
+	 *     [IMAGE_AUTO_RETRY_MIN_MS, IMAGE_AUTO_RETRY_MAX_MS] so a 1-hour
+	 *     Pixabay window cannot freeze the tab;
+	 *   - it shows a live countdown in the video's status line, so the wait is
+	 *     visible instead of looking like a hang;
+	 *   - it is cancellable (Stop / a new flow / deleting the video) and
+	 *     bounded (IMAGE_AUTO_RETRY_LIMIT attempts per flow), after which the
+	 *     old "press Retry" behaviour is the fallback.
+	 */
+	const IMAGE_AUTO_RETRY_LIMIT =
+		2;
+	const IMAGE_AUTO_RETRY_MIN_MS =
+		2000;
+	const IMAGE_AUTO_RETRY_MAX_MS =
+		120000;
+	const IMAGE_AUTO_RETRY_FALLBACK_MS =
+		15000;
+	const IMAGE_AUTO_RETRY_TICK_MS =
+		500;
+
+	/*
+	 * Reasons that must NOT be retried even though they may arrive with a
+	 * 5xx status: a missing API key, a rejected credential, a full gallery or
+	 * a spent allowance will answer exactly the same way on the next attempt.
+	 * Retrying them would hide the real cause behind a countdown.
+	 */
+	const IMAGE_VERDICT_REASON =
+		/not configured|misconfigur|configuration|api key|unauthori[sz]ed|forbidden|invalid key|permission|gallery is full|allowance|not enough|credit|quota/i;
+
+	/* Reasons that deserve another attempt rather than a verdict. */
+	const IMAGE_RETRYABLE_REASON =
+		/stopped responding|stopped for \d+ seconds|timed out|time out|rate limit|429|too many requests|busy|overload|temporar|network|failed to fetch|interrupted|disconnected/i;
+
+	/* Exposed so tests / debugging can see and shrink the budgets. */
+	if (typeof window !== "undefined") {
+		window.__IMAGE_AUTO_RETRY_TIMING = {
+			limit: IMAGE_AUTO_RETRY_LIMIT,
+			minDelayMs: IMAGE_AUTO_RETRY_MIN_MS,
+			maxDelayMs: IMAGE_AUTO_RETRY_MAX_MS,
+			fallbackDelayMs: IMAGE_AUTO_RETRY_FALLBACK_MS,
+			tickMs: IMAGE_AUTO_RETRY_TICK_MS
+		};
+		window.__IMAGE_AUTO_RETRY_LOG = [];
+	}
+
+	function imageAutoRetryLimits() {
+
+		const override =
+			typeof window !== "undefined" ? window.__IMAGE_AUTO_RETRY_TIMING : null;
+		const pick = function (key, fallback) {
+			const value = override ? Number(override[key]) : NaN;
+			return isFinite(value) && value >= 0 ? value : fallback;
+		};
+		const min =
+			pick("minDelayMs", IMAGE_AUTO_RETRY_MIN_MS);
+		const max =
+			pick("maxDelayMs", IMAGE_AUTO_RETRY_MAX_MS);
+		const limit =
+			pick("limit", IMAGE_AUTO_RETRY_LIMIT);
+
+		return {
+			limit: Math.max(1, Math.floor(limit)),
+			min: Math.max(0, Math.floor(min)),
+			max: Math.max(Math.max(0, Math.floor(min)), Math.floor(max)),
+			fallback: Math.max(1, Math.floor(pick("fallbackDelayMs", IMAGE_AUTO_RETRY_FALLBACK_MS))),
+			tick: Math.max(0, Math.floor(pick("tickMs", IMAGE_AUTO_RETRY_TICK_MS)))
+		};
+
+	}
+
+	function imageAutoRetryLog(entry) {
+
+		if (typeof window === "undefined") return;
+		const log = Array.isArray(window.__IMAGE_AUTO_RETRY_LOG) ? window.__IMAGE_AUTO_RETRY_LOG : [];
+		log.push(entry);
+		while (log.length > 12) log.shift();
+		window.__IMAGE_AUTO_RETRY_LOG = log;
+
+	}
+
+	/* How many planned scenes this flow has not delivered yet. */
+	function imageSceneGapCount(project) {
+
+		if (!project || !Array.isArray(project.imagePrompts) || !project.imagePrompts.length) return 0;
+		const flowId =
+			project.imagePromptFlowId;
+		let missing = 0;
+
+		project.imagePrompts.forEach(function (_, index) {
+			const delivered =
+				project.assets.some(function (asset) {
+					return asset && asset.imagePromptFlowId === flowId && Number(asset.sceneIndex) === index;
+				});
+			if (!delivered) missing++;
+		});
+
+		return missing;
+
+	}
+
+	/*
+	 * A stop reason becomes a retry plan, or nothing at all. null means
+	 * "this really is a verdict" (a full gallery, a rejected credential, the
+	 * retry budget spent).
+	 */
+	function imageAutoRetryPlan(project, reason) {
+
+		if (!project || project._deleted) return null;
+		if (project._imageFlowActive) return null;
+
+		const marker =
+			project._imageFlowRetry || null;
+		const text =
+			String(reason || (marker && marker.reason) || "");
+		if (IMAGE_VERDICT_REASON.test(text)) return null;
+
+		const retryable =
+			marker && marker.retryable === false
+				? false
+				: Boolean((marker && marker.retryable) || IMAGE_RETRYABLE_REASON.test(text));
+
+		if (!retryable) return null;
+		if (!imageSceneGapCount(project)) return null;
+
+		const limits =
+			imageAutoRetryLimits();
+		const used =
+			Number(project._imageAutoRetries) || 0;
+		if (used >= limits.limit) return null;
+
+		const hint =
+			marker && Number(marker.hintMs) > 0 ? Number(marker.hintMs) : 0;
+		const raw =
+			hint > 0 ? hint : limits.fallback * (used + 1);
+		const delayMs =
+			Math.round(Math.max(limits.min, Math.min(limits.max, raw)));
+
+		return {
+			reason: text,
+			kind: (marker && marker.kind) || "retry",
+			attempt: used + 1,
+			limit: limits.limit,
+			delayMs: delayMs
+		};
+
+	}
+
+	function cancelImageAutoRetry(project, options) {
+
+		if (!project || !project._imageAutoRetry) return false;
+
+		const state =
+			project._imageAutoRetry;
+		project._imageAutoRetry = null;
+
+		if (state.timer) clearTimeout(state.timer);
+		if (state.ticker) clearTimeout(state.ticker);
+
+		imageAutoRetryLog({ event: "cancelled", kind: state.kind, attempt: state.attempt });
+
+		if (!options || options.quiet !== true) {
+			const liveN = videoProjects.indexOf(project) + 1;
+			const statusEl = liveN > 0 ? document.getElementById("va-ai-status-" + liveN) : null;
+			if (statusEl) statusEl.textContent = "Automatic retry cancelled.";
+		}
+
+		return true;
+
+	}
+
+	function scheduleImageAutoRetry(project, plan) {
+
+		if (!project || !plan) return false;
+
+		cancelImageAutoRetry(project, { quiet: true });
+
+		const limits =
+			imageAutoRetryLimits();
+		const until =
+			Date.now() + plan.delayMs;
+		const state = {
+			reason: plan.reason,
+			kind: plan.kind,
+			attempt: plan.attempt,
+			delayMs: plan.delayMs,
+			until: until,
+			timer: null,
+			ticker: null,
+			message: ""
+		};
+
+		project._imageAutoRetry = state;
+
+		const paint = function () {
+
+			const liveN =
+				videoProjects.indexOf(project) + 1;
+
+			if (liveN <= 0 || project._deleted) {
+				cancelImageAutoRetry(project, { quiet: true });
+				return;
+			}
+
+			const secondsLeft =
+				Math.max(0, Math.ceil((until - Date.now()) / 1000));
+			const label =
+				(plan.kind === "rate-limit" || plan.kind === "overload"
+					? "Pixabay is busy"
+					: "Pixabay needs a moment") +
+				" \u2014 retrying the missing scenes automatically in " +
+				secondsLeft +
+				"s (attempt " +
+				plan.attempt +
+				" of " +
+				plan.limit +
+				")\u2026";
+
+			state.message = label;
+
+			const statusEl =
+				document.getElementById("va-ai-status-" + liveN);
+			if (statusEl) statusEl.textContent = label;
+
+		};
+
+		const tick = function () {
+			if (project._imageAutoRetry !== state) return;
+			paint();
+			if (limits.tick > 0) {
+				state.ticker = setTimeout(tick, Math.max(limits.tick, Math.min(limits.tick, state.until - Date.now())));
+			}
+		};
+		paint();
+		if (limits.tick > 0) state.ticker = setTimeout(tick, limits.tick);
+
+		state.timer = setTimeout(function () {
+
+			if (project._imageAutoRetry !== state) return;
+
+			project._imageAutoRetry = null;
+			if (state.ticker) clearTimeout(state.ticker);
+
+			const liveN =
+				videoProjects.indexOf(project) + 1;
+			if (project._deleted || liveN <= 0 || project._imageFlowActive) {
+				imageAutoRetryLog({ event: "skipped", kind: plan.kind, attempt: plan.attempt });
+				return;
+			}
+
+			project._imageAutoRetries = (Number(project._imageAutoRetries) || 0) + 1;
+
+			imageAutoRetryLog({
+				event: "running",
+				kind: plan.kind,
+				attempt: plan.attempt,
+				waitedMs: plan.delayMs,
+				missing: imageSceneGapCount(project),
+				reason: String(plan.reason || "").slice(0, 160)
+			});
+			console.info("[seo-image-flow] auto retry", {
+				videoIndex: liveN,
+				attempt: plan.attempt,
+				kind: plan.kind,
+				waitedMs: plan.delayMs,
+				reason: String(plan.reason || "").slice(0, 160)
+			});
+
+			const statusEl =
+				document.getElementById("va-ai-status-" + liveN);
+			if (statusEl) statusEl.textContent = "Retrying the missing Pixabay scenes automatically (attempt " + plan.attempt + " of " + plan.limit + ")\u2026";
+
+			Promise.resolve()
+				.then(function () { return retryImagePromptFlow(liveN); })
+				.catch(function (error) {
+					console.error("[seo-image-flow] auto retry failed", String(error && error.message || error).slice(0, 300));
+				});
+
+		}, plan.delayMs);
+
+		imageAutoRetryLog({
+			event: "scheduled",
+			kind: plan.kind,
+			attempt: plan.attempt,
+			delayMs: plan.delayMs,
+			missing: imageSceneGapCount(project),
+			reason: String(plan.reason || "").slice(0, 160)
+		});
+		console.info("[seo-image-flow] auto retry scheduled", {
+			kind: plan.kind,
+			delayMs: plan.delayMs,
+			attempt: plan.attempt
+		});
+
+		return true;
+
+	}
+
+	/*
+	 * The single call the end of a flow makes. Returns true when a retry was
+	 * armed - the caller then leaves its "stopped" message alone, because the
+	 * countdown is the message now.
+	 */
+	function maybeScheduleImageAutoRetry(project, reason) {
+
+		const plan =
+			imageAutoRetryPlan(project, reason);
+
+		if (!plan) {
+			/* A verdict (or a spent budget): the manual Retry button is next. */
+			project._imageFlowRetry = null;
+			return false;
+		}
+
+		project._imageFlowRetry = null;
+
+		return scheduleImageAutoRetry(project, plan);
+
+	}
+
+	/*
 	 * Step 3 + 4 of the walkthrough.
 	 *
 	 * The text LLM plans stock keywords; delivery routes import photos and two MP4 clips.
@@ -18544,6 +19045,10 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		project._aiImageSkipped = 0;
 		project._imageFlowStopReason = "";
 		project._imageFlowStartedAt = Date.now();
+		/* A fresh run starts a fresh retry budget. */
+		cancelImageAutoRetry(project, { quiet: true });
+		project._imageAutoRetries = 0;
+		project._imageFlowRetry = null;
 
 		if (availableImages < 2 || videoCounts(project).clips > MAX_MP4_UPLOADS - 2) {
 			await finalizeImagePromptFlow(
@@ -18656,7 +19161,7 @@ if (flowRetry) flowRetry.style.display = "none";
 		if (videoCounts(project).clips >= MAX_MP4_UPLOADS) return false;
 		const url = createStudioObjectUrl(blob), video = document.createElement("video");
 		try {
-			const duration = await probeMp4Duration(video, url);
+			const duration = await probeMp4DurationWithRetry(url, 2, video);
 			if (stale() || project._deleted || videoCounts(project).clips >= MAX_MP4_UPLOADS) { releaseStudioObjectUrl(url); video.removeAttribute("src"); video.load(); return false; }
 			if (!Number.isFinite(duration) || duration <= 0 || duration > MP4_MAX_DURATION_S) throw new Error("Unsupported Pixabay clip duration");
 			const asset = { kind: "mp4", file: file, stockSource: blob.stockSource, videoEl: video, duration: duration,
@@ -18711,6 +19216,24 @@ if (flowRetry) flowRetry.style.display = "none";
 						? describeImageLoadFailure(firstFailure && firstFailure.error)
 						: ((firstFailure && firstFailure.error && firstFailure.error.message) || "The image batch could not complete; delivered images were kept.") +
 							(firstFailure && firstFailure.error && firstFailure.error.requestId ? " (request " + firstFailure.error.requestId + ")" : "");
+					/*
+					 * 429 means "wait", not "no". The provider's own reset hint
+					 * becomes the wait the retry scheduler honours (clamped by
+					 * IMAGE_AUTO_RETRY_MAX_MS). 401/403 is a bad credential and
+					 * is never retried - it is marked as a verdict instead.
+					 */
+					const failureStatus = Number(firstFailure && firstFailure.error && firstFailure.error.status) || 0;
+					const failureHint = Number(firstFailure && firstFailure.error && firstFailure.error.retryAfterMs) || 0;
+					if (failureStatus === 401 || failureStatus === 403) {
+						project._imageFlowRetry = { kind: "auth", retryable: false, hintMs: 0, reason: project._imageFlowStopReason };
+					} else if (failureStatus === 429 || failureStatus === 503 || (firstFailure && firstFailure.error && firstFailure.error.kind === "overload")) {
+						project._imageFlowRetry = {
+							kind: failureStatus === 429 ? "rate-limit" : "overload",
+							retryable: true,
+							hintMs: failureHint,
+							reason: project._imageFlowStopReason
+						};
+					}
 				}
 			}
 		} catch (error) {
@@ -18772,11 +19295,24 @@ if (flowRetry) flowRetry.style.display = "none";
 			if (!controller) return;
 			if (idleTimer) clearTimeout(idleTimer);
 			idleTimer = setTimeout(function () {
-				if (!isStaleFlow() && !project._imageFlowStopReason) {
-					project._imageFlowStopReason = "The image batch stopped responding for " + Math.round(IMAGE_BATCH_IDLE_TIMEOUT_MS / 1000) + " seconds.";
+				if (!isStaleFlow()) {
+					if (!project._imageFlowStopReason) {
+						project._imageFlowStopReason = "The image batch stopped responding for " + Math.round(imageBatchIdleTimeoutMs() / 1000) + " seconds.";
+					}
+					/*
+					 * Silence is not a verdict: record it as retryable so the
+					 * finalizer re-arms the flow for whatever is still missing
+					 * instead of ending with "stopped".
+					 */
+					project._imageFlowRetry = {
+						kind: "idle",
+						retryable: true,
+						hintMs: 5000,
+						reason: project._imageFlowStopReason
+					};
 				}
 				try { controller.abort(); } catch (abortError) { }
-			}, IMAGE_BATCH_IDLE_TIMEOUT_MS);
+			}, imageBatchIdleTimeoutMs());
 		};
 
 		const progressText = function () {
@@ -19062,8 +19598,22 @@ if (retryBtn) retryBtn.style.display = (project.imagePromptFlowId && !project._i
 			);
 		if (scriptButton) scriptButton.disabled = false;
 
+		/*
+		 * Before saying "stopped", check whether the reason is one a re-run
+		 * could fix (a 429 wait, an idle abort, a transient network error).
+		 * The countdown then owns the status line, and the scenes already in
+		 * the gallery are never searched or billed twice.
+		 */
+		if (!finalReason) project._imageFlowRetry = null;
+		const autoRetryArmed =
+			finalReason ? maybeScheduleImageAutoRetry(project, finalReason) : false;
+
 		let statusMessage;
-		if (finalReason) {
+		if (autoRetryArmed) {
+			statusMessage = (project._imageAutoRetry && project._imageAutoRetry.message) ||
+				"Pixabay needs a moment; retrying the missing scenes automatically.";
+		}
+		else if (finalReason) {
 			statusMessage = "Pixabay image flow stopped: " + finalReason + " " + actualCount + " image(s) added to the gallery.";
 		}
 		else if (imageTarget < promptCount) {
@@ -19172,6 +19722,8 @@ async function retryImagePromptFlow(n) {
 	project._imageFlowStopReason = "";
 	project._aiImageFailures = 0;
 	project.imagePromptStates = {};
+	cancelImageAutoRetry(project, { quiet: true });
+	project._imageFlowRetry = null;
 	const seq = project._imageFlowSeq;
 	const stale = function () { return Boolean(project._deleted || project._imageFlowSeq !== seq || !project._imageFlowActive); };
 	const liveIndex = function () { return videoProjects.indexOf(project) + 1; };
@@ -19188,11 +19740,57 @@ async function retryImagePromptFlow(n) {
 		setImagePromptState(project, i, alreadyImported ? "imported" : "planned", alreadyImported ? "already in gallery" : "");
 	}
 
-	const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+	let controller = typeof AbortController !== "undefined" ? new AbortController() : null;
 	project._imageBatchController = controller;
+	/*
+	 * One Pixabay search per scene used to be all a scene ever got: a 429
+	 * ("please wait before searching again") on scene 3 of 7 dropped scene 3
+	 * for good. Each scene now gets SCENE_RETRY_ATTEMPTS tries, and a try
+	 * that the provider asked us to delay waits that long before it runs.
+	 */
+	const sceneRetryTiming =
+		(typeof window !== "undefined" && window.__PIXABAY_SCENE_RETRY) || {};
+	const SCENE_RETRY_ATTEMPTS = Math.max(1, Math.floor(Number(sceneRetryTiming.attempts) || 3));
+	const SCENE_RETRY_BASE_MS = Math.max(0, Math.floor(Number(sceneRetryTiming.baseMs) || 800));
+	const SCENE_RETRY_MAX_MS = Math.max(SCENE_RETRY_BASE_MS, Math.floor(Number(sceneRetryTiming.maxMs) || 15000));
+	/*
+	 * The stall guard for a single scene. It aborts only THIS attempt and
+	 * then re-arms on a fresh controller; previously an abort of the shared
+	 * controller ended the whole retry run.
+	 */
+	const SCENE_IDLE_TIMEOUT_MS = Math.max(1, Math.floor(Number(sceneRetryTiming.idleMs) || 90000));
+	let sceneWatchdog = null;
+	const clearSceneWatchdog = function () {
+		if (sceneWatchdog) { clearTimeout(sceneWatchdog); sceneWatchdog = null; }
+	};
+	const armSceneWatchdog = function () {
+		clearSceneWatchdog();
+		if (!controller) return;
+		sceneWatchdog = setTimeout(function () {
+			sceneWatchdog = null;
+			project._imageFlowRetry = {
+				kind: "timeout",
+				retryable: true,
+				hintMs: 5000,
+				reason: "The Pixabay search stopped responding for " + Math.round(SCENE_IDLE_TIMEOUT_MS / 1000) + " seconds."
+			};
+			console.warn("[pixabay-retry] scene stalled; aborting this attempt so it can be retried", { timeoutMs: SCENE_IDLE_TIMEOUT_MS });
+			try { controller.abort(); } catch (abortError) { }
+		}, SCENE_IDLE_TIMEOUT_MS);
+	};
+	/* Retry-After is seconds on the wire; the client works in milliseconds. */
+	const mediaRetryHintMs = function (response, body) {
+		const fromBody = Number(body && body.retryAfterMs) > 0 ? Number(body.retryAfterMs) : 0;
+		if (fromBody) return fromBody;
+		const headerSeconds = Number(response && response.headers && response.headers.get ? response.headers.get("Retry-After") : 0);
+		return headerSeconds > 0 ? Math.round(headerSeconds * 1000) : 0;
+	};
+	/* "No results for this keyword" is an answer, not a transmission error. */
+	const SCENE_RETRYABLE = /rate limit|429|too many requests|busy|overload|temporar|timeout|timed out|network|failed to fetch|interrupted/i;
 	let imported = 0;
 	let failed = 0;
 	try {
+		sceneLoop:
 		for (let i = 0; i < project.imagePrompts.length; i++) {
 			if (stale()) break;
 			const alreadyImported = project.assets.some(function (asset) { return asset.imagePromptFlowId === flowId && Number(asset.sceneIndex) === i; });
@@ -19206,6 +19804,11 @@ async function retryImagePromptFlow(n) {
 			setImagePromptState(project, i, "searching", "");
 			if (statusEl) statusEl.textContent = "Pixabay search " + (i + 1) + " of " + project.imagePrompts.length + ": " + selection.q;
 			console.info("[pixabay-retry] scene.search", { scene: i, type: selection.type, keyword: selection.q });
+			let sceneOk = false;
+			let sceneError = null;
+			let sceneHintMs = 0;
+			for (let attempt = 1; attempt <= SCENE_RETRY_ATTEMPTS; attempt++) {
+			armSceneWatchdog();
 			try {
 				/*
 				 * Browser-first: search and download the asset in this tab,
@@ -19248,7 +19851,20 @@ async function retryImagePromptFlow(n) {
 					searchUrl.searchParams.set("orientation", "landscape");
 					const searchResponse = await fetch(searchUrl.pathname + searchUrl.search, controller ? { signal: controller.signal } : undefined);
 					const searchData = await searchResponse.json().catch(function () { return null; });
-					if (!searchResponse.ok || !searchData || !Array.isArray(searchData.hits)) throw new Error((searchData && searchData.error) || ("Pixabay search failed (HTTP " + searchResponse.status + ")"));
+					if (!searchResponse.ok || !searchData || !Array.isArray(searchData.hits)) {
+						/*
+						 * The server answers a 429 with "Pixabay rate limit
+						 * (429). Please wait before searching again." plus a
+						 * Retry-After header. Both are kept: the status makes
+						 * the failure retryable, the header says how long to
+						 * wait. Without them the scene was simply dropped.
+						 */
+						const searchError = new Error((searchData && searchData.error) || ("Pixabay search failed (HTTP " + searchResponse.status + ")"));
+						searchError.status = searchResponse.status;
+						searchError.kind = (searchData && searchData.kind) || (searchResponse.status === 429 ? "rate-limit" : "");
+						searchError.retryAfterMs = mediaRetryHintMs(searchResponse, searchData);
+						throw searchError;
+					}
 					console.info("[pixabay-retry] scene.search-result", { scene: i, status: searchResponse.status, hits: searchData.hits.length });
 					hit = searchData.hits[selection.index] || searchData.hits[0];
 					if (!hit || !hit.id) throw new Error("No Pixabay " + selection.type + " results for this keyword");
@@ -19263,7 +19879,11 @@ async function retryImagePromptFlow(n) {
 					const assetResponse = await fetch(assetUrl.pathname + assetUrl.search, controller ? { signal: controller.signal } : undefined);
 					if (!assetResponse.ok) {
 						const errorData = await assetResponse.json().catch(function () { return null; });
-						throw new Error((errorData && errorData.error) || ("Pixabay asset download failed (HTTP " + assetResponse.status + ")"));
+						const assetError = new Error((errorData && errorData.error) || ("Pixabay asset download failed (HTTP " + assetResponse.status + ")"));
+						assetError.status = assetResponse.status;
+						assetError.kind = (errorData && errorData.kind) || (assetResponse.status === 429 ? "rate-limit" : "");
+						assetError.retryAfterMs = mediaRetryHintMs(assetResponse, errorData);
+						throw assetError;
 					}
 					const mime = assetResponse.headers.get("content-type") || (selection.type === "video" ? "video/mp4" : "image/jpeg");
 					blob = await assetResponse.blob();
@@ -19273,7 +19893,7 @@ async function retryImagePromptFlow(n) {
 					console.info("[pixabay-retry] scene.downloaded", { scene: i, id: hit.id, type: selection.type, mime: blob.type, bytes: blob.size });
 					blob.stockSource = { provider: "pixabay", id: hit.id, pageURL: hit.pageURL || "", user: hit.user || "", type: selection.type, duration: hit.duration || 0 };
 				}
-				if (stale()) break;
+				if (stale()) break sceneLoop;
 				const at = liveIndex();
 				if (at <= 0 || !await insertStockScene(at, blob, flowId, i, stale)) throw new Error("Could not add the downloaded asset to the gallery");
 				imported++;
@@ -19282,19 +19902,85 @@ async function retryImagePromptFlow(n) {
 				recordStudioUsage("images", "ok", 1);
 				setImagePromptState(project, i, "imported", selection.type === "video" ? "clip added to gallery" : "photo added to gallery");
 				console.info("[pixabay-retry] scene.added-to-gallery", { scene: i, id: hit.id, type: selection.type, imported });
+				sceneOk = true;
+				/*
+				 * A scene that eventually landed is not a reason to retry
+				 * later - but a scene that failed earlier in this same pass
+				 * still is, so the marker survives while any failure stands.
+				 */
+				if (!failed) project._imageFlowRetry = null;
 			} catch (error) {
-				if (error && error.name === "AbortError") break;
+				if (error && error.name === "AbortError") {
+					const stalled = Boolean(project._imageFlowRetry && project._imageFlowRetry.kind === "timeout");
+					if (stalled && attempt < SCENE_RETRY_ATTEMPTS && !stale()) {
+						/* The guard tripped, not the user: re-arm and try again. */
+						project._imageFlowRetry = null;
+						controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+						project._imageBatchController = controller;
+						sceneError = error;
+						console.warn("[pixabay-retry] scene attempt stalled, re-arming", { scene: i, attempt: attempt, of: SCENE_RETRY_ATTEMPTS });
+						setImagePromptState(project, i, "searching", "stalled; retrying");
+						await new Promise(function (resolve) { setTimeout(resolve, 1500); });
+						continue;
+					}
+					break sceneLoop;
+				}
+				sceneError = error;
+				sceneHintMs = Number(error && error.retryAfterMs) > 0 ? Number(error.retryAfterMs) : 0;
+				const retryable =
+					SCENE_RETRYABLE.test(String(error && error.message || error)) ||
+					[408, 429, 500, 502, 503, 504].indexOf(Number(error && error.status)) >= 0;
+				if (attempt >= SCENE_RETRY_ATTEMPTS || !retryable) break;
+				/*
+				 * Honour the provider's own wait when it gave one (a 429 reset
+				 * hint), otherwise back off 800 ms, 1.6 s. Never longer than
+				 * SCENE_RETRY_MAX_MS, so one scene cannot stall the flow.
+				 */
+				const waitMs = Math.min(
+					SCENE_RETRY_MAX_MS,
+					Math.max(SCENE_RETRY_BASE_MS, sceneHintMs || SCENE_RETRY_BASE_MS * Math.pow(2, attempt - 1))
+				);
+				project._imageFlowRetry = { kind: sceneHintMs ? "rate-limit" : "scene", retryable: true, hintMs: sceneHintMs, reason: String(error && error.message || error) };
+				setImagePromptState(project, i, "searching", "attempt " + attempt + " failed; retrying in " + Math.round(waitMs / 1000) + "s");
+				console.warn("[pixabay-retry] scene attempt failed, waiting to retry", {
+					scene: i,
+					attempt: attempt,
+					of: SCENE_RETRY_ATTEMPTS,
+					waitMs: waitMs,
+					error: String(error && error.message || error).slice(0, 300)
+				});
+				await new Promise(function (resolve) { setTimeout(resolve, waitMs); });
+				if (stale()) break sceneLoop;
+			}
+			clearSceneWatchdog();
+			if (sceneOk) break;
+			}
+			if (!sceneOk && !stale()) {
 				failed++;
 				project._aiImageFailures++;
-				setImagePromptState(project, i, "failed", error && error.message ? error.message : String(error));
-				console.error("[pixabay-retry] scene failed", { scene: i, type: selection.type, keyword: selection.q, error: String(error && error.message || error).slice(0, 500) });
+				const message = sceneError && sceneError.message ? sceneError.message : String(sceneError || "Pixabay scene failed");
+				setImagePromptState(project, i, "failed", message);
+				console.error("[pixabay-retry] scene failed", { scene: i, type: selection.type, keyword: selection.q, attempts: SCENE_RETRY_ATTEMPTS, error: message.slice(0, 500) });
+				/*
+				 * Leave a retry marker only for reasons a re-run could fix. A
+				 * non-retryable marker stops the finalizer from looping on a
+				 * scene that will never succeed.
+				 */
+				if (SCENE_RETRYABLE.test(message)) {
+					project._imageFlowRetry = { kind: sceneHintMs ? "rate-limit" : "scene", retryable: true, hintMs: sceneHintMs, reason: message };
+				} else {
+					project._imageFlowRetry = { kind: "scene", retryable: false, hintMs: 0, reason: message };
+				}
 			}
 		}
 	} finally {
+		if (typeof clearSceneWatchdog === "function") clearSceneWatchdog();
 		refreshCredits();
 		if (!stale()) {
 			project._imageBatchController = null;
 			project._imageFlowActive = false;
+			/* Only scenes that are still missing may trigger an automatic retry. */
+			if (!failed) project._imageFlowRetry = null;
 			if (liveIndex() > 0) await finalizeImagePromptFlow(liveIndex(), failed ? "Some Pixabay searches failed; successful assets were kept." : "");
 			if (btn) { btn.disabled = false; btn.textContent = "Retry Pixabay search"; }
 			if (statusEl && !failed) statusEl.textContent = imported
@@ -19318,28 +20004,460 @@ async function retryImagePromptFlow(n) {
 	const SCRIPT_RETRY_LIMIT =
 		2;
 
-	async function requestSeoScriptOnce(
-		n,
+	/*
+	 * SCRIPT NOTES (dynamic URL) + ASYNC SCRIPT JOBS
+	 *
+	 * When the worker advertises "scriptNotes", every script request carries
+	 * "useNotes", so the worker reuses the note for this topic/source URL:
+	 * the note holds the validated keyword set and the beat plan, which takes
+	 * the planner call (and a lot of retry risk) out of the path. When the
+	 * worker also advertises "asyncScript", the request is submitted as a job
+	 * ("/api/script?async=1"), the worker answers 202 with a note id, and this
+	 * client returns to the request by polling GET /api/script/notes/<id> until
+	 * the note is done or failed. Both paths end in the same "data" shape, so
+	 * nothing downstream knows which one ran.
+	 */
+	const SCRIPT_NOTE_POLL_MS =
+		900;
+	const SCRIPT_NOTE_MAX_WAIT_MS =
+		185000;
+	/*
+	 * Hang guards (see current_code_latest.md §2b). A note that stops
+	 * advancing must end the flow: 15 s without a state change, three
+	 * consecutive failed polls and the wall-clock ceiling are the only
+	 * reasons this client stops waiting. The server advertises the same
+	 * numbers in /api/capabilities, so the page follows the worker instead
+	 * of guessing.
+	 */
+	const SCRIPT_NOTE_STALL_MS =
+		15000;
+	const SCRIPT_NOTE_POLL_ATTEMPTS =
+		3;
+	/*
+	 * #5: a client request that has not answered in 20 s is retried instead of
+	 * holding the tab for 105 s. That is safe because the negotiated async path
+	 * answers in milliseconds and the job lives in its note - the 105 s ceiling
+	 * is kept only for a Worker that has no note/async support and therefore has
+	 * to hold one long response.
+	 */
+	const SCRIPT_REQUEST_TIMEOUT_MS =
+		20000;
+	const SCRIPT_LEGACY_TIMEOUT_MS =
+		105000;
+	const SCRIPT_RETRY_BACKOFF_MS =
+		250;
+
+	/* Exposed so tests / debugging can see the live script budgets. */
+	if (typeof window !== "undefined") {
+		window.__SCRIPT_PIPELINE_TIMING = {
+			requestTimeoutMs: SCRIPT_REQUEST_TIMEOUT_MS,
+			legacyTimeoutMs: SCRIPT_LEGACY_TIMEOUT_MS,
+			retryBackoffMs: SCRIPT_RETRY_BACKOFF_MS,
+			notePollMs: SCRIPT_NOTE_POLL_MS,
+			noteWaitMs: SCRIPT_NOTE_MAX_WAIT_MS,
+			noteStallMs: SCRIPT_NOTE_STALL_MS,
+			notePollAttempts: SCRIPT_NOTE_POLL_ATTEMPTS
+		};
+	}
+
+	function fetchWithTimeout(
+		url,
+		init,
+		ms
+	) {
+
+		if (typeof AbortController !== "function") {
+			return fetch(url, init);
+		}
+
+		const controller =
+			new AbortController();
+		const timer =
+			setTimeout(function () {
+				try {
+					controller.abort();
+				} catch (abortError) {
+					/* already settled */
+				}
+			}, ms);
+
+		return fetch(
+			url,
+			Object.assign({}, init || {}, { signal: controller.signal })
+		).then(
+			function (response) {
+				clearTimeout(timer);
+				return response;
+			},
+			function (error) {
+				clearTimeout(timer);
+				if (error && error.name === "AbortError") {
+					const timeout = new Error("Request timed out after " + Math.round(ms / 1000) + "s");
+					timeout.name = "TimeoutError";
+					timeout.retryable = true;
+					throw timeout;
+				}
+				throw error;
+			}
+		);
+	}
+
+	/* The note this browser already holds for exactly this script, if any. */
+	function browserScriptNote(
+		project,
+		topic,
+		minutes,
+		speed
+	) {
+
+		try {
+			return scriptNoteMemory.get({
+				topic: topic,
+				sourceUrl: project && project.scriptSourceUrl ? project.scriptSourceUrl : "",
+				minutes: minutes,
+				speed: speed
+			});
+		} catch (noteError) {
+			console.warn("[script-notes] browser note read failed", String(noteError && noteError.message || noteError).slice(0, 200));
+			return null;
+		}
+	}
+
+	/* Writes the finished script back so the next run starts warm. */
+	function rememberBrowserScriptNote(
+		project,
 		topic,
 		minutes,
 		speed,
-		attempt,
-		previousFailure
+		data,
+		seed
+	) {
+
+		if (!data || !data.script) return;
+
+		try {
+			scriptNoteMemory.put({
+				noteId: data.noteId || (seed && seed.noteId) || null,
+				topic: topic,
+				sourceUrl: project && project.scriptSourceUrl ? project.scriptSourceUrl : "",
+				minutes: minutes,
+				speed: speed,
+				keywordSet:
+					seed && seed.keywordSet
+						? seed.keywordSet
+						: project && project.selectedSeoSet
+							? project.selectedSeoSet
+							: undefined,
+				outline:
+					Array.isArray(data.outline) && data.outline.length
+						? data.outline
+						: (seed && seed.outline) || [],
+				script: data.script,
+				durationMs: data.durationMs
+			});
+			if (project && data.noteId) project.scriptNoteId = data.noteId;
+		} catch (noteError) {
+			console.warn("[script-notes] browser note write failed", String(noteError && noteError.message || noteError).slice(0, 200));
+		}
+	}
+
+	/*
+	 * HANG GUARD (H3 + H4). One poll loop, shared by every layout.
+	 *
+	 * A note is the durable half of the pipeline, so the loop must be able to
+	 * end for a reason that is NOT "the model finally answered":
+	 *   - a terminal note (any state, not just done/error) ends it;
+	 *   - three consecutive failed reads end it (a note that cannot be read is
+	 *     not a note that is still working);
+	 *   - no state change for the stall window ends it, where the server's own
+	 *     waitMs promise extends the window while the run is honest;
+	 *   - the wall-clock ceiling ends it.
+	 */
+	function scriptNoteResult(note) {
+		return note.result && note.result.script
+			? note.result
+			: {
+				success: true,
+				script: note.script || "",
+				durationMs: Number(note.durationMs) || 0,
+				title: note.keywords && note.keywords.title ? note.keywords.title : "",
+				headings: note.keywords && Array.isArray(note.keywords.headings) ? note.keywords.headings : [],
+				model: note.model || ""
+			};
+	}
+
+	async function requestScriptNoteOnce(
+		context,
+		noteUrl,
+		pollAfterMs,
+		limits
+	) {
+
+		const budget =
+			limits || {};
+		const maxWaitMs =
+			Number(budget.maxWaitMs) > 0 ? Number(budget.maxWaitMs) : SCRIPT_NOTE_MAX_WAIT_MS;
+		const stallMs =
+			Number(budget.stallMs) > 0 ? Number(budget.stallMs) : SCRIPT_NOTE_STALL_MS;
+		const defaultPollMs =
+			Number(budget.pollMs) > 0 ? Number(budget.pollMs) : SCRIPT_NOTE_POLL_MS;
+		const wait =
+			Number(pollAfterMs) > 0
+				? Math.min(5000, Number(pollAfterMs))
+				: defaultPollMs;
+		const startedAt =
+			Date.now();
+		let polls = 0;
+		let failedPolls = 0;
+		let lastSignature = "";
+		let progressDeadline = startedAt + stallMs;
+
+		while (Date.now() - startedAt < maxWaitMs) {
+
+			if (context.isCancelled()) {
+				const cancelled = new Error("Generation was cancelled");
+				cancelled.name = "AbortError";
+				throw cancelled;
+			}
+
+			/* The first read is immediate: a short job answers at once. */
+			if (polls > 0) {
+				await batchDelay(wait);
+			}
+			polls++;
+
+			let note = null;
+			try {
+				const polled = await fetchWithTimeout(
+					noteUrl,
+					{ headers: { Accept: "application/json" } },
+					SCRIPT_REQUEST_TIMEOUT_MS
+				);
+				note = await polled.json().catch(() => null);
+			} catch (pollError) {
+				/*
+				 * A dropped poll is not a dropped job, but a note that cannot
+				 * be read three times running is a note this tab cannot use.
+				 */
+				failedPolls++;
+				console.warn("[script-notes] poll failed", {
+					poll: polls,
+					failedPolls: failedPolls,
+					error: String(pollError && pollError.message || pollError).slice(0, 200)
+				});
+				if (failedPolls >= SCRIPT_NOTE_POLL_ATTEMPTS) {
+					const unreadable = new Error(
+						"The script note could not be read after " + failedPolls +
+						" attempts - the job may still finish, so try again in a moment"
+					);
+					unreadable.retryable = true;
+					unreadable.code = "SCRIPT_NOTE_UNREADABLE";
+					throw unreadable;
+				}
+				continue;
+			}
+			if (!note || typeof note !== "object") {
+				failedPolls++;
+				if (failedPolls >= SCRIPT_NOTE_POLL_ATTEMPTS) {
+					const unreadable = new Error(
+						"The script note returned no state after " + failedPolls + " attempts - try again"
+					);
+					unreadable.retryable = true;
+					unreadable.code = "SCRIPT_NOTE_UNREADABLE";
+					throw unreadable;
+				}
+				continue;
+			}
+			failedPolls = 0;
+
+			const state =
+				String(note.state || "");
+			/*
+			 * H3: the worker's terminal flag is the contract, and "done" is
+			 * the only success among terminal states. "empty" (and anything
+			 * else terminal) used to fall through here and poll forever.
+			 */
+			const terminal =
+				note.terminal === true ||
+				state === "done" ||
+				state === "error" ||
+				state === "empty";
+
+			if (terminal && state === "done") {
+				const result = scriptNoteResult(note);
+				if (result.script) {
+					return result;
+				}
+				const emptyScript = new Error("Script job finished without text");
+				emptyScript.retryable = true;
+				emptyScript.code = "SCRIPT_NOTE_NO_TEXT";
+				throw emptyScript;
+			}
+
+			if (terminal) {
+				const failure = new Error(
+					note.error ||
+					("The script job ended in state '" + (state || "unknown") + "'")
+				);
+				failure.retryable = true;
+				failure.state = state;
+				failure.noteState = state;
+				failure.code = note.errorCode || "";
+				throw failure;
+			}
+
+			/* Proof of life: a new state/updatedAt/outline extends the window. */
+			const signature = [
+				state,
+				note.updatedAt || 0,
+				note.runs || 0,
+				Array.isArray(note.outline) ? note.outline.length : 0
+			].join("|");
+
+			if (signature !== lastSignature) {
+				lastSignature = signature;
+				const advertised = Number(note.waitMs) > 0 ? Number(note.waitMs) : 0;
+				progressDeadline =
+					Date.now() + (advertised > 0 ? Math.max(stallMs, advertised) : stallMs);
+			}
+
+			if (Date.now() > progressDeadline) {
+				const stalled = new Error(
+					"The script note stopped advancing (" + (state || "unknown") +
+					" for " + Math.round(stallMs / 1000) + "s) - try again"
+				);
+				stalled.retryable = true;
+				stalled.code = "SCRIPT_NOTE_STALLED";
+				throw stalled;
+			}
+
+			if (context.onStatus) {
+				const beats = Array.isArray(note.outline) ? note.outline.length : 0;
+				context.onStatus(
+					"Writing your script from the saved note" +
+					(beats > 0 ? " (" + beats + " planned sections)" : "") +
+					", " + Math.round((Date.now() - startedAt) / 1000) + "s..."
+				);
+			}
+		}
+
+		const timeout = new Error("Script job timed out");
+		timeout.retryable = true;
+		timeout.code = "SCRIPT_TIMEOUT";
+		throw timeout;
+	}
+
+	/*
+	 * ONE REQUESTER FOR EVERY LAYOUT (H5).
+	 *
+	 * The editor accordion and the quick-batch table are different UIs, but a
+	 * script request is the same five things: a topic, the note this browser
+	 * already holds, the note/async negotiation, the 20 s-per-request budget,
+	 * and the ability to be cancelled. context carries the layout-specific
+	 * parts so neither layout can drift back to the 105 s legacy path:
+	 *
+	 *   context = {
+	 *     project:       the video project (or null for a table row),
+	 *     keywordSet:    optional preselected SEO set,
+	 *     sourceUrl:     optional dynamic URL the note is keyed on,
+	 *     isCancelled:   () => boolean,
+	 *     setController / clearController: abort plumbing for this layout,
+	 *     onStatus:      (text) => void  - where "Writing... 12s" is shown
+	 *   }
+	 */
+	async function requestScriptWithNotes(
+		context,
+		options
 	) {
 
 		const project =
-			videoProjects[n - 1];
-		const single = (await studioOffload.capabilities()).singleAttemptScript && project && project.selectedSeoSet;
+			(context && context.project) || null;
+		const topic =
+			String(options && options.topic || "my video");
+		const minutes =
+			Number(options && options.minutes) > 0 ? Number(options.minutes) : 1;
+		const speed =
+			String(options && options.speed || "medium");
+		const attempt =
+			Number(options && options.attempt) || 0;
+		const previousFailure =
+			String(options && options.previousFailure || "").slice(0, 800);
+
+		const caps =
+			await studioOffload.capabilities();
+		const single = Boolean(caps.singleAttemptScript && project && project.selectedSeoSet);
+		const notesEnabled = Boolean(caps.scriptNotes);
+		const asyncEnabled = notesEnabled && Boolean(caps.asyncScript);
+		/* #5: 20 s per request once the worker can park the job in a note. */
+		const requestTimeout = asyncEnabled
+			? SCRIPT_REQUEST_TIMEOUT_MS
+			: SCRIPT_LEGACY_TIMEOUT_MS;
+		const noteSeed = notesEnabled ? browserScriptNote(project, topic, minutes, speed) : null;
+		const scriptPath = asyncEnabled ? "/api/script?async=1" : "/api/script";
+		const isCancelled =
+			context && context.isCancelled
+				? context.isCancelled
+				: function () { return Boolean(project && project._deleted); };
 		const send = single ? function (url, init) {
 			return studioOffload.scriptRequest(init, {
-				isCancelled: function () { return Boolean(project._deleted); },
-				setController: function (controller) { project._seoScriptController = controller; },
-				clearController: function (controller) { if (project._seoScriptController === controller) project._seoScriptController = null; }
+				path: url,
+				timeout: requestTimeout,
+				isCancelled: isCancelled,
+				setController: context && context.setController,
+				clearController: context && context.clearController
 			});
-		} : fetch;
+		} : function (url, init) {
+			return fetchWithTimeout(url, init, requestTimeout);
+		};
+
+		const keywordSet =
+			context && context.keywordSet !== undefined && context.keywordSet !== null
+				? context.keywordSet
+				: project && project.selectedSeoSet
+					? project.selectedSeoSet
+					: null;
+		const sourceUrl =
+			context && context.sourceUrl !== undefined && context.sourceUrl !== null
+				? context.sourceUrl
+				: project && project.scriptSourceUrl
+					? project.scriptSourceUrl
+					: "";
+
+		const requestBody = {
+			singleAttempt: Boolean(single),
+			attempt: attempt,
+			previousFailure: previousFailure,
+			topic: topic,
+			minutes: minutes,
+			speed: speed,
+			keywordSet:
+				keywordSet
+					? keywordSet
+					: undefined,
+			/*
+			 * The note this browser already holds: its validated keyword set and
+			 * its beat plan. Sending them is what removes the planner from the
+			 * request (fix #1) - the first run is a single writer call.
+			 */
+			note:
+				notesEnabled && noteSeed
+					? {
+						keywordSet: noteSeed.keywordSet || undefined,
+						outline:
+							Array.isArray(noteSeed.outline) && noteSeed.outline.length
+								? noteSeed.outline
+								: undefined,
+						updatedAt: noteSeed.updatedAt || undefined
+					}
+					: undefined,
+			/* Worker-derived note id: same topic + minutes + speed + URL. */
+			useNotes: notesEnabled || undefined,
+			sourceUrl: notesEnabled && sourceUrl ? sourceUrl : undefined
+		};
+
 		const response =
 			await send(
-				"/api/script",
+				scriptPath,
 				{
 					method: "POST",
 					headers: {
@@ -19347,20 +20465,44 @@ async function retryImagePromptFlow(n) {
 							"application/json"
 					},
 					body:
-						JSON.stringify(
-							{
-								singleAttempt: Boolean(single), attempt: Number(attempt) || 0, previousFailure: String(previousFailure || "").slice(0, 800),
-								topic: topic,
-								minutes: minutes,
-								speed: speed,
-								keywordSet:
-									project && project.selectedSeoSet
-										? project.selectedSeoSet
-										: undefined
-							}
-						)
+						JSON.stringify(requestBody)
 				}
 			);
+
+		if (response.status === 202) {
+			const ticket =
+				await response
+					.json()
+					.catch(
+						() => ({})
+					);
+			if (!ticket || !ticket.noteUrl) {
+				const queueError = new Error("The script job was not queued");
+				queueError.retryable = true;
+				throw queueError;
+			}
+			if (project && ticket.noteId) project.scriptNoteId = ticket.noteId;
+			console.info("[script-notes] queued", {
+				noteId: ticket.noteId,
+				noteUrl: ticket.noteUrl,
+				mode: ticket.mode || "loop"
+			});
+			const finished = await requestScriptNoteOnce(
+				{
+					isCancelled: isCancelled,
+					onStatus: context && context.onStatus
+				},
+				ticket.noteUrl,
+				ticket.pollAfterMs,
+				{
+					maxWaitMs: Number(caps.scriptNoteWaitMs) > 0 ? Number(caps.scriptNoteWaitMs) : SCRIPT_NOTE_MAX_WAIT_MS,
+					stallMs: Number(caps.scriptNoteStallMs) > 0 ? Number(caps.scriptNoteStallMs) : SCRIPT_NOTE_STALL_MS,
+					pollMs: Number(caps.scriptNotePollMs) > 0 ? Number(caps.scriptNotePollMs) : SCRIPT_NOTE_POLL_MS
+				}
+			);
+			rememberBrowserScriptNote(project, topic, minutes, speed, finished, noteSeed);
+			return finished;
+		}
 
 		const data =
 			await response
@@ -19368,6 +20510,8 @@ async function retryImagePromptFlow(n) {
 				.catch(
 					() => ({})
 				);
+
+		rememberBrowserScriptNote(project, topic, minutes, speed, data, noteSeed);
 
 		/*
 		 * 'script' is plain narration text - the worker never sends
@@ -19381,12 +20525,150 @@ async function retryImagePromptFlow(n) {
 		) {
 
 			const error = new Error((data && data.error) || ("HTTP " + response.status));
+			error.status = response.status;
+			error.kind = (data && data.kind) || "";
+			error.retryAfterMs = data && Number(data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
 			error.retryable = response.status === 408 || response.status === 429 || response.status >= 500 || response.ok;
 			throw error;
 
 		}
 
 		return data;
+
+	}
+
+	/* The editor layout: the video project owns everything. */
+	function scriptContextForProject(project) {
+		return {
+			project: project,
+			isCancelled: function () {
+				return Boolean(!project || project._deleted || videoProjects.indexOf(project) < 0);
+			},
+			setController: function (controller) {
+				if (project) project._seoScriptController = controller;
+			},
+			clearController: function (controller) {
+				if (project && project._seoScriptController === controller) project._seoScriptController = null;
+			},
+			onStatus: function (text) {
+				const liveIndex = project ? videoProjects.indexOf(project) + 1 : 0;
+				if (liveIndex <= 0) return;
+				const statusEl = document.getElementById("va-script-status-" + liveIndex);
+				if (statusEl) statusEl.textContent = text;
+			}
+		};
+	}
+
+	/*
+	 * The table layout's half of the same pipeline (H5).
+	 *
+	 * A quick-batch row has no video project, so it builds its own context and
+	 * calls the SAME requester: notes, the async ticket, the 20 s request
+	 * budget, the 15 s stall guard and the wall-clock ceiling all apply here
+	 * exactly as they do in the editor accordion. The first line of the row's
+	 * script cell is the topic; the finished narration replaces it.
+	 */
+	function batchRowScriptContext(row) {
+		return {
+			project: null,
+			keywordSet: null,
+			sourceUrl: String(row.sourceUrl || ""),
+			isCancelled: function () {
+				return Boolean(row.stopRequested || !getBatchRow(row.id));
+			},
+			setController: function (controller) {
+				row.controller = controller;
+			},
+			clearController: function (controller) {
+				if (row.controller === controller) row.controller = null;
+			},
+			onStatus: function (text) {
+				if (!text) return;
+				setBatchStage(row, "writing", text);
+				refreshBatchRowCells();
+			}
+		};
+	}
+
+	async function generateBatchRowScript(rowId) {
+
+		const row = getBatchRow(rowId);
+		if (!row || row._scriptWriting) return false;
+
+		const typed = String(row.script || "").trim();
+		if (!typed) {
+			setBatchStage(row, "error", "Type a topic in the script cell first, then press the magic wand");
+			refreshBatchRowCells();
+			return false;
+		}
+		if (batchRowBusy(row)) {
+			setBatchStage(row, "error", "This row is already generating");
+			refreshBatchRowCells();
+			return false;
+		}
+
+		const minutes = Math.min(6, Math.max(1, Number(row.minutes) || BATCH_MIN_MINUTES));
+		const topic = batchRowTopic(row) || "my video";
+
+		row._scriptWriting = true;
+		setBatchStage(row, "writing", "Writing the script from the note\u2026");
+		refreshBatchRowCells();
+
+		try {
+			const data = await requestScriptWithNotes(batchRowScriptContext(row), {
+				topic: topic,
+				minutes: minutes,
+				speed: "medium",
+				attempt: 0,
+				previousFailure: ""
+			});
+			const script = String((data && data.script) || "").trim();
+			if (!script) throw new Error("The script came back empty");
+			const live = getBatchRow(rowId);
+			if (!live) return false;
+			live.script = script;
+			const cell = document.querySelector('[data-batch-row="' + rowId + '"] [data-batch-field="script"]');
+			if (cell) cell.value = script;
+			setBatchStage(live, "empty", "Script ready \u2014 review it, then press \u2726 Generate");
+			refreshBatchRowCells();
+			updateBatchToolbar();
+			return true;
+		} catch (error) {
+			const live = getBatchRow(rowId);
+			if (!live) return false;
+			const cancelled = error && error.name === "AbortError";
+			setBatchStage(live, "error", cancelled ? "Script generation was cancelled" : ((error && error.message) || "Script generation failed"));
+			refreshBatchRowCells();
+			return false;
+		} finally {
+			const live = getBatchRow(rowId);
+			if (live) live._scriptWriting = false;
+		}
+
+	}
+
+	async function requestSeoScriptOnce(
+		n,
+		topic,
+		minutes,
+		speed,
+		attempt,
+		previousFailure
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		return requestScriptWithNotes(
+			scriptContextForProject(project),
+			{
+				topic: topic,
+				minutes: minutes,
+				speed: speed,
+				attempt: attempt,
+				previousFailure: previousFailure
+			}
+		);
 
 	}
 
@@ -19707,7 +20989,7 @@ async function retryImagePromptFlow(n) {
 							videoProjects.indexOf(project) + 1,
 							retryLine
 						);
-						if ((await studioOffload.capabilities()).singleAttemptScript) await batchDelay(500 * attempt);
+						await batchDelay(SCRIPT_RETRY_BACKOFF_MS);
 					}
 
 				}

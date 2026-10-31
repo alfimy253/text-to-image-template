@@ -30,6 +30,20 @@ import {
 	renderUpgradePageResponse
 } from "./modules/user-pages";
 import { handleSeoScriptGeneration, handleSeoPlanGeneration } from "./modules/script-seo";
+import { scriptEventLoop } from "./modules/script-event-loop";
+import {
+	handleScriptNoteWrite,
+	handleScriptNoteRead,
+	handleScriptNoteDelete,
+	matchScriptNoteRoute,
+	submitAsyncScriptJob
+} from "./modules/script-notes-api";
+import {
+	SCRIPT_NOTE_CLIENT_STALL_MS,
+	SCRIPT_NOTE_CLIENT_WAIT_MS,
+	SCRIPT_NOTE_DEADLINE_MS,
+	SCRIPT_NOTE_QUEUE_GRACE_MS
+} from "./modules/script-notes";
 import {
 	handleGenerateImagePrompts,
 	handleRemovedImagePromptJobRoute
@@ -265,7 +279,25 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				/* Browser-first provider fetching + credit claim/settle (src/client/pixabay-direct.ts). */
 				directMedia: 1,
 				/* API rotation across backup Workers (src/modules/api-relay.ts). */
-				apiRelay: 1, mediaProvider: "pixabay", per_page: 2, video_per_page: 3 }), {
+				apiRelay: 1,
+				/*
+				 * Script notes + async script jobs (src/modules/script-notes.ts,
+				 * src/modules/script-notes-api.ts). Additive: a client that does
+				 * not read these keeps the legacy synchronous /api/script path.
+				 */
+				scriptNotes: 1, asyncScript: 1, noteRepair: 1,
+				/* Poll hint for GET /api/script/notes/<id>. */
+				scriptNotePollMs: 900,
+				/*
+				 * Hang budgets, advertised so the browser uses the server's
+				 * numbers instead of its own: the client must never wait
+				 * longer than a note is allowed to stay non-terminal.
+				 */
+				scriptNoteWaitMs: SCRIPT_NOTE_CLIENT_WAIT_MS,
+				scriptNoteStallMs: SCRIPT_NOTE_CLIENT_STALL_MS,
+				scriptNoteQueueGraceMs: SCRIPT_NOTE_QUEUE_GRACE_MS,
+				scriptNoteDeadlineMs: SCRIPT_NOTE_DEADLINE_MS,
+				mediaProvider: "pixabay", per_page: 2, video_per_page: 3 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});
 		}
@@ -1553,42 +1585,116 @@ async function handleRequest(request: any, env: any, ctx: any) {
 
 		}
 
+		/*
+		 * SCRIPT NOTES (dynamic URL):
+		 *   POST   /api/script/notes       write notes down from a URL/topic
+		 *   GET    /api/script/notes/<id>  the note + the async job state
+		 *   DELETE /api/script/notes/<id>  forget the note
+		 *
+		 * The note is where a script request "returns to" in async mode: it is
+		 * non-billable metadata, so these routes never touch credit accounting.
+		 */
+		/*
+		 * Shared plumbing for the note routes AND the async script route: the
+		 * page fetcher used to write notes down, the isolate's script event
+		 * loop, and ctx.waitUntil so a parked job outlives its response.
+		 */
+		const scriptNoteDeps = {
+			fetchImpl: fetch,
+			waitUntil: (task: Promise<unknown>) => {
+				try {
+					if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(task);
+				} catch {
+					/* best effort */
+				}
+			},
+			loop: scriptEventLoop()
+		};
+
+		if (
+			url.pathname === "/api/script/notes" ||
+			matchScriptNoteRoute(url.pathname)
+		) {
+
+			if (request.method === "POST" && url.pathname === "/api/script/notes") {
+				return handleScriptNoteWrite(request, env, scriptNoteDeps);
+			}
+
+			const noteMatch = matchScriptNoteRoute(url.pathname);
+			if (noteMatch && request.method === "GET") {
+				return handleScriptNoteRead(noteMatch.id, env, url, {
+					queueGraceMs: SCRIPT_NOTE_QUEUE_GRACE_MS,
+					deadlineMs: SCRIPT_NOTE_DEADLINE_MS
+				});
+			}
+			if (noteMatch && request.method === "DELETE") {
+				return handleScriptNoteDelete(noteMatch.id, env);
+			}
+			return new Response(
+				JSON.stringify({ success: false, error: "Method not allowed" }),
+				{
+					status: 405,
+					headers: {
+						"Content-Type": "application/json",
+						Allow: "POST, GET, DELETE",
+						"Cache-Control": "no-store"
+					}
+				}
+			);
+		}
+
 		if (
 			request.method === "POST" &&
 			url.pathname === "/api/script"
 		) {
+
+			const scriptUsage = async () => {
+				/*
+				 * AI scripts are unlimited on both plans (free and
+				 * paid_user). Record usage only after request inputs
+				 * validate so 400/503 rejections do not inflate counters.
+				 */
+				if (env && env.KV_BINDING) {
+					const scriptCreditUser = await creditSessionUser(request, env);
+					if (scriptCreditUser) {
+						await creditConsume(
+							env,
+							scriptCreditUser.username,
+							scriptCreditUser.usertype,
+							"scripts"
+						);
+					} else if (hasFreemiumCookie(request)) {
+						await guestCreditConsume(
+							env,
+							await guestCreditIdentity(request),
+							"scripts"
+						);
+					}
+				}
+			};
+
+			/*
+			 * Async mode (?async=1): hand the caller a note id immediately and
+			 * let the event loop finish the script. The caller polls
+			 * GET /api/script/notes/<id> until state is done/error.
+			 */
+			if (url.searchParams.get("async") === "1") {
+				return submitAsyncScriptJob(request, env, SCRIPT_MODEL, {
+					...scriptNoteDeps,
+					onValidated: scriptUsage
+				});
+			}
 
 			return handleSeoScriptGeneration(
 				request,
 				url,
 				env,
 				SCRIPT_MODEL,
-				async () => {
-					/*
-					 * AI scripts are unlimited on both plans (free and
-					 * paid_user). Record usage only after request inputs
-					 * validate so 400/503 rejections do not inflate counters.
-					 */
-					if (env && env.KV_BINDING) {
-						const scriptCreditUser = await creditSessionUser(
-							request,
-							env
-						);
-						if (scriptCreditUser) {
-							await creditConsume(
-								env,
-								scriptCreditUser.username,
-								scriptCreditUser.usertype,
-								"scripts"
-							);
-						} else if (hasFreemiumCookie(request)) {
-							await guestCreditConsume(
-								env,
-								await guestCreditIdentity(request),
-								"scripts"
-							);
-						}
-					}
+				scriptUsage,
+				{
+					waitUntil: scriptNoteDeps.waitUntil,
+					fetchImpl: fetch,
+					loop: scriptNoteDeps.loop
 				}
 			);
 

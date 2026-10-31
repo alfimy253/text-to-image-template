@@ -130,7 +130,8 @@ test('Pixabay search keywords planned from the script are shown in the video acc
     file: { name: 'already-imported.jpg' } });
 
   /* Simulate the likely recovery case: one browser search gets the original
-   * redirect/provider error, while the other missing scenes import normally. */
+   * redirect/provider error. That scene is now retried inside the click
+   * instead of being dropped, so the click completes every missing scene. */
   const plansBefore = calls.filter((p) => p === '/api/image-prompts').length;
   const inlineRetry = retry.getAttribute('onclick');
   assert.equal(inlineRetry, 'retryImagePromptFlow(1)', 'visible control is wired to the browser retry flow');
@@ -141,18 +142,17 @@ test('Pixabay search keywords planned from the script are shown in the video acc
   retry.click();
   await clickPromise;
   assert.equal(calls.filter((p) => p === '/api/image-prompts').length, plansBefore, 'retry reuses the visible search keywords');
-  assert.equal(calls.filter((p) => p === '/api/media/search').length, 5, 'button click starts a browser search for every missing scene');
-  assert.equal(calls.filter((p) => p === '/api/media/asset').length, 4, 'only successful searches proceed to asset downloads');
-  assert.equal(project.imagePromptStates['1'].state, 'failed', 'simulated upstream failure remains attached to its scene');
-  assert.equal(project.assets.length, 5, 'successful scene imports are retained after one search fails');
+  assert.equal(calls.filter((p) => p === '/api/media/search').length, 6,
+    'four missing scenes plus one in-click retry of the scene that answered 502');
+  assert.equal(calls.filter((p) => p === '/api/media/asset').length, 5, 'only successful searches proceed to asset downloads');
+  assert.equal(project.imagePromptStates['1'].state, 'imported', 'the retried scene ends up in the gallery');
+  assert.equal(project.assets.length, 6, 'the retried scene is imported exactly once');
 
-  /* A second real button click searches only the missing scene; it does not
-   * rerun the planner, duplicate successful imports, or reuse the old failure. */
+  /* Nothing is missing any more: a second click searches nothing at all. */
   retry.click();
   await clickPromise;
   assert.equal(calls.filter((p) => p === '/api/image-prompts').length, plansBefore, 'retry never re-plans available keywords');
-  assert.equal(calls.filter((p) => p === '/api/media/search').length, 6, 'next button click searches only the previously failed scene');
-  assert.equal(calls.filter((p) => p === '/api/media/asset').length, 5, 'successful search downloads its selected asset');
+  assert.equal(calls.filter((p) => p === '/api/media/search').length, 6, 'a complete gallery is not searched again');
   assert.equal(project.assets.length, 6, 'retried images are inserted without duplicating prior imports');
   assert.ok(project.assets.every((asset) => asset.stockSource?.provider === 'pixabay'));
 
