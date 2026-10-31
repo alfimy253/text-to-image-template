@@ -563,10 +563,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		try {
 
-			await document.fonts.load(
+			// Font loading is optional: an offline font service must not hold
+			// the renderer (and the rest of the queue) indefinitely.
+			await mediaDeadline(document.fonts.load(
 				CAPTION_FONT_SIZE +
 				'px "Bookman Old Style"'
-			);
+			), 8000, "Caption font loading timed out; using a fallback font.");
 
 		}
 		catch (error) {
@@ -863,29 +865,19 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			height / 3;
 
 
-		const textWidth =
-			context.measureText(
-				active.text
-			).width;
-
-
-		const padX =
-			10;
-
-
-		const padY =
-			6;
-
-
-		const boxWidth =
-			textWidth +
-			padX * 2;
-
-
-		const boxHeight =
-			SUBTITLE_FONT_SIZE +
-			padY * 2 +
-			4;
+		// Canvas fillText does not lay out newline-separated lines. The
+		// shared cue builder wraps long sentences with newlines, so draw
+		// each line separately in both editor and quick-batch exports.
+		const lines = String(active.text || "").split("\\n");
+		const padX = 10;
+		const padY = 6;
+		const lineHeight = SUBTITLE_FONT_SIZE + 4;
+		const maxLineWidth = Math.max(1, width - padX * 2);
+		const textWidth = Math.min(maxLineWidth, Math.max.apply(null, lines.map(function (line) {
+			return context.measureText(line).width;
+		})));
+		const boxWidth = textWidth + padX * 2;
+		const boxHeight = lines.length * lineHeight + padY * 2;
 
 
 		const boxX =
@@ -923,11 +915,10 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			"#ffffff";
 
 
-		context.fillText(
-			active.text,
-			x,
-			y
-		);
+		for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+			context.fillText(lines[lineIndex], x,
+				y + (lineIndex - (lines.length - 1) / 2) * lineHeight, maxLineWidth);
+		}
 
 
 		context.restore();
@@ -4342,16 +4333,16 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		try {
 
-			await document.fonts.load(
+			await mediaDeadline(document.fonts.load(
 				"bold " +
 					TITLE_FONT_SIZE +
 					'px "' +
 					font.loadName +
 					'"'
-			);
+			), 8000, "Title font loading timed out; using a fallback font.");
 
-
-			await document.fonts.ready;
+			// Do not wait for document.fonts.ready: it waits for unrelated
+			// page fonts too, and can remain pending after this font loaded.
 
 		}
 		catch (error) {
@@ -9124,7 +9115,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			}
 
 			const audioBytes =
-				(await blob.arrayBuffer()).slice(0);
+				(await mediaDeadline(blob.arrayBuffer(), 30000, "Reading batch narration timed out.")).slice(0);
 
 			const decoded =
 				await Promise.race([
@@ -10971,12 +10962,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		}
 
-		if (batchRenderBusy) {
+		if (batchRenderBusy || generating || window.__workerMode) {
 
 			setBatchStage(
 				row,
 				"done",
-				"Another row is still being rendered"
+				"Another video is still being rendered"
 			);
 
 			return;
@@ -12169,6 +12160,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		project.audio =
 			null;
+		project._voiceoverDurationMs = 0;
 
 		const line =
 			document.getElementById(
@@ -12853,7 +12845,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 		}
 
-		if (generating) {
+		if (generating || batchRenderBusy || window.__workerMode) {
+			alert("A video is already being rendered in this browser. Please wait for it to finish.");
 			return;
 		}
 
@@ -12934,7 +12927,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 		) {
 
 			const arrayBuffer =
-				await project.audioFile.arrayBuffer();
+				await mediaDeadline(project.audioFile.arrayBuffer(), 30000,
+					"Reading the audio file timed out; retry this video.");
 
 			const context =
 				getAudioContext();
@@ -12952,6 +12946,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 				url:
 					null,
 			};
+
+			// Match quick batch: the actual selected audio is the timing
+			// source, including when a different MP3 was uploaded later.
+			if (project.subtitles && project.subtitles.length && project.script && decoded.duration > 0) {
+				project.subtitles = buildScriptCues(project.script, decoded.duration * 1000);
+			}
 
 			const line =
 				document.getElementById(
@@ -13024,7 +13024,8 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			) {
 
 				const buffer =
-					await asset.file.arrayBuffer();
+					await mediaDeadline(asset.file.arrayBuffer(), 30000,
+						"Reading the GIF file timed out; retry this video.");
 
 				const gif =
 					buildGifSlideFrames(
@@ -15875,15 +15876,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	}
 
 	/*
-	 * The "\u2601\ufe0f API" button in each accordion:
-	 * uploads all of this video's elements to
-	 * POST /api/render, then polls
-	 * /api/render/<jobId> until a (background)
-	 * worker finishes and the MP4 is ready to
-	 * download.
+	 * Prefer the user's browser for studio exports. The legacy remote path
+	 * remains available to explicit callers passing { remote: true }; external
+	 * users of /api/render and the background worker protocol are unchanged.
 	 */
 	async function apiRenderVideo(
-		n
+		n, options
 	) {
 
 		const project =
@@ -15904,6 +15902,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 
 			return;
 
+		}
+
+		// Do not serialize media or create a queue job for normal studio exports.
+		if (!options || options.remote !== true) {
+			await renderVideoLocally(n);
+			return;
 		}
 
 		const payload =
@@ -16187,7 +16191,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 			return;
 		}
 
-		if (generating) {
+		if (generating || batchRenderBusy || window.__workerMode) {
 
 			alert(
 				"A video is already being generated \u2014 please wait for it to finish."
@@ -16449,7 +16453,7 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					"done"
 					? "\u2713 " +
 						project.name +
-						" rendered in this browser (API was busy)"
+						" rendered in this browser"
 					: project.name +
 						" local render " +
 						result;
@@ -16467,6 +16471,11 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 	async function workerRunJob(
 		job
 	) {
+
+		// All three export paths share the same renderer and mutable state.
+		if (generating || batchRenderBusy || window.__workerMode) {
+			throw new Error("Another video is already being rendered in this browser");
+		}
 
 		window.__workerMode =
 			true;
@@ -16813,6 +16822,12 @@ ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 					"render produced no output"
 				);
 
+			}
+
+			// A timed-out browser worker may still finish its underlying render.
+			// Never deliver that stale result after its operator reported failure.
+			if (job._workerTimedOut) {
+				throw new Error("Worker render timed out; output was not delivered.");
 			}
 
 			const resp =
@@ -19821,8 +19836,9 @@ async function retryImagePromptFlow(n) {
 			const context =
 				getAudioContext();
 
+			const bytes = await mediaDeadline(blob.arrayBuffer(), 30000, "Reading narration audio timed out.");
 			const decoded =
-				await mediaDeadline(context.decodeAudioData(await blob.arrayBuffer()), 20000, "Narration duration decoding timed out.");
+				await mediaDeadline(context.decodeAudioData(bytes), 20000, "Narration duration decoding timed out.");
 
 			return Math.round(
 				decoded.duration * 1000
@@ -19998,7 +20014,7 @@ async function retryImagePromptFlow(n) {
 		modal.innerHTML =
 			'<div class="modal-box">' +
 			'<div class="modal-title">\ud83c\udf99 Voiceover (MP3) \u2014 Video ' + n + '</div>' +
-			'<div class="va-note" style="margin-bottom:8px">MeloTTS (Cloudflare AI) speaks this video\\'s script exactly as written \\u2014 plain narration sentences, never a subtitle format \\u2014 into an English MP3 (one fixed voice). The MP3 can be uploaded as this video\\'s audio track.</div>' +
+			'<div class="va-note" style="margin-bottom:8px">MeloTTS speaks the plain narration into an English MP3. The voiceover is downloaded and added to this video if no audio is selected. Existing audio is kept. Subtitles use estimated sentence timing and can be turned off.</div>' +
 			'<label class="quality-select voiceover-voice-label">Voice <select id="voiceover-voice-' + n + '" disabled title="Always English">' +
 			'<option value="en" selected>English (en)</option>' +
 			'</select></label>' +
@@ -20138,6 +20154,8 @@ async function retryImagePromptFlow(n) {
 
 			const blob =
 				await response.blob();
+			if (!blob || !blob.size) throw new Error("The voiceover model returned no audio");
+			if (project._deleted || videoProjects.indexOf(project) < 0) return;
 
 			recordStudioUsage("voiceovers", "ok", 1);
 
@@ -20199,33 +20217,41 @@ async function retryImagePromptFlow(n) {
 				2000
 			);
 
-			project.voiceoverFile =
-				blob;
+			project.voiceoverFile = blob;
 
-			/*
-			 * The MP3 is now the truth about how long this video is, so
-			 * any subtitle track already applied is re-timed against it
-			 * instead of the worker's estimate. Same sentences, real
-			 * durations.
-			 */
-			if (
-				project.subtitles &&
-				project.subtitles.length
-			) {
-				project.subtitles =
-					buildScriptCues(
-						text,
-						(await measureBlobMs(blob)) ||
-						project.scriptDurationMs
-					);
+			// Like quick batch, time the plain narration against its audio.
+			// Never overwrite an audio file the user has already selected.
+			const measuredMs = await measureBlobMs(blob);
+			if (project._deleted || videoProjects.indexOf(project) < 0) return;
+			const sameScript = String(project.script || "").trim() === text;
+			let attached = false;
+			if (sameScript && !project.audioFile) {
+				project.audioFile = new File([blob], fileName, { type: blob.type || "audio/mpeg" });
+				project.audio = null;
+				project._voiceoverDurationMs = measuredMs || 0;
+				attached = true;
+				const liveN = videoProjects.indexOf(project) + 1;
+				const audioLine = document.getElementById("va-audio-line-" + liveN);
+				if (audioLine) audioLine.textContent = "\ud83c\udfb5 " + fileName;
+				updateVideoStatus(liveN);
+			}
+			if (sameScript && !project._subtitlesDisabled) {
+				const spanMs = project.audio && project.audio.duration
+					? project.audio.duration * 1000
+					: attached ? measuredMs || project.scriptDurationMs : project.scriptDurationMs;
+				const cues = buildScriptCues(text, spanMs);
+				if (cues.length) project.subtitles = cues;
+			}
+			const subBtn = document.getElementById("voiceover-subtitles-" + n);
+			if (subBtn && project.subtitles && project.subtitles.length) {
+				subBtn.textContent = "\u2705 Subtitles ON \u2014 click to turn off";
 			}
 
 			if (statusEl) {
-				statusEl.textContent =
-					"Voiceover MP3 saved \u2014 upload it as the audio track" +
-					(project.subtitles && project.subtitles.length
-						? " (subtitles re-timed to the MP3)"
-						: "");
+				statusEl.textContent = sameScript
+					? (attached ? "Voiceover saved and added to this video" : "Voiceover saved; existing audio was kept") +
+						(project.subtitles && project.subtitles.length ? " (subtitles enabled)" : "")
+					: "Voiceover saved; the script changed, so the video was not updated";
 			}
 
 		}
@@ -20300,6 +20326,7 @@ async function retryImagePromptFlow(n) {
 
 			project.subtitles =
 				null;
+			project._subtitlesDisabled = true;
 
 			if (statusEl) {
 
@@ -20331,7 +20358,7 @@ async function retryImagePromptFlow(n) {
 				project.script,
 				project.audio && project.audio.duration
 					? project.audio.duration * 1000
-					: project.scriptDurationMs
+					: project._voiceoverDurationMs || project.scriptDurationMs
 			);
 
 		if (!cues.length) {
@@ -20349,6 +20376,7 @@ async function retryImagePromptFlow(n) {
 
 		project.subtitles =
 			cues;
+		project._subtitlesDisabled = false;
 
 		if (statusEl) {
 
