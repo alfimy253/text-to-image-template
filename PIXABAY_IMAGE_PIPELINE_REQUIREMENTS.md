@@ -2,20 +2,37 @@
 
 This file records the image-flow behavior traced from the implementation and the retry contract that must remain true in both studio layouts.
 
-## Shared Worker/provider path
+## Shared provider path (updated: browser-first)
 
-The layouts use different browser orchestration, but both ultimately use `src/modules/pixabay.ts`:
+> **Change of decision.** The earlier rule ("the browser must never call
+> `pixabay.com` and must never receive the key") has been superseded by an
+> explicit product decision: image fetching starts in the browser UI. See
+> [`IMAGE_FETCH_BROWSER_MIGRATION.md`](IMAGE_FETCH_BROWSER_MIGRATION.md).
+
+The layouts use different browser orchestration, and both now fetch media in the
+page first:
 
 ```text
-searchPixabay
-  -> Pixabay metadata request
-  -> validate and normalize hits
-  -> choose hit
-  -> downloadPixabay
-  -> validate media bytes and return a server-owned response
+studioPixabayDirect.scene            (src/client/pixabay-direct.ts)
+  -> GET /api/media/config           (provider origin + key + limits)
+  -> POST /api/media/claim           (reserve import units)
+  -> browser searchPixabay-equivalent request to pixabay.com/api/
+  -> normalize/validate hits with the same rules as src/modules/pixabay.ts
+  -> choose hit in the page
+  -> browser download from cdn.pixabay.com
+  -> validate size, MIME and signatures
+  -> POST /api/media/settle          (refund granted - delivered)
 ```
 
-The provider key is read from the Worker environment. Browser code must never call `pixabay.com` directly or receive the API key. The metadata fetch uses `redirect: "manual"` because Cloudflare Workers does not implement `redirect: "error"`; redirect responses are checked as HTTP responses rather than followed automatically.
+`src/modules/pixabay.ts` (`searchPixabay`, `downloadPixabay`,
+`pixabaySceneImage`) remains the **same-origin fallback** for any scene the
+browser could not read (CORS refusal, provider error, blocked CDN) and for
+clients that do not negotiate `directMedia`. The Worker metadata fetch still uses
+`redirect: "manual"`; the browser path re-checks the final URL after redirects.
+
+The provider key is handed to the page by `/api/media/config` for an
+authenticated or `/free` session, and is never placed in the page HTML. The
+direct path can be disabled server-side with `PIXABAY_BROWSER_FETCH=0`.
 
 ## Editor layout: per-video gallery
 
@@ -49,10 +66,10 @@ When a usable planned keyword list exists, clicking it must:
 
 1. Use the existing visible keyword tokens; do not call the planner or replace the terms.
 2. Skip each scene already represented by the same `imagePromptFlowId` and scene index.
-3. Have the browser issue a same-origin `GET /api/media/search` for every missing scene.
-4. Have the browser issue `GET /api/media/asset` only after a search returns a selected hit.
+3. Fetch each missing scene in the browser first (`studioPixabayDirect.scene`), with one claimed import unit per scene.
+4. On a browser failure, refund that unit and issue the same-origin `GET /api/media/search` + `GET /api/media/asset` fallback for that scene only.
 5. Insert successful results with their original scene index, retain earlier successes, and keep failed scenes retryable.
-6. Leave Pixabay credentials and provider requests on the Worker side.
+6. Keep provider credentials out of page state and out of logs; the key is delivered only by `/api/media/config`, and the direct path must be disableable without a client deploy.
 
 The only exception is when no usable keyword list exists (for example, the planner never produced one): the retry function may fall back to `startImagePromptFlow` to create new terms.
 
@@ -83,7 +100,7 @@ Generate / runBatchRow(row)
 
 Quick Batch currently has no per-row **Retry Pixabay search** button. `#top-generate` is the recovery action for an unfinished row. It restarts that row from the beginning (including voiceover and prompt planning); the browser's `requestImageChunk` first retries failed image requests within its bounded per-scene retry rounds. Consequently, a manual whole-row rerun can discard earlier successful media and repeat successful work/credit usage. Do not treat the top-level Generate control as an editor retry or silently route it through `retryImagePromptFlow`.
 
-A future table-specific scene retry must be designed against row state and row scene indices. It must not read/write `videoProjects`, and it must use a browser-initiated same-origin request without exposing provider credentials.
+A future table-specific scene retry must be designed against row state and row scene indices. It must not read/write `videoProjects`, and it must use the same browser-first fetch (direct attempt, refunded unit, same-scene Worker fallback).
 
 ## Failure simulation and regression expectations
 

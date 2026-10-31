@@ -300,6 +300,46 @@ function createStudioOffloadRuntime(win) {
 		throw error;
 	}
 	function hintSeconds(value) { var n = Number(value); return n > 0 ? n : 0; }
+	/*
+	 * Browser-first media fetching (see src/client/pixabay-direct.ts).
+	 *
+	 * The page itself asks Pixabay for the scene and downloads the bytes; the
+	 * Worker is only used for (a) the small config document, (b) one credit
+	 * reservation per chunk and (c) the same-origin fallback for any scene the
+	 * browser could not read (CORS refusal, provider error, blocked CDN).
+	 *
+	 * Accounting stays exact: the claim grants N units for this chunk, every
+	 * browser-delivered scene keeps its unit, and the settle call refunds
+	 * granted - delivered — including scenes that fell back to the Worker,
+	 * which charges its own unit through the existing hooks.
+	 */
+	function directRuntime() {
+		try { if (win.studioPixabayDirect && typeof win.studioPixabayDirect.scene === "function") return win.studioPixabayDirect; } catch (_) {}
+		try { if (typeof studioPixabayDirect !== "undefined" && studioPixabayDirect && typeof studioPixabayDirect.scene === "function") return studioPixabayDirect; } catch (_) {}
+		return null;
+	}
+	async function directBatchPlan(prompts, g) {
+		var direct = directRuntime();
+		if (!direct || !prompts.length) return null;
+		var ready = false;
+		try { ready = await direct.enabled(); } catch (_) { ready = false; }
+		if (!ready) return null;
+		check(g.options);
+		var claim = null;
+		try { claim = await direct.claim(prompts.length, { signal: g.options.signal }); }
+		catch (error) {
+			if (error && error.name === "AbortError") throw error;
+			/* Quota/transport answers are enforced by the same-origin path too. */
+			if (win.console && win.console.warn) win.console.warn("[studio-image] browser credit claim unavailable; using the same-origin path", { error: String(error && error.message || error).slice(0, 300) });
+			return null;
+		}
+		if (!claim || Number(claim.granted) < prompts.length) {
+			try { if (claim) await direct.settle(claim.claimId, 0); } catch (_) {}
+			return null;
+		}
+		if (win.console && win.console.info) win.console.info("[studio-image] browser media claim granted", { requested: prompts.length, granted: claim.granted });
+		return { runtime: direct, claim: claim, delivered: 0 };
+	}
 	async function images(prompts, frame, options) {
 		options = options || {};
 		/*
@@ -310,36 +350,70 @@ function createStudioOffloadRuntime(win) {
 		 * three-wide pipe while three batch rows are rendering at once.
 		 */
 		var slots = Number(options.slots) > 0 ? Number(options.slots) : 0;
-		var g = group(options), results;
+		var g = group(options), results, directState = null;
 		try {
+			directState = await directBatchPlan(prompts, g);
 			results = await Promise.all(prompts.map(function (prompt, index) {
 				return schedule(async function () {
-					try {
-						var blob = await timedFetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" },
-							body: JSON.stringify(Object.assign({ prompt: prompt }, frame)) }, 165000, g.options, async function (response) {
-								if (!response.ok) return responseError(response);
-								var contentType = response.headers.get("Content-Type") || "";
-								if (!/^(image\/(png|jpeg|webp)|video\/mp4)(;|$)/i.test(contentType)) throw new Error("Image response was not an image");
-								var imageBlob = await response.blob();
-								try { imageBlob.stockSource = JSON.parse(decodeURIComponent(response.headers.get("X-Pixabay-Source") || "%7B%7D")); } catch (_) {}
-								return imageBlob;
-							});
-						check(g.options);
-						if (!blob.size) throw new Error("Empty image response");
-						if (options.onImage) await options.onImage(blob, index);
-						if (win.console && win.console.info) win.console.info("[studio-image] scene delivered", { sceneIndex: index, bytes: blob.size, mediaType: blob.type, sourceId: blob.stockSource && blob.stockSource.id || null });
-						return { ok: true, blob: blob, index: index };
-					} catch (error) {
-						if (error && error.retryAfterMs > 0) noteBackoff(error.retryAfterMs);
-						if (win.console && win.console.error) win.console.error("[studio-image] scene request failed", { sceneIndex: index, status: Number(error && error.status) || 0, kind: error && error.kind || "", retryable: error && error.retryable, retryAfterMs: Number(error && error.retryAfterMs) || 0, requestId: error && error.requestId || "", error: String(error && error.message || error).slice(0, 500) });
-						if (options.onError) options.onError(error, index);
-						return { ok: false, error: error, index: index, retryAfterMs: error && error.retryAfterMs || 0 };
+					var blob = null, directError = null, transport = "worker";
+					if (directState) {
+						try {
+							var scene = await directState.runtime.scene(prompt, frame || {}, { signal: g.options.signal, isCancelled: g.options.isCancelled });
+							check(g.options);
+							if (!scene || !scene.blob || !scene.blob.size) throw new Error("Empty Pixabay scene");
+							blob = scene.blob;
+							blob.stockSource = scene.source || null;
+							directState.delivered += 1;
+							transport = "browser";
+						} catch (error) {
+							if (error && error.name === "AbortError") throw error;
+							directError = error;
+							/* One scene falls back; the rest of the batch keeps its transport. */
+							if (win.console && win.console.warn) win.console.warn("[studio-image] browser Pixabay fetch fell back to the Worker", {
+								sceneIndex: index, status: Number(error && error.status) || 0, kind: error && error.kind || "",
+								retryable: Boolean(error && error.fallback !== false), error: String(error && error.message || error).slice(0, 300) });
+						}
 					}
+					if (!blob) {
+						try {
+							blob = await timedFetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" },
+								body: JSON.stringify(Object.assign({ prompt: prompt }, frame)) }, 165000, g.options, async function (response) {
+									if (!response.ok) return responseError(response);
+									var contentType = response.headers.get("Content-Type") || "";
+									if (!/^(image\/(png|jpeg|webp)|video\/mp4)(;|$)/i.test(contentType)) throw new Error("Image response was not an image");
+									var imageBlob = await response.blob();
+									try { imageBlob.stockSource = JSON.parse(decodeURIComponent(response.headers.get("X-Pixabay-Source") || "%7B%7D")); } catch (_) {}
+									return imageBlob;
+								});
+							check(g.options);
+							if (!blob.size) throw new Error("Empty image response");
+						} catch (error) {
+							if (error && error.retryAfterMs > 0) noteBackoff(error.retryAfterMs);
+							if (win.console && win.console.error) win.console.error("[studio-image] scene request failed", { sceneIndex: index, status: Number(error && error.status) || 0, kind: error && error.kind || "", retryable: error && error.retryable, retryAfterMs: Number(error && error.retryAfterMs) || 0, requestId: error && error.requestId || "", directError: directError ? String(directError.message || directError).slice(0, 200) : "", error: String(error && error.message || error).slice(0, 500) });
+							if (options.onError) options.onError(error, index);
+							return { ok: false, error: error, index: index, retryAfterMs: error && error.retryAfterMs || 0 };
+						}
+					}
+					try {
+						if (options.onImage) await options.onImage(blob, index);
+					} catch (error) {
+						if (options.onError) options.onError(error, index);
+						return { ok: false, error: error, index: index };
+					}
+					if (win.console && win.console.info) win.console.info("[studio-image] scene delivered", { sceneIndex: index, bytes: blob.size, mediaType: blob.type, transport: transport, sourceId: blob.stockSource && blob.stockSource.id || null });
+					return { ok: true, blob: blob, index: index, transport: transport };
 				}, Object.assign({}, g.options, { kind: "image", slots: slots })).catch(function (error) { return { ok: false, error: error, index: index }; });
 			}));
 			check(g.options);
 			return results;
-		} finally { if (options.clearController) options.clearController(g.owner); }
+		} finally {
+			/* Refund whatever the browser did not deliver: failed scenes and
+			 * scenes that were re-fetched through the Worker. */
+			if (directState) {
+				try { await directState.runtime.settle(directState.claim.claimId, directState.delivered); } catch (_) {}
+			}
+			if (options.clearController) options.clearController(g.owner);
+		}
 	}
 	async function mediaResponse(url, init, options) {
 		var g = group(options);
