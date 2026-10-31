@@ -261,9 +261,21 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 		}
 		const data: SearchResult = { provider: "pixabay", per_page: resultLimit as 2 | 3, page, totalHits: Number(raw.totalHits) || 0, hits };
 		traceLog("info", "provider-search.completed", trace, { status: response.status, totalHits: data.totalHits, acceptedHits: hits.length, type });
-		await cachePut(cache, cacheKey, new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=86400" } }));
-		if (localSearch.size >= 128) localSearch.delete(localSearch.keys().next().value!);
-		localSearch.set(cacheKey, { until: Date.now() + PIXABAY_CACHE_SECONDS * 1000, data });
+		/*
+		 * Deep debug: a zero-hit answer used to be cached for a full 24 hours,
+		 * exactly like a successful search. One transient empty provider reply
+		 * (or one over-narrow keyword) then made every later retry in that
+		 * isolate return "no media" for the rest of the day, even after the
+		 * provider recovered or the user changed the keyword. Empty answers are
+		 * deliberately NOT kept in the isolate cache, so the next retry asks
+		 * the provider again; the edge copy is short-lived (30 s) so a retry
+		 * storm still cannot hammer upstream.
+		 */
+		await cachePut(cache, cacheKey, new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=" + (hits.length ? PIXABAY_CACHE_SECONDS : 30) } }));
+		if (hits.length) {
+			if (localSearch.size >= 128) localSearch.delete(localSearch.keys().next().value!);
+			localSearch.set(cacheKey, { until: Date.now() + PIXABAY_CACHE_SECONDS * 1000, data });
+		}
 		return data;
 	})();
 	inFlight.set(cacheKey, work);
@@ -365,13 +377,54 @@ async function downloadPixabayUnqueued(hit: StockHit, signal?: AbortSignal, trac
 	traceLog("info", "download.completed", trace, { mediaType: hit.type, assetId: hit.id, mime, bytes: bytes.length });
 	return { bytes, mime };
 }
+/*
+ * Browser-first imports (`src/client/pixabay-direct.ts`) call the provider from
+ * the page, so they no longer pass through `searchPixabay` and its shared
+ * Durable Object budget. The credit claim route uses this helper so one chunk
+ * of browser searches still draws from the same 90-per-60 s provider budget.
+ * The units are advisory for tests/local runtimes without the DO binding.
+ */
+export async function reservePixabayBudget(
+	env: PixabayEnv,
+	units = 1,
+	trace?: PixabayTrace
+): Promise<{ ok: true } | { ok: false; retryAfter: number }> {
+	const key = env?.PIXABAY_API_KEY?.trim();
+	if (!key || !env.PIXABAY_RATE_LIMITER) return { ok: true };
+	const fingerprint = await digest(key);
+	const wanted = Math.max(1, Math.min(20, Math.floor(Number(units) || 1)));
+	for (let index = 0; index < wanted; index++) {
+		try {
+			await sharedBudget(env, fingerprint, 0, trace);
+		} catch (error) {
+			if (error instanceof PixabayError && error.status === 429) {
+				return { ok: false, retryAfter: Math.max(1, Number(error.retryAfter) || 60) };
+			}
+			throw error;
+		}
+	}
+	return { ok: true };
+}
 export function sceneSearchToken(q: string, scene: number): string {
 	return "pixabay:" + JSON.stringify({ q: normalizeSearchQuery(q), page: 1, index: scene % PIXABAY_IMAGE_RESULTS, scene });
 }
 export async function pixabaySceneImage(env: PixabayEnv, token: string, options: { signal?: AbortSignal; width?: number; height?: number; trace?: PixabayTrace } = {}) {
 	let q = token, page = 1, index = 0, type: MediaType = "image";
 	if (token.startsWith("pixabay:")) {
-		try { const t = JSON.parse(token.slice(8)); q = t.q; page = t.page; index = t.index; type = t.type || "image"; }
+		try {
+			const t = JSON.parse(token.slice(8));
+			q = t.q;
+			type = t.type || "image";
+			/*
+			 * Deep-debug fix: a token without an explicit page/index used to be
+			 * rejected as an invalid selection (HTTP 422), even though both
+			 * fields are optional in the token shape the browser and older
+			 * saved projects write. Defaults keep those tokens usable; the
+			 * bounds check below still rejects real nonsense.
+			 */
+			page = Number.isInteger(t.page) && t.page > 0 ? t.page : 1;
+			index = Number.isInteger(t.index) && t.index >= 0 ? t.index : 0;
+		}
 		catch { throw new PixabayError("Invalid stock scene selection", 400); }
 	}
 	if (!["image", "video"].includes(type) || typeof q !== "string" || !Number.isInteger(index) || index < 0 || index > 2 || !Number.isInteger(page) || page < 1) throw new PixabayError("Invalid stock scene selection", 400);

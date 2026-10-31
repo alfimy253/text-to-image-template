@@ -1,5 +1,5 @@
 export { PixabayRateLimiter } from "./modules/pixabay";
-import { handlePixabayApi } from "./modules/pixabay";
+import { handlePixabayApi, reservePixabayBudget } from "./modules/pixabay";
 /*
  * YouTube Vibe Studio — Cloudflare Worker entry.
  *
@@ -262,6 +262,8 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			 */
 			return new Response(JSON.stringify({ version: 261, binaryImages: true, chunkVoiceover: true,
 				singleAttemptScript: true, compactPrompts: true, imageChunks: 2, imageSlots: 6,
+				/* Browser-first provider fetching + credit claim/settle (src/client/pixabay-direct.ts). */
+				directMedia: 1,
 				/* API rotation across backup Workers (src/modules/api-relay.ts). */
 				apiRelay: 1, mediaProvider: "pixabay", per_page: 2, video_per_page: 3 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
@@ -431,6 +433,31 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				if (reservation) await access.refund(1);
 				throw error;
 			}
+		}
+
+		/*
+		 * BROWSER-FIRST PIXABAY FETCHING (src/client/pixabay-direct.ts)
+		 *
+		 *   GET  /api/media/config  -> provider origin + key + limits (no media)
+		 *   POST /api/media/claim   -> reserve stock import units {count}
+		 *   POST /api/media/settle  -> refund units the browser did not deliver
+		 *
+		 * The provider search and the asset bytes never pass through this Worker
+		 * on the direct path. The three routes above only carry configuration
+		 * and accounting, so the isolate is out of the media bandwidth path
+		 * while credits stay server-enforced.
+		 */
+		if (request.method === "GET" && url.pathname === "/api/media/config") {
+			const access = await imageCreditHooks(request, env);
+			if (access.blocked) return access.blocked;
+			return mediaBrowserConfigResponse(env);
+		}
+		if (request.method === "POST" && (url.pathname === "/api/media/claim" || url.pathname === "/api/media/settle")) {
+			const access = await imageCreditHooks(request, env);
+			if (access.blocked) return access.blocked;
+			return url.pathname === "/api/media/claim"
+				? handleMediaClaim(request, env, access)
+				: handleMediaSettle(request, env, access);
 		}
 
 		// =====================================================
@@ -5063,6 +5090,311 @@ function creditResponseHeaders(
 
 }
 
+
+/* ---- Browser-first Pixabay fetching (src/client/pixabay-direct.ts) ------- */
+
+const MEDIA_CLAIM_PREFIX = "media-claim:";
+const MEDIA_CLAIM_TTL_SECONDS = 900;
+const MEDIA_CLAIM_MAX_UNITS = 20;
+
+function mediaJson(
+	data: unknown,
+	status: any = 200
+): Response {
+
+	return new Response(
+		JSON.stringify(data),
+		{
+			status,
+			headers: {
+				"Content-Type": "application/json",
+				"Cache-Control": "no-store"
+			}
+		}
+	);
+
+}
+
+/*
+ * Browser fetching is the default (the user asked for image fetching to start
+ * in the UI, not in the Worker). An operator can turn the direct path off
+ * without breaking the studio: the browser then keeps using the documented
+ * same-origin /api/image and /api/media routes.
+ */
+function mediaBrowserFetchEnabled(
+	env: any
+): boolean {
+
+	if (
+		!env ||
+		!env.PIXABAY_API_KEY
+	) {
+		return false;
+	}
+
+	const flag =
+		env.PIXABAY_BROWSER_FETCH;
+
+	if (flag === undefined || flag === null || flag === "") {
+		return true;
+	}
+
+	return !["0", "false", "off", "no"].includes(
+		String(flag).trim().toLowerCase()
+	);
+
+}
+
+function mediaBrowserConfigResponse(
+	env: any
+): Response {
+
+	const enabled =
+		mediaBrowserFetchEnabled(env);
+
+	return mediaJson({
+		success: enabled,
+		direct: enabled,
+		/* The page may only talk to the provider origins below. */
+		apiOrigin: "https://pixabay.com",
+		assetHosts: ["cdn.pixabay.com"],
+		/* Browser Pixabay access necessarily uses the public provider key. */
+		key: enabled ? String(env.PIXABAY_API_KEY).trim() : "",
+		perPage: 3,
+		imageResults: 2,
+		videoResults: 3,
+		maxImageBytes: 8 * 1024 * 1024,
+		maxVideoBytes: 16 * 1024 * 1024,
+		claimPath: "/api/media/claim",
+		settlePath: "/api/media/settle",
+		...(enabled ? {} : {
+			error: env && env.PIXABAY_API_KEY
+				? "Browser media fetching is disabled by configuration"
+				: "Pixabay API key is not configured"
+		})
+	});
+
+}
+
+/*
+ * One claim = one chunk of browser-delivered scenes. The claim grants units up
+ * front (so a browser cannot fetch past its allowance) and settle() refunds
+ * `granted - delivered`, including every scene that fell back to the Worker.
+ * Records live in KV for 15 minutes, so an abandoned tab cannot leak credits
+ * forever without a matching settle.
+ */
+async function handleMediaClaim(
+	request: any,
+	env: any,
+	access: any
+): Promise<Response> {
+
+	const body =
+		await request.json().catch(function () { return {}; });
+
+	const count =
+		Math.max(1, Math.min(MEDIA_CLAIM_MAX_UNITS,
+			Math.floor(Number(body && body.count) || 1)));
+
+	if (access.open) {
+		return mediaJson({ success: true, claimId: "open", granted: count, credits: null });
+	}
+
+	let reservation: any;
+
+	try {
+
+		reservation =
+			await access.consume(count);
+
+	}
+	catch (error) {
+
+		console.error("[media-claim] credits.consume.failed", {
+			error: String(error && (error as Error).message || error).slice(0, 300)
+		});
+
+		return mediaJson({ success: false, error: "Media authorization unavailable. Please retry later." }, 503);
+
+	}
+
+	if (
+		!reservation ||
+		!reservation.allowed ||
+		Number(reservation.granted) <= 0
+	) {
+
+		return mediaJson({
+			success: false,
+			error: (reservation && reservation.error) || "Daily stock import allowance exhausted",
+			credits: reservation && reservation.summary || null
+		}, 429);
+
+	}
+
+	/*
+	 * Browser-first fetches skip searchPixabay(), so the shared provider
+	 * budget has to be drawn here instead. A busy key answers 429 and the
+	 * reservation is refunded before anything is fetched.
+	 */
+	let budget: { ok: true } | { ok: false; retryAfter: number };
+	try {
+		budget = await reservePixabayBudget(env, Number(reservation.granted));
+	}
+	catch (error) {
+		budget = { ok: true }; // A budget store outage must not block authorized work.
+	}
+	if (!budget.ok) {
+		try { await access.refund(Number(reservation.granted)); } catch (_) { /* already answered */ }
+		return mediaJson({
+			success: false,
+			error: "Pixabay is busy (429). Please wait.",
+			kind: "overload",
+			retryAfterMs: budget.retryAfter * 1000,
+			credits: reservation.summary || null
+		}, 429);
+	}
+
+	const claimId =
+		crypto.randomUUID();
+
+	try {
+
+		await env.KV_BINDING.put(
+			MEDIA_CLAIM_PREFIX + claimId,
+			JSON.stringify({
+				subject: access.subject,
+				granted: Number(reservation.granted),
+				at: Date.now()
+			}),
+			{ expirationTtl: MEDIA_CLAIM_TTL_SECONDS }
+		);
+
+	}
+	catch (error) {
+
+		console.error("[media-claim] claim.persist.failed", {
+			error: String(error && (error as Error).message || error).slice(0, 300)
+		});
+
+		try { await access.refund(Number(reservation.granted)); } catch (_) { /* already answered */ }
+
+		return mediaJson({ success: false, error: "Media authorization storage is unavailable", kind: "fatal" }, 503);
+
+	}
+
+	return mediaJson({
+		success: true,
+		claimId,
+		granted: Number(reservation.granted),
+		credits: reservation.summary || null
+	});
+
+}
+
+async function handleMediaSettle(
+	request: any,
+	env: any,
+	access: any
+): Promise<Response> {
+
+	const body =
+		await request.json().catch(function () { return {}; });
+
+	const claimId =
+		String(body && body.claimId || "").slice(0, 100);
+
+	const delivered =
+		Math.max(0, Math.min(MEDIA_CLAIM_MAX_UNITS,
+			Math.floor(Number(body && body.delivered) || 0)));
+
+	if (
+		access.open ||
+		!claimId ||
+		claimId === "open"
+	) {
+		return mediaJson({ success: true, settled: false, refunded: 0 });
+	}
+
+	const key =
+		MEDIA_CLAIM_PREFIX + claimId;
+
+	let raw: string | null;
+
+	try {
+
+		raw =
+			await env.KV_BINDING.get(key);
+
+	}
+	catch (error) {
+
+		return mediaJson({ success: false, error: "Media authorization storage is unavailable" }, 503);
+
+	}
+
+	if (!raw) {
+		/* Already settled, expired, or never issued: nothing to refund. */
+		return mediaJson({ success: true, settled: false, refunded: 0 });
+	}
+
+	let record: any =
+		null;
+
+	try { record = JSON.parse(raw); }
+	catch (_) { record = null; }
+
+	if (
+		!record ||
+		record.subject !== access.subject
+	) {
+
+		try { await env.KV_BINDING.delete(key); } catch (_) { /* best effort */ }
+
+		return mediaJson({ success: false, error: "This media claim does not belong to the current session" }, 403);
+
+	}
+
+	const granted =
+		Math.max(0, Math.floor(Number(record.granted) || 0));
+
+	const refunded =
+		Math.max(0, granted - Math.min(granted, delivered));
+
+	/*
+	 * Delete before refunding: a retried settle must never refund twice. If the
+	 * claim cannot be deleted the refund is abandoned (the claim stays live for
+	 * its TTL), because a double refund is worse than a delayed one.
+	 */
+	try { await env.KV_BINDING.delete(key); }
+	catch (error) {
+		console.error("[media-settle] claim.delete.failed", {
+			error: String(error && (error as Error).message || error).slice(0, 300)
+		});
+		return mediaJson({ success: false, error: "Media authorization storage is unavailable" }, 503);
+	}
+
+	let summary: any =
+		null;
+
+	if (refunded > 0) {
+		try { summary = await access.refund(refunded); }
+		catch (error) {
+			console.error("[media-settle] credits.refund.failed", {
+				refunded,
+				error: String(error && (error as Error).message || error).slice(0, 300)
+			});
+		}
+	}
+
+	return mediaJson({
+		success: true,
+		settled: true,
+		refunded,
+		credits: summary
+	});
+
+}
 
 async function imageCreditHooks(
 	request: any,

@@ -13,11 +13,13 @@
  * (\`, \${, \\u...) are intentional — do not reformat.
  */
 
+import { PIXABAY_DIRECT_JS } from "./pixabay-direct";
 import { BROWSER_OFFLOAD_JS } from "./browser-offload";
 import { BROWSER_USAGE_JS } from "./usage-ledger";
 import { PROGRESSIVE_IMAGE_PIPELINE_JS } from "./progressive-image-pipeline";
 
 export const APP_JS = `
+${PIXABAY_DIRECT_JS}
 ${BROWSER_OFFLOAD_JS}
 ${BROWSER_USAGE_JS}
 ${PROGRESSIVE_IMAGE_PIPELINE_JS}
@@ -19190,43 +19192,78 @@ async function retryImagePromptFlow(n) {
 			if (statusEl) statusEl.textContent = "Pixabay search " + (i + 1) + " of " + project.imagePrompts.length + ": " + selection.q;
 			console.info("[pixabay-retry] scene.search", { scene: i, type: selection.type, keyword: selection.q });
 			try {
-				const searchUrl = new URL("/api/media/search", window.location.href);
-				searchUrl.searchParams.set("q", selection.q);
-				searchUrl.searchParams.set("type", selection.type);
-				searchUrl.searchParams.set("page", "1");
-				searchUrl.searchParams.set("per_page", selection.type === "video" ? "3" : "2");
-				searchUrl.searchParams.set("orientation", "landscape");
-				const searchResponse = await fetch(searchUrl.pathname + searchUrl.search, controller ? { signal: controller.signal } : undefined);
-				const searchData = await searchResponse.json().catch(function () { return null; });
-				if (!searchResponse.ok || !searchData || !Array.isArray(searchData.hits)) throw new Error((searchData && searchData.error) || ("Pixabay search failed (HTTP " + searchResponse.status + ")"));
-				console.info("[pixabay-retry] scene.search-result", { scene: i, status: searchResponse.status, hits: searchData.hits.length });
-				const hit = searchData.hits[selection.index] || searchData.hits[0];
-				if (!hit || !hit.id) throw new Error("No Pixabay " + selection.type + " results for this keyword");
-
-				const assetUrl = new URL("/api/media/asset", window.location.href);
-				assetUrl.searchParams.set("id", String(hit.id));
-				assetUrl.searchParams.set("q", selection.q);
-				assetUrl.searchParams.set("type", selection.type);
-				assetUrl.searchParams.set("page", "1");
-				assetUrl.searchParams.set("per_page", selection.type === "video" ? "3" : "2");
-				assetUrl.searchParams.set("orientation", "landscape");
-				const assetResponse = await fetch(assetUrl.pathname + assetUrl.search, controller ? { signal: controller.signal } : undefined);
-				if (!assetResponse.ok) {
-					const errorData = await assetResponse.json().catch(function () { return null; });
-					throw new Error((errorData && errorData.error) || ("Pixabay asset download failed (HTTP " + assetResponse.status + ")"));
+				/*
+				 * Browser-first: search and download the asset in this tab,
+				 * with one claimed import unit. Any failure (CORS, provider,
+				 * CDN) refunds that unit and falls back to the same-origin
+				 * Worker route for this scene only.
+				 */
+				let blob = null;
+				let hit = null;
+				const direct = typeof studioPixabayDirect !== "undefined" ? studioPixabayDirect : null;
+				if (direct && await direct.enabled()) {
+					let claim = null;
+					try { claim = await direct.claim(1, controller ? { signal: controller.signal } : null); }
+					catch (claimError) {
+						if (claimError && claimError.name === "AbortError") throw claimError;
+						console.warn("[pixabay-retry] browser credit claim unavailable; using the same-origin path", { scene: i, error: String(claimError && claimError.message || claimError).slice(0, 300) });
+					}
+					if (claim) {
+						try {
+							const scene = await direct.scene(project.imagePrompts[i], {}, controller ? { signal: controller.signal } : null);
+							if (!scene || !scene.blob || !scene.blob.size) throw new Error("Empty Pixabay scene");
+							blob = scene.blob;
+							hit = scene.hit || null;
+							blob.stockSource = scene.source || { provider: "pixabay", id: hit && hit.id, pageURL: hit && hit.pageURL || "", user: hit && hit.user || "", type: selection.type, duration: hit && hit.duration || 0 };
+							console.info("[pixabay-retry] scene.direct", { scene: i, id: hit && hit.id, type: selection.type, bytes: blob.size });
+						} catch (directError) {
+							if (directError && directError.name === "AbortError") throw directError;
+							console.warn("[pixabay-retry] browser Pixabay fetch fell back", { scene: i, status: Number(directError && directError.status) || 0, kind: directError && directError.kind || "", error: String(directError && directError.message || directError).slice(0, 300) });
+						} finally {
+							try { await direct.settle(claim.claimId, blob ? 1 : 0); } catch (_) {}
+						}
+					}
 				}
-				const mime = assetResponse.headers.get("content-type") || (selection.type === "video" ? "video/mp4" : "image/jpeg");
-				let blob = await assetResponse.blob();
-				if (mime.indexOf("video/") === 0 && blob.type !== "video/mp4") blob = new Blob([blob], { type: mime });
-				if (selection.type === "video" && blob.type !== "video/mp4") throw new Error("Pixabay returned a non-MP4 asset for a video scene");
-				if (selection.type === "image" && blob.type.indexOf("image/") !== 0) throw new Error("Pixabay returned a non-image asset for a photo scene");
-				console.info("[pixabay-retry] scene.downloaded", { scene: i, id: hit.id, type: selection.type, mime: blob.type, bytes: blob.size });
-				blob.stockSource = { provider: "pixabay", id: hit.id, pageURL: hit.pageURL || "", user: hit.user || "", type: selection.type, duration: hit.duration || 0 };
+				if (!blob) {
+					const searchUrl = new URL("/api/media/search", window.location.href);
+					searchUrl.searchParams.set("q", selection.q);
+					searchUrl.searchParams.set("type", selection.type);
+					searchUrl.searchParams.set("page", "1");
+					searchUrl.searchParams.set("per_page", selection.type === "video" ? "3" : "2");
+					searchUrl.searchParams.set("orientation", "landscape");
+					const searchResponse = await fetch(searchUrl.pathname + searchUrl.search, controller ? { signal: controller.signal } : undefined);
+					const searchData = await searchResponse.json().catch(function () { return null; });
+					if (!searchResponse.ok || !searchData || !Array.isArray(searchData.hits)) throw new Error((searchData && searchData.error) || ("Pixabay search failed (HTTP " + searchResponse.status + ")"));
+					console.info("[pixabay-retry] scene.search-result", { scene: i, status: searchResponse.status, hits: searchData.hits.length });
+					hit = searchData.hits[selection.index] || searchData.hits[0];
+					if (!hit || !hit.id) throw new Error("No Pixabay " + selection.type + " results for this keyword");
+
+					const assetUrl = new URL("/api/media/asset", window.location.href);
+					assetUrl.searchParams.set("id", String(hit.id));
+					assetUrl.searchParams.set("q", selection.q);
+					assetUrl.searchParams.set("type", selection.type);
+					assetUrl.searchParams.set("page", "1");
+					assetUrl.searchParams.set("per_page", selection.type === "video" ? "3" : "2");
+					assetUrl.searchParams.set("orientation", "landscape");
+					const assetResponse = await fetch(assetUrl.pathname + assetUrl.search, controller ? { signal: controller.signal } : undefined);
+					if (!assetResponse.ok) {
+						const errorData = await assetResponse.json().catch(function () { return null; });
+						throw new Error((errorData && errorData.error) || ("Pixabay asset download failed (HTTP " + assetResponse.status + ")"));
+					}
+					const mime = assetResponse.headers.get("content-type") || (selection.type === "video" ? "video/mp4" : "image/jpeg");
+					blob = await assetResponse.blob();
+					if (mime.indexOf("video/") === 0 && blob.type !== "video/mp4") blob = new Blob([blob], { type: mime });
+					if (selection.type === "video" && blob.type !== "video/mp4") throw new Error("Pixabay returned a non-MP4 asset for a video scene");
+					if (selection.type === "image" && blob.type.indexOf("image/") !== 0) throw new Error("Pixabay returned a non-image asset for a photo scene");
+					console.info("[pixabay-retry] scene.downloaded", { scene: i, id: hit.id, type: selection.type, mime: blob.type, bytes: blob.size });
+					blob.stockSource = { provider: "pixabay", id: hit.id, pageURL: hit.pageURL || "", user: hit.user || "", type: selection.type, duration: hit.duration || 0 };
+				}
 				if (stale()) break;
 				const at = liveIndex();
 				if (at <= 0 || !await insertStockScene(at, blob, flowId, i, stale)) throw new Error("Could not add the downloaded asset to the gallery");
 				imported++;
-				project.aiImagesDone = imported;
+				/* Add to the scenes already in the gallery, never reset the count. */
+				project.aiImagesDone = (project.aiImagesDone || 0) + 1;
 				recordStudioUsage("images", "ok", 1);
 				setImagePromptState(project, i, "imported", selection.type === "video" ? "clip added to gallery" : "photo added to gallery");
 				console.info("[pixabay-retry] scene.added-to-gallery", { scene: i, id: hit.id, type: selection.type, imported });

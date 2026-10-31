@@ -22,9 +22,10 @@ flowchart LR
 
     Visitor --> Browser
     Browser <-->|same-origin HTTP APIs| Worker
+    Browser -->|search + download media (browser-first)| Pixabay
     Worker -->|env.AI calls / relay selection| Relay
     Relay --> AI
-    Worker -->|search + download media server-side| Pixabay
+    Worker -->|fallback search + download only| Pixabay
     Worker --> DO
     Worker <--> KV
     Worker -->|fallback audio request| TTS
@@ -133,7 +134,7 @@ sequenceDiagram
 2. **Voiceover provides timing.** The browser requests chunked speech when supported. The Worker validates language/text and returns audio chunks; fallback TTS is available. The browser decodes the audio and uses its duration to lay out scenes/captions.
 3. **Scene count is derived from script length.** The stock planner's canonical totals are 6 / 8 / 10 scenes based on word count (≤130 / ≤240 / above that, capped at 10); a smaller editor slot limit can reduce the requested total. Exactly two slots are videos, scene index 0 and `total - 2`; the other slots are photo images.
 4. **Planner output is search vocabulary.** `/api/image-prompts` calls the text model with the entire script and asks for short (1–5 word) Pixabay search terms, not art prompts. Browser requests are batched and may look ahead while earlier scenes are being processed.
-5. **Media bytes are fetched server-side.** The Worker validates selection/frame and consumes credits before sending requests to Pixabay. It returns media bytes with source metadata rather than making the browser permanently hotlink Pixabay assets. Failed or un-delivered work is refunded where the code can determine it.
+5. **Media bytes are fetched by the browser first.** `src/client/pixabay-direct.ts` validates the selection/frame, searches `pixabay.com` and downloads from `cdn.pixabay.com` using a short-lived config from `GET /api/media/config`. Import units are reserved with `POST /api/media/claim` and refunded for undelivered scenes with `POST /api/media/settle`. The Worker routes (`/api/image`, `/api/image-batch`, `/api/media/search`, `/api/media/asset`) remain as the per-scene fallback and for old clients. See [`IMAGE_FETCH_BROWSER_MIGRATION.md`](IMAGE_FETCH_BROWSER_MIGRATION.md) for the verified flow and debug guide.
 6. **Rendering stays in the browser.** The editor uses browser decode/canvas/WebCodecs facilities and `mp4-muxer` to produce the MP4; it is not a server-rendering workflow. The narration track remains the master audio.
 
 ## 4. Quick Batch flow
