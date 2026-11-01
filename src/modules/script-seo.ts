@@ -23,6 +23,32 @@
  * are never a retry reason. See `system-rules.md` RULE 7.
  */
 
+import {
+	buildNoteOutline,
+	buildNoteWriterBrief,
+	canonicalSourceUrl,
+	clientNoteIsFresh,
+	sanitizeClientNote,
+	emptyScriptNote,
+	isScriptNoteId,
+	noteHit,
+	noteRunDone,
+	noteRunFailed,
+	readScriptNote,
+	repairKeywordShortfall,
+	researchSourceUrl,
+	scriptNoteId,
+	topicFromUrl,
+	SCRIPT_NOTE_RESEARCH_TTL_MS,
+	writeScriptNote,
+	type ClientScriptNote,
+	type NoteFetch,
+	type ScriptNote,
+	type ScriptNoteKv,
+	type ScriptNoteSource
+} from "./script-notes";
+import { scriptEventLoop, type ScriptEventLoop } from "./script-event-loop";
+
 export const SEO_LONG_TAIL = 1;
 export const SEO_SHORT_TOTAL = 4;
 export const SEO_SHORT_WORDS_MAX = 3;
@@ -1515,12 +1541,115 @@ function buildPinpointRetryInstructions(
 	return feedback;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Note-aware generation (notes + event loop)                                 */
+/* ------------------------------------------------------------------------- */
+
+export interface ScriptGenerationOptions {
+	/* Note id decided by the caller (async route / pre-warmed note). */
+	noteId?: string;
+	/* Dynamic URL to take notes on, when it is not in the request body. */
+	sourceUrl?: string;
+	/* Turn the note layer on even when the body does not ask for it. */
+	useNotes?: boolean;
+	/* Injected for tests: the page fetcher used to write the note down. */
+	fetchImpl?: NoteFetch;
+	/* Injected for tests: the event loop that schedules the pipeline. */
+	loop?: ScriptEventLoop;
+	/* ctx.waitUntil, so note bookkeeping can outlive the response. */
+	waitUntil?: (task: Promise<unknown>) => void;
+}
+
+export interface ScriptNoteContext {
+	requested: boolean;
+	noteId: string;
+	sourceUrl: string;
+	topic: string;
+	/* The note the browser already holds (localStorage / cookie mirror). */
+	clientNote: ClientScriptNote | null;
+}
+
+const SCRIPT_URL_TOPIC = /^(?:https?:\/\/|www\.)[^\s]+$/i;
+
+/*
+ * What a skipped model call is worth. Used only for the `timings.savedMs`
+ * report written into the note; the real numbers come from current_code_latest.md
+ * (planner p50 7.2 s, writer p50 21 s on the 8B instruct model).
+ */
+export const PLANNER_CALL_SAVED_MS = 7200;
+export const WRITER_CALL_SAVED_MS = 21000;
+
+/*
+ * Decides whether a request uses the note layer and which note it is.
+ *
+ * Notes are OPT-IN (body `useNotes`/`notes`, a `noteId`, or a URL in
+ * `sourceUrl`/`url`/`topic`) so that an old client keeps the exact legacy
+ * pipeline and an old deployment cannot silently serve another topic's cache.
+ * A topic that IS a URL is researched, and the note is keyed on that dynamic
+ * URL, which is the "take down notes on a dynamic url" contract.
+ */
+export function scriptNoteContext(
+	body: Record<string, unknown>,
+	topic: string,
+	minutes: number,
+	speed: string,
+	options: ScriptGenerationOptions = {}
+): ScriptNoteContext {
+	const rawUrl = String(body.sourceUrl ?? body.url ?? "");
+	const topicIsUrl = SCRIPT_URL_TOPIC.test(topic.trim());
+	const givenUrl = rawUrl || (topicIsUrl ? topic.trim() : "");
+	const sourceUrl = canonicalSourceUrl(givenUrl || options.sourceUrl);
+	const bodyNoteId = String(body.noteId ?? "");
+	const requested =
+		options.useNotes === true ||
+		body.useNotes === true ||
+		body.notes === true ||
+		Boolean(options.noteId) ||
+		isScriptNoteId(bodyNoteId) ||
+		Boolean(sourceUrl);
+	const noteId = isScriptNoteId(options.noteId)
+		? String(options.noteId)
+		: isScriptNoteId(bodyNoteId)
+			? bodyNoteId
+			: scriptNoteId({ topic, sourceUrl, minutes, speed });
+	return {
+		requested,
+		noteId,
+		sourceUrl,
+		topic: topicIsUrl ? topicFromUrl(sourceUrl) || sourceUrl || topic : topic,
+		clientNote: sanitizeClientNote(body.note)
+	};
+}
+
+/*
+ * Runs `fn` on the shared script event loop, but never lets scheduling be the
+ * reason a script fails: a full queue simply runs the task inline.
+ */
+async function onScriptLoop<T>(
+	loop: ScriptEventLoop,
+	id: string,
+	label: string,
+	fn: () => Promise<T>
+): Promise<T> {
+	try {
+		return await loop.schedule(fn, { id, label });
+	} catch (err: unknown) {
+		const code = (err as { code?: string })?.code;
+		if (code === "SCRIPT_LOOP_QUEUE_FULL") return fn();
+		throw err;
+	}
+}
+
 export async function handleSeoScriptGeneration(
 	request: Request,
 	url: URL,
-	env: { AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> } },
+	env: {
+		AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> };
+		KV_BINDING?: ScriptNoteKv;
+	},
 	scriptModel: string,
-	onValidated?: () => Promise<void>
+	onValidated?: () => Promise<void>,
+	options: ScriptGenerationOptions = {}
 ): Promise<Response> {
 	const reqId = makeReqId();
 	const startedAt = Date.now();
@@ -1648,6 +1777,141 @@ export async function handleSeoScriptGeneration(
 	// Scale token limit with video length so 4-6 min SRTs are never cut off mid-timestamp
 	const writerMaxTokens = Math.min(4096, Math.max(2048, minutes * 800));
 
+	/*
+	 * THE NOTE LAYER (opt-in).
+	 *
+	 * A note is the durable half of the pipeline: research taken from a dynamic
+	 * URL, the validated keyword set, and the beat plan. Reusing it removes the
+	 * planner call from every repeat run; handing it to the writer removes the
+	 * guesswork that used to produce rejected SRTs. See current_code_latest.md.
+	 */
+	const noteContext = scriptNoteContext(body, topic, minutes, speed, options);
+	const noteEnabled = noteContext.requested;
+	/* What the prompts are ABOUT. A URL topic becomes its slug here and its
+	 * researched page title once the note has been written down. */
+	const subject = noteEnabled ? noteContext.topic : topic;
+	const repairEnabled = noteEnabled || body.repairKeywords === true;
+	const loop = options.loop || scriptEventLoop();
+	const defer = (task: Promise<unknown>) => {
+		if (options.waitUntil) {
+			try {
+				options.waitUntil(task);
+				return;
+			} catch {
+				/* fall through: best effort */
+			}
+		}
+		void task;
+	};
+
+	let note: ScriptNote | null = null;
+	let noteMs = 0;
+	let noteResearchMs = 0;
+	let notePlannerSkipped = false;
+	let noteError = "";
+
+	if (noteEnabled) {
+		const noteStartedAt = Date.now();
+		try {
+			note = await readScriptNote(env, noteContext.noteId);
+			if (note) {
+				noteHit(note);
+			} else {
+				note = emptyScriptNote({
+					id: noteContext.noteId,
+					topic: noteContext.topic,
+					sourceUrl: noteContext.sourceUrl,
+					minutes,
+					speed
+				});
+			}
+			note.minutes = minutes;
+			note.speed = speed;
+			if (noteContext.sourceUrl) note.sourceUrl = noteContext.sourceUrl;
+
+			/*
+			 * Browser memory: the client sends the note it kept in localStorage
+			 * (cookie mirror compacts it). Everything is re-validated here, and
+			 * it only ever FILLS GAPS - a server note that already has a plan
+			 * wins, so a stale browser copy cannot rewrite this topic's plan.
+			 */
+			const clientNote = noteContext.clientNote;
+			if (clientNote && clientNoteIsFresh(clientNote)) {
+				if (!note.outline.length && clientNote.outline.length) {
+					note.outline = clientNote.outline;
+					note.origin = "browser";
+				}
+				if (!note.keywordSet && clientNote.keywordSetRaw) {
+					const clientCheck = parseKeywordSet(JSON.stringify(clientNote.keywordSetRaw));
+					if (clientCheck.ok) {
+						note.keywordSet = clientCheck.data;
+						note.origin = "browser";
+					} else {
+						console.warn("[script] browser note keyword set ignored", {
+							reqId,
+							noteId: note.id,
+							reason: clientCheck.error
+						});
+					}
+				}
+			} else if (clientNote) {
+				console.warn("[script] stale browser note ignored", {
+					reqId,
+					noteId: note.id,
+					updatedAt: clientNote.updatedAt
+				});
+			}
+		} catch (err: unknown) {
+			noteError = errorMessage(err);
+			note = null;
+		}
+		noteMs = Date.now() - noteStartedAt;
+	}
+
+	/*
+	 * `reuseScript: true` is the explicit "give me the note's script" switch
+	 * (a re-render, a re-open, the second half of a retry). It is never implied:
+	 * a normal request still re-writes the script from the note's keyword set
+	 * and beat plan, so the text is fresh.
+	 */
+	if (note && body.reuseScript === true && note.payload && note.script) {
+		noteHit(note);
+		await writeScriptNote(env, note);
+		const cachedPayload: Record<string, unknown> = {
+			...note.payload,
+			noteId: note.id,
+			noteUrl: "/api/script/notes/" + note.id,
+			noteHits: note.hits,
+			cachedNote: true,
+			cachedAt: note.updatedAt
+		};
+		console.log("[script] served from note", {
+			reqId,
+			noteId: note.id,
+			hits: note.hits,
+			scriptChars: String(note.script).length
+		});
+		return scriptJson(cachedPayload, 200);
+	}
+
+	/*
+	 * Research and planning are independent, so the note fetch is parked on the
+	 * event loop in the `poll` phase together with the planner call: a 4 s page
+	 * read is hidden behind a 6-20 s planner call instead of being added to it.
+	 */
+	const researchUrl = note ? noteContext.sourceUrl || note.sourceUrl : "";
+	const needsResearch = Boolean(
+		note &&
+			researchUrl &&
+			(!note.source || Date.now() - (note.updatedAt || 0) > SCRIPT_NOTE_RESEARCH_TTL_MS)
+	);
+	const researchTask: Promise<ScriptNoteSource> | null =
+		note && needsResearch
+			? onScriptLoop(loop, note.id + ":research", "notes", () =>
+					researchSourceUrl(researchUrl, options.fetchImpl)
+				)
+			: null;
+
 	console.log("[script] start", {
 		reqId,
 		topic: topic.slice(0, 80),
@@ -1658,160 +1922,268 @@ export async function handleSeoScriptGeneration(
 		approxSecPerCue,
 		maxAllowedMs,
 		writerMaxTokens,
-		model: scriptModel
+		model: scriptModel,
+		noteId: note ? note.id : undefined,
+		noteSource: noteContext.sourceUrl || undefined,
+		noteHits: note ? note.hits : undefined
 	});
 
 	const plannerTrace: Array<Record<string, unknown>> = [];
 	const writerTrace: Array<Record<string, unknown>> = [];
+	const stages: Record<string, number> = {
+		noteMs: 0,
+		researchMs: 0,
+		planMs: 0,
+		writeMs: 0,
+		totalMs: 0
+	};
+	let repairedKeywords: string[] = [];
+	let activeNote = note;
+
+	/* The payload every success path shares, so the note can mirror it. */
+	const buildSuccess = (
+		check: SrtValidationResult,
+		repair: { repairedKeywords: string[]; repairMs: number } | null
+	): Record<string, unknown> => {
+		const set = keywordSet as PlannedKeywordSet;
+		const cues = check.cues || [];
+		const spokenText = check.srt ? srtSpokenText(check.srt) : "";
+		const plainScript = plainScriptFromCues(cues);
+		const spokenWordCount = spokenText.split(/\s+/).filter(Boolean).length;
+		const keywords = {
+			longTail: {
+				keyword: set.longTail,
+				count: keywordCount(spokenText, set.longTail),
+				min: SEO_LONG_FREQ_MIN,
+				max: null
+			},
+			short: set.shorts.map((kw) => ({
+				keyword: kw,
+				count: keywordCount(spokenText, kw),
+				min: SEO_SHORT_FREQ_MIN,
+				max: null
+			}))
+		};
+		const payload: Record<string, unknown> = {
+			success: true,
+			script: plainScript,
+			format: "plain",
+			title: set.title,
+			headings: set.headings,
+			keywords,
+			lines: cues.length,
+			words: spokenWordCount,
+			durationMs: check.endMs || 0,
+			minutes: minutes,
+			model: writerModel
+		};
+		if (repair) {
+			payload.repaired = true;
+			payload.repairedKeywords = repair.repairedKeywords;
+			payload.repairMs = repair.repairMs;
+		}
+		if (activeNote) {
+			payload.noteId = activeNote.id;
+			payload.noteUrl = "/api/script/notes/" + activeNote.id;
+			payload.noteHits = activeNote.hits;
+			payload.notePlannerSkipped = notePlannerSkipped;
+			payload.noteOrigin = activeNote.origin || "server";
+			/* The browser stores this so its next request needs no planner. */
+			payload.outline = activeNote.outline;
+		}
+		if (debugRequested) {
+			payload.timings = stages;
+		}
+		return payload;
+	};
+
+	let keywordSet: PlannedKeywordSet | null = suppliedKeywordSet;
+
+	const noteResearchStartedAt = Date.now();
 
 	try {
 		/*
 		 * Stage 1: SEO Keyword, Title & Section Heading Planner (max 3 attempts)
+		 *
+		 * Skipped entirely when the note already holds a validated set: that is
+		 * the 6-20 s the note layer removes from every repeat run.
 		 */
-		const keywordPrompt = buildSeoPlannerPrompt(topic);
-		let keywordSet: PlannedKeywordSet | null = suppliedKeywordSet;
-		let keywordError = "";
-		if (keywordSet) {
-			plannerTrace.push({ attempt: 0, ok: true, ms: 0, source: "client-selected" });
-			console.log("[script] keywords supplied", { reqId, title: keywordSet.title, longTail: keywordSet.longTail, shorts: keywordSet.shorts });
-		}
-		let prevPlannerRaw = "";
-
-		for (let attempt = 1; !keywordSet && attempt <= 3; attempt++) {
-			const attemptT0 = Date.now();
-			const plannerTemp = attempt === 1 ? 0.55 : 0.4;
-			const prompt =
-				keywordPrompt +
-				(attempt > 1
-					? " Your previous attempt was rejected: " +
-						keywordError +
-						(prevPlannerRaw
-							? " Your previous JSON was: " +
-								prevPlannerRaw.slice(0, 420) +
-								"."
-							: "") +
-						" Try again and fix that exact problem."
-					: "");
-
-			console.log("[script] keywords attempt", {
-				reqId,
-				attempt,
-				temperature: plannerTemp,
-				maxTokens: 1024,
-				promptChars: prompt.length
-			});
-
-			/*
-			 * A transport failure (AiError, rate limit, timeout, a retired
-			 * model slug) is a RETRY reason, not a reason to abandon the
-			 * request: it consumes one of the three planner attempts and the
-			 * next prompt repeats the original ask. Before this, any thrown
-			 * model error jumped straight to the outer catch and answered
-			 * 500 without a single retry.
-			 */
-			let rawText = "";
-
-			try {
-				const result = await runAiCallWithTimeout(
-					env.AI.run(scriptModel, {
-						prompt,
-						max_tokens: 1024,
-						temperature: plannerTemp
-					}),
-					SEO_PLAN_AI_TIMEOUT_MS
-				);
-
-				rawText = aiText(result);
-
-				if (!rawText && result) {
-					console.warn("[script] unrecognized AI output shape (keywords)", {
-						reqId,
-						attempt,
-						resultType: typeof result,
-						keys:
-							typeof result === "object" && result !== null
-								? Object.keys(result as Record<string, unknown>)
-								: []
-					});
-				}
-			} catch (modelError: unknown) {
-				keywordError =
-					"the planner model call failed (" +
-					errorMessage(modelError) +
-					")";
-				prevPlannerRaw = "";
+		const noteKeywordSet = activeNote ? activeNote.keywordSet : null;
+		if (!keywordSet && noteKeywordSet) {
+			const stored = parseKeywordSet(
+				JSON.stringify({
+					title: noteKeywordSet.title,
+					headings: noteKeywordSet.headings,
+					longTail: noteKeywordSet.longTail,
+					short: noteKeywordSet.shorts
+				})
+			);
+			if (stored.ok) {
+				keywordSet = stored.data;
+				notePlannerSkipped = true;
 				plannerTrace.push({
-					attempt,
-					ok: false,
-					ms: Date.now() - attemptT0,
-					transport: true,
-					reason: keywordError
-				});
-				console.warn("[script] keywords model error", {
-					reqId,
-					attempt,
-					ms: Date.now() - attemptT0,
-					error: keywordError
-				});
-				continue;
-			}
-
-			if (!rawText) {
-				keywordError = "the planner returned an empty reply";
-				prevPlannerRaw = "";
-				plannerTrace.push({
-					attempt,
-					ok: false,
-					ms: Date.now() - attemptT0,
-					empty: true,
-					reason: keywordError
-				});
-				continue;
-			}
-
-			const check = parseKeywordSet(rawText);
-			const attemptMs = Date.now() - attemptT0;
-
-			if (check.ok) {
-				keywordSet = check.data;
-				plannerTrace.push({
-					attempt,
+					attempt: 0,
 					ok: true,
-					ms: attemptMs
+					ms: 0,
+					source: activeNote && activeNote.origin === "browser" ? "browser-note" : "note"
 				});
-				console.log("[script] keywords ok", {
+				console.log("[script] keywords from note", {
 					reqId,
-					attempt,
-					ms: attemptMs,
+					noteId: activeNote?.id,
 					title: keywordSet.title,
-					titleMatchedShorts: keywordSet.titleMatchedShorts,
-					headings: keywordSet.headings,
-					headingMatchedShorts: keywordSet.headingMatchedShorts,
 					longTail: keywordSet.longTail,
 					shorts: keywordSet.shorts
 				});
-				break;
+			} else {
+				console.warn("[script] note keyword set unusable", {
+					reqId,
+					noteId: activeNote?.id,
+					reason: stored.error
+				});
 			}
-
-			keywordError = check.error;
-			prevPlannerRaw = rawText.replace(/\s+/g, " ").trim();
-			plannerTrace.push({
-				attempt,
-				ok: false,
-				ms: attemptMs,
-				reason: keywordError,
-				rawPreview: prevPlannerRaw.slice(0, 260)
-			});
-
-			console.warn("[script] keywords invalid", {
-				reqId,
-				attempt,
-				ms: attemptMs,
-				reason: keywordError,
-				rawChars: rawText.length,
-				rawPreview: prevPlannerRaw.slice(0, 260)
-			});
 		}
+
+		const keywordPrompt = buildSeoPlannerPrompt(subject);
+		let keywordError = "";
+		let prevPlannerRaw = "";
+		const planStartedAt = Date.now();
+
+		if (!keywordSet) {
+			for (let attempt = 1; attempt <= 3; attempt++) {
+				const attemptT0 = Date.now();
+				const plannerTemp = attempt === 1 ? 0.55 : 0.4;
+				const prompt =
+					keywordPrompt +
+					(attempt > 1
+						? " Your previous attempt was rejected: " +
+							keywordError +
+							(prevPlannerRaw
+								? " Your previous JSON was: " +
+									prevPlannerRaw.slice(0, 420) +
+									"."
+								: "") +
+							" Try again and fix that exact problem."
+						: "");
+
+				console.log("[script] keywords attempt", {
+					reqId,
+					attempt,
+					temperature: plannerTemp,
+					maxTokens: 1024,
+					promptChars: prompt.length
+				});
+
+				/*
+				 * A transport failure (AiError, rate limit, timeout, a retired
+				 * model slug) is a RETRY reason, not a reason to abandon the
+				 * request: it consumes one of the three planner attempts and the
+				 * next prompt repeats the original ask.
+				 */
+				let rawText = "";
+
+				try {
+					const result = await runAiCallWithTimeout(
+						env.AI.run(scriptModel, {
+							prompt,
+							max_tokens: 1024,
+							temperature: plannerTemp
+						}),
+						SEO_PLAN_AI_TIMEOUT_MS
+					);
+
+					rawText = aiText(result);
+
+					if (!rawText && result) {
+						console.warn("[script] unrecognized AI output shape (keywords)", {
+							reqId,
+							attempt,
+							resultType: typeof result,
+							keys:
+								typeof result === "object" && result !== null
+									? Object.keys(result as Record<string, unknown>)
+									: []
+						});
+					}
+				} catch (modelError: unknown) {
+					keywordError =
+						"the planner model call failed (" +
+						errorMessage(modelError) +
+						")";
+					prevPlannerRaw = "";
+					plannerTrace.push({
+						attempt,
+						ok: false,
+						ms: Date.now() - attemptT0,
+						transport: true,
+						reason: keywordError
+					});
+					console.warn("[script] keywords model error", {
+						reqId,
+						attempt,
+						ms: Date.now() - attemptT0,
+						error: keywordError
+					});
+					continue;
+				}
+
+				if (!rawText) {
+					keywordError = "the planner returned an empty reply";
+					prevPlannerRaw = "";
+					plannerTrace.push({
+						attempt,
+						ok: false,
+						ms: Date.now() - attemptT0,
+						empty: true,
+						reason: keywordError
+					});
+					continue;
+				}
+
+				const check = parseKeywordSet(rawText);
+				const attemptMs = Date.now() - attemptT0;
+
+				if (check.ok) {
+					keywordSet = check.data;
+					plannerTrace.push({
+						attempt,
+						ok: true,
+						ms: attemptMs
+					});
+					console.log("[script] keywords ok", {
+						reqId,
+						attempt,
+						ms: attemptMs,
+						title: keywordSet.title,
+						titleMatchedShorts: keywordSet.titleMatchedShorts,
+						headings: keywordSet.headings,
+						headingMatchedShorts: keywordSet.headingMatchedShorts,
+						longTail: keywordSet.longTail,
+						shorts: keywordSet.shorts
+					});
+					break;
+				}
+
+				keywordError = check.error;
+				prevPlannerRaw = rawText.replace(/\s+/g, " ").trim();
+				plannerTrace.push({
+					attempt,
+					ok: false,
+					ms: attemptMs,
+					reason: keywordError,
+					rawPreview: prevPlannerRaw.slice(0, 260)
+				});
+
+				console.warn("[script] keywords invalid", {
+					reqId,
+					attempt,
+					ms: attemptMs,
+					reason: keywordError,
+					rawChars: rawText.length,
+					rawPreview: prevPlannerRaw.slice(0, 260)
+				});
+			}
+		}
+		stages.planMs = Date.now() - planStartedAt;
 
 		if (!keywordSet) {
 			const totalMs = Date.now() - startedAt;
@@ -1821,6 +2193,10 @@ export async function handleSeoScriptGeneration(
 				lastReason: keywordError,
 				totalMs
 			});
+			if (activeNote) {
+				noteRunFailed(activeNote, "SEO keywords invalid (" + keywordError + ")");
+				defer(writeScriptNote(env, activeNote));
+			}
 			const errPayload: Record<string, unknown> = {
 				success: false,
 				error: "SEO keywords invalid (" + keywordError + ") - try again"
@@ -1830,19 +2206,71 @@ export async function handleSeoScriptGeneration(
 					reqId,
 					totalMs,
 					plannerAttempts: plannerTrace,
-					writerAttempts: writerTrace
+					writerAttempts: writerTrace,
+					eventLoop: loop.stats()
 				};
+				errPayload.timings = stages;
 			}
 			return scriptJson(errPayload, 500);
 		}
 
+		/* The note now holds the validated set for every later run. */
+		if (activeNote) {
+			activeNote.keywordSet = keywordSet;
+			if (!activeNote.outline.length) {
+				activeNote.outline = buildNoteOutline(activeNote.source, keywordSet, wordTarget);
+			}
+		}
+		/*
+		 * Stage 0b: collect the research that was started in parallel with the
+		 * planner. Awaiting it HERE (not before planning) is what makes the page
+		 * read free on a cold note: the note fetch runs while the model plans.
+		 */
+		if (activeNote && researchTask) {
+			const source = await researchTask;
+			noteResearchMs = Date.now() - noteResearchStartedAt;
+			activeNote.source = source;
+			stages.researchMs = noteResearchMs;
+			if (source.status === "fetched") {
+				console.log("[script] notes written", {
+					reqId,
+					noteId: activeNote.id,
+					url: source.url,
+					ms: source.ms,
+					headings: source.headings.length,
+					facts: source.facts.length
+				});
+			} else {
+				console.warn("[script] notes unavailable", {
+					reqId,
+					noteId: activeNote.id,
+					url: source.url,
+					status: source.status,
+					error: source.error
+				});
+			}
+		}
+
+		const noteBrief = activeNote ? buildNoteWriterBrief(activeNote) : "";
+
 		/*
 		 * Stage 2: Explainer SRT Writer + Redundant Server Enforcement (max 3 attempts)
 		 */
+		/*
+		 * When the topic was a URL, the researched page title is the honest
+		 * subject; the slug derived at request time is only the fallback for a
+		 * page that could not be read.
+		 */
+		const researchTitle =
+			activeNote && activeNote.source && activeNote.source.status === "fetched"
+				? activeNote.source.title
+				: "";
+		const writerSubject =
+			SCRIPT_URL_TOPIC.test(topic) && researchTitle ? researchTitle : subject;
 		const basePrompt =
 			"You are a professional video script writer for EXPLAINER videos - every default script explains its topic section by section, in natural spoken English. Answer with ONLY valid SRT subtitle text, nothing else. " +
 			"Write a YouTube narration script as SRT subtitles about: " +
-			topic +
+			writerSubject +
 			". The video is " +
 			minutes +
 			" minute(s) long and the TOTAL duration of your SRT must stay UNDER " +
@@ -1882,15 +2310,22 @@ export async function handleSeoScriptGeneration(
 			".\n" +
 			keywordOverlapInstructions(keywordSet) +
 			"- Weave every keyword naturally into spoken sentences (never read them as a list).\n" +
-			"- Follow this explainer section flow in order (for topic structure ONLY — do NOT speak or print the title/headings verbatim; they are not spoken SRT and their words do not count as keyword uses): " +
-			keywordSet.headings
-				.map((h, idx) => "Section " + (idx + 1) + ": " + h)
-				.join(" -> ") +
-			".";
+			(noteBrief
+				? "- Write to the REFERENCE NOTE below instead of inventing your own structure. It carries the researched facts and a beat plan with a word budget per beat; every beat must be covered once, in order, and the spoken words must still fit the " +
+					minutes +
+					" minute(s) above.\n" +
+					noteBrief +
+					"\n"
+				: "- Follow this explainer section flow in order (for topic structure ONLY — do NOT speak or print the title/headings verbatim; they are not spoken SRT and their words do not count as keyword uses): " +
+					keywordSet.headings
+						.map((h, idx) => "Section " + (idx + 1) + ": " + h)
+						.join(" -> ") +
+					".");
 
 		let lastError = "";
 		let prevCheck: SrtValidationResult | null = null;
 		let prevAudit: KeywordAuditEntry[] | null = null;
+		const writeStartedAt = Date.now();
 
 		for (let attempt = 1; attempt <= (singleAttempt ? 1 : 3); attempt++) {
 			const attemptT0 = Date.now();
@@ -1908,7 +2343,8 @@ export async function handleSeoScriptGeneration(
 				temperature: writerTemp,
 				maxTokens: writerMaxTokens,
 				promptChars: prompt.length,
-				hasPreviousValidSrt: Boolean(prevCheck && prevCheck.ok)
+				hasPreviousValidSrt: Boolean(prevCheck && prevCheck.ok),
+				noteId: activeNote ? activeNote.id : undefined
 			});
 
 			/* Same rule as the planner: a thrown model error retries. */
@@ -1949,49 +2385,99 @@ export async function handleSeoScriptGeneration(
 			}
 
 			const check = validateSrt(rawSrt, minutes);
-			const spokenText =
+			const spokenBeforeRepair =
 				check.ok && check.srt ? srtSpokenText(check.srt) : "";
+
+			/*
+			 * DETERMINISTIC REPAIR (note layer): a valid SRT that only misses a
+			 * keyword minimum is patched in place. Before this, that case cost
+			 * another full writer call (up to 90 s per attempt, twice).
+			 */
+			let finalCheck: SrtValidationResult = check;
+			let repair: { repairedKeywords: string[]; repairMs: number } | null = null;
+			if (
+				repairEnabled &&
+				check.ok &&
+				check.cues &&
+				spokenBeforeRepair &&
+				keywordUsageError(spokenBeforeRepair, keywordSet)
+			) {
+				const repairStartedAt = Date.now();
+				const fixed = repairKeywordShortfall(check.cues, keywordSet);
+				if (fixed) {
+					const recheck = validateSrt(fixed.srt, minutes);
+					const repairedProblem =
+						recheck.ok && recheck.srt
+							? keywordUsageError(srtSpokenText(recheck.srt), keywordSet)
+							: recheck.error || "invalid SRT after repair";
+					if (recheck.ok && recheck.srt && !repairedProblem) {
+						finalCheck = recheck;
+						repair = {
+							repairedKeywords: fixed.patched.map((entry) => entry.keyword),
+							repairMs: Date.now() - repairStartedAt
+						};
+						repairedKeywords = repair.repairedKeywords;
+						writerTrace.push({
+							attempt,
+							ok: true,
+							repaired: repair.repairedKeywords,
+							ms: Date.now() - attemptT0,
+							repairMs: repair.repairMs,
+							cueCount: recheck.cues ? recheck.cues.length : 0,
+							endMs: recheck.endMs
+						});
+						console.log("[script] keywords repaired locally", {
+							reqId,
+							attempt,
+							repairMs: repair.repairMs,
+							keywords: repair.repairedKeywords,
+							savedModelCall: true
+						});
+					} else {
+						console.warn("[script] local repair insufficient", {
+							reqId,
+							attempt,
+							reason: repairedProblem
+						});
+					}
+				}
+			}
+
+			const spokenText =
+				finalCheck.ok && finalCheck.srt ? srtSpokenText(finalCheck.srt) : "";
 			/* What the browser is actually given: the spoken sentences only. */
 			const plainScript =
-				check.ok && check.cues ? plainScriptFromCues(check.cues) : "";
+				finalCheck.ok && finalCheck.cues ? plainScriptFromCues(finalCheck.cues) : "";
 			const spokenWordCount = spokenText
 				? spokenText.split(/\s+/).filter(Boolean).length
 				: 0;
 			const audit =
-				check.ok && spokenText
-					? keywordUsageAudit(spokenText, check.cues, keywordSet)
+				finalCheck.ok && spokenText
+					? keywordUsageAudit(spokenText, finalCheck.cues, keywordSet)
 					: null;
 
-			const problem = check.ok
+			const problem = finalCheck.ok
 				? keywordUsageError(spokenText, keywordSet)
-				: check.error || "invalid SRT";
+				: finalCheck.error || "invalid SRT";
 			const attemptMs = Date.now() - attemptT0;
 
-			if (!problem && check.srt && plainScript) {
-				const keywords = {
-					longTail: {
-						keyword: keywordSet.longTail,
-						count: keywordCount(spokenText, keywordSet.longTail),
-						min: SEO_LONG_FREQ_MIN,
-						max: null
-					},
-					short: keywordSet.shorts.map((kw) => ({
-						keyword: kw,
-						count: keywordCount(spokenText, kw),
-						min: SEO_SHORT_FREQ_MIN,
-						max: null
-					}))
-				};
-
+			if (!problem && finalCheck.srt && plainScript) {
 				const totalMs = Date.now() - startedAt;
-				writerTrace.push({
-					attempt,
-					ok: true,
-					ms: attemptMs,
-					cueCount: check.cues ? check.cues.length : 0,
-					endMs: check.endMs,
-					spokenWords: spokenWordCount
-				});
+				stages.writeMs = Date.now() - writeStartedAt;
+				stages.totalMs = totalMs;
+				stages.noteMs = noteMs;
+				const payload = buildSuccess(finalCheck, repair);
+
+				if (!repair) {
+					writerTrace.push({
+						attempt,
+						ok: true,
+						ms: attemptMs,
+						cueCount: finalCheck.cues ? finalCheck.cues.length : 0,
+						endMs: finalCheck.endMs,
+						spokenWords: spokenWordCount
+					});
+				}
 
 				console.log("[script] ok", {
 					reqId,
@@ -1999,54 +2485,55 @@ export async function handleSeoScriptGeneration(
 					ms: attemptMs,
 					totalMs,
 					scriptChars: plainScript.length,
-					cueCount: check.cues ? check.cues.length : 0,
-					endMs: check.endMs,
+					cueCount: finalCheck.cues ? finalCheck.cues.length : 0,
+					endMs: finalCheck.endMs,
 					spokenWords: spokenWordCount,
 					wordTarget,
-					strippedTrailingLines: check.strippedTrailingLines || 0,
+					strippedTrailingLines: finalCheck.strippedTrailingLines || 0,
 					title: keywordSet.title,
 					headingsCount: keywordSet.headings.length,
-					longTail:
-						keywords.longTail.keyword + " x" + keywords.longTail.count,
-					shorts: keywords.short.map(
-						(x) => x.keyword + " x" + x.count
-					)
+					repairedKeywords: repairedKeywords.length ? repairedKeywords : undefined,
+					noteId: activeNote ? activeNote.id : undefined,
+					notePlannerSkipped,
+					phaseStats: loop.stats().phases
 				});
 
-				/*
-				 * The client receives PLAIN narration text only (see the
-				 * OUTPUT FORMAT note at the top of this file): the Script box
-				 * shows it, the voiceover speaks it verbatim, and no subtitle
-				 * formatting crosses the wire. `durationMs` is the verified
-				 * cue span, kept so the UI can state the script length
-				 * without parsing anything.
-				 */
-				const okPayload: Record<string, unknown> = {
-					success: true,
-					script: plainScript,
-					format: "plain",
-					title: keywordSet.title,
-					headings: keywordSet.headings,
-					keywords,
-					lines: check.cues ? check.cues.length : 0,
-					words: spokenWordCount,
-					durationMs: check.endMs || 0,
-					minutes: minutes,
-					model: writerModel
-				};
+				if (activeNote) {
+					noteRunDone(activeNote, {
+						script: plainScript,
+						durationMs: finalCheck.endMs || 0,
+						model: writerModel,
+						keywordSet,
+						outline: buildNoteOutline(activeNote.source, keywordSet, wordTarget),
+						repairedKeywords,
+						payload,
+						timings: {
+							planMs: stages.planMs,
+							writeMs: stages.writeMs,
+							totalMs,
+							savedModelCalls: (notePlannerSkipped ? 1 : 0) + (repair ? 1 : 0),
+							savedMs:
+								(notePlannerSkipped ? PLANNER_CALL_SAVED_MS : 0) +
+								(repair ? WRITER_CALL_SAVED_MS : 0)
+						}
+					});
+					await writeScriptNote(env, activeNote);
+				}
+
 				if (debugRequested) {
-					okPayload.debug = {
+					(payload as Record<string, unknown>).debug = {
 						reqId,
 						totalMs,
 						plannerAttempts: plannerTrace,
-						writerAttempts: writerTrace
+						writerAttempts: writerTrace,
+						eventLoop: loop.stats()
 					};
 				}
-				return scriptJson(okPayload, 200);
+				return scriptJson(payload, 200);
 			}
 
 			lastError = problem;
-			prevCheck = check;
+			prevCheck = finalCheck;
 			prevAudit = audit;
 
 			const auditSummary = audit
@@ -2062,10 +2549,10 @@ export async function handleSeoScriptGeneration(
 				attempt,
 				ok: false,
 				ms: attemptMs,
-				failureStage: check.ok ? "seo" : "srt",
+				failureStage: finalCheck.ok ? "seo" : "srt",
 				reason: lastError,
-				cueCount: check.cues ? check.cues.length : 0,
-				endMs: check.endMs ?? null,
+				cueCount: finalCheck.cues ? finalCheck.cues.length : 0,
+				endMs: finalCheck.endMs ?? null,
 				spokenWords: spokenWordCount,
 				keywordAudit: auditSummary
 			});
@@ -2074,30 +2561,37 @@ export async function handleSeoScriptGeneration(
 				reqId,
 				attempt,
 				ms: attemptMs,
-				failureStage: check.ok ? "seo" : "srt",
+				failureStage: finalCheck.ok ? "seo" : "srt",
 				reason: lastError,
-				srtValid: check.ok,
-				cueCount: check.cues ? check.cues.length : 0,
-				endMs: check.endMs ?? null,
+				srtValid: finalCheck.ok,
+				cueCount: finalCheck.cues ? finalCheck.cues.length : 0,
+				endMs: finalCheck.endMs ?? null,
 				maxAllowedMs,
 				spokenWords: spokenWordCount,
 				wordTarget,
-				strippedTrailingLines: check.strippedTrailingLines || 0,
+				strippedTrailingLines: finalCheck.strippedTrailingLines || 0,
 				keywordAudit: auditSummary,
 				rawChars: rawSrt.length,
-				rawPreview: check.ok
+				rawPreview: finalCheck.ok
 					? undefined
 					: rawSrt.replace(/\s+/g, " ").slice(0, 260)
 			});
 		}
 
 		const totalMs = Date.now() - startedAt;
+		stages.writeMs = Date.now() - writeStartedAt;
+		stages.totalMs = totalMs;
 		console.error("[script] exhausted", {
 			reqId,
 			attempts: 3,
-			lastReason: lastError,
+			reason: lastError,
 			totalMs
 		});
+
+		if (activeNote) {
+			noteRunFailed(activeNote, lastError);
+			await writeScriptNote(env, activeNote);
+		}
 
 		const failPayload: Record<string, unknown> = {
 			success: false,
@@ -2108,8 +2602,14 @@ export async function handleSeoScriptGeneration(
 				reqId,
 				totalMs,
 				plannerAttempts: plannerTrace,
-				writerAttempts: writerTrace
+				writerAttempts: writerTrace,
+				eventLoop: loop.stats()
 			};
+			failPayload.timings = stages;
+		}
+		if (activeNote) {
+			failPayload.noteId = activeNote.id;
+			failPayload.noteUrl = "/api/script/notes/" + activeNote.id;
 		}
 		return scriptJson(failPayload, 500);
 	} catch (err: unknown) {
@@ -2125,8 +2625,15 @@ export async function handleSeoScriptGeneration(
 			reqId,
 			totalMs,
 			error: message,
+			noteId: activeNote ? activeNote.id : undefined,
+			noteError: noteError || undefined,
 			stack: err instanceof Error ? err.stack : undefined
 		});
+
+		if (activeNote) {
+			noteRunFailed(activeNote, message);
+			defer(writeScriptNote(env, activeNote));
+		}
 
 		return scriptJson(
 			{

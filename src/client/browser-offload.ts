@@ -437,7 +437,17 @@ function createStudioOffloadRuntime(win) {
 			}); }, g.options);
 		} finally { if (options && options.clearController) options.clearController(g.owner); }
 	}
-	function scriptRequest(init, options) { return jsonRequest("/api/script", init, 105000, options); }
+	/*
+	 * #5: how long a script request may hold the tab is the CALLER's decision
+	 * now (options.timeout). Async script jobs answer in milliseconds and the
+	 * note keeps the work, so the studio asks for 20 s and retries instead of
+	 * staring at one 105 s response. No option = the historical ceiling.
+	 */
+	function scriptRequest(init, options) {
+		var timeout = Number(options && options.timeout);
+		var path = (options && options.path) || "/api/script";
+		return jsonRequest(path, init, timeout > 0 ? timeout : 105000, options);
+	}
 
 	function compactIdea(script, topic) {
 		var text = String(script || "").slice(0, 40000).split(/\r?\n/).filter(function (line) {
