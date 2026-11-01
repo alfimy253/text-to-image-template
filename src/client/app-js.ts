@@ -20316,7 +20316,18 @@ async function retryImagePromptFlow(n) {
 
 			if (signature !== lastSignature) {
 				lastSignature = signature;
-				const advertised = Number(note.waitMs) > 0 ? Number(note.waitMs) : 0;
+				/*
+				 * The worker advertises TWO different numbers and only one of
+				 * them belongs here: "stallMs" is the PROGRESS budget (one
+				 * model attempt - the pipeline heartbeats the note before every
+				 * call), while "waitMs" is the remaining share of the whole run
+				 * budget. This guard used to read "waitMs", which is always the
+				 * larger of the two, so the deadline kept extending itself and
+				 * the "stopped advancing" check never fired: a note whose runner
+				 * had died ran out the 185 s ceiling and reported SCRIPT_TIMEOUT
+				 * instead of a stall.
+				 */
+				const advertised = Number(note.stallMs) > 0 ? Number(note.stallMs) : 0;
 				progressDeadline =
 					Date.now() + (advertised > 0 ? Math.max(stallMs, advertised) : stallMs);
 			}

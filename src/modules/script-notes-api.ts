@@ -46,7 +46,12 @@ import {
 	scriptEventLoop,
 	type ScriptEventLoop
 } from "./script-event-loop";
-import { parseKeywordSet, SPEED_WORDS, handleSeoScriptGeneration } from "./script-seo";
+import {
+	parseKeywordSet,
+	SPEED_WORDS,
+	handleSeoScriptGeneration,
+	SEO_PROGRESS_BUDGET_MS
+} from "./script-seo";
 
 export interface ScriptNoteApiDeps {
 	fetchImpl?: NoteFetch;
@@ -167,19 +172,15 @@ export async function handleScriptNoteWrite(
 	);
 	let researchMs = 0;
 	if (shouldResearch) {
-		const loop = deps.loop || scriptEventLoop();
-		const task = () =>
-			researchSourceUrl(url, deps.fetchImpl).then((source) => {
-				note.source = source;
-				return source;
-			});
-		const source = await (async () => {
-			try {
-				return await loop.schedule(task, { id: id + ":research", label: "notes" });
-			} catch {
-				return task();
-			}
-		})();
+		/*
+		 * Run inline, not on the script event loop. This task is awaited
+		 * immediately, so the loop's only possible contributions were queue
+		 * latency and starvation: while the loop's two slots were busy it made
+		 * `POST /api/script/notes` wait behind unrelated script jobs. The fetch
+		 * is already bounded (4 s, 400 KB, SSRF-guarded) and never throws.
+		 */
+		const source = await researchSourceUrl(url, deps.fetchImpl);
+		note.source = source;
 		researchMs = Date.now() - startedAt;
 		if (source.status !== "fetched") {
 			/* A dead URL must not leave the note empty: keep the beat plan. */
@@ -218,6 +219,8 @@ export async function handleScriptNoteWrite(
 export interface NoteReadBudgets {
 	queueGraceMs?: number;
 	deadlineMs?: number;
+	/* Progress budget advertised as `stallMs`; defaults to one model attempt. */
+	stallMs?: number;
 }
 
 /*
@@ -275,6 +278,14 @@ export async function handleScriptNoteRead(
 			? Number(budgets.queueGraceMs) > 0 ? Number(budgets.queueGraceMs) : SCRIPT_NOTE_QUEUE_GRACE_MS
 			: Number(note.deadlineMs) > 0 ? Number(note.deadlineMs) : SCRIPT_NOTE_DEADLINE_MS;
 		payload.waitMs = Math.max(0, startedAt + budget - Date.now());
+		/*
+		 * `waitMs` is the RUN budget and `stallMs` is the PROGRESS budget, and
+		 * they are not the same number. A healthy run heartbeats the note
+		 * before every model call, so silence beyond one attempt means the
+		 * runner is gone. The client's stall guard must use this, not `waitMs`.
+		 */
+		payload.stallMs =
+			Number(budgets.stallMs) > 0 ? Number(budgets.stallMs) : SEO_PROGRESS_BUDGET_MS;
 		return noteJson(payload, 202, {
 			"Retry-After": String(Math.max(1, Math.round(SCRIPT_JOB_POLL_AFTER_MS / 1000)))
 		});
@@ -348,7 +359,7 @@ export async function submitAsyncScriptJob(
 	 * leave the note in a terminal state: `handleSeoScriptGeneration` writes
 	 * `done`/`error` itself, and `onError` covers a throw before it can.
 	 */
-	const runJob = async (): Promise<{ status: number; ok: boolean }> => {
+	const runJob = async (context?: { signal?: AbortSignal }): Promise<{ status: number; ok: boolean }> => {
 		const response = await handleSeoScriptGeneration(
 			innerRequest,
 			new URL(request.url),
@@ -360,7 +371,12 @@ export async function submitAsyncScriptJob(
 				useNotes: true,
 				fetchImpl: deps.fetchImpl,
 				loop,
-				waitUntil: deps.waitUntil
+				waitUntil: deps.waitUntil,
+				/* This route already counted the run when it issued the ticket. */
+				runCounted: true,
+				/* So an expired deadline actually stops the pipeline instead of
+				 * leaving an orphan that rewrites the note's terminal state. */
+				signal: context?.signal
 			}
 		);
 		const status = response.status;
