@@ -33,7 +33,9 @@ import {
 	isScriptNoteId,
 	noteHit,
 	noteRunDone,
+	noteRunHeartbeat,
 	noteRunFailed,
+	noteRunStart,
 	readScriptNote,
 	repairKeywordShortfall,
 	researchSourceUrl,
@@ -45,7 +47,8 @@ import {
 	type NoteFetch,
 	type ScriptNote,
 	type ScriptNoteKv,
-	type ScriptNoteSource
+	type ScriptNoteSource,
+	type ScriptNoteState
 } from "./script-notes";
 import { scriptEventLoop, type ScriptEventLoop } from "./script-event-loop";
 
@@ -1179,6 +1182,19 @@ export const SEO_PLAN_FALLBACK_MODELS: string[] =
 export const SEO_PLAN_AI_TIMEOUT_MS = 45000;
 export const SEO_SCRIPT_AI_TIMEOUT_MS = 90000;
 
+/*
+ * HOW LONG A HEALTHY RUN MAY GO WITHOUT ADVANCING THE NOTE.
+ *
+ * The pipeline heartbeats the note before every model call, so the longest
+ * silence a healthy run can produce is ONE attempt - the writer's, at 90 s.
+ * This is the number the browser's "stopped advancing" guard has to be
+ * measured against. It used to be measured against `waitMs`, which is the
+ * remaining share of the whole 240 s RUN budget and therefore always larger,
+ * so the stall guard could never fire: a wedged note surfaced as a 185 s
+ * SCRIPT_TIMEOUT instead of as a stall.
+ */
+export const SEO_PROGRESS_BUDGET_MS = SEO_SCRIPT_AI_TIMEOUT_MS + 15000;
+
 /* Transport attempts per model (validation attempts are separate). */
 export const SEO_PLAN_TRANSPORT_ATTEMPTS = 2;
 
@@ -1558,6 +1574,14 @@ export interface ScriptGenerationOptions {
 	loop?: ScriptEventLoop;
 	/* ctx.waitUntil, so note bookkeeping can outlive the response. */
 	waitUntil?: (task: Promise<unknown>) => void;
+	/*
+	 * The caller already counted this run against the note (`runs`). Set by the
+	 * async route, which increments when it issues the ticket; without it the
+	 * sync route would never record a run at all.
+	 */
+	runCounted?: boolean;
+	/* Aborts the run when the caller's deadline expires (see the event loop). */
+	signal?: AbortSignal;
 }
 
 export interface ScriptNoteContext {
@@ -1622,23 +1646,26 @@ export function scriptNoteContext(
 }
 
 /*
- * Runs `fn` on the shared script event loop, but never lets scheduling be the
- * reason a script fails: a full queue simply runs the task inline.
+ * WHY THERE IS NO `onScriptLoop` HELPER ANY MORE
+ *
+ * The note research used to be parked on the shared script loop "in the poll
+ * phase together with the planner call". That is a self-deadlock: an async
+ * script job already OCCUPIES one of the loop's two concurrency slots, and it
+ * then queued its own `:research` sub-job behind itself. Two concurrent
+ * note-backed scripts therefore held both slots while both research tasks sat
+ * in the queue that only those two jobs could free — the isolate made zero
+ * progress until the 240 s job deadline fired (measured: active=2 queued=2
+ * completed=0 after 5 s, terminal only at 240.3 s).
+ *
+ * Routing the page read through the job queue bought nothing: the overlap that
+ * hides a 4 s fetch behind a 6-20 s planner call comes from STARTING the
+ * promise early and awaiting it after Stage 1, which works identically inline.
+ * `researchSourceUrl` is already self-bounding (4 s timeout, 400 KB cap,
+ * SSRF-guarded, and it never throws), so it needs no queue protection at all.
+ *
+ * Rule this file now follows: a job on the script loop must never wait on
+ * another job on the same loop.
  */
-async function onScriptLoop<T>(
-	loop: ScriptEventLoop,
-	id: string,
-	label: string,
-	fn: () => Promise<T>
-): Promise<T> {
-	try {
-		return await loop.schedule(fn, { id, label });
-	} catch (err: unknown) {
-		const code = (err as { code?: string })?.code;
-		if (code === "SCRIPT_LOOP_QUEUE_FULL") return fn();
-		throw err;
-	}
-}
 
 export async function handleSeoScriptGeneration(
 	request: Request,
@@ -1757,13 +1784,22 @@ export async function handleSeoScriptGeneration(
 	const writerModel = singleAttempt && Number(body.attempt) > 0
 		? (SEO_PLAN_FALLBACK_MODELS.find((slug) => slug !== scriptModel) || scriptModel) : scriptModel;
 
-	if (onValidated) {
-		try {
-			await onValidated();
-		} catch {
-			/* informational usage tracking is best-effort */
-		}
-	}
+	/*
+	 * Usage tracking is informational and independent of the note work, so it
+	 * now runs CONCURRENTLY with the note read and the page fetch instead of
+	 * blocking in front of them (it is two KV round trips that the caller used
+	 * to wait for before the pipeline even started). It is still awaited before
+	 * the first model call, so a counter is never charged for a request that was
+	 * rejected by the validation above, and the promise is never left floating.
+	 */
+	const usageTask: Promise<void> | null = onValidated
+		? Promise.resolve()
+				.then(() => onValidated())
+				.then(
+					() => undefined,
+					() => undefined
+				)
+		: null;
 
 	const endStamp = "00:" + String(minutes).padStart(2, "0") + ":00,000";
 	const maxAllowedMs = minutes * 60 * 1000 + 1500;
@@ -1792,23 +1828,84 @@ export async function handleSeoScriptGeneration(
 	const subject = noteEnabled ? noteContext.topic : topic;
 	const repairEnabled = noteEnabled || body.repairKeywords === true;
 	const loop = options.loop || scriptEventLoop();
-	const defer = (task: Promise<unknown>) => {
-		if (options.waitUntil) {
-			try {
-				options.waitUntil(task);
-				return;
-			} catch {
-				/* fall through: best effort */
-			}
-		}
-		void task;
+
+	/*
+	 * ORDERED, NON-BLOCKING NOTE PERSISTENCE.
+	 *
+	 * A note write is bookkeeping, not part of the answer, so it must never sit
+	 * in front of a model call - but two writes must also never land out of
+	 * order, or a late heartbeat could overwrite the terminal state. Chaining
+	 * them gives both: each write runs CONCURRENTLY with the next model call
+	 * while the chain preserves the order. Only terminal writes are awaited
+	 * (await persistNote()), which drains everything queued before them.
+	 *
+	 * This replaces the old `defer()` helper. Its fallback branch was a bare
+	 * `void task`, i.e. an untracked floating promise: whenever ctx.waitUntil
+	 * was absent or threw, the write was dropped on the floor with nothing
+	 * holding a reference to it. Every write is now reachable from `noteWrites`,
+	 * and `flushNote()` is what ctx.waitUntil is given, so nothing is orphaned.
+	 */
+	let noteWrites: Promise<unknown> = Promise.resolve();
+	const persistNote = (): Promise<void> => {
+		if (!note) return Promise.resolve();
+		/* Freeze the record now: the pipeline keeps mutating `note` while the
+		 * write is still in flight. */
+		const snapshot = JSON.parse(JSON.stringify(note)) as ScriptNote;
+		noteWrites = noteWrites
+			.then(() => writeScriptNote(env, snapshot))
+			.catch(() => undefined);
+		return flushNote();
 	};
+	/* Resolves once every queued write has settled; never rejects. */
+	const flushNote = (): Promise<void> =>
+		noteWrites.then(
+			() => undefined,
+			() => undefined
+		);
 
 	let note: ScriptNote | null = null;
 	let noteMs = 0;
 	let noteResearchMs = 0;
 	let notePlannerSkipped = false;
 	let noteError = "";
+
+	/*
+	 * CANCELLATION. A caller's deadline (the event loop's `withDeadline`) used
+	 * to reject the job's promise while this function kept running: the orphan
+	 * resumed as soon as a slot freed, finished the writer call and wrote
+	 * `state:"done"` OVER the terminal `error` the loop had just recorded
+	 * (measured: onError at +502 ms, `state=done` written at +509 ms). A note
+	 * that flips error -> done after the runner was declared dead makes the
+	 * terminal state a lie, which is the one thing the H2 watchdog exists to
+	 * prevent. So the signal is checked at every stage boundary, and an aborted
+	 * run never writes a success.
+	 */
+	const signal = options.signal;
+	const aborted = (): boolean => Boolean(signal && signal.aborted);
+	const abortError = (): Error => {
+		const err = new Error("script run cancelled (deadline exceeded)");
+		(err as { code?: string }).code = "SCRIPT_RUN_ABORTED";
+		return err;
+	};
+
+	/*
+	 * Proof of life for the poller. Only the async route hands out a note URL
+	 * to poll, so only that route pays for the writes; a sync request has no
+	 * watcher and gets no heartbeat. Called before every model call, which
+	 * bounds the silence a healthy run can produce to ONE attempt - the number
+	 * the browser's stall guard is measured against.
+	 *
+	 * Deliberately NOT awaited: the write overlaps the model call it announces,
+	 * so the heartbeat costs the run nothing. Order is still guaranteed by the
+	 * write chain, and the terminal write drains it.
+	 */
+	const heartbeat = (state: ScriptNoteState): void => {
+		if (!note || !(options.runCounted === true)) return;
+		/* `noteRunHeartbeat`, never `noteRunActive`: the beat must not restart
+		 * the run clock the staleness watchdog is counting down. */
+		noteRunHeartbeat(note, state);
+		void persistNote();
+	};
 
 	if (noteEnabled) {
 		const noteStartedAt = Date.now();
@@ -1876,7 +1973,10 @@ export async function handleSeoScriptGeneration(
 	 */
 	if (note && body.reuseScript === true && note.payload && note.script) {
 		noteHit(note);
-		await writeScriptNote(env, note);
+		await persistNote();
+		/* This return is before the pipeline's join point, so the usage write
+		 * started above has to be settled here or it would float. */
+		if (usageTask) await usageTask;
 		const cachedPayload: Record<string, unknown> = {
 			...note.payload,
 			noteId: note.id,
@@ -1895,9 +1995,35 @@ export async function handleSeoScriptGeneration(
 	}
 
 	/*
-	 * Research and planning are independent, so the note fetch is parked on the
-	 * event loop in the `poll` phase together with the planner call: a 4 s page
-	 * read is hidden behind a 6-20 s planner call instead of being added to it.
+	 * THE RUN IS STARTING - and the note has to say so.
+	 *
+	 * Two things were wrong here before:
+	 *
+	 *  1. `noteRunStart` (the only thing that increments `runs`) ran solely in
+	 *     `submitAsyncScriptJob`, so every SYNC run left `runs` at 0 no matter
+	 *     how many times the pipeline executed (measured: 3 successful sync
+	 *     runs -> runs=0,0,0). `runs` is part of `clientNote()`, i.e. part of
+	 *     the browser's progress signature, so the note under-reported itself.
+	 *     The async caller has already counted this run, hence `runCounted`.
+	 *
+	 *  2. Nothing was written to the store until the run FINISHED, so a poller
+	 *     saw no state change at all for the whole run. That is what made the
+	 *     client's "stopped advancing" stall guard useless: with no heartbeat
+	 *     the only way to avoid a false stall was to ignore the guard, which is
+	 *     exactly what `Math.max(stallMs, advertisedWaitMs)` did. Writing the
+	 *     transition here gives the poller a real proof of life to key on.
+	 */
+	if (note && !(options.runCounted === true)) {
+		noteRunStart(note, "planning");
+		/* Overlaps the research fetch and the planner call. */
+		void persistNote();
+	}
+
+	/*
+	 * Research and planning are independent, so the page read is STARTED here
+	 * and awaited after Stage 1: a 4 s fetch is hidden behind a 6-20 s planner
+	 * call instead of being added to it. It is deliberately NOT scheduled on
+	 * the script event loop - see the note above `handleSeoScriptGeneration`.
 	 */
 	const researchUrl = note ? noteContext.sourceUrl || note.sourceUrl : "";
 	const needsResearch = Boolean(
@@ -1907,10 +2033,29 @@ export async function handleSeoScriptGeneration(
 	);
 	const researchTask: Promise<ScriptNoteSource> | null =
 		note && needsResearch
-			? onScriptLoop(loop, note.id + ":research", "notes", () =>
-					researchSourceUrl(researchUrl, options.fetchImpl)
-				)
+			? /* `researchSourceUrl` reports failure as `status:"unreachable"`
+				 * rather than throwing, so this promise can never reject. */
+				researchSourceUrl(researchUrl, options.fetchImpl)
 			: null;
+
+	/*
+	 * Every exit path owes the note the research it paid for. Before this, the
+	 * planner-exhausted return left `researchTask` un-awaited: the page had
+	 * already been fetched, the result was dropped, and `note.source` stayed
+	 * empty - so the NEXT attempt re-fetched the same URL (`needsResearch` keys
+	 * off `!note.source`). Settling it into the note here makes the fetch
+	 * count exactly once per research TTL, whichever way the run ends.
+	 */
+	const settleResearch = async (): Promise<void> => {
+		if (!activeNote || !researchTask) return;
+		try {
+			const source = await researchTask;
+			/* Never overwrite research a later stage already stored. */
+			if (!activeNote.source) activeNote.source = source;
+		} catch {
+			/* unreachable: researchSourceUrl does not throw */
+		}
+	};
 
 	console.log("[script] start", {
 		reqId,
@@ -2003,6 +2148,13 @@ export async function handleSeoScriptGeneration(
 
 	try {
 		/*
+		 * Single join point for the usage write started above. Everything
+		 * independent has already been kicked off by now (note read, page
+		 * fetch), so this await costs nothing that was not already overlapping.
+		 */
+		if (usageTask) await usageTask;
+
+		/*
 		 * Stage 1: SEO Keyword, Title & Section Heading Planner (max 3 attempts)
 		 *
 		 * Skipped entirely when the note already holds a validated set: that is
@@ -2050,6 +2202,9 @@ export async function handleSeoScriptGeneration(
 
 		if (!keywordSet) {
 			for (let attempt = 1; attempt <= 3; attempt++) {
+				/* Stage boundary: an expired deadline stops the run here. */
+				if (aborted()) throw abortError();
+				heartbeat("planning");
 				const attemptT0 = Date.now();
 				const plannerTemp = attempt === 1 ? 0.55 : 0.4;
 				const prompt =
@@ -2194,13 +2349,30 @@ export async function handleSeoScriptGeneration(
 				totalMs
 			});
 			if (activeNote) {
+				/*
+				 * The page read this run paid for must not be thrown away:
+				 * storing it here means the retry reuses the research instead
+				 * of re-fetching the same URL (`needsResearch` keys off
+				 * `!note.source`).
+				 */
+				await settleResearch();
 				noteRunFailed(activeNote, "SEO keywords invalid (" + keywordError + ")");
-				defer(writeScriptNote(env, activeNote));
+				await persistNote();
 			}
 			const errPayload: Record<string, unknown> = {
 				success: false,
 				error: "SEO keywords invalid (" + keywordError + ") - try again"
 			};
+			/*
+			 * Same contract as the writer-exhausted 500 below: a note client is
+			 * told which note holds the failure. Omitting it here left the
+			 * browser with no way to read back the research it had just paid
+			 * for, and made this failure indistinguishable from a note-less run.
+			 */
+			if (activeNote) {
+				errPayload.noteId = activeNote.id;
+				errPayload.noteUrl = "/api/script/notes/" + activeNote.id;
+			}
 			if (debugRequested) {
 				errPayload.debug = {
 					reqId,
@@ -2328,6 +2500,9 @@ export async function handleSeoScriptGeneration(
 		const writeStartedAt = Date.now();
 
 		for (let attempt = 1; attempt <= (singleAttempt ? 1 : 3); attempt++) {
+			/* Stage boundary: an expired deadline stops the run here. */
+			if (aborted()) throw abortError();
+			heartbeat("writing");
 			const attemptT0 = Date.now();
 			const writerTemp = attempt === 1 ? 0.65 : 0.4;
 			const prompt =
@@ -2462,6 +2637,13 @@ export async function handleSeoScriptGeneration(
 			const attemptMs = Date.now() - attemptT0;
 
 			if (!problem && finalCheck.srt && plainScript) {
+				/*
+				 * The deadline may have expired while the writer was running.
+				 * The loop has already closed the note as a terminal `error`;
+				 * writing `done` over it is what made the terminal state a lie,
+				 * so an aborted run reports its cancellation instead.
+				 */
+				if (aborted()) throw abortError();
 				const totalMs = Date.now() - startedAt;
 				stages.writeMs = Date.now() - writeStartedAt;
 				stages.totalMs = totalMs;
@@ -2517,7 +2699,13 @@ export async function handleSeoScriptGeneration(
 								(repair ? WRITER_CALL_SAVED_MS : 0)
 						}
 					});
-					await writeScriptNote(env, activeNote);
+					/*
+					 * Awaited, and it drains the chain: an async poller is about
+					 * to read this note, so `done` has to be durable before the
+					 * response goes out or the poller would keep waiting on a
+					 * state that is already decided.
+					 */
+					await persistNote();
 				}
 
 				if (debugRequested) {
@@ -2590,7 +2778,7 @@ export async function handleSeoScriptGeneration(
 
 		if (activeNote) {
 			noteRunFailed(activeNote, lastError);
-			await writeScriptNote(env, activeNote);
+			await persistNote();
 		}
 
 		const failPayload: Record<string, unknown> = {
@@ -2630,9 +2818,17 @@ export async function handleSeoScriptGeneration(
 			stack: err instanceof Error ? err.stack : undefined
 		});
 
-		if (activeNote) {
+		/*
+		 * An aborted run does not write the note: the caller's deadline has
+		 * already closed it as terminal, and a second write from this orphaned
+		 * continuation is what used to overwrite that verdict.
+		 */
+		const isAbort = (err as { code?: string })?.code === "SCRIPT_RUN_ABORTED";
+		if (activeNote && !isAbort) {
 			noteRunFailed(activeNote, message);
-			defer(writeScriptNote(env, activeNote));
+			/* Awaited, not deferred: this is the note's terminal verdict and an
+			 * untracked write could be dropped before the isolate unwound. */
+			await persistNote();
 		}
 
 		return scriptJson(

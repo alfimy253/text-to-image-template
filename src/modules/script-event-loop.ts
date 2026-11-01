@@ -47,6 +47,17 @@ export interface LoopJobSnapshot {
 	error?: string;
 }
 
+/*
+ * Handed to every job body. `signal` is aborted the moment the job's own
+ * `deadlineMs` expires, which is what makes a deadline mean something: without
+ * it `withDeadline` only rejected the job's PROMISE while the body kept
+ * running, and an abandoned script pipeline later wrote `state:"done"` over the
+ * terminal `error` the loop had just recorded.
+ */
+export interface LoopJobContext {
+	signal: AbortSignal;
+}
+
 export interface LoopScheduleOptions<T> {
 	id: string;
 	/* Reported in the snapshot: the named step this job represents. */
@@ -83,9 +94,11 @@ interface TimerEntry {
 
 interface QueuedJob {
 	snapshot: LoopJobSnapshot;
-	run: () => Promise<unknown>;
+	run: (context: LoopJobContext) => Promise<unknown>;
 	options: LoopScheduleOptions<unknown>;
 	settle: (outcome: { ok: boolean; value?: unknown; error?: unknown }) => void;
+	controller: AbortController;
+	context: LoopJobContext;
 }
 
 export const SCRIPT_LOOP_DEFAULT_CONCURRENCY = 2;
@@ -177,7 +190,10 @@ export class ScriptEventLoop {
 	 * returned promise rejects with a `TooManyScriptJobs`-shaped error so the
 	 * route can answer 429 without leaking a hung request.
 	 */
-	schedule<T>(run: () => Promise<T>, options: LoopScheduleOptions<T>): Promise<T> {
+	schedule<T>(
+		run: (context: LoopJobContext) => Promise<T>,
+		options: LoopScheduleOptions<T>
+	): Promise<T> {
 		const id = String(options?.id || "job-" + (this.seq + 1));
 		if (this.closed) {
 			return Promise.reject(new Error("script event loop is closed"));
@@ -230,11 +246,17 @@ export class ScriptEventLoop {
 		/* Keep a rejection from surfacing before a waiter is attached. */
 		promise.catch(() => {});
 
+		const controller =
+			typeof AbortController === "function"
+				? new AbortController()
+				: ({ abort() {}, signal: { aborted: false } } as unknown as AbortController);
 		this.queue.push({
 			snapshot,
-			run: run as () => Promise<unknown>,
+			run: run as (context: LoopJobContext) => Promise<unknown>,
 			options: options as LoopScheduleOptions<unknown>,
-			settle
+			settle,
+			controller,
+			context: { signal: controller.signal }
 		});
 		this.pump();
 		return promise;
@@ -301,16 +323,26 @@ export class ScriptEventLoop {
 
 	private withDeadline<T>(job: QueuedJob): Promise<T> {
 		const deadlineMs = Number(job.options.deadlineMs);
-		if (!(deadlineMs > 0)) return job.run() as Promise<T>;
+		if (!(deadlineMs > 0)) return job.run(job.context) as Promise<T>;
 		return new Promise<T>((resolve, reject) => {
 			const timer = setTimeout(() => {
+				/*
+				 * Tell the body to stop BEFORE rejecting, so the loop's verdict
+				 * is the last word: an orphaned pipeline that keeps running
+				 * would otherwise finish later and overwrite the terminal state.
+				 */
+				try {
+					job.controller.abort();
+				} catch {
+					/* abort is best effort */
+				}
 				reject(
 					new Error(
 						"script job " + job.snapshot.id + " exceeded its " + deadlineMs + " ms budget"
 					)
 				);
 			}, deadlineMs);
-			(job.run() as Promise<T>).then(
+			(job.run(job.context) as Promise<T>).then(
 				(value) => {
 					clearTimeout(timer);
 					resolve(value);
@@ -472,7 +504,55 @@ export class ScriptEventLoop {
 		this.timers = [];
 		this.pending = [];
 		this.immediates = [];
+		const closers = this.closers;
 		this.closers = [];
+		for (const fn of closers) {
+			try {
+				fn();
+			} catch {
+				/* isolated */
+			}
+		}
+
+		/*
+		 * SETTLE EVERYONE WAITING ON THIS LOOP.
+		 *
+		 * `pump()` returns immediately once closed, so nothing would ever drain
+		 * the queue or resolve an idle waiter again: every `schedule()` promise
+		 * still in the queue and every pending `drain()` stayed unresolved
+		 * forever (measured: both still pending 300 ms after close()). A closed
+		 * loop is a teardown, so it has to hand back a verdict rather than
+		 * strand the caller - `ctx.waitUntil` on such a promise would otherwise
+		 * hold the isolate open for nothing.
+		 */
+		const queued = this.queue;
+		this.queue = [];
+		const active = [...this.activeJobs.values()];
+		this.activeJobs.clear();
+		for (const job of [...active, ...queued]) {
+			try {
+				job.controller.abort();
+			} catch {
+				/* best effort */
+			}
+		}
+		const closedError = () => new Error("script event loop is closed");
+		for (const job of queued) {
+			job.snapshot.state = "cancelled";
+			job.snapshot.finishedAt = Date.now();
+			/* These will never run now. */
+			job.settle({ ok: false, error: closedError() });
+		}
+		for (const job of active) {
+			job.snapshot.state = "cancelled";
+			job.snapshot.finishedAt = Date.now();
+			/* A body that ignores the signal must not outlive the loop. A
+			 * promise settles once, so `runJob`'s own settle stays harmless. */
+			job.settle({ ok: false, error: closedError() });
+		}
+		const waiters = this.idleWaiters;
+		this.idleWaiters = [];
+		for (const resolve of waiters) resolve();
 	}
 }
 

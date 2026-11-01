@@ -1092,6 +1092,26 @@ export function noteRunActive(note: ScriptNote, state: ScriptNoteState = "planni
 	return note;
 }
 
+/*
+ * PROOF OF LIFE, NOT A NEW RUN.
+ *
+ * The pipeline beats before every model call so a poller can tell "still
+ * working" from "the runner is gone". It must NOT use `noteRunActive` for that:
+ * `runStartedAt` is what `noteStaleReason` measures the run budget from, so
+ * beating through it would silently redefine "240 s for the whole run" as
+ * "240 s since the last beat". With up to three 45 s planner attempts and three
+ * 90 s writer attempts (405 s) the watchdog would never expire - and on the
+ * degraded INLINE path there is no job deadline at all, so that watchdog is the
+ * only thing standing between a caller and an eternal "pending".
+ *
+ * Only `state` and `updatedAt` move here; the run clock stays where it was.
+ */
+export function noteRunHeartbeat(note: ScriptNote, state: ScriptNoteState): ScriptNote {
+	note.state = state;
+	note.updatedAt = Date.now();
+	return note;
+}
+
 export function noteStateIsTerminal(state: unknown): boolean {
 	return state === "done" || state === "error" || state === "empty";
 }

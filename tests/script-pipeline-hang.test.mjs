@@ -20,8 +20,12 @@ import { createHTML } from "../src/page.ts";
 import { APP_JS } from "../src/client/app-js.ts";
 import workerModule from "../src/index.ts";
 import {
+	clientNote,
 	emptyScriptNote,
+	noteRunActive,
+	noteRunHeartbeat,
 	noteRunStart,
+	noteStaleReason,
 	readScriptNote,
 	scriptNoteId,
 	SCRIPT_NOTE_DEADLINE_MS,
@@ -30,9 +34,14 @@ import {
 } from "../src/modules/script-notes.ts";
 import {
 	handleScriptNoteRead,
+	handleScriptNoteWrite,
 	submitAsyncScriptJob
 } from "../src/modules/script-notes-api.ts";
 import { ScriptEventLoop } from "../src/modules/script-event-loop.ts";
+import {
+	handleSeoScriptGeneration,
+	SEO_PROGRESS_BUDGET_MS
+} from "../src/modules/script-seo.ts";
 
 const plan = {
 	title: "Yoga for a Calmer Morning",
@@ -446,4 +455,393 @@ test("the page exposes the same budgets it enforces", () => {
 	assert.ok(timing.noteWaitMs < 240000, "the page gives up before the 240 s note deadline");
 	assert.equal(timing.notePollAttempts, 3);
 	dom.window.close();
+});
+
+/* ------------------------------------------------------------------------- */
+/* H6 — the note layer deadlocked the scriptwriter that created it            */
+/* ------------------------------------------------------------------------- */
+/*
+ * H1-H5 all drive the pipeline with a bare topic, so `needsResearch` is false
+ * and no page is ever fetched. That is exactly the blind spot: the note
+ * research used to be parked on the SAME bounded event loop that the script job
+ * already occupied, so two concurrent note-backed scripts held both concurrency
+ * slots while both research tasks waited in the queue that only those two jobs
+ * could free. Measured before the fix: active=2 queued=2 completed=0 after 5 s,
+ * terminal only at 240.3 s (the job deadline), and the abandoned pipeline then
+ * wrote `state:"done"` over the terminal error the loop had recorded.
+ */
+
+function envByPrompt(calls = []) {
+	return {
+		calls,
+		env: {
+			AI: {
+				run: async (model, input) => {
+					calls.push({ model, prompt: input.prompt });
+					const isWriter = /Answer with ONLY valid SRT/.test(input.prompt);
+					return { response: isWriter ? makeSrt() : JSON.stringify(plan) };
+				}
+			}
+		}
+	};
+}
+
+function noteFetch(html, hits = []) {
+	return async (url) => {
+		hits.push(String(url));
+		return {
+			ok: true,
+			status: 200,
+			headers: { get: () => "text/html; charset=utf-8" },
+			text: async () => html
+		};
+	};
+}
+
+const pageHtml = `<!doctype html><html><head>
+<title>Morning Yoga for Beginners</title>
+<meta name="description" content="A short morning routine.">
+</head><body><h1>Morning Yoga for Beginners</h1>
+<h2>Start with breathing</h2><h2>Move into gentle stretches</h2>
+<p>Most beginners rush the warm-up and pay for it later.</p></body></html>`;
+
+test("H6: two concurrent note-backed scripts both finish instead of deadlocking", async () => {
+	/* the real defaults: two slots, and two different articles to take notes on */
+	const loop = new ScriptEventLoop({ concurrency: 2 });
+	const { env, calls } = envByPrompt();
+	const fetchImpl = noteFetch(pageHtml);
+
+	const first = await submitAsyncScriptJob(
+		asyncRequest({ topic: "Morning yoga", sourceUrl: "https://example.com/h6-a", minutes: 1, speed: "medium" }),
+		env, "mock-instruct", { loop, fetchImpl }
+	);
+	const second = await submitAsyncScriptJob(
+		asyncRequest({ topic: "Evening yoga", sourceUrl: "https://example.com/h6-b", minutes: 1, speed: "medium" }),
+		env, "mock-instruct", { loop, fetchImpl }
+	);
+	assert.equal(first.status, 202);
+	assert.equal(second.status, 202);
+
+	/* The whole point: the loop reaches idle. Before the fix it never did. */
+	const drained = await Promise.race([
+		loop.drain().then(() => true),
+		new Promise((resolve) => setTimeout(() => resolve(false), 10000))
+	]);
+	assert.equal(drained, true, "the loop drains; no job waits on its own sub-job");
+
+	const stats = loop.stats();
+	assert.equal(stats.queued, 0, "nothing is left waiting for a slot");
+	assert.equal(stats.failed, 0, "no job was killed by its deadline");
+	assert.ok(stats.completed >= 2, "both script jobs completed");
+	assert.equal(calls.length, 4, "planner + writer for each of the two scripts");
+
+	for (const response of [first, second]) {
+		const ticket = await response.clone().json();
+		const poll = await handleScriptNoteRead(
+			ticket.noteId, env, new URL("https://studio.test" + ticket.noteUrl)
+		);
+		const note = await poll.json();
+		assert.equal(note.state, "done");
+		assert.equal(note.terminal, true);
+		assert.equal(note.source.status, "fetched", "the notes really were taken");
+		assert.ok(note.script.length > 40);
+	}
+	loop.close();
+});
+
+test("H6: a note write is never starved by a busy script loop", async () => {
+	/* Both slots held by jobs that never finish: the old code queued the page
+	 * read behind them, so `POST /api/script/notes` hung too. */
+	const loop = new ScriptEventLoop({ concurrency: 2 });
+	const holders = [
+		loop.schedule(() => new Promise(() => {}), { id: "hold-1" }),
+		loop.schedule(() => new Promise(() => {}), { id: "hold-2" })
+	];
+	holders.forEach((job) => job.catch(() => {}));
+	assert.equal(loop.stats().active, 2, "both slots are busy");
+
+	const fetchImpl = noteFetch(pageHtml);
+	const response = await handleScriptNoteWrite(
+		new Request("https://studio.test/api/script/notes", {
+			method: "POST",
+			body: JSON.stringify({ url: "https://example.com/h6-starve", minutes: 1, speed: "medium" })
+		}),
+		{ AI: { run: async () => ({ response: "unused" }) } },
+		{ loop, fetchImpl }
+	);
+	assert.equal(response.status, 200);
+	const written = await response.json();
+	assert.equal(written.note.source.status, "fetched", "research is not queued behind script jobs");
+	loop.close();
+});
+
+test("H6: an expired deadline cancels the run, so a note cannot flip error -> done", async () => {
+	const writes = [];
+	const rows = new Map();
+	const env = {
+		KV_BINDING: {
+			async get(key) { return rows.has(key) ? rows.get(key) : null; },
+			async put(key, value) {
+				writes.push(JSON.parse(value).state);
+				rows.set(key, value);
+			},
+			async delete(key) { rows.delete(key); }
+		},
+		AI: {
+			run: async (_model, input) => {
+				if (/Answer with ONLY valid SRT/.test(input.prompt)) {
+					/* outlive the deadline: the writer is mid-call when it expires */
+					await new Promise((resolve) => setTimeout(resolve, 300));
+					return { response: makeSrt() };
+				}
+				return { response: JSON.stringify(plan) };
+			}
+		}
+	};
+	const loop = new ScriptEventLoop({ concurrency: 1 });
+	const body = { topic: "Morning yoga", sourceUrl: "https://example.com/h6-cancel", minutes: 1, speed: "medium" };
+
+	const job = loop.schedule(
+		(context) => handleSeoScriptGeneration(
+			new Request("https://studio.test/api/script", { method: "POST", body: JSON.stringify(body) }),
+			new URL("https://studio.test/api/script"),
+			env, "mock-instruct", undefined,
+			{ loop, fetchImpl: noteFetch(pageHtml), signal: context.signal, runCounted: true }
+		),
+		{ id: "h6-cancel", label: "script", deadlineMs: 120 }
+	);
+	const outcome = await job.then(() => "resolved", (error) => error.message);
+	assert.match(String(outcome), /exceeded its 120 ms budget/, "the deadline fires");
+
+	await loop.drain();
+	await new Promise((resolve) => setTimeout(resolve, 400));
+
+	assert.ok(
+		!writes.includes("done"),
+		"the abandoned pipeline never writes a success (writes were: " + writes.join(",") + ")"
+	);
+	loop.close();
+});
+
+test("H6: a live note advertises a progress budget the stall guard can use", async () => {
+	const note = emptyScriptNote({
+		id: "nt-h6budget", topic: "yoga", sourceUrl: "", minutes: 1, speed: "medium"
+	});
+	noteRunStart(note, "planning");
+	note.deadlineMs = SCRIPT_NOTE_DEADLINE_MS;
+	const env = { AI: { run: async () => ({ response: "unused" }) } };
+	await writeScriptNote(env, note);
+
+	const response = await handleScriptNoteRead(
+		"nt-h6budget", env, new URL("https://studio.test/api/script/notes/nt-h6budget")
+	);
+	assert.equal(response.status, 202);
+	const payload = await response.json();
+	assert.equal(payload.pending, true);
+	assert.equal(payload.stallMs, SEO_PROGRESS_BUDGET_MS);
+	assert.ok(
+		payload.stallMs < payload.waitMs,
+		"the progress budget is strictly smaller than the run budget - that gap is the bug"
+	);
+	/* The client must key its stall guard on the progress budget. Reading
+	 * `waitMs` here is what made the guard unreachable. */
+	assert.ok(/Number\(note\.stallMs\)/.test(APP_JS), "the page reads the progress budget");
+	assert.ok(
+		!/const advertised = Number\(note\.waitMs\)/.test(APP_JS),
+		"the page no longer extends its stall deadline by the whole run budget"
+	);
+});
+
+test("H6: a sync script run is recorded in the note's run count", async () => {
+	const env = { ...envByPrompt().env };
+	const fetchImpl = noteFetch(pageHtml);
+	const body = { topic: "Morning yoga", sourceUrl: "https://example.com/h6-runs", minutes: 1, speed: "medium" };
+	let noteId = "";
+
+	for (const expectedRuns of [1, 2, 3]) {
+		const response = await handleSeoScriptGeneration(
+			new Request("https://studio.test/api/script", { method: "POST", body: JSON.stringify(body) }),
+			new URL("https://studio.test/api/script"),
+			env, "mock-instruct", undefined, { fetchImpl, loop: new ScriptEventLoop({ concurrency: 2 }) }
+		);
+		assert.equal(response.status, 200);
+		const payload = await response.json();
+		noteId = payload.noteId;
+		const stored = await readScriptNote(env, noteId);
+		assert.equal(stored.runs, expectedRuns, "the sync route counts every run");
+	}
+	assert.ok(noteId);
+});
+
+test("H6: research survives a planner failure and is not fetched twice", async () => {
+	const hits = [];
+	const env = {
+		AI: { run: async (_model, input) => ({
+			response: /Answer with ONLY valid SRT/.test(input.prompt) ? makeSrt() : "not json at all"
+		}) }
+	};
+	const body = { topic: "Morning yoga", sourceUrl: "https://example.com/h6-research", minutes: 1, speed: "medium" };
+
+	const first = await handleSeoScriptGeneration(
+		new Request("https://studio.test/api/script", { method: "POST", body: JSON.stringify(body) }),
+		new URL("https://studio.test/api/script"),
+		env, "mock-instruct", undefined, { fetchImpl: noteFetch(pageHtml, hits) }
+	);
+	assert.equal(first.status, 500, "the planner exhausted its attempts");
+	const failed = await first.json();
+	const stored = await readScriptNote(env, failed.noteId);
+	assert.equal(stored.state, "error");
+	assert.equal(stored.source.status, "fetched", "the page read is kept, not thrown away");
+	assert.equal(hits.length, 1);
+
+	/* The retry reuses the stored research instead of re-fetching the URL. */
+	const second = await handleSeoScriptGeneration(
+		new Request("https://studio.test/api/script", { method: "POST", body: JSON.stringify(body) }),
+		new URL("https://studio.test/api/script"),
+		env, "mock-instruct", undefined, { fetchImpl: noteFetch(pageHtml, hits) }
+	);
+	assert.equal(second.status, 500);
+	assert.equal(hits.length, 1, "no second fetch of the same page");
+});
+
+test("H6: a heartbeat advances the note without restarting the staleness clock", () => {
+	/*
+	 * The pipeline beats before every model call. If that beat went through
+	 * `noteRunActive` it would also move `runStartedAt`, which is what
+	 * `noteStaleReason` counts the run budget down from - so "240 s for the
+	 * whole run" would quietly become "240 s since the last beat". Three 45 s
+	 * planner attempts plus three 90 s writer attempts is 405 s, and on the
+	 * degraded inline path there is no job deadline, so that watchdog is the
+	 * only thing that can ever tell a poller the run is over.
+	 */
+	const beat = emptyScriptNote({
+		id: "nt-h6beat", topic: "yoga", sourceUrl: "", minutes: 1, speed: "medium"
+	});
+	noteRunStart(beat, "planning");
+	beat.runStartedAt = Date.now() - (SCRIPT_NOTE_DEADLINE_MS + 5000);
+	beat.updatedAt = beat.runStartedAt;
+	const startedAt = beat.runStartedAt;
+	const before = clientNote(beat).updatedAt;
+
+	/* what three planner plus three writer attempts produce */
+	for (const state of ["planning", "planning", "planning", "writing", "writing", "writing"]) {
+		noteRunHeartbeat(beat, state);
+	}
+
+	assert.equal(beat.state, "writing");
+	assert.equal(beat.runStartedAt, startedAt, "the run clock did not move");
+	assert.ok(clientNote(beat).updatedAt > before, "but the poller's signature did");
+	assert.ok(
+		noteStaleReason(beat, Date.now()),
+		"a run past its budget is still closed even while it is beating"
+	);
+
+	/* The mistake this guards against, stated explicitly. */
+	const wrong = emptyScriptNote({
+		id: "nt-h6wrong", topic: "yoga", sourceUrl: "", minutes: 1, speed: "medium"
+	});
+	noteRunStart(wrong, "planning");
+	wrong.runStartedAt = Date.now() - (SCRIPT_NOTE_DEADLINE_MS + 5000);
+	noteRunActive(wrong, "writing");
+	assert.equal(
+		noteStaleReason(wrong, Date.now()),
+		null,
+		"noteRunActive would have hidden the dead run - which is why the beat must not use it"
+	);
+});
+
+test("H6: closing the loop settles every waiter instead of stranding it", async () => {
+	const loop = new ScriptEventLoop({ concurrency: 1, maxQueue: 4 });
+	const blocker = loop.schedule(() => new Promise(() => {}), { id: "h6-blocker" });
+	blocker.catch(() => {});
+	/* one active job plus one that will never get a slot */
+	const queued = loop.schedule(async () => "never runs", { id: "h6-queued" });
+	const draining = loop.drain();
+	assert.equal(loop.stats().active, 1);
+	assert.equal(loop.stats().queued, 1);
+
+	let queuedSettled = false;
+	let drainSettled = false;
+	queued.then(() => { queuedSettled = true; }, () => { queuedSettled = true; });
+	draining.then(() => { drainSettled = true; }, () => { drainSettled = true; });
+
+	loop.close();
+	await new Promise((resolve) => setTimeout(resolve, 50));
+
+	/*
+	 * `pump()` returns at once once the loop is closed, so nothing would ever
+	 * drain the queue or resolve an idle waiter again. Before this, both
+	 * promises stayed pending forever - and `ctx.waitUntil` holding such a
+	 * promise keeps an isolate open for nothing.
+	 */
+	assert.equal(queuedSettled, true, "a queued job gets a verdict when the loop closes");
+	assert.equal(drainSettled, true, "drain() resolves when the loop closes");
+	await assert.rejects(() => loop.schedule(async () => 1, { id: "h6-after" }), /closed/);
+});
+
+test("H6: a huge advertised waitMs cannot disable the client stall guard", async (t) => {
+	/*
+	 * The exact regression. A live note advertises TWO numbers: `waitMs` (the
+	 * remaining share of the 240 s RUN budget - here 60 s) and `stallMs` (the
+	 * PROGRESS budget - here 120 ms). The guard used to extend its deadline by
+	 * `Math.max(stallMs, waitMs)`, so the larger number always won and the
+	 * "stopped advancing" check could never fire; the page sat until its own
+	 * wall-clock ceiling and reported a timeout instead of a stall.
+	 */
+	const { dom, w } = makeApp();
+	t.after(() => dom.window.close());
+
+	const startedAt = Date.now();
+	let polls = 0;
+	w.fetch = async (input) => {
+		const url = String(input);
+		if (url === "/api/pipeline-capabilities") {
+			return json({
+				version: 261,
+				singleAttemptScript: true,
+				scriptNotes: 1,
+				asyncScript: 1,
+				noteRepair: 1,
+				/* a generous wall-clock ceiling, a tight progress budget */
+				scriptNoteWaitMs: 5000,
+				scriptNoteStallMs: 120,
+				scriptNotePollMs: 10
+			});
+		}
+		if (url.indexOf("/api/script/notes/") === 0) {
+			polls++;
+			/* frozen state, and a run budget 500x the progress budget */
+			return json({
+				success: true,
+				noteId: "nt-h6stall",
+				state: "writing",
+				terminal: false,
+				pending: true,
+				updatedAt: 1,
+				runs: 1,
+				waitMs: 60000,
+				stallMs: 120
+			}, 202);
+		}
+		if (url.indexOf("/api/script") === 0) {
+			return json({
+				success: true, pending: true, noteId: "nt-h6stall",
+				noteUrl: "/api/script/notes/nt-h6stall", pollAfterMs: 10, state: "queued"
+			}, 202);
+		}
+		return json({ success: false, error: "unexpected " + url }, 404);
+	};
+
+	w.addVideoAccordion();
+	const ok = await w.runSeoScriptRequest(1, "morning yoga", 1, "medium");
+	const elapsed = Date.now() - startedAt;
+
+	assert.equal(ok, false);
+	assert.ok(polls > 0, "the note was actually polled");
+	/* Three attempts bounded by the 120 ms progress budget, not by the 5 s
+	 * wall-clock ceiling - if waitMs still drove the guard this would take
+	 * ~15 s. */
+	assert.ok(elapsed < 3000, "gave up on the progress budget, took " + elapsed + "ms");
+	const status = w.document.getElementById("va-script-status-1").textContent;
+	assert.match(status, /stopped advancing/i, "reported as a stall, not a timeout");
 });
