@@ -41,8 +41,9 @@ import {
 	researchSourceUrl,
 	scriptNoteId,
 	topicFromUrl,
+	noteStateIsTerminal,
 	SCRIPT_NOTE_RESEARCH_TTL_MS,
-	writeScriptNote,
+	writeScriptNoteGuarded,
 	type ClientScriptNote,
 	type NoteFetch,
 	type ScriptNote,
@@ -1851,8 +1852,23 @@ export async function handleSeoScriptGeneration(
 		/* Freeze the record now: the pipeline keeps mutating `note` while the
 		 * write is still in flight. */
 		const snapshot = JSON.parse(JSON.stringify(note)) as ScriptNote;
+		const terminal = noteStateIsTerminal(snapshot.state);
 		noteWrites = noteWrites
-			.then(() => writeScriptNote(env, snapshot))
+			.then(() => {
+				/*
+				 * RE-CHECK THE CANCEL AT WRITE TIME, NOT ONLY AT CALL TIME.
+				 *
+				 * The chain exists so a heartbeat never blocks a model call, which
+				 * means a queued write can execute SECONDS after it was enqueued. If
+				 * the caller's deadline expires in that gap, this run has already
+				 * been judged by the loop's `onError`; publishing a later `done` (or
+				 * even a heartbeat) from the orphaned continuation is what made a
+				 * terminal note flip back to life. `writeScriptNoteGuarded` adds the
+				 * second half of the same rule: the FIRST terminal verdict wins.
+				 */
+				if (options.signal?.aborted) return undefined;
+				return writeScriptNoteGuarded(env, snapshot, { fresh: terminal });
+			})
 			.catch(() => undefined);
 		return flushNote();
 	};

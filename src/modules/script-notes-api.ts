@@ -26,9 +26,11 @@ import {
 	noteRunActive,
 	noteRunExpire,
 	noteRunFailed,
+	noteRunAdopt,
 	noteRunStart,
 	noteStaleReason,
 	readScriptNote,
+	readScriptNoteFresh,
 	researchSourceUrl,
 	scriptNoteStore,
 	scriptNoteId,
@@ -36,6 +38,7 @@ import {
 	SCRIPT_NOTE_QUEUE_GRACE_MS,
 	SCRIPT_NOTE_RESEARCH_TTL_MS,
 	writeScriptNote,
+	writeScriptNoteGuarded,
 	type NoteFetch,
 	type ScriptNote,
 	type ScriptNoteKv
@@ -252,17 +255,37 @@ export async function handleScriptNoteRead(
 	}
 	const stale = noteStaleReason(note, Date.now(), budgets);
 	if (stale) {
-		note = noteRunExpire(note, stale, "SCRIPT_NOTE_STALE");
-		try {
-			await writeScriptNote(env, note);
-		} catch (writeError) {
-			console.warn("[script-notes] stale note could not be closed", {
+		/*
+		 * A VERDICT IS READ THROUGH TO KV.
+		 *
+		 * `readScriptNote` is cache-first, so this isolate may be holding a
+		 * copy from before the runner finished somewhere else. Closing a note
+		 * that KV already has as `done` would report a finished script as a
+		 * failure - the same resurrection bug as the runner's late `done`,
+		 * mirrored. Re-read the authoritative copy before judging, and let the
+		 * note's own terminal state win.
+		 */
+		const fresh = (await readScriptNoteFresh(env, id)) || note;
+		note = fresh;
+		const stillStale = noteStaleReason(note, Date.now(), budgets);
+		if (stillStale) {
+			note = noteRunExpire(note, stillStale, "SCRIPT_NOTE_STALE");
+			try {
+				await writeScriptNote(env, note);
+			} catch (writeError) {
+				console.warn("[script-notes] stale note could not be closed", {
+					noteId: id,
+					reason: stillStale,
+					error: String((writeError as { message?: string })?.message || writeError).slice(0, 160)
+				});
+			}
+			console.log("[script-notes] stale note closed", { noteId: id, reason: stillStale });
+		} else {
+			console.log("[script-notes] stale note already settled elsewhere", {
 				noteId: id,
-				reason: stale,
-				error: String((writeError as { message?: string })?.message || writeError).slice(0, 160)
+				state: note.state
 			});
 		}
-		console.log("[script-notes] stale note closed", { noteId: id, reason: stale });
 	}
 	const includeScript = url.searchParams.get("script") !== "0";
 	const terminal = isTerminalNoteState(note.state);
@@ -338,6 +361,21 @@ export async function submitAsyncScriptJob(
 
 	const jobDeadlineMs =
 		Number(deps.jobDeadlineMs) > 0 ? Number(deps.jobDeadlineMs) : SCRIPT_NOTE_DEADLINE_MS;
+	const loop = deps.loop || scriptEventLoop();
+	/*
+	 * THE SAME NOTE SUBMITTED TWICE IS ONE RUN.
+	 *
+	 * `schedule()` already coalesces two submissions with the same id into one
+	 * job, but this route used to write `noteRunStart` first - so the second
+	 * ticket minted a NEW run over a job that was about to finish under the old
+	 * one, and the old run's terminal write then belonged to "an older run".
+	 * Nothing is written when the ticket is a duplicate: the note already says
+	 * where the run is, and the caller gets the same job through `schedule()`.
+	 */
+	const inFlight = typeof loop.job === "function" ? loop.job(id) : null;
+	const alreadyRunning = Boolean(
+		inFlight && (inFlight.state === "queued" || inFlight.state === "active")
+	);
 	const existing = await readScriptNote(env, id);
 	const note: ScriptNote = existing
 		? noteHit(existing)
@@ -346,11 +384,26 @@ export async function submitAsyncScriptJob(
 	note.minutes = minutes;
 	note.speed = speed;
 	if (url) note.sourceUrl = url;
-	noteRunStart(note, "queued");
-	note.deadlineMs = jobDeadlineMs;
-	await writeScriptNote(env, note);
-
-	const loop = deps.loop || scriptEventLoop();
+	if (!alreadyRunning) {
+		noteRunStart(note, "queued");
+		note.deadlineMs = jobDeadlineMs;
+		/*
+		 * Deliberately the UNGUARDED write: issuing a ticket is the one moment a
+		 * run is allowed to reopen a settled note (a retry after `error`). Every
+		 * write after this goes through `writeScriptNoteGuarded`.
+		 */
+		await writeScriptNote(env, note);
+	} else if (note.state !== "done" && note.state !== "empty") {
+		/*
+		 * A retry that lands on a job which is still in flight re-arms that SAME
+		 * run instead of minting a second owner (the job's own writes would
+		 * belong to the old one and be rejected). This is the "the watchdog
+		 * closed it too early, the user tried again" path: the note goes back to
+		 * `queued` with a fresh staleness clock and the job finishes normally.
+		 */
+		noteRunAdopt(note, "queued");
+		await writeScriptNote(env, note);
+	}
 	const innerBody: Record<string, unknown> = { ...body, useNotes: true, async: false };
 	const innerRequest = new Request(request.url, {
 		method: "POST",
@@ -363,7 +416,51 @@ export async function submitAsyncScriptJob(
 	 * leave the note in a terminal state: `handleSeoScriptGeneration` writes
 	 * `done`/`error` itself, and `onError` covers a throw before it can.
 	 */
+	/*
+	 * THE TRANSITION TO `planning` HAPPENS ONCE PER RUN, and it is also the
+	 * place where a note that is ALREADY SETTLED is detected: a reader's
+	 * watchdog can close a note while its job is still waiting for a slot
+	 * (queue grace 90 s, run deadline 240 s), and the job used to run anyway -
+	 * paying for a planner and a writer call for a browser that had already
+	 * been told the run failed. `settled` short-circuits the body; the note's
+	 * own verdict is left alone.
+	 */
+	let runMarked = false;
+	let settled: string | null = null;
+	const markRunning = async (context?: { signal?: AbortSignal }): Promise<void> => {
+		if (runMarked) return;
+		runMarked = true;
+		try {
+			/* Fresh: a verdict written by another isolate must be visible here. */
+			const current = (await readScriptNoteFresh(env, id)) || note;
+			/* A slow KV read can outlive the job deadline. Do not persist a stale
+			 * active transition after the watchdog has already closed the note. */
+			if (context?.signal?.aborted) return;
+			if (isTerminalNoteState(current.state)) {
+				settled = String(current.state);
+				console.warn("[script-notes] job skipped: the note is already settled", {
+					noteId: id,
+					state: current.state,
+					errorCode: current.errorCode
+				});
+				return;
+			}
+			noteRunActive(current, "planning");
+			await writeScriptNoteGuarded(env, current);
+		} catch {
+			/* bookkeeping only: the job itself is what matters */
+		}
+	};
+
 	const runJob = async (context?: { signal?: AbortSignal }): Promise<{ status: number; ok: boolean }> => {
+		await markRunning(context);
+		if (settled) {
+			/*
+			 * Do not spend a model call on a note nobody is waiting for, and do
+			 * not overwrite its verdict: the HTTP shape is only used for logging.
+			 */
+			return { status: 409, ok: false };
+		}
 		const response = await handleSeoScriptGeneration(
 			innerRequest,
 			new URL(request.url),
@@ -388,29 +485,17 @@ export async function submitAsyncScriptJob(
 		return { status, ok: Boolean((payload as { success?: boolean }).success) };
 	};
 
-	/* The job is really running now: the queue wait is over (staleness clock). */
-	const markRunning = async (context?: { signal?: AbortSignal }): Promise<void> => {
-		try {
-			const current = (await readScriptNote(env, id)) || note;
-			/* A slow KV read can outlive the job deadline. Do not persist a stale
-			 * active transition after the watchdog has already closed the note. */
-			if (context?.signal?.aborted || isTerminalNoteState(current.state)) return;
-			noteRunActive(current, "planning");
-			await writeScriptNote(env, current);
-		} catch {
-			/* bookkeeping only: the job itself is what matters */
-		}
-	};
-
 	const failNote = async (error: unknown, code: string): Promise<void> => {
 		try {
-			const current = (await readScriptNote(env, id)) || note;
+			/* Fresh: this write is a verdict, so it must see the authoritative
+			 * copy (and `writeScriptNoteGuarded` then keeps the first verdict). */
+			const current = (await readScriptNoteFresh(env, id)) || note;
 			noteRunFailed(
 				current,
 				String((error as { message?: string })?.message || error || code)
 			);
 			current.errorCode = code;
-			await writeScriptNote(env, current);
+			await writeScriptNoteGuarded(env, current);
 		} catch {
 			/* the client's staleness watchdog is the backstop */
 		}
@@ -425,15 +510,21 @@ export async function submitAsyncScriptJob(
 	};
 
 	/*
-	 * H1: a full queue must not produce a ticket for work that will never run.
-	 * The loop refuses the job (`SCRIPT_LOOP_QUEUE_FULL`) and the caller used to
-	 * ignore that rejection after the note was already written, so the note sat
-	 * in `queued` forever. Now the rejected job runs INLINE under waitUntil
-	 * (degraded mode, the work still happens), and when there is no waitUntil
-	 * to keep the isolate alive the answer is an honest 503 with the note
-	 * closed - never a 202.
+	 * H1: a loop that will not take the job must not produce a ticket for work
+	 * that will never run.
+	 *
+	 * Two ways the loop refuses, and BOTH have to land in the same fallback:
+	 * the queue is at `maxQueue`, or the loop has been closed (a teardown, a
+	 * harness, a reused isolate) and `schedule()` rejects synchronously with
+	 * "script event loop is closed". The second one was checked nowhere, so a
+	 * closed loop still produced a 202 for a note that could only ever be
+	 * closed by the 90 s watchdog later on. Now the rejected job runs INLINE
+	 * under waitUntil (degraded mode, the work still happens), and when there
+	 * is no waitUntil to keep the isolate alive the answer is an honest 503
+	 * with the note closed - never a 202.
 	 */
-	const queueFull = loop.stats().queued >= loop.maxQueue;
+	const closed = typeof loop.isClosed === "function" ? loop.isClosed() : false;
+	const queueFull = closed || loop.stats().queued >= loop.maxQueue;
 	let mode: "loop" | "inline" = "loop";
 
 	if (!queueFull) {
@@ -450,13 +541,7 @@ export async function submitAsyncScriptJob(
 		mode = "inline";
 		const controller = new AbortController();
 		let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-		const work = (async () => {
-			await markRunning({ signal: controller.signal });
-			if (controller.signal.aborted) {
-				throw new Error("script job exceeded its " + jobDeadlineMs + " ms budget");
-			}
-			return runJob({ signal: controller.signal });
-		})();
+		const work = runJob({ signal: controller.signal });
 		const deadline = new Promise<never>((_resolve, reject) => {
 			deadlineTimer = setTimeout(() => {
 				controller.abort();
@@ -465,40 +550,58 @@ export async function submitAsyncScriptJob(
 				reject(error);
 			}, jobDeadlineMs);
 		});
-		const inline = Promise.race([work, deadline]).finally(() => {
-			if (deadlineTimer) clearTimeout(deadlineTimer);
-		});
-		inline.catch((error) => {
+		const settleFailure = (error: unknown): Promise<void> => {
 			const code = (error as { code?: string })?.code === "SCRIPT_NOTE_DEADLINE"
 				? "SCRIPT_NOTE_DEADLINE"
 				: "SCRIPT_NOTE_FAILED";
 			/* A broken KV must not turn the fallback task into another hang. */
-			void failNote(error, code).catch(() => {});
+			return failNote(error, code).catch(() => undefined);
+		};
+		const inline = Promise.race([work, deadline]).finally(() => {
+			if (deadlineTimer) clearTimeout(deadlineTimer);
 		});
+		/*
+		 * The verdict write is part of the waitUntil contract, not a detached
+		 * promise: `void failNote(...)` could be dropped the moment the isolate
+		 * unwound, leaving the note `planning` until a reader's watchdog closed
+		 * it 90 s later.
+		 */
+		const settledInline = inline.catch((error) => settleFailure(error));
 		try {
-			deps.waitUntil(inline);
+			deps.waitUntil(settledInline);
 		} catch {
 			/* best effort */
 		}
-		console.warn("[script] event loop queue full, running the job inline", {
+		console.warn("[script] event loop is not accepting jobs, running inline", {
 			noteId: id,
 			queued: loop.stats().queued,
 			maxQueue: loop.maxQueue
 		});
 	} else {
+		/* Two distinct refusals, two distinct codes: "the queue is full" is not
+		 * "this isolate is shutting down", and the browser's retry hint is the
+		 * same either way. */
+		const unavailableCode = closed ? "SCRIPT_LOOP_CLOSED" : "SCRIPT_LOOP_QUEUE_FULL";
+		const unavailableMessage = closed
+			? "This runtime is not accepting script jobs right now - try again in a moment"
+			: "The script queue is full - try again in a moment";
 		await failNote(
-			new Error("script event loop queue is full and this runtime cannot run it after the response"),
-			"SCRIPT_LOOP_QUEUE_FULL"
+			new Error(
+				(closed ? "the script event loop is closed" : "script event loop queue is full") +
+					" and this runtime cannot run it after the response"
+			),
+			unavailableCode
 		);
-		console.error("[script] async job rejected: queue full, no waitUntil", {
+		console.error("[script] async job rejected: no capacity after the response", {
 			noteId: id,
+			closed,
 			queued: loop.stats().queued,
 			maxQueue: loop.maxQueue
 		});
 		return noteJson(
 			{
 				success: false,
-				error: "The script queue is full - try again in a moment",
+				error: unavailableMessage,
 				kind: "overload",
 				retryAfterMs: 1500,
 				noteId: id,
