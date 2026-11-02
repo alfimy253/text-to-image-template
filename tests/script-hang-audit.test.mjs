@@ -243,7 +243,10 @@ test("a note the watchdog closed while its job was queued is not resurrected by 
 		scriptRequest({ topic: "Morning yoga", minutes: 1, speed: "medium" }),
 		env,
 		"mock-instruct",
-		{ loop, waitUntil: () => {}, jobDeadlineMs: 5000, onValidated: async () => {} }
+		/* 20 s: enough for one real attempt (the pipeline refuses to start an
+		 * attempt with less than SCRIPT_MIN_ATTEMPT_MS left) after the queue
+		 * wait this test deliberately imposes. */
+		{ loop, waitUntil: () => {}, jobDeadlineMs: 20000, onValidated: async () => {} }
 	);
 	const ticket = await response.json();
 
@@ -297,7 +300,12 @@ test("a closed loop runs the job inline when it can, and answers 503 when it can
 		scriptRequest({ topic: "Closed loop", minutes: 1, speed: "medium" }),
 		inlineAi.env,
 		"mock-instruct",
-		{ loop, waitUntil: (task) => kept.push(task), jobDeadlineMs: 4000, onValidated: async () => {} }
+		/*
+		 * A real run budget: the pipeline refuses to start an attempt with less
+		 * than SCRIPT_MIN_ATTEMPT_MS (5 s) left, which is the slow-pipeline rule
+		 * this test is not about - it is about WHERE the job runs.
+		 */
+		{ loop, waitUntil: (task) => kept.push(task), jobDeadlineMs: 20000, onValidated: async () => {} }
 	);
 	assert.equal(inline.status, 202);
 	const inlineTicket = await inline.json();
@@ -468,7 +476,7 @@ test("a retry that lands on an in-flight job re-arms that run instead of failing
 		scriptRequest({ topic: "Morning yoga", minutes: 1, speed: "medium" }),
 		env,
 		"mock-instruct",
-		{ loop, waitUntil: () => {}, jobDeadlineMs: 5000, onValidated: async () => {} }
+		{ loop, waitUntil: () => {}, jobDeadlineMs: 20000, onValidated: async () => {} }
 	);
 	const ticket = await first.json();
 	assert.equal((await readNote(ticket.noteId, env, { queueGraceMs: 90, deadlineMs: 5000 })).body.state, "queued");
@@ -483,7 +491,7 @@ test("a retry that lands on an in-flight job re-arms that run instead of failing
 		scriptRequest({ topic: "Morning yoga", minutes: 1, speed: "medium" }),
 		env,
 		"mock-instruct",
-		{ loop, waitUntil: () => {}, jobDeadlineMs: 5000, onValidated: async () => {} }
+		{ loop, waitUntil: () => {}, jobDeadlineMs: 20000, onValidated: async () => {} }
 	);
 	assert.equal(retry.status, 202);
 	const retryTicket = await retry.json();

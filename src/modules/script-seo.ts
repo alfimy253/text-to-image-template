@@ -1195,6 +1195,12 @@ export const SEO_SCRIPT_AI_TIMEOUT_MS = 90000;
  * SCRIPT_TIMEOUT instead of as a stall.
  */
 export const SEO_PROGRESS_BUDGET_MS = SEO_SCRIPT_AI_TIMEOUT_MS + 15000;
+/*
+ * The smallest slice of a run's budget that is worth starting an attempt with.
+ * Below this an attempt cannot beat the network round trip, so the run reports
+ * "budget exhausted" instead of spending a paid inference it cannot use.
+ */
+export const SCRIPT_MIN_ATTEMPT_MS = 5000;
 
 /* Transport attempts per model (validation attempts are separate). */
 export const SEO_PLAN_TRANSPORT_ATTEMPTS = 2;
@@ -1583,6 +1589,17 @@ export interface ScriptGenerationOptions {
 	runCounted?: boolean;
 	/* Aborts the run when the caller's deadline expires (see the event loop). */
 	signal?: AbortSignal;
+	/*
+	 * WHEN THIS RUN MUST BE DECIDED (absolute epoch ms).
+	 *
+	 * Optional, so the sync route keeps its "as long as it takes" behaviour.
+	 * When present, no attempt is started that cannot finish inside it, and no
+	 * attempt may outlive it - see `attemptSlot`.
+	 */
+	deadlineAtMs?: number;
+	/* Per-attempt ceilings; tests shrink them, production uses the constants. */
+	planAttemptTimeoutMs?: number;
+	writeAttemptTimeoutMs?: number;
 }
 
 export interface ScriptNoteContext {
@@ -1915,12 +1932,76 @@ export async function handleSeoScriptGeneration(
 	 * so the heartbeat costs the run nothing. Order is still guaranteed by the
 	 * write chain, and the terminal write drains it.
 	 */
+	/*
+	 * THE RUN'S OWN BUDGET (slow-pipeline fix).
+	 *
+	 * The retry ladder is 3 planner attempts x 45 s + 3 writer attempts x 90 s
+	 * = 405 s, while one async run is promised 240 s (the note watchdog) and
+	 * the browser waits 185 s. Those numbers never agreed, so the LAST attempts
+	 * were started with less budget left than the attempt could use: measured,
+	 * attempt 2 of a 600 ms run started with 251 ms left and was cut off
+	 * mid-flight - one paid inference whose answer was thrown away, and a
+	 * generic timeout instead of a real verdict.
+	 *
+	 * `attemptSlot()` keeps the ladder inside the promise: an attempt is only
+	 * worth starting with at least SCRIPT_MIN_ATTEMPT_MS of budget left, and
+	 * its own timeout is clamped to whatever remains, so no attempt can outlive
+	 * the run.
+	 */
+	const runDeadlineAt = Number(options.deadlineAtMs) > 0 ? Number(options.deadlineAtMs) : 0;
+	const remainingRunMs = (): number =>
+		runDeadlineAt ? runDeadlineAt - Date.now() : Number.POSITIVE_INFINITY;
+	const planAttemptTimeoutMs =
+		Number(options.planAttemptTimeoutMs) > 0
+			? Number(options.planAttemptTimeoutMs)
+			: SEO_PLAN_AI_TIMEOUT_MS;
+	const writeAttemptTimeoutMs =
+		Number(options.writeAttemptTimeoutMs) > 0
+			? Number(options.writeAttemptTimeoutMs)
+			: SEO_SCRIPT_AI_TIMEOUT_MS;
+	const attemptSlot = (baseTimeoutMs: number): { timeoutMs: number; leftMs: number } | null => {
+		if (!runDeadlineAt) return { timeoutMs: baseTimeoutMs, leftMs: Number.POSITIVE_INFINITY };
+		const leftMs = remainingRunMs();
+		if (leftMs < SCRIPT_MIN_ATTEMPT_MS) return null;
+		return { timeoutMs: Math.min(baseTimeoutMs, leftMs), leftMs };
+	};
+	const budgetExhaustedReason = (): string =>
+		"the run budget was exhausted (" +
+		Math.max(0, Math.round(remainingRunMs())) +
+		" ms left, " +
+		SCRIPT_MIN_ATTEMPT_MS +
+		" ms needed for another attempt)";
+
+	/*
+	 * HEARTBEATS ARE COALESCED (slow-pipeline fix).
+	 *
+	 * Six attempts used to leave six heartbeat writes in the chain, and the
+	 * terminal write waits for the chain: measured, 9 serial KV writes for a
+	 * 6-attempt run, so `done` landed 9 x the store's latency after the script
+	 * was already ready (1.5 s at 150 ms/op, 18 s at the 2 s budget). A
+	 * heartbeat only reports the CURRENT state, so every snapshot but the last
+	 * is dead on arrival: keep one in-flight write and one pending slot, and let
+	 * the newest snapshot replace the pending one.
+	 */
+	let pendingHeartbeat: ScriptNote | null = null;
+	let heartbeatQueued = false;
 	const heartbeat = (state: ScriptNoteState): void => {
 		if (!note || !(options.runCounted === true)) return;
 		/* `noteRunHeartbeat`, never `noteRunActive`: the beat must not restart
 		 * the run clock the staleness watchdog is counting down. */
 		noteRunHeartbeat(note, state);
-		void persistNote();
+		pendingHeartbeat = JSON.parse(JSON.stringify(note)) as ScriptNote;
+		if (heartbeatQueued) return;
+		heartbeatQueued = true;
+		noteWrites = noteWrites
+			.then(() => {
+				const snapshot = pendingHeartbeat;
+				pendingHeartbeat = null;
+				heartbeatQueued = false;
+				if (!snapshot || options.signal?.aborted) return undefined;
+				return writeScriptNoteGuarded(env, snapshot);
+			})
+			.catch(() => undefined);
 	};
 
 	if (noteEnabled) {
@@ -2220,6 +2301,18 @@ export async function handleSeoScriptGeneration(
 			for (let attempt = 1; attempt <= 3; attempt++) {
 				/* Stage boundary: an expired deadline stops the run here. */
 				if (aborted()) throw abortError();
+				/* Never start a planner call this run cannot afford. */
+				const plannerSlot = attemptSlot(planAttemptTimeoutMs);
+				if (!plannerSlot) {
+					keywordError = budgetExhaustedReason();
+					plannerTrace.push({ attempt, ok: false, budget: true, reason: keywordError });
+					console.warn("[script] planner skipped: no budget left", {
+						reqId,
+						attempt,
+						leftMs: Math.round(remainingRunMs())
+					});
+					break;
+				}
 				heartbeat("planning");
 				const attemptT0 = Date.now();
 				const plannerTemp = attempt === 1 ? 0.55 : 0.4;
@@ -2259,7 +2352,7 @@ export async function handleSeoScriptGeneration(
 							max_tokens: 1024,
 							temperature: plannerTemp
 						}),
-						SEO_PLAN_AI_TIMEOUT_MS
+						plannerSlot.timeoutMs
 					);
 
 					rawText = aiText(result);
@@ -2518,6 +2611,19 @@ export async function handleSeoScriptGeneration(
 		for (let attempt = 1; attempt <= (singleAttempt ? 1 : 3); attempt++) {
 			/* Stage boundary: an expired deadline stops the run here. */
 			if (aborted()) throw abortError();
+			/* The same rule as the planner: an attempt that cannot finish is a
+			 * paid inference whose answer is thrown away. */
+			const writerSlot = attemptSlot(writeAttemptTimeoutMs);
+			if (!writerSlot) {
+				lastError = budgetExhaustedReason();
+				writerTrace.push({ attempt, ok: false, budget: true, reason: lastError });
+				console.warn("[script] writer skipped: no budget left", {
+					reqId,
+					attempt,
+					leftMs: Math.round(remainingRunMs())
+				});
+				break;
+			}
 			heartbeat("writing");
 			const attemptT0 = Date.now();
 			const writerTemp = attempt === 1 ? 0.65 : 0.4;
@@ -2548,7 +2654,7 @@ export async function handleSeoScriptGeneration(
 						max_tokens: writerMaxTokens,
 						temperature: writerTemp
 					}),
-					SEO_SCRIPT_AI_TIMEOUT_MS
+					writerSlot.timeoutMs
 				);
 
 				rawSrt = aiText(result);

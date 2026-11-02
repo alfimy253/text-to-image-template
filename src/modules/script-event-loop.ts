@@ -83,6 +83,16 @@ export interface ScriptEventLoopStats {
 	checkJobs: number;
 	pendingWaitMs: number;
 	lastTickAt: number | null;
+	/*
+	 * EWMA of how long a job actually RUNS (settled jobs only).
+	 *
+	 * The admission check in the async route needs this to tell a caller the
+	 * truth about its ticket: with `queued` jobs ahead of it, the wait is
+	 * `ceil((queued + 1) / concurrency) * avgRunMs`, and a wait longer than the
+	 * job's own budget means the ticket can only ever fail. 0 = no samples yet
+	 * (the caller falls back to a cold-start estimate).
+	 */
+	avgRunMs: number;
 	jobs: LoopJobSnapshot[];
 }
 
@@ -149,6 +159,8 @@ export class ScriptEventLoop {
 	private checkJobs = 0;
 	private lastTickAt: number | null = null;
 	private seq = 0;
+	private avgRunMsValue = 0;
+	private runSamples = 0;
 	private idleWaiters: Array<() => void> = [];
 	private pumping = false;
 	private pumpAgain = false;
@@ -348,6 +360,7 @@ export class ScriptEventLoop {
 			if (job.snapshot.state !== "cancelled") {
 				job.snapshot.finishedAt = Date.now();
 				job.snapshot.runMs = job.snapshot.finishedAt - startedAt;
+				this.observeRunMs(job.snapshot.runMs);
 				job.settle(outcome);
 				/* Settled promises resume in the `pending` phase. */
 				this.pending.push(() => this.phaseCount.pending++);
@@ -595,6 +608,16 @@ export class ScriptEventLoop {
 		return this.snapshots.get(id) || null;
 	}
 
+	/* EWMA (alpha 0.3) so one freak job does not rewrite the estimate. */
+	private observeRunMs(runMs: number): void {
+		const value = Number(runMs);
+		if (!Number.isFinite(value) || value < 0) return;
+		this.runSamples++;
+		this.avgRunMsValue = this.runSamples === 1
+			? value
+			: this.avgRunMsValue * 0.7 + value * 0.3;
+	}
+
 	stats(): ScriptEventLoopStats {
 		return {
 			ticks: this.tickCount,
@@ -610,6 +633,7 @@ export class ScriptEventLoop {
 			checkJobs: this.checkJobs,
 			pendingWaitMs: this.pendingWaitMs,
 			lastTickAt: this.lastTickAt,
+			avgRunMs: Math.round(this.avgRunMsValue),
 			jobs: [...this.snapshots.values()].slice(-8)
 		};
 	}

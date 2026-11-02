@@ -20227,12 +20227,14 @@ async function retryImagePromptFlow(n) {
 			polls++;
 
 			let note = null;
+			let pollStatus = 0;
 			try {
 				const polled = await fetchWithTimeout(
 					noteUrl,
 					{ headers: { Accept: "application/json" } },
 					SCRIPT_REQUEST_TIMEOUT_MS
 				);
+				pollStatus = Number(polled.status) || 0;
 				note = await polled.json().catch(() => null);
 			} catch (pollError) {
 				/*
@@ -20244,6 +20246,35 @@ async function retryImagePromptFlow(n) {
 					poll: polls,
 					failedPolls: failedPolls,
 					error: String(pollError && pollError.message || pollError).slice(0, 200)
+				});
+				if (failedPolls >= SCRIPT_NOTE_POLL_ATTEMPTS) {
+					const unreadable = new Error(
+						"The script note could not be read after " + failedPolls +
+						" attempts - the job may still finish, so try again in a moment"
+					);
+					unreadable.retryable = true;
+					unreadable.code = "SCRIPT_NOTE_UNREADABLE";
+					throw unreadable;
+				}
+				continue;
+			}
+			/*
+			 * A BUSY NOTE STORE IS A FAILED POLL, NOT A NOTE STATE.
+			 *
+			 * The worker answers 503 { code: "SCRIPT_NOTE_STORE_BUSY",
+			 * terminal: false } when its KV binding did not answer inside its
+			 * budget. That is a poll this tab could not read - the job is untouched -
+			 * so it must be counted like a dropped connection (three in a row ends
+			 * the flow with the RETRYABLE SCRIPT_NOTE_UNREADABLE), never treated as
+			 * the note's state or as proof of life.
+			 */
+			if (pollStatus === 503 && note && note.terminal === false) {
+				failedPolls++;
+				console.warn("[script-notes] note store busy", {
+					poll: polls,
+					failedPolls: failedPolls,
+					code: note.code || "",
+					retryAfterMs: Number(note.retryAfterMs) || 0
 				});
 				if (failedPolls >= SCRIPT_NOTE_POLL_ATTEMPTS) {
 					const unreadable = new Error(

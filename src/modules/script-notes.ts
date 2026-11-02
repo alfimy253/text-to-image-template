@@ -391,6 +391,45 @@ export function clearScriptNoteMemory(): void {
  */
 export const SCRIPT_NOTE_KV_TIMEOUT_MS = 2000;
 
+/*
+ * "SLOW" IS NOT "MISSING".
+ *
+ * A note op that exceeds `SCRIPT_NOTE_KV_TIMEOUT_MS` must not be reported as
+ * `null`, because `null` means "there is no note": the read route turned that
+ * into `404 { state:"empty", terminal:true }`, i.e. a HEALTHY run behind a slow
+ * store was declared finished and the browser stopped polling it (measured: a
+ * KV at 2.5 s per op -> 404 terminal, where the pre-budget code simply took
+ * 2.5 s and answered 202). Every read therefore reports whether the store
+ * ANSWERED at all.
+ */
+export interface NoteReadResult {
+	note: ScriptNote | null;
+	/* The binding did not answer inside its budget: unknown, not absent. */
+	unavailable: boolean;
+}
+
+/* Same race as `withNoteBudget`, but it tells the caller which side won. */
+function kvRace<T>(task: Promise<T>, ms: number = SCRIPT_NOTE_KV_TIMEOUT_MS): Promise<{ value?: T; timedOut: boolean; failed: boolean }> {
+	return new Promise((resolve) => {
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const finish = (result: { value?: T; timedOut: boolean; failed: boolean }) => {
+			if (settled) return;
+			settled = true;
+			if (timer) clearTimeout(timer);
+			resolve(result);
+		};
+		timer = setTimeout(
+			() => finish({ timedOut: true, failed: false }),
+			Number(ms) > 0 ? Number(ms) : SCRIPT_NOTE_KV_TIMEOUT_MS
+		);
+		task.then(
+			(value) => finish({ value, timedOut: false, failed: false }),
+			() => finish({ timedOut: false, failed: true })
+		);
+	});
+}
+
 function withNoteBudget<T>(task: Promise<T>, fallback: T, ms: number = SCRIPT_NOTE_KV_TIMEOUT_MS): Promise<T> {
 	return new Promise<T>((resolve) => {
 		let settled = false;
@@ -405,8 +444,6 @@ function withNoteBudget<T>(task: Promise<T>, fallback: T, ms: number = SCRIPT_NO
 			() => finish(fallback),
 			Number(ms) > 0 ? Number(ms) : SCRIPT_NOTE_KV_TIMEOUT_MS
 		);
-		/* Do not hold the isolate open just to time out an abandoned note op. */
-		(timer as { unref?: () => void })?.unref?.();
 		task.then(
 			(value) => finish(value),
 			() => finish(fallback)
@@ -547,19 +584,48 @@ export async function readScriptNoteFresh(
 	env: { KV_BINDING?: ScriptNoteKv } | undefined,
 	id: string
 ): Promise<ScriptNote | null> {
-	if (!isScriptNoteId(id)) return null;
-	const kv =
-		env && env.KV_BINDING && typeof env.KV_BINDING.get === "function"
-			? kvNoteStore(env.KV_BINDING)
-			: null;
-	if (!kv) return scriptNoteStore(env).get(id);
-	const fresh = await kv.get(id);
-	if (fresh) {
-		/* Refresh the isolate cache with what KV actually says. */
-		await noteMemoryStore().put(fresh);
-		return fresh;
+	const result = await readScriptNoteChecked(env, id, { fresh: true });
+	return result.note;
+}
+
+/*
+ * The read every VERDICT goes through: it says whether the store answered, so a
+ * slow binding can never be mistaken for a settled (or a missing) note.
+ */
+export async function readScriptNoteChecked(
+	env: { KV_BINDING?: ScriptNoteKv } | undefined,
+	id: string,
+	options: { fresh?: boolean } = {}
+): Promise<NoteReadResult> {
+	if (!isScriptNoteId(id)) return { note: null, unavailable: false };
+	const memory = noteMemoryStore();
+	if (!options.fresh) {
+		const cached = await memory.get(id);
+		if (cached) return { note: cached, unavailable: false };
 	}
-	return null;
+	const kv = env && env.KV_BINDING;
+	if (!kv || typeof kv.get !== "function") {
+		/*
+		 * No KV binding: the in-process mirror IS the store, so it is also
+		 * authoritative. Returning `null` for a fresh read here made every
+		 * "is this note already settled?" check blind in a memory-only runtime
+		 * (and in the unit tests), which silently disabled the settled-note
+		 * guard - the measured symptom was a `done` written over a watchdog's
+		 * `SCRIPT_NOTE_STALE`.
+		 */
+		return { note: await memory.get(id), unavailable: false };
+	}
+	const raced = await kvRace(Promise.resolve(kv.get(SCRIPT_NOTE_PREFIX + id)));
+	if (raced.timedOut) return { note: null, unavailable: true };
+	if (raced.failed || !raced.value) return { note: null, unavailable: false };
+	try {
+		const parsed = JSON.parse(String(raced.value)) as ScriptNote;
+		if (!parsed || !parsed.id) return { note: null, unavailable: false };
+		await memory.put(parsed);
+		return { note: parsed, unavailable: false };
+	} catch {
+		return { note: null, unavailable: false };
+	}
 }
 
 /*

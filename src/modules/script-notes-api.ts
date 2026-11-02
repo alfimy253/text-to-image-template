@@ -30,6 +30,7 @@ import {
 	noteRunStart,
 	noteStaleReason,
 	readScriptNote,
+	readScriptNoteChecked,
 	readScriptNoteFresh,
 	researchSourceUrl,
 	scriptNoteStore,
@@ -246,8 +247,38 @@ export async function handleScriptNoteRead(
 	if (!isScriptNoteId(id)) {
 		return noteJson({ success: false, error: "Unknown note id" }, 404);
 	}
-	let note = await readScriptNote(env, id);
+	const first = await readScriptNoteChecked(env, id);
+	let note = first.note;
 	if (!note) {
+		/*
+		 * A STORE THAT DID NOT ANSWER IS NOT AN EMPTY NOTE.
+		 *
+		 * The KV budget (SCRIPT_NOTE_KV_TIMEOUT_MS) turns a slow binding into a
+		 * fast answer, but "no answer" must never become `404 terminal` - the
+		 * browser reads that as "the run ended in state 'empty'" and stops
+		 * polling a job that is still writing (measured before this branch: a
+		 * KV at 2.5 s per op answered 404/terminal while the pre-budget code
+		 * simply waited and answered 202). 503 + `terminal:false` says the
+		 * truth: the poll failed, the job did not.
+		 */
+		if (first.unavailable) {
+			console.warn("[script-notes] note store did not answer", { noteId: id });
+			return noteJson(
+				{
+					success: false,
+					error: "The script note store is busy - the job may still be running",
+					code: "SCRIPT_NOTE_STORE_BUSY",
+					retryable: true,
+					pending: true,
+					terminal: false,
+					noteId: id,
+					pollAfterMs: SCRIPT_JOB_POLL_AFTER_MS,
+					retryAfterMs: SCRIPT_JOB_POLL_AFTER_MS
+				},
+				503,
+				{ "Retry-After": String(Math.max(1, Math.round(SCRIPT_JOB_POLL_AFTER_MS / 1000))) }
+			);
+		}
 		return noteJson(
 			{ success: false, error: "Note not found", noteId: id, state: "empty", terminal: true },
 			404
@@ -265,9 +296,13 @@ export async function handleScriptNoteRead(
 		 * mirrored. Re-read the authoritative copy before judging, and let the
 		 * note's own terminal state win.
 		 */
-		const fresh = (await readScriptNoteFresh(env, id)) || note;
-		note = fresh;
-		const stillStale = noteStaleReason(note, Date.now(), budgets);
+		const fresh = await readScriptNoteChecked(env, id, { fresh: true });
+		/* A store that did not answer cannot be the basis of a verdict: serve the
+		 * copy we have and let the next poll judge. */
+		if (!fresh.unavailable && fresh.note) note = fresh.note;
+		const stillStale = !fresh.unavailable
+			? noteStaleReason(note, Date.now(), budgets)
+			: null;
 		if (stillStale) {
 			note = noteRunExpire(note, stillStale, "SCRIPT_NOTE_STALE");
 			try {
@@ -325,6 +360,36 @@ export async function handleScriptNoteDelete(id: string, env: NoteEnv): Promise<
 	return noteJson({ success: true, noteId: id, deleted: true });
 }
 
+/* Cold-start guess for one run when the loop has no samples yet. */
+export const SCRIPT_NOTE_QUEUE_RUN_ESTIMATE_MS = 60000;
+
+/*
+ * HOW LONG WILL THIS TICKET WAIT?
+ *
+ * The loop runs `concurrency` jobs at a time, so a caller that lands behind
+ * `queued` jobs waits for roughly `ceil((queued + 1) / concurrency)` runs. A
+ * wait longer than the job's own budget means the ticket can only ever fail:
+ * the job would spend the whole budget queueing and be refused when it finally
+ * got a slot (measured: a 202 that reported failure 4.5 s later at a 1.2 s
+ * budget; at production scale that is minutes of polling for nothing).
+ *
+ * Returns 0 when nothing is ahead, so an idle loop never rejects a caller.
+ */
+export function estimateQueueWaitMs(stats: {
+	queued?: number;
+	concurrency?: number;
+	avgRunMs?: number;
+}): number {
+	const ahead = Math.max(0, Math.floor(Number(stats && stats.queued) || 0));
+	if (!ahead) return 0;
+	const concurrency = Math.max(1, Math.floor(Number(stats && stats.concurrency) || 1));
+	const perRun =
+		Number(stats && stats.avgRunMs) > 0
+			? Number(stats.avgRunMs)
+			: SCRIPT_NOTE_QUEUE_RUN_ESTIMATE_MS;
+	return Math.ceil((ahead + 1) / concurrency) * perRun;
+}
+
 export interface AsyncScriptResult {
 	noteId: string;
 	noteUrl: string;
@@ -376,7 +441,41 @@ export async function submitAsyncScriptJob(
 	const alreadyRunning = Boolean(
 		inFlight && (inFlight.state === "queued" || inFlight.state === "active")
 	);
-	const existing = await readScriptNote(env, id);
+	const loopStats = loop.stats();
+	/*
+	 * ADMISSION: never hand out a ticket this queue cannot honour.
+	 *
+	 * Checked before the note write so a rejected submission does not rewrite
+	 * (or, behind a slow store, clobber) the note of the run it is refusing.
+	 * `alreadyRunning` submissions are exempt: they adopt the job that is
+	 * already in the queue, so they add no wait.
+	 */
+	const queueEtaMs = alreadyRunning ? 0 : estimateQueueWaitMs(loopStats);
+	const admissionRefused = queueEtaMs > 0 && queueEtaMs >= jobDeadlineMs;
+	const loaded = await readScriptNoteChecked(env, id);
+	if (!alreadyRunning && !admissionRefused && loaded.unavailable) {
+		/*
+		 * The store is too slow to trust: issuing a ticket would (a) replace a
+		 * note we could not read - losing the keyword set and beat plan that
+		 * make the next run cheap - and (b) promise a note URL we may not be
+		 * able to serve. Answer honestly and let the caller retry.
+		 */
+		console.warn("[script] async job refused: note store did not answer", { noteId: id });
+		return noteJson(
+			{
+				success: false,
+				error: "The script note store is busy - try again in a moment",
+				kind: "busy",
+				code: "SCRIPT_NOTE_STORE_BUSY",
+				retryAfterMs: 1500,
+				noteId: id,
+				noteUrl: "/api/script/notes/" + id
+			},
+			503,
+			{ "Retry-After": "2" }
+		);
+	}
+	const existing = loaded.note;
 	const note: ScriptNote = existing
 		? noteHit(existing)
 		: emptyScriptNote({ id, topic, sourceUrl: url, minutes, speed });
@@ -477,7 +576,15 @@ export async function submitAsyncScriptJob(
 				runCounted: true,
 				/* So an expired deadline actually stops the pipeline instead of
 				 * leaving an orphan that rewrites the note's terminal state. */
-				signal: context?.signal
+				signal: context?.signal,
+				/*
+				 * The SAME clock the note's watchdog and the loop use: the
+				 * ticket. Without it the pipeline's retry ladder (3 x 45 s +
+				 * 3 x 90 s = 405 s) cannot fit inside this run's 240 s promise,
+				 * so the last attempt is always started and then thrown away -
+				 * see the attempt-budget check in script-seo.
+				 */
+				deadlineAtMs: Number(note.runStartedAt || Date.now()) + jobDeadlineMs
 			}
 		);
 		const status = response.status;
@@ -524,7 +631,7 @@ export async function submitAsyncScriptJob(
 	 * with the note closed - never a 202.
 	 */
 	const closed = typeof loop.isClosed === "function" ? loop.isClosed() : false;
-	const queueFull = closed || loop.stats().queued >= loop.maxQueue;
+	const queueFull = closed || admissionRefused || loopStats.queued >= loop.maxQueue;
 	let mode: "loop" | "inline" = "loop";
 
 	if (!queueFull) {
@@ -581,13 +688,23 @@ export async function submitAsyncScriptJob(
 		/* Two distinct refusals, two distinct codes: "the queue is full" is not
 		 * "this isolate is shutting down", and the browser's retry hint is the
 		 * same either way. */
-		const unavailableCode = closed ? "SCRIPT_LOOP_CLOSED" : "SCRIPT_LOOP_QUEUE_FULL";
+		const unavailableCode = closed
+			? "SCRIPT_LOOP_CLOSED"
+			: admissionRefused
+				? "SCRIPT_QUEUE_ETA_EXCEEDED"
+				: "SCRIPT_LOOP_QUEUE_FULL";
 		const unavailableMessage = closed
 			? "This runtime is not accepting script jobs right now - try again in a moment"
-			: "The script queue is full - try again in a moment";
+			: admissionRefused
+				? "The script queue is too long for this request to finish in time - try again in a moment"
+				: "The script queue is full - try again in a moment";
 		await failNote(
 			new Error(
-				(closed ? "the script event loop is closed" : "script event loop queue is full") +
+				(closed
+					? "the script event loop is closed"
+					: admissionRefused
+						? "the estimated queue wait (" + queueEtaMs + " ms) exceeds this run's " + jobDeadlineMs + " ms budget"
+						: "script event loop queue is full") +
 					" and this runtime cannot run it after the response"
 			),
 			unavailableCode
@@ -595,7 +712,9 @@ export async function submitAsyncScriptJob(
 		console.error("[script] async job rejected: no capacity after the response", {
 			noteId: id,
 			closed,
-			queued: loop.stats().queued,
+			admissionRefused,
+			queueEtaMs,
+			queued: loopStats.queued,
 			maxQueue: loop.maxQueue
 		});
 		return noteJson(
