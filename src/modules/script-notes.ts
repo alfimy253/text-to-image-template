@@ -118,6 +118,9 @@ export interface ScriptNote {
 	deadlineMs?: number;
 	/* Machine-readable failure reason, e.g. SCRIPT_NOTE_STALE. */
 	errorCode?: string;
+	/* Which pipeline stage failed ("planner" | "writer" | "pipeline"): the
+	 * browser's retry decides what to resume from it. */
+	failureStage?: string;
 	/* Where the keyword set/beat plan last came from. */
 	origin?: "server" | "browser";
 	/* The exact success payload the sync route returns, so an async poller
@@ -1492,6 +1495,7 @@ export function clientNote(note: ScriptNote, includeScript = true): Record<strin
 		ring: note.timings || null,
 		error: note.lastError || null,
 		errorCode: note.errorCode || null,
+		failureStage: note.failureStage || null,
 		runStartedAt: note.runStartedAt || null,
 		deadlineMs: note.deadlineMs || null,
 		repairedKeywords: note.repairedKeywords || null

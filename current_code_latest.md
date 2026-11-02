@@ -482,3 +482,27 @@ coverage; `tsc` reports **no new errors** versus the base commit (diff of the so
 | `bench/script-pipeline-bench.mjs` | **new** — pipeline before/after |
 | `bench/script-note-memory-bench.mjs` | **new** — browser memory cost |
 | `SYSTEM_FLOW.md` | route map updated |
+
+---
+
+## 9. Retry ownership (session 278) — the browser retries, the worker attempts once
+
+The pipeline used to retry **for** the page: 3 planner + 3 writer attempts inside one
+`/api/script` request, while the page retried that whole request 3 times. One click could
+cost **18 paid inferences** and the worker's 405 s ladder could not fit the 240 s the note
+layer promised. Retries now live where the attempt counter and the UI already live.
+
+| Retry | Owner **now** |
+| --- | --- |
+| `/api/script` planner / writer | **browser** — with `browserRetries: true` the worker makes exactly 1 attempt per stage and returns `{ retryable, failure: { stage, reason, attempts, retryable }, keywordSet }` |
+| Whole-request script retry (editor **and** quick-batch row) | **browser** — `scriptAttempts()` (from `browserScriptRetries`, default 3), 250 ms backoff or the worker's `retryAfterMs`, stops on `retryable === false` |
+| Resume after a writer failure | **browser** — re-sends the worker's `keywordSet`, so attempt 2 skips the planner entirely |
+| Voiceover chunk mode / Pixabay media / image prompt flow / note polling | **browser** (already was) |
+| Image generation (`IMAGE_BATCH_ATTEMPTS`, `IMAGE_OVERLOAD_ATTEMPTS`, 45 s budget) | worker — welded to credit refunds and one streaming response; the client has no per-slot replay path yet |
+| `api-relay` endpoint rotation, legacy voiceover ladder, `planOneSeoKeywordSet` | worker — provider-level / no browser caller |
+
+Requests **without** `browserRetries` keep the legacy 3+3 ladder, so old clients and old
+workers are unaffected. `GET /api/pipeline-capabilities` advertises
+`scriptRetryOwner: "browser"` and `browserScriptRetries: 3`; a missing AI binding is now
+`503 { retryable: false }` instead of a bare 503 the page would have retried three times.
+Full details and measurements: `bug-fix-session-278-browser-retry-owner.md`.
