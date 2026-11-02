@@ -20277,11 +20277,9 @@ async function retryImagePromptFlow(n) {
 			 * the only success among terminal states. "empty" (and anything
 			 * else terminal) used to fall through here and poll forever.
 			 */
-			const terminal =
-				note.terminal === true ||
-				state === "done" ||
-				state === "error" ||
-				state === "empty";
+			/* The server's terminal flag is authoritative; keeping another list
+			 * of terminal state names here let client and API drift apart. */
+			const terminal = note.terminal === true;
 
 			if (terminal && state === "done") {
 				const result = scriptNoteResult(note);

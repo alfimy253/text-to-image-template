@@ -2083,7 +2083,7 @@ export async function handleSeoScriptGeneration(
 		totalMs: 0
 	};
 	let repairedKeywords: string[] = [];
-	let activeNote = note;
+	const activeNote = note;
 
 	/* The payload every success path shares, so the note can mirror it. */
 	const buildSuccess = (

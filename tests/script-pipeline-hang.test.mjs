@@ -142,6 +142,39 @@ test("H1: a full event-loop queue answers 503 with a terminal note, never a 202"
 	loop.close();
 });
 
+test("H1: inline queue fallback is bounded even when validation tracking never settles", async () => {
+	const loop = new ScriptEventLoop({ concurrency: 1, maxQueue: 1 });
+	const { env } = envWith([]);
+	const blocker = loop.schedule(() => new Promise(() => {}), { id: "inline-timeout-blocker" });
+	const waiting = loop.schedule(() => new Promise(() => {}), { id: "inline-timeout-waiting" });
+	blocker.catch(() => {});
+	waiting.catch(() => {});
+	const parked = [];
+	const response = await submitAsyncScriptJob(
+		asyncRequest({ topic: "Morning yoga", minutes: 1, speed: "medium" }),
+		env,
+		"mock-instruct",
+		{
+			loop,
+			jobDeadlineMs: 30,
+			onValidated: () => new Promise(() => {}),
+			waitUntil: (task) => parked.push(task)
+		}
+	);
+	assert.equal(response.status, 202);
+	const ticket = await response.json();
+	assert.equal(ticket.mode, "inline");
+	const outcome = await Promise.race([
+		Promise.all(parked).then(() => "settled", () => "settled"),
+		new Promise((_, reject) => setTimeout(() => reject(new Error("inline job hung")), 500))
+	]);
+	assert.equal(outcome, "settled");
+	const note = await readScriptNote(env, ticket.noteId);
+	assert.equal(note.state, "error");
+	assert.equal(note.errorCode, "SCRIPT_NOTE_DEADLINE");
+	loop.close();
+});
+
 test("H1: with waitUntil the overflowing job runs inline instead of being lost", async () => {
 	const loop = new ScriptEventLoop({ concurrency: 1, maxQueue: 1 });
 	const { env, calls } = envWith([JSON.stringify(plan), makeSrt()]);
@@ -752,7 +785,11 @@ test("H6: a heartbeat advances the note without restarting the staleness clock",
 
 test("H6: closing the loop settles every waiter instead of stranding it", async () => {
 	const loop = new ScriptEventLoop({ concurrency: 1, maxQueue: 4 });
-	const blocker = loop.schedule(() => new Promise(() => {}), { id: "h6-blocker" });
+	let finishLateBody;
+	const blocker = loop.schedule(
+		() => new Promise((resolve) => { finishLateBody = resolve; }),
+		{ id: "h6-blocker" }
+	);
 	blocker.catch(() => {});
 	/* one active job plus one that will never get a slot */
 	const queued = loop.schedule(async () => "never runs", { id: "h6-queued" });
@@ -776,6 +813,10 @@ test("H6: closing the loop settles every waiter instead of stranding it", async 
 	 */
 	assert.equal(queuedSettled, true, "a queued job gets a verdict when the loop closes");
 	assert.equal(drainSettled, true, "drain() resolves when the loop closes");
+	assert.equal(loop.job("h6-blocker").state, "cancelled");
+	finishLateBody("late success");
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(loop.job("h6-blocker").state, "cancelled", "a late body cannot overwrite teardown state");
 	await assert.rejects(() => loop.schedule(async () => 1, { id: "h6-after" }), /closed/);
 });
 

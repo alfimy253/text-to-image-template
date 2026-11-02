@@ -58,6 +58,8 @@ export interface ScriptNoteApiDeps {
 	loop?: ScriptEventLoop;
 	waitUntil?: (task: Promise<unknown>) => void;
 	onValidated?: () => Promise<void>;
+	/** Testable/configurable wall-clock budget for a parked job. */
+	jobDeadlineMs?: number;
 }
 
 type NoteEnv = {
@@ -334,6 +336,8 @@ export async function submitAsyncScriptJob(
 		? String(body.noteId)
 		: scriptNoteId({ topic, sourceUrl: url, minutes, speed });
 
+	const jobDeadlineMs =
+		Number(deps.jobDeadlineMs) > 0 ? Number(deps.jobDeadlineMs) : SCRIPT_NOTE_DEADLINE_MS;
 	const existing = await readScriptNote(env, id);
 	const note: ScriptNote = existing
 		? noteHit(existing)
@@ -343,7 +347,7 @@ export async function submitAsyncScriptJob(
 	note.speed = speed;
 	if (url) note.sourceUrl = url;
 	noteRunStart(note, "queued");
-	note.deadlineMs = SCRIPT_NOTE_DEADLINE_MS;
+	note.deadlineMs = jobDeadlineMs;
 	await writeScriptNote(env, note);
 
 	const loop = deps.loop || scriptEventLoop();
@@ -385,10 +389,12 @@ export async function submitAsyncScriptJob(
 	};
 
 	/* The job is really running now: the queue wait is over (staleness clock). */
-	const markRunning = async (): Promise<void> => {
+	const markRunning = async (context?: { signal?: AbortSignal }): Promise<void> => {
 		try {
 			const current = (await readScriptNote(env, id)) || note;
-			if (isTerminalNoteState(current.state)) return;
+			/* A slow KV read can outlive the job deadline. Do not persist a stale
+			 * active transition after the watchdog has already closed the note. */
+			if (context?.signal?.aborted || isTerminalNoteState(current.state)) return;
 			noteRunActive(current, "planning");
 			await writeScriptNote(env, current);
 		} catch {
@@ -413,7 +419,7 @@ export async function submitAsyncScriptJob(
 	const jobOptions = {
 		id,
 		label: "script",
-		deadlineMs: SCRIPT_NOTE_DEADLINE_MS,
+		deadlineMs: jobDeadlineMs,
 		onStart: markRunning,
 		onError: (error: unknown) => failNote(error, "SCRIPT_NOTE_FAILED")
 	};
@@ -442,11 +448,33 @@ export async function submitAsyncScriptJob(
 		}
 	} else if (deps.waitUntil) {
 		mode = "inline";
-		const inline = (async () => {
-			await markRunning();
-			return runJob();
+		const controller = new AbortController();
+		let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+		const work = (async () => {
+			await markRunning({ signal: controller.signal });
+			if (controller.signal.aborted) {
+				throw new Error("script job exceeded its " + jobDeadlineMs + " ms budget");
+			}
+			return runJob({ signal: controller.signal });
 		})();
-		inline.catch((error) => failNote(error, "SCRIPT_NOTE_FAILED"));
+		const deadline = new Promise<never>((_resolve, reject) => {
+			deadlineTimer = setTimeout(() => {
+				controller.abort();
+				const error = new Error("script job exceeded its " + jobDeadlineMs + " ms budget");
+				(error as { code?: string }).code = "SCRIPT_NOTE_DEADLINE";
+				reject(error);
+			}, jobDeadlineMs);
+		});
+		const inline = Promise.race([work, deadline]).finally(() => {
+			if (deadlineTimer) clearTimeout(deadlineTimer);
+		});
+		inline.catch((error) => {
+			const code = (error as { code?: string })?.code === "SCRIPT_NOTE_DEADLINE"
+				? "SCRIPT_NOTE_DEADLINE"
+				: "SCRIPT_NOTE_FAILED";
+			/* A broken KV must not turn the fallback task into another hang. */
+			void failNote(error, code).catch(() => {});
+		});
 		try {
 			deps.waitUntil(inline);
 		} catch {

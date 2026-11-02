@@ -539,6 +539,30 @@ test("async mode parks the job on the loop and the note URL returns the script",
 	loop.close();
 });
 
+test("event-loop deadlines include a stalled onStart hook and cannot hang in onError", async () => {
+	const loop = new ScriptEventLoop({ concurrency: 1 });
+	const startedAt = Date.now();
+	const job = loop.schedule(
+		async () => "must not run",
+		{
+			id: "stuck-start-hook",
+			deadlineMs: 25,
+			onStart: () => new Promise(() => {}),
+			onError: () => new Promise(() => {})
+		}
+	);
+	const result = await Promise.race([
+		job.then(() => "resolved", (error) => error.message),
+		new Promise((resolve) => setTimeout(() => resolve("hung"), 1400))
+	]);
+	assert.notEqual(result, "hung", "lifecycle hooks cannot strand the job promise");
+	assert.match(String(result), /exceeded its 25 ms budget/);
+	assert.ok(Date.now() - startedAt < 1300, "the failed hook is bounded to its short best-effort window");
+	await loop.drain();
+	assert.equal(loop.stats().active, 0);
+	loop.close();
+});
+
 test("the event loop keeps Node's phase order, its concurrency bound and its queue cap", async () => {
 	const loop = new ScriptEventLoop({ concurrency: 2, maxQueue: 2 });
 
