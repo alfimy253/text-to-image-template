@@ -298,6 +298,20 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				scriptNoteStallMs: SCRIPT_NOTE_CLIENT_STALL_MS,
 				scriptNoteQueueGraceMs: SCRIPT_NOTE_QUEUE_GRACE_MS,
 				scriptNoteDeadlineMs: SCRIPT_NOTE_DEADLINE_MS,
+				/*
+				 * RETRY OWNERSHIP (see handleSeoScriptGeneration).
+				 *
+				 * A client that sends `browserRetries: true` gets exactly ONE
+				 * planner attempt and ONE writer attempt per request, and a
+				 * structured `failure: { stage, reason, attempts }` plus the
+				 * validated `keywordSet` to resume from - this page then owns
+				 * the attempt count, the backoff and the retry decision.
+				 * `browserScriptRetries` is how many attempts a page should
+				 * make in total; without these fields (or without the request
+				 * flag) the worker keeps its legacy internal ladder.
+				 */
+				scriptRetryOwner: "browser",
+				browserScriptRetries: 3,
 				mediaProvider: "pixabay", per_page: 2, video_per_page: 3 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});

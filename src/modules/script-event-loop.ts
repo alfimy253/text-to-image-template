@@ -83,6 +83,16 @@ export interface ScriptEventLoopStats {
 	checkJobs: number;
 	pendingWaitMs: number;
 	lastTickAt: number | null;
+	/*
+	 * EWMA of how long a job actually RUNS (settled jobs only).
+	 *
+	 * The admission check in the async route needs this to tell a caller the
+	 * truth about its ticket: with `queued` jobs ahead of it, the wait is
+	 * `ceil((queued + 1) / concurrency) * avgRunMs`, and a wait longer than the
+	 * job's own budget means the ticket can only ever fail. 0 = no samples yet
+	 * (the caller falls back to a cold-start estimate).
+	 */
+	avgRunMs: number;
 	jobs: LoopJobSnapshot[];
 }
 
@@ -104,9 +114,26 @@ interface QueuedJob {
 export const SCRIPT_LOOP_DEFAULT_CONCURRENCY = 2;
 export const SCRIPT_LOOP_MAX_QUEUE = 24;
 
+/*
+ * A JOB IS NEVER UNBOUNDED.
+ *
+ * `deadlineMs` used to be optional with "0/absent = unbounded", and an
+ * unbounded job that never settled pinned its concurrency slot FOR THE LIFE OF
+ * THE ISOLATE: every later script queued behind it, `drain()` never resolved
+ * (so `ctx.waitUntil(drain())` held the isolate open for nothing) and the notes
+ * those jobs owned sat in `queued` until the 90 s watchdog. The slot is the
+ * scarce resource here, so a job that declares no budget now inherits one.
+ */
+export const SCRIPT_LOOP_DEFAULT_JOB_DEADLINE_MS = 300000;
+/* How many phase iterations one synchronous `pump()` may run (see pump). */
+export const SCRIPT_LOOP_MAX_PUMP_ITERATIONS = 1000;
+
 export class ScriptEventLoop {
 	readonly concurrency: number;
 	readonly maxQueue: number;
+	/* The budget a job inherits when it declares none (see
+	 * SCRIPT_LOOP_DEFAULT_JOB_DEADLINE_MS); overridable for tests. */
+	readonly defaultJobDeadlineMs: number;
 
 	private timers: TimerEntry[] = [];
 	private pending: Array<() => void> = [];
@@ -132,16 +159,23 @@ export class ScriptEventLoop {
 	private checkJobs = 0;
 	private lastTickAt: number | null = null;
 	private seq = 0;
+	private avgRunMsValue = 0;
+	private runSamples = 0;
 	private idleWaiters: Array<() => void> = [];
 	private pumping = false;
 	private pumpAgain = false;
 	private closed = false;
 
-	constructor(options: { concurrency?: number; maxQueue?: number } = {}) {
+	constructor(options: { concurrency?: number; maxQueue?: number; defaultJobDeadlineMs?: number } = {}) {
 		const concurrency = Number(options.concurrency);
 		this.concurrency = Number.isFinite(concurrency) && concurrency > 0 ? Math.floor(concurrency) : SCRIPT_LOOP_DEFAULT_CONCURRENCY;
 		const maxQueue = Number(options.maxQueue);
 		this.maxQueue = Number.isFinite(maxQueue) && maxQueue > 0 ? Math.floor(maxQueue) : SCRIPT_LOOP_MAX_QUEUE;
+		const defaultJobDeadlineMs = Number(options.defaultJobDeadlineMs);
+		this.defaultJobDeadlineMs =
+			Number.isFinite(defaultJobDeadlineMs) && defaultJobDeadlineMs > 0
+				? defaultJobDeadlineMs
+				: SCRIPT_LOOP_DEFAULT_JOB_DEADLINE_MS;
 	}
 
 	/* process.nextTick equivalent: run at the next `pending` boundary, never
@@ -326,6 +360,7 @@ export class ScriptEventLoop {
 			if (job.snapshot.state !== "cancelled") {
 				job.snapshot.finishedAt = Date.now();
 				job.snapshot.runMs = job.snapshot.finishedAt - startedAt;
+				this.observeRunMs(job.snapshot.runMs);
 				job.settle(outcome);
 				/* Settled promises resume in the `pending` phase. */
 				this.pending.push(() => this.phaseCount.pending++);
@@ -334,9 +369,40 @@ export class ScriptEventLoop {
 		}
 	}
 
+	/*
+	 * THE BUDGET BELONGS TO THE JOB, NOT TO THE SLOT.
+	 *
+	 * A note promises "this run is decided within `deadlineMs` of the TICKET"
+	 * (the note's own `runStartedAt` is written when the ticket is issued), so
+	 * the loop has to measure from the same instant. Starting the clock at
+	 * `runJob` instead gave a job queue-wait PLUS its full budget, i.e. the
+	 * runner could keep working for minutes after the note's watchdog had
+	 * already declared it dead.
+	 */
+	private budgetFor(job: QueuedJob): { budgetMs: number; remainingMs: number } {
+		const declared = Number(job.options.deadlineMs);
+		const budgetMs =
+			Number.isFinite(declared) && declared > 0 ? declared : this.defaultJobDeadlineMs;
+		/* `waitMs` is stamped by startReadyJobs before the body is called. */
+		const waitMs = Math.max(0, Number(job.snapshot.waitMs) || 0);
+		return { budgetMs, remainingMs: budgetMs - waitMs };
+	}
+
 	private withDeadline<T>(job: QueuedJob): Promise<T> {
-		const deadlineMs = Number(job.options.deadlineMs);
+		const { budgetMs: deadlineMs, remainingMs } = this.budgetFor(job);
 		const work = async (): Promise<T> => {
+			/*
+			 * A job that spent its whole budget waiting for a slot must not start
+			 * spending model calls: nobody is polling for it any more (the note
+			 * watchdog closed it), so the honest answer is a failure that
+			 * `onError` can write down.
+			 */
+			if (remainingMs <= 0) {
+				throw new Error(
+					"script job " + job.snapshot.id + " waited " + job.snapshot.waitMs +
+						" ms in the queue and spent its " + deadlineMs + " ms budget"
+				);
+			}
 			if (job.options.onStart) await job.options.onStart(job.context);
 			if (job.context.signal.aborted) {
 				throw new Error("script event loop job was cancelled");
@@ -354,7 +420,6 @@ export class ScriptEventLoop {
 			}
 			return value;
 		};
-		if (!(deadlineMs > 0)) return work();
 		return new Promise<T>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				/*
@@ -372,7 +437,13 @@ export class ScriptEventLoop {
 						"script job " + job.snapshot.id + " exceeded its " + deadlineMs + " ms budget"
 					)
 				);
-			}, deadlineMs);
+			}, Math.max(1, remainingMs));
+			/*
+			 * Do not hold the isolate open for the budget of a job that has
+			 * already been settled by `close()`: the timer is a watchdog, not
+			 * the job's keep-alive.
+			 */
+			(timer as unknown as { unref?: () => void })?.unref?.();
 			work().then(
 				(value) => {
 					clearTimeout(timer);
@@ -397,9 +468,27 @@ export class ScriptEventLoop {
 			return;
 		}
 		this.pumping = true;
+		/*
+		 * A SYNCHRONOUS PUMP MUST YIELD.
+		 *
+		 * `nextTick()`/`immediate()` re-arm themselves inside the phases below
+		 * (`setImmediate(flush)` is the canonical shape), and every re-arm sets
+		 * `pumpAgain`, so this do/while ran them all INSIDE one synchronous
+		 * call: an unbounded chain never returned to the runtime - no timer, no
+		 * promise continuation, no response (measured: the process was still
+		 * spinning when it was killed at 4 s). Bounding the iterations and
+		 * handing the rest to a macrotask keeps the loop's phase order while
+		 * guaranteeing the isolate gets control back.
+		 */
+		let iterations = 0;
+		let yieldToRuntime = false;
 		try {
 			do {
 				this.pumpAgain = false;
+				if (++iterations > SCRIPT_LOOP_MAX_PUMP_ITERATIONS) {
+					yieldToRuntime = true;
+					break;
+				}
 				this.tickCount++;
 				this.lastTickAt = Date.now();
 
@@ -475,7 +564,15 @@ export class ScriptEventLoop {
 			} while (this.pumpAgain);
 		} finally {
 			this.pumping = false;
+			if (yieldToRuntime && !this.closed) {
+				const wake = setTimeout(() => this.pump(), 0);
+				(wake as { unref?: () => void })?.unref?.();
+			}
 		}
+	}
+
+	isClosed(): boolean {
+		return this.closed;
 	}
 
 	/* Runs process.nextTick-style callbacks queued since the last boundary. */
@@ -511,6 +608,16 @@ export class ScriptEventLoop {
 		return this.snapshots.get(id) || null;
 	}
 
+	/* EWMA (alpha 0.3) so one freak job does not rewrite the estimate. */
+	private observeRunMs(runMs: number): void {
+		const value = Number(runMs);
+		if (!Number.isFinite(value) || value < 0) return;
+		this.runSamples++;
+		this.avgRunMsValue = this.runSamples === 1
+			? value
+			: this.avgRunMsValue * 0.7 + value * 0.3;
+	}
+
 	stats(): ScriptEventLoopStats {
 		return {
 			ticks: this.tickCount,
@@ -526,6 +633,7 @@ export class ScriptEventLoop {
 			checkJobs: this.checkJobs,
 			pendingWaitMs: this.pendingWaitMs,
 			lastTickAt: this.lastTickAt,
+			avgRunMs: Math.round(this.avgRunMsValue),
 			jobs: [...this.snapshots.values()].slice(-8)
 		};
 	}

@@ -20003,6 +20003,18 @@ async function retryImagePromptFlow(n) {
 	 */
 	const SCRIPT_RETRY_LIMIT =
 		2;
+	/*
+	 * The worker advertises how many attempts it expects the page to make
+	 * ("browserScriptRetries" in /api/pipeline-capabilities) because the worker
+	 * itself now makes exactly ONE attempt per stage. \`scriptAttemptLimit\` is
+	 * that number, clamped to something sane; the default below is what a page
+	 * uses until the capabilities land (and what an older worker gets).
+	 */
+	let scriptAttemptLimit =
+		SCRIPT_RETRY_LIMIT + 1;
+	function scriptAttempts() {
+		return Math.min(5, Math.max(1, Number(scriptAttemptLimit) || SCRIPT_RETRY_LIMIT + 1));
+	}
 
 	/*
 	 * SCRIPT NOTES (dynamic URL) + ASYNC SCRIPT JOBS
@@ -20227,12 +20239,14 @@ async function retryImagePromptFlow(n) {
 			polls++;
 
 			let note = null;
+			let pollStatus = 0;
 			try {
 				const polled = await fetchWithTimeout(
 					noteUrl,
 					{ headers: { Accept: "application/json" } },
 					SCRIPT_REQUEST_TIMEOUT_MS
 				);
+				pollStatus = Number(polled.status) || 0;
 				note = await polled.json().catch(() => null);
 			} catch (pollError) {
 				/*
@@ -20244,6 +20258,35 @@ async function retryImagePromptFlow(n) {
 					poll: polls,
 					failedPolls: failedPolls,
 					error: String(pollError && pollError.message || pollError).slice(0, 200)
+				});
+				if (failedPolls >= SCRIPT_NOTE_POLL_ATTEMPTS) {
+					const unreadable = new Error(
+						"The script note could not be read after " + failedPolls +
+						" attempts - the job may still finish, so try again in a moment"
+					);
+					unreadable.retryable = true;
+					unreadable.code = "SCRIPT_NOTE_UNREADABLE";
+					throw unreadable;
+				}
+				continue;
+			}
+			/*
+			 * A BUSY NOTE STORE IS A FAILED POLL, NOT A NOTE STATE.
+			 *
+			 * The worker answers 503 { code: "SCRIPT_NOTE_STORE_BUSY",
+			 * terminal: false } when its KV binding did not answer inside its
+			 * budget. That is a poll this tab could not read - the job is untouched -
+			 * so it must be counted like a dropped connection (three in a row ends
+			 * the flow with the RETRYABLE SCRIPT_NOTE_UNREADABLE), never treated as
+			 * the note's state or as proof of life.
+			 */
+			if (pollStatus === 503 && note && note.terminal === false) {
+				failedPolls++;
+				console.warn("[script-notes] note store busy", {
+					poll: polls,
+					failedPolls: failedPolls,
+					code: note.code || "",
+					retryAfterMs: Number(note.retryAfterMs) || 0
 				});
 				if (failedPolls >= SCRIPT_NOTE_POLL_ATTEMPTS) {
 					const unreadable = new Error(
@@ -20297,10 +20340,19 @@ async function retryImagePromptFlow(n) {
 					note.error ||
 					("The script job ended in state '" + (state || "unknown") + "'")
 				);
+				/*
+				 * A note that reached a terminal error is a FAILED ATTEMPT, not a
+				 * verdict about the whole click: this page decides whether to
+				 * spend another one. The note's keyword plan is the resume point,
+				 * so the retry does not pay for the planner again.
+				 */
 				failure.retryable = true;
 				failure.state = state;
 				failure.noteState = state;
 				failure.code = note.errorCode || "";
+				failure.stage = note.failureStage || "";
+				failure.retryAfterMs = Number(note.retryAfterMs) > 0 ? Number(note.retryAfterMs) : 0;
+				failure.keywordSet = note.keywords || null;
 				throw failure;
 			}
 
@@ -20396,6 +20448,21 @@ async function retryImagePromptFlow(n) {
 			await studioOffload.capabilities();
 		const single = Boolean(caps.singleAttemptScript && project && project.selectedSeoSet);
 		const notesEnabled = Boolean(caps.scriptNotes);
+		/*
+		 * WHO OWNS THE RETRIES: THE BROWSER.
+		 *
+		 * The worker advertises how many attempts it expects the page to make
+		 * ("browserScriptRetries"). When it does, every script request says
+		 * \`browserRetries: true\`, which makes the worker do exactly ONE attempt
+		 * per stage and report which stage failed; this loop decides whether to
+		 * spend another. Without that field the worker keeps its legacy ladder,
+		 * so a new page against an old worker (or the reverse) still works.
+		 */
+		const browserRetries = Number(caps.browserScriptRetries) > 0;
+		/* The worker's number, not this file's guess (see scriptAttempts). */
+		if (Number(caps.browserScriptRetries) > 0) {
+			scriptAttemptLimit = Number(caps.browserScriptRetries);
+		}
 		const asyncEnabled = notesEnabled && Boolean(caps.asyncScript);
 		/* #5: 20 s per request once the worker can park the job in a note. */
 		const requestTimeout = asyncEnabled
@@ -20419,12 +20486,27 @@ async function retryImagePromptFlow(n) {
 			return fetchWithTimeout(url, init, requestTimeout);
 		};
 
-		const keywordSet =
+		/*
+		 * The keyword set is the RESUME POINT of a browser-owned retry: when an
+		 * attempt got as far as a validated plan and failed in the writer, the
+		 * next attempt sends that plan back and the planner is skipped (the
+		 * worker treats \`keywordSet\` exactly like a warm note).
+		 */
+		const seededKeywordSet =
 			context && context.keywordSet !== undefined && context.keywordSet !== null
 				? context.keywordSet
 				: project && project.selectedSeoSet
 					? project.selectedSeoSet
 					: null;
+		/*
+		 * A resume set WINS over a stale local seed: it is the plan the worker
+		 * itself validated on the failed attempt, so replaying it cannot
+		 * contradict the note (a seed can be older than the note's).
+		 */
+		const keywordSet =
+			options && options.resumeKeywordSet
+				? options.resumeKeywordSet
+				: seededKeywordSet;
 		const sourceUrl =
 			context && context.sourceUrl !== undefined && context.sourceUrl !== null
 				? context.sourceUrl
@@ -20461,7 +20543,9 @@ async function retryImagePromptFlow(n) {
 					: undefined,
 			/* Worker-derived note id: same topic + minutes + speed + URL. */
 			useNotes: notesEnabled || undefined,
-			sourceUrl: notesEnabled && sourceUrl ? sourceUrl : undefined
+			sourceUrl: notesEnabled && sourceUrl ? sourceUrl : undefined,
+			/* The worker makes one attempt per stage; this page retries. */
+			browserRetries: browserRetries || undefined
 		};
 
 		const response =
@@ -20537,7 +20621,19 @@ async function retryImagePromptFlow(n) {
 			error.status = response.status;
 			error.kind = (data && data.kind) || "";
 			error.retryAfterMs = data && Number(data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
-			error.retryable = response.status === 408 || response.status === 429 || response.status >= 500 || response.ok;
+			/*
+			 * The worker's own verdict wins over the status-code guess: it knows
+			 * whether the failure came from the planner, the writer or the SRT
+			 * validator, and whether another attempt can help at all.
+			 */
+			error.retryable = data && data.retryable === false
+				? false
+				: response.status === 408 || response.status === 429 || response.status >= 500 || response.ok;
+			error.stage = (data && data.failure && data.failure.stage) || "";
+			error.failureReason = (data && data.failure && data.failure.reason) || "";
+			error.attempts = (data && data.failure && Number(data.failure.attempts)) || 0;
+			/* Where the next attempt resumes from (planner already done). */
+			error.keywordSet = (data && data.keywordSet) || null;
 			throw error;
 
 		}
@@ -20624,13 +20720,50 @@ async function retryImagePromptFlow(n) {
 		refreshBatchRowCells();
 
 		try {
-			const data = await requestScriptWithNotes(batchRowScriptContext(row), {
-				topic: topic,
-				minutes: minutes,
-				speed: "medium",
-				attempt: 0,
-				previousFailure: ""
-			});
+			/*
+			 * A TABLE ROW NOW RETRIES TOO.
+			 *
+			 * It used to send exactly one request and lean on the worker's
+			 * internal ladder for every retry, so once the worker became
+			 * single-attempt per request this layout would have had exactly one
+			 * try. Same three attempts, same feedback loop as the editor.
+			 */
+			let data = null;
+			let lastError = null;
+			let usedAttempts = 0;
+			const attemptLimit = scriptAttempts();
+			for (let attempt = 1; attempt <= attemptLimit; attempt++) {
+				usedAttempts = attempt;
+				if (row.stopRequested || !getBatchRow(rowId)) {
+					const cancelled = new Error("Script generation was cancelled");
+					cancelled.name = "AbortError";
+					throw cancelled;
+				}
+				try {
+					if (attempt > 1) {
+						setBatchStage(row, "writing", "Retrying the script (" + attempt + " of " + attemptLimit + ")\u2026");
+						refreshBatchRowCells();
+					}
+					data = await requestScriptWithNotes(batchRowScriptContext(row), {
+						topic: topic,
+						minutes: minutes,
+						speed: "medium",
+						attempt: attempt - 1,
+						previousFailure: lastError ? (lastError.message || String(lastError)) : "",
+						resumeKeywordSet: lastError ? lastError.keywordSet : null
+					});
+					lastError = null;
+					break;
+				} catch (attemptError) {
+					lastError = attemptError;
+					if (attemptError && attemptError.retryable === false) break;
+					if (attempt >= attemptLimit) break;
+					const hinted = attemptError && Number(attemptError.retryAfterMs) > 0 ? Number(attemptError.retryAfterMs) : 0;
+					await batchDelay(hinted > 0 ? Math.min(5000, hinted) : SCRIPT_RETRY_BACKOFF_MS);
+				}
+			}
+			if (lastError) throw lastError;
+			console.info("[script-notes] table row script", { rowId: rowId, attempts: usedAttempts });
 			const script = String((data && data.script) || "").trim();
 			if (!script) throw new Error("The script came back empty");
 			const live = getBatchRow(rowId);
@@ -20662,7 +20795,8 @@ async function retryImagePromptFlow(n) {
 		minutes,
 		speed,
 		attempt,
-		previousFailure
+		previousFailure,
+		resumeKeywordSet
 	) {
 
 		const project =
@@ -20675,7 +20809,8 @@ async function retryImagePromptFlow(n) {
 				minutes: minutes,
 				speed: speed,
 				attempt: attempt,
-				previousFailure: previousFailure
+				previousFailure: previousFailure,
+				resumeKeywordSet: resumeKeywordSet || null
 			}
 		);
 
@@ -20920,14 +21055,16 @@ async function retryImagePromptFlow(n) {
 			topic: topic,
 			minutes: minutes,
 			speed: speed,
-			attempts: SCRIPT_RETRY_LIMIT + 1
+			attempts: scriptAttempts()
 		});
 
 		try {
 
+			const attemptLimit = scriptAttempts();
+
 			for (
 				let attempt = 1;
-				attempt <= SCRIPT_RETRY_LIMIT + 1;
+				attempt <= attemptLimit;
 				attempt++
 			) {
 
@@ -20942,7 +21079,9 @@ async function retryImagePromptFlow(n) {
 							minutes,
 							speed,
 							attempt - 1,
-							lastError && lastError.message
+							lastError && lastError.message,
+							/* Resume: the plan the previous attempt already paid for. */
+							lastError && lastError.keywordSet
 						);
 
 					if (project._deleted) return false;
@@ -20982,13 +21121,13 @@ async function retryImagePromptFlow(n) {
 
 					if (project._deleted) return false;
 					if (err && err.retryable === false) break;
-					if (attempt <= SCRIPT_RETRY_LIMIT) {
+					if (attempt < attemptLimit) {
 						/* Not an error yet - the browser is retrying. */
 						const retryLine =
 							"Script generation failed \u2014 retrying (" +
 							attempt +
 							" of " +
-							SCRIPT_RETRY_LIMIT +
+							attemptLimit +
 							")\u2026";
 
 						const liveStatus = document.getElementById("va-script-status-" + (videoProjects.indexOf(project) + 1));
@@ -20998,7 +21137,10 @@ async function retryImagePromptFlow(n) {
 							videoProjects.indexOf(project) + 1,
 							retryLine
 						);
-						await batchDelay(SCRIPT_RETRY_BACKOFF_MS);
+						/* The worker may ask for a specific wait (a busy fleet,
+						 * a rate limit); otherwise the fixed backoff applies. */
+						const hinted = err && Number(err.retryAfterMs) > 0 ? Number(err.retryAfterMs) : 0;
+						await batchDelay(hinted > 0 ? Math.min(5000, hinted) : SCRIPT_RETRY_BACKOFF_MS);
 					}
 
 				}

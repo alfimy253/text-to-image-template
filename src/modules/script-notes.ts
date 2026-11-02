@@ -104,10 +104,23 @@ export interface ScriptNote {
 	repairedKeywords?: string[];
 	/* When the CURRENT run was accepted/started (staleness watchdog). */
 	runStartedAt?: number;
+	/*
+	 * WHICH run owns this note (see `noteWriteAllowed`).
+	 *
+	 * A run is the unit of authorship: the ticket that `submitAsyncScriptJob`
+	 * hands out mints one, and every write that run makes carries it. Without
+	 * an owner, "last write wins" is the only rule the store can apply - and
+	 * that is exactly how an abandoned run's `done` used to land on top of the
+	 * `error` the loop had already recorded for it.
+	 */
+	runId?: string;
 	/* The wall-clock budget that run promised (0/absent = the default). */
 	deadlineMs?: number;
 	/* Machine-readable failure reason, e.g. SCRIPT_NOTE_STALE. */
 	errorCode?: string;
+	/* Which pipeline stage failed ("planner" | "writer" | "pipeline"): the
+	 * browser's retry decides what to resume from it. */
+	failureStage?: string;
 	/* Where the keyword set/beat plan last came from. */
 	origin?: "server" | "browser";
 	/* The exact success payload the sync route returns, so an async poller
@@ -370,11 +383,85 @@ export function clearScriptNoteMemory(): void {
 	memoryNotes.clear();
 }
 
+/*
+ * A KV operation is an external I/O and NOTHING in this Worker can cancel it.
+ * `await env.KV_BINDING.get(...)` on a degraded binding therefore parks the
+ * request (or, worse, the poller) for as long as the binding sits there - which
+ * is the one await in these routes that had no ceiling at all. Every note read
+ * and write is raced against this budget instead: a note is an optimisation, so
+ * "the binding did not answer" is reported as "no note" rather than as a hung
+ * request. The still-pending KV promise is left to settle on its own.
+ */
+export const SCRIPT_NOTE_KV_TIMEOUT_MS = 2000;
+
+/*
+ * "SLOW" IS NOT "MISSING".
+ *
+ * A note op that exceeds `SCRIPT_NOTE_KV_TIMEOUT_MS` must not be reported as
+ * `null`, because `null` means "there is no note": the read route turned that
+ * into `404 { state:"empty", terminal:true }`, i.e. a HEALTHY run behind a slow
+ * store was declared finished and the browser stopped polling it (measured: a
+ * KV at 2.5 s per op -> 404 terminal, where the pre-budget code simply took
+ * 2.5 s and answered 202). Every read therefore reports whether the store
+ * ANSWERED at all.
+ */
+export interface NoteReadResult {
+	note: ScriptNote | null;
+	/* The binding did not answer inside its budget: unknown, not absent. */
+	unavailable: boolean;
+}
+
+/* Same race as `withNoteBudget`, but it tells the caller which side won. */
+function kvRace<T>(task: Promise<T>, ms: number = SCRIPT_NOTE_KV_TIMEOUT_MS): Promise<{ value?: T; timedOut: boolean; failed: boolean }> {
+	return new Promise((resolve) => {
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const finish = (result: { value?: T; timedOut: boolean; failed: boolean }) => {
+			if (settled) return;
+			settled = true;
+			if (timer) clearTimeout(timer);
+			resolve(result);
+		};
+		timer = setTimeout(
+			() => finish({ timedOut: true, failed: false }),
+			Number(ms) > 0 ? Number(ms) : SCRIPT_NOTE_KV_TIMEOUT_MS
+		);
+		task.then(
+			(value) => finish({ value, timedOut: false, failed: false }),
+			() => finish({ timedOut: false, failed: true })
+		);
+	});
+}
+
+function withNoteBudget<T>(task: Promise<T>, fallback: T, ms: number = SCRIPT_NOTE_KV_TIMEOUT_MS): Promise<T> {
+	return new Promise<T>((resolve) => {
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const finish = (value: T) => {
+			if (settled) return;
+			settled = true;
+			if (timer) clearTimeout(timer);
+			resolve(value);
+		};
+		timer = setTimeout(
+			() => finish(fallback),
+			Number(ms) > 0 ? Number(ms) : SCRIPT_NOTE_KV_TIMEOUT_MS
+		);
+		task.then(
+			(value) => finish(value),
+			() => finish(fallback)
+		);
+	});
+}
+
 export function kvNoteStore(kv: ScriptNoteKv): ScriptNoteStore {
 	return {
 		async get(id) {
 			try {
-				const raw = await kv.get(SCRIPT_NOTE_PREFIX + id);
+				const raw = await withNoteBudget<unknown>(
+					Promise.resolve(kv.get(SCRIPT_NOTE_PREFIX + id)),
+					null
+				);
 				if (!raw) return null;
 				const parsed = JSON.parse(String(raw)) as ScriptNote;
 				return parsed && parsed.id ? parsed : null;
@@ -384,16 +471,23 @@ export function kvNoteStore(kv: ScriptNoteKv): ScriptNoteStore {
 		},
 		async put(note, ttlSeconds = SCRIPT_NOTE_TTL_SECONDS) {
 			try {
-				await kv.put(SCRIPT_NOTE_PREFIX + note.id, JSON.stringify(note), {
-					expirationTtl: ttlSeconds
-				});
+				await withNoteBudget(
+					Promise.resolve(
+						kv.put(SCRIPT_NOTE_PREFIX + note.id, JSON.stringify(note), {
+							expirationTtl: ttlSeconds
+						})
+					),
+					undefined
+				);
 			} catch {
 				/* A note is an optimisation: never fail a script over it. */
 			}
 		},
 		async delete(id) {
 			try {
-				if (kv.delete) await kv.delete(SCRIPT_NOTE_PREFIX + id);
+				if (kv.delete) {
+					await withNoteBudget(Promise.resolve(kv.delete(SCRIPT_NOTE_PREFIX + id)), undefined);
+				}
 			} catch {
 				/* best effort */
 			}
@@ -476,6 +570,132 @@ export async function writeScriptNote(
 	note.updatedAt = Date.now();
 	await scriptNoteStore(env).put(note, ttlSeconds);
 	return note;
+}
+
+/*
+ * A FRESH read: KV first, cache second.
+ *
+ * `readScriptNote` is cache-first, which is right for the hot path but wrong
+ * for a verdict. A reader running in ANOTHER isolate can close this note (the
+ * H2 stale watchdog) while this isolate still holds the pre-expiry copy in
+ * `memoryNotes`; a terminal write decided from that copy resurrects a note the
+ * browser was already told was dead (measured: watchdog at +150 ms closed the
+ * note as SCRIPT_NOTE_STALE, the runner's `done` landed at +1050 ms on top of
+ * it). Anything that PUBLISHES a verdict reads through this instead.
+ */
+export async function readScriptNoteFresh(
+	env: { KV_BINDING?: ScriptNoteKv } | undefined,
+	id: string
+): Promise<ScriptNote | null> {
+	const result = await readScriptNoteChecked(env, id, { fresh: true });
+	return result.note;
+}
+
+/*
+ * The read every VERDICT goes through: it says whether the store answered, so a
+ * slow binding can never be mistaken for a settled (or a missing) note.
+ */
+export async function readScriptNoteChecked(
+	env: { KV_BINDING?: ScriptNoteKv } | undefined,
+	id: string,
+	options: { fresh?: boolean } = {}
+): Promise<NoteReadResult> {
+	if (!isScriptNoteId(id)) return { note: null, unavailable: false };
+	const memory = noteMemoryStore();
+	if (!options.fresh) {
+		const cached = await memory.get(id);
+		if (cached) return { note: cached, unavailable: false };
+	}
+	const kv = env && env.KV_BINDING;
+	if (!kv || typeof kv.get !== "function") {
+		/*
+		 * No KV binding: the in-process mirror IS the store, so it is also
+		 * authoritative. Returning `null` for a fresh read here made every
+		 * "is this note already settled?" check blind in a memory-only runtime
+		 * (and in the unit tests), which silently disabled the settled-note
+		 * guard - the measured symptom was a `done` written over a watchdog's
+		 * `SCRIPT_NOTE_STALE`.
+		 */
+		return { note: await memory.get(id), unavailable: false };
+	}
+	const raced = await kvRace(Promise.resolve(kv.get(SCRIPT_NOTE_PREFIX + id)));
+	if (raced.timedOut) return { note: null, unavailable: true };
+	if (raced.failed || !raced.value) return { note: null, unavailable: false };
+	try {
+		const parsed = JSON.parse(String(raced.value)) as ScriptNote;
+		if (!parsed || !parsed.id) return { note: null, unavailable: false };
+		await memory.put(parsed);
+		return { note: parsed, unavailable: false };
+	} catch {
+		return { note: null, unavailable: false };
+	}
+}
+
+/*
+ * WHO MAY WRITE THIS NOTE.
+ *
+ * Two rules, and both of them exist because "last write wins" is not a
+ * consistency model:
+ *
+ *  1. A DIFFERENT run may only take the note over when its run started LATER.
+ *     A run that was already abandoned (the loop cancelled it, the watchdog
+ *     closed it) therefore cannot publish anything any more.
+ *  2. Within one run, the FIRST terminal state is final. `done` may not land
+ *     on `error` and `error` may not land on `done`, whichever order the two
+ *     racing writers reach the store in - and a late heartbeat may not reopen
+ *     a note whose run has already been judged.
+ *
+ * A brand-new run (a retry, an explicit rewrite) mints a new `runId` and a new
+ * `runStartedAt`, so rule 1 is what lets it legitimately reopen a terminal
+ * note.
+ */
+export function noteWriteAllowed(current: ScriptNote | null, incoming: ScriptNote): boolean {
+	if (!current) return true;
+	const currentRun = String(current.runId || "");
+	const incomingRun = String(incoming.runId || "");
+	if (currentRun && incomingRun && currentRun !== incomingRun) {
+		return Number(incoming.runStartedAt || 0) > Number(current.runStartedAt || 0);
+	}
+	if (noteStateIsTerminal(current.state)) {
+		if (!noteStateIsTerminal(incoming.state)) return false;
+		return current.state === incoming.state;
+	}
+	return true;
+}
+
+export interface NoteWriteOptions {
+	/* Read THROUGH to KV before deciding: required for a terminal verdict. */
+	fresh?: boolean;
+	ttlSeconds?: number;
+}
+
+/*
+ * The only write path a RUN may use. Returns whether the write was applied.
+ *
+ * Explicit user writes (`POST /api/script/notes`) and a fresh ticket keep using
+ * `writeScriptNote` directly: those are the two things that are SUPPOSED to
+ * reopen a settled note.
+ */
+export async function writeScriptNoteGuarded(
+	env: { KV_BINDING?: ScriptNoteKv } | undefined,
+	note: ScriptNote,
+	options: NoteWriteOptions = {}
+): Promise<boolean> {
+	const current = options.fresh
+		? await readScriptNoteFresh(env, note.id)
+		: await readScriptNote(env, note.id);
+	if (!noteWriteAllowed(current, note)) {
+		console.warn("[script-notes] write rejected: a newer verdict owns this note", {
+			noteId: note.id,
+			incomingState: note.state,
+			currentState: current ? current.state : null,
+			incomingRun: note.runId || null,
+			currentRun: current ? current.runId || null : null
+		});
+		return false;
+	}
+	await writeScriptNote(env, note, options.ttlSeconds);
+	return true;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1073,11 +1293,25 @@ export function noteHit(note: ScriptNote): ScriptNote {
 	return note;
 }
 
+/* A new run id: unique per accepted run, monotonic through `runStartedAt`. */
+export function scriptRunId(now: number = Date.now()): string {
+	return "run-" + now.toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
 export function noteRunStart(note: ScriptNote, state: ScriptNoteState): ScriptNote {
 	note.state = state;
 	note.runs = (note.runs || 0) + 1;
 	note.updatedAt = Date.now();
-	note.runStartedAt = note.updatedAt;
+	/*
+	 * STRICTLY INCREASING, even when two runs are minted in the same
+	 * millisecond: `noteWriteAllowed` orders runs by this number, so a tie would
+	 * make "which run owns the note" undecidable (measured: a retry issued in
+	 * the same millisecond as the run it replaces could not take the note over).
+	 */
+	note.runStartedAt = Math.max(note.updatedAt, Number(note.runStartedAt || 0) + 1);
+	/* This run now owns the note: only a LATER run may write it (see
+	 * `noteWriteAllowed`). */
+	note.runId = scriptRunId(note.runStartedAt);
 	note.deadlineMs = Number(note.deadlineMs) > 0 ? note.deadlineMs : SCRIPT_NOTE_DEADLINE_MS;
 	note.errorCode = undefined;
 	note.lastError = undefined;
@@ -1089,6 +1323,26 @@ export function noteRunActive(note: ScriptNote, state: ScriptNoteState = "planni
 	note.state = state;
 	note.updatedAt = Date.now();
 	note.runStartedAt = note.updatedAt;
+	return note;
+}
+
+/*
+ * THE SAME RUN, STILL ALIVE.
+ *
+ * A reader's watchdog can close a note whose job is still waiting for a slot
+ * (queue grace 90 s) and the user then retries while that job is still in
+ * flight. The retry must not mint a second owner for the job that is about to
+ * run - it re-arms the SAME run: the owner (`runId`) is kept, and only the
+ * staleness clock and the copied state move. Unlike `noteRunActive`, this
+ * refreshes `runStartedAt` on a note that was already judged, which is the
+ * point: the run was judged dead too early.
+ */
+export function noteRunAdopt(note: ScriptNote, state: ScriptNoteState = "queued"): ScriptNote {
+	note.state = state;
+	note.updatedAt = Date.now();
+	note.runStartedAt = Math.max(note.updatedAt, Number(note.runStartedAt || 0) + 1);
+	note.errorCode = undefined;
+	note.lastError = undefined;
 	return note;
 }
 
@@ -1197,6 +1451,10 @@ export function noteRunDone(
 	if (input.payload) note.payload = input.payload;
 	note.timings = input.timings;
 	note.lastError = undefined;
+	/* A `done` note must not keep the code of a verdict it outlived (a retry
+	 * that adopted a note a watchdog had closed as SCRIPT_NOTE_STALE); the
+	 * client mirrors `errorCode` verbatim. */
+	note.errorCode = undefined;
 	note.updatedAt = Date.now();
 	return note;
 }
@@ -1237,6 +1495,7 @@ export function clientNote(note: ScriptNote, includeScript = true): Record<strin
 		ring: note.timings || null,
 		error: note.lastError || null,
 		errorCode: note.errorCode || null,
+		failureStage: note.failureStage || null,
 		runStartedAt: note.runStartedAt || null,
 		deadlineMs: note.deadlineMs || null,
 		repairedKeywords: note.repairedKeywords || null

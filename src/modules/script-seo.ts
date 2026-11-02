@@ -41,8 +41,9 @@ import {
 	researchSourceUrl,
 	scriptNoteId,
 	topicFromUrl,
+	noteStateIsTerminal,
 	SCRIPT_NOTE_RESEARCH_TTL_MS,
-	writeScriptNote,
+	writeScriptNoteGuarded,
 	type ClientScriptNote,
 	type NoteFetch,
 	type ScriptNote,
@@ -1194,6 +1195,12 @@ export const SEO_SCRIPT_AI_TIMEOUT_MS = 90000;
  * SCRIPT_TIMEOUT instead of as a stall.
  */
 export const SEO_PROGRESS_BUDGET_MS = SEO_SCRIPT_AI_TIMEOUT_MS + 15000;
+/*
+ * The smallest slice of a run's budget that is worth starting an attempt with.
+ * Below this an attempt cannot beat the network round trip, so the run reports
+ * "budget exhausted" instead of spending a paid inference it cannot use.
+ */
+export const SCRIPT_MIN_ATTEMPT_MS = 5000;
 
 /* Transport attempts per model (validation attempts are separate). */
 export const SEO_PLAN_TRANSPORT_ATTEMPTS = 2;
@@ -1582,6 +1589,17 @@ export interface ScriptGenerationOptions {
 	runCounted?: boolean;
 	/* Aborts the run when the caller's deadline expires (see the event loop). */
 	signal?: AbortSignal;
+	/*
+	 * WHEN THIS RUN MUST BE DECIDED (absolute epoch ms).
+	 *
+	 * Optional, so the sync route keeps its "as long as it takes" behaviour.
+	 * When present, no attempt is started that cannot finish inside it, and no
+	 * attempt may outlive it - see `attemptSlot`.
+	 */
+	deadlineAtMs?: number;
+	/* Per-attempt ceilings; tests shrink them, production uses the constants. */
+	planAttemptTimeoutMs?: number;
+	writeAttemptTimeoutMs?: number;
 }
 
 export interface ScriptNoteContext {
@@ -1718,8 +1736,24 @@ export async function handleSeoScriptGeneration(
 			status: 503,
 			reason: "AI binding not configured"
 		});
+		/*
+		 * RETRYABLE: FALSE. This is the deployment missing its AI binding, so
+		 * a browser-owned retry cannot fix it: say so instead of letting the
+		 * page spend its three attempts (and the user's wait) on it. The old
+		 * bare 503 read as transient to every client.
+		 */
 		return scriptJson(
-			{ success: false, error: "AI binding not configured" },
+			{
+				success: false,
+				error: "AI binding not configured",
+				retryable: false,
+				failure: {
+					stage: "pipeline",
+					reason: "AI binding not configured",
+					attempts: 0,
+					retryable: false
+				}
+			},
 			503
 		);
 	}
@@ -1774,15 +1808,48 @@ export async function handleSeoScriptGeneration(
 		suppliedKeywordSet = suppliedCheck.data;
 	}
 
+	/*
+	 * WHO OWNS THE RETRIES?
+	 *
+	 * Historically this route retried for the caller: up to 3 planner attempts
+	 * and 3 writer attempts inside ONE request, each planner call on the plain
+	 * path itself retrying transport twice. The browser then retried that whole
+	 * thing up to three times, so one click could cost 3 x (3 + 3) inferences -
+	 * and the 405 s ladder could not fit the 240 s the note layer promised
+	 * (see bug-fix-session-277-slow-pipeline.md).
+	 *
+	 * `browserRetries: true` moves the policy where it belongs: the worker makes
+	 * exactly ONE attempt per stage, reports the stage and the reason, and the
+	 * browser decides whether to spend another attempt (it already owns the
+	 * attempt counter, the backoff and the `previousFailure` feedback loop).
+	 * Requests that do not declare it keep the legacy server ladder, so an old
+	 * client is unaffected.
+	 */
+	const browserRetries = body.browserRetries === true;
+	const plannerAttemptLimit = browserRetries ? 1 : 3;
 	// #261: single-attempt requests require the validated walkthrough keyword set.
 	const singleAttempt = body.singleAttempt === true;
+	/* A single-attempt (walkthrough) request is already browser-driven; a
+	 * `browserRetries` request makes that the rule for every script. */
+	const writerAttemptLimit = browserRetries || singleAttempt ? 1 : 3;
 	if (singleAttempt && (!suppliedKeywordSet || (body.attempt !== undefined &&
 		(!Number.isInteger(body.attempt) || Number(body.attempt) < 0 || Number(body.attempt) > 2)))) {
 		return scriptJson({ error: "Single-attempt scripts require a valid keyword set and attempt 0-2" }, 400);
 	}
 	const previousFailure = typeof body.previousFailure === "string" ? body.previousFailure.slice(0, 800) : "";
-	const writerModel = singleAttempt && Number(body.attempt) > 0
-		? (SEO_PLAN_FALLBACK_MODELS.find((slug) => slug !== scriptModel) || scriptModel) : scriptModel;
+	/*
+	 * A browser-owned retry should not replay the identical call: attempt 1+
+	 * moves to a different model slug, exactly as the walkthrough always did.
+	 * The counter lives in the browser, so this is derived from `attempt`, not
+	 * from a loop inside the worker.
+	 */
+	const browserAttempt = Number(body.attempt) > 0;
+	const alternateModel =
+		SEO_PLAN_FALLBACK_MODELS.find((slug) => slug !== scriptModel) || scriptModel;
+	const plannerModel = (singleAttempt || browserRetries) && browserAttempt
+		? alternateModel : scriptModel;
+	const writerModel = (singleAttempt || browserRetries) && browserAttempt
+		? alternateModel : scriptModel;
 
 	/*
 	 * Usage tracking is informational and independent of the note work, so it
@@ -1851,8 +1918,23 @@ export async function handleSeoScriptGeneration(
 		/* Freeze the record now: the pipeline keeps mutating `note` while the
 		 * write is still in flight. */
 		const snapshot = JSON.parse(JSON.stringify(note)) as ScriptNote;
+		const terminal = noteStateIsTerminal(snapshot.state);
 		noteWrites = noteWrites
-			.then(() => writeScriptNote(env, snapshot))
+			.then(() => {
+				/*
+				 * RE-CHECK THE CANCEL AT WRITE TIME, NOT ONLY AT CALL TIME.
+				 *
+				 * The chain exists so a heartbeat never blocks a model call, which
+				 * means a queued write can execute SECONDS after it was enqueued. If
+				 * the caller's deadline expires in that gap, this run has already
+				 * been judged by the loop's `onError`; publishing a later `done` (or
+				 * even a heartbeat) from the orphaned continuation is what made a
+				 * terminal note flip back to life. `writeScriptNoteGuarded` adds the
+				 * second half of the same rule: the FIRST terminal verdict wins.
+				 */
+				if (options.signal?.aborted) return undefined;
+				return writeScriptNoteGuarded(env, snapshot, { fresh: terminal });
+			})
 			.catch(() => undefined);
 		return flushNote();
 	};
@@ -1899,12 +1981,76 @@ export async function handleSeoScriptGeneration(
 	 * so the heartbeat costs the run nothing. Order is still guaranteed by the
 	 * write chain, and the terminal write drains it.
 	 */
+	/*
+	 * THE RUN'S OWN BUDGET (slow-pipeline fix).
+	 *
+	 * The retry ladder is 3 planner attempts x 45 s + 3 writer attempts x 90 s
+	 * = 405 s, while one async run is promised 240 s (the note watchdog) and
+	 * the browser waits 185 s. Those numbers never agreed, so the LAST attempts
+	 * were started with less budget left than the attempt could use: measured,
+	 * attempt 2 of a 600 ms run started with 251 ms left and was cut off
+	 * mid-flight - one paid inference whose answer was thrown away, and a
+	 * generic timeout instead of a real verdict.
+	 *
+	 * `attemptSlot()` keeps the ladder inside the promise: an attempt is only
+	 * worth starting with at least SCRIPT_MIN_ATTEMPT_MS of budget left, and
+	 * its own timeout is clamped to whatever remains, so no attempt can outlive
+	 * the run.
+	 */
+	const runDeadlineAt = Number(options.deadlineAtMs) > 0 ? Number(options.deadlineAtMs) : 0;
+	const remainingRunMs = (): number =>
+		runDeadlineAt ? runDeadlineAt - Date.now() : Number.POSITIVE_INFINITY;
+	const planAttemptTimeoutMs =
+		Number(options.planAttemptTimeoutMs) > 0
+			? Number(options.planAttemptTimeoutMs)
+			: SEO_PLAN_AI_TIMEOUT_MS;
+	const writeAttemptTimeoutMs =
+		Number(options.writeAttemptTimeoutMs) > 0
+			? Number(options.writeAttemptTimeoutMs)
+			: SEO_SCRIPT_AI_TIMEOUT_MS;
+	const attemptSlot = (baseTimeoutMs: number): { timeoutMs: number; leftMs: number } | null => {
+		if (!runDeadlineAt) return { timeoutMs: baseTimeoutMs, leftMs: Number.POSITIVE_INFINITY };
+		const leftMs = remainingRunMs();
+		if (leftMs < SCRIPT_MIN_ATTEMPT_MS) return null;
+		return { timeoutMs: Math.min(baseTimeoutMs, leftMs), leftMs };
+	};
+	const budgetExhaustedReason = (): string =>
+		"the run budget was exhausted (" +
+		Math.max(0, Math.round(remainingRunMs())) +
+		" ms left, " +
+		SCRIPT_MIN_ATTEMPT_MS +
+		" ms needed for another attempt)";
+
+	/*
+	 * HEARTBEATS ARE COALESCED (slow-pipeline fix).
+	 *
+	 * Six attempts used to leave six heartbeat writes in the chain, and the
+	 * terminal write waits for the chain: measured, 9 serial KV writes for a
+	 * 6-attempt run, so `done` landed 9 x the store's latency after the script
+	 * was already ready (1.5 s at 150 ms/op, 18 s at the 2 s budget). A
+	 * heartbeat only reports the CURRENT state, so every snapshot but the last
+	 * is dead on arrival: keep one in-flight write and one pending slot, and let
+	 * the newest snapshot replace the pending one.
+	 */
+	let pendingHeartbeat: ScriptNote | null = null;
+	let heartbeatQueued = false;
 	const heartbeat = (state: ScriptNoteState): void => {
 		if (!note || !(options.runCounted === true)) return;
 		/* `noteRunHeartbeat`, never `noteRunActive`: the beat must not restart
 		 * the run clock the staleness watchdog is counting down. */
 		noteRunHeartbeat(note, state);
-		void persistNote();
+		pendingHeartbeat = JSON.parse(JSON.stringify(note)) as ScriptNote;
+		if (heartbeatQueued) return;
+		heartbeatQueued = true;
+		noteWrites = noteWrites
+			.then(() => {
+				const snapshot = pendingHeartbeat;
+				pendingHeartbeat = null;
+				heartbeatQueued = false;
+				if (!snapshot || options.signal?.aborted) return undefined;
+				return writeScriptNoteGuarded(env, snapshot);
+			})
+			.catch(() => undefined);
 	};
 
 	if (noteEnabled) {
@@ -2146,6 +2292,62 @@ export async function handleSeoScriptGeneration(
 
 	const noteResearchStartedAt = Date.now();
 
+	/*
+	 * THE RETRY CONTRACT (browser-owned attempts).
+	 *
+	 * A failure is not just "500 + a sentence" any more: the browser has to know
+	 * WHICH stage failed, whether another attempt can help, and what it should
+	 * send back so the next attempt does not repeat work it already paid for.
+	 * `stage` and `retryable` come from the pipeline; `keywordSet` is the resume
+	 * point (the next request passes it straight back and the planner is
+	 * skipped, exactly like a warm note).
+	 */
+	/*
+	 * A few failures are facts about the deployment, not about this attempt:
+	 * no amount of browser retries turns a missing AI binding into a script.
+	 * Reporting them as `retryable: false` is what stops the page burning its
+	 * three attempts (and the user's time) on them.
+	 */
+	const permanentFailure = (reason: string): boolean =>
+		/AI binding not configured|invalid api key|unauthori[sz]ed|forbidden|quota|exceeded your current quota/i.test(
+			String(reason || "")
+		);
+
+	const failurePayload = (
+		stage: "planner" | "writer" | "pipeline",
+		reason: string,
+		attemptsUsed: number
+	): Record<string, unknown> => {
+		const retryable = !permanentFailure(reason);
+		const payload: Record<string, unknown> = {
+			success: false,
+			error: reason,
+			/* Additive: an old client ignores both fields. */
+			retryable,
+			failure: {
+				stage,
+				reason: String(reason || "").slice(0, 400),
+				attempts: attemptsUsed,
+				retryable
+			}
+		};
+		if (keywordSet) {
+			const set = keywordSet as PlannedKeywordSet;
+			/* Exactly the shape `parseKeywordSet` accepts for `body.keywordSet`. */
+			payload.keywordSet = {
+				title: set.title,
+				headings: set.headings,
+				longTail: set.longTail,
+				short: set.shorts
+			};
+		}
+		if (activeNote) {
+			payload.noteId = activeNote.id;
+			payload.noteUrl = "/api/script/notes/" + activeNote.id;
+		}
+		return payload;
+	};
+
 	try {
 		/*
 		 * Single join point for the usage write started above. Everything
@@ -2201,9 +2403,21 @@ export async function handleSeoScriptGeneration(
 		const planStartedAt = Date.now();
 
 		if (!keywordSet) {
-			for (let attempt = 1; attempt <= 3; attempt++) {
+			for (let attempt = 1; attempt <= plannerAttemptLimit; attempt++) {
 				/* Stage boundary: an expired deadline stops the run here. */
 				if (aborted()) throw abortError();
+				/* Never start a planner call this run cannot afford. */
+				const plannerSlot = attemptSlot(planAttemptTimeoutMs);
+				if (!plannerSlot) {
+					keywordError = budgetExhaustedReason();
+					plannerTrace.push({ attempt, ok: false, budget: true, reason: keywordError });
+					console.warn("[script] planner skipped: no budget left", {
+						reqId,
+						attempt,
+						leftMs: Math.round(remainingRunMs())
+					});
+					break;
+				}
 				heartbeat("planning");
 				const attemptT0 = Date.now();
 				const plannerTemp = attempt === 1 ? 0.55 : 0.4;
@@ -2238,12 +2452,12 @@ export async function handleSeoScriptGeneration(
 
 				try {
 					const result = await runAiCallWithTimeout(
-						env.AI.run(scriptModel, {
+						env.AI.run(plannerModel, {
 							prompt,
 							max_tokens: 1024,
 							temperature: plannerTemp
 						}),
-						SEO_PLAN_AI_TIMEOUT_MS
+						plannerSlot.timeoutMs
 					);
 
 					rawText = aiText(result);
@@ -2344,7 +2558,9 @@ export async function handleSeoScriptGeneration(
 			const totalMs = Date.now() - startedAt;
 			console.error("[script] keywords exhausted", {
 				reqId,
-				attempts: 3,
+				attempts: plannerTrace.length,
+				attemptLimit: plannerAttemptLimit,
+				retryOwner: browserRetries ? "browser" : "worker",
 				lastReason: keywordError,
 				totalMs
 			});
@@ -2356,23 +2572,21 @@ export async function handleSeoScriptGeneration(
 				 * `!note.source`).
 				 */
 				await settleResearch();
+				/* The browser's next attempt reads this back from the note. */
+				activeNote.failureStage = "planner";
 				noteRunFailed(activeNote, "SEO keywords invalid (" + keywordError + ")");
 				await persistNote();
 			}
-			const errPayload: Record<string, unknown> = {
-				success: false,
-				error: "SEO keywords invalid (" + keywordError + ") - try again"
-			};
 			/*
-			 * Same contract as the writer-exhausted 500 below: a note client is
-			 * told which note holds the failure. Omitting it here left the
-			 * browser with no way to read back the research it had just paid
-			 * for, and made this failure indistinguishable from a note-less run.
+			 * Same contract as the writer-exhausted 500 below: the note id is
+			 * included so a note client can read back the research it paid for,
+			 * and the failure metadata tells the browser which stage to retry.
 			 */
-			if (activeNote) {
-				errPayload.noteId = activeNote.id;
-				errPayload.noteUrl = "/api/script/notes/" + activeNote.id;
-			}
+			const errPayload = failurePayload(
+				"planner",
+				"SEO keywords invalid (" + keywordError + ") - try again",
+				plannerTrace.length
+			);
 			if (debugRequested) {
 				errPayload.debug = {
 					reqId,
@@ -2499,15 +2713,28 @@ export async function handleSeoScriptGeneration(
 		let prevAudit: KeywordAuditEntry[] | null = null;
 		const writeStartedAt = Date.now();
 
-		for (let attempt = 1; attempt <= (singleAttempt ? 1 : 3); attempt++) {
+		for (let attempt = 1; attempt <= writerAttemptLimit; attempt++) {
 			/* Stage boundary: an expired deadline stops the run here. */
 			if (aborted()) throw abortError();
+			/* The same rule as the planner: an attempt that cannot finish is a
+			 * paid inference whose answer is thrown away. */
+			const writerSlot = attemptSlot(writeAttemptTimeoutMs);
+			if (!writerSlot) {
+				lastError = budgetExhaustedReason();
+				writerTrace.push({ attempt, ok: false, budget: true, reason: lastError });
+				console.warn("[script] writer skipped: no budget left", {
+					reqId,
+					attempt,
+					leftMs: Math.round(remainingRunMs())
+				});
+				break;
+			}
 			heartbeat("writing");
 			const attemptT0 = Date.now();
 			const writerTemp = attempt === 1 ? 0.65 : 0.4;
 			const prompt =
 				userPrompt +
-				(singleAttempt && previousFailure ? " Previous validation failure to correct: " + previousFailure : "") +
+				(previousFailure ? " Previous validation failure to correct: " + previousFailure : "") +
 				(attempt > 1
 					? buildPinpointRetryInstructions(lastError, prevCheck, prevAudit)
 					: "");
@@ -2532,7 +2759,7 @@ export async function handleSeoScriptGeneration(
 						max_tokens: writerMaxTokens,
 						temperature: writerTemp
 					}),
-					SEO_SCRIPT_AI_TIMEOUT_MS
+					writerSlot.timeoutMs
 				);
 
 				rawSrt = aiText(result);
@@ -2771,20 +2998,24 @@ export async function handleSeoScriptGeneration(
 		stages.totalMs = totalMs;
 		console.error("[script] exhausted", {
 			reqId,
-			attempts: 3,
+			attempts: writerTrace.length,
+			attemptLimit: writerAttemptLimit,
+			retryOwner: browserRetries ? "browser" : "worker",
 			reason: lastError,
 			totalMs
 		});
 
 		if (activeNote) {
+			activeNote.failureStage = "writer";
 			noteRunFailed(activeNote, lastError);
 			await persistNote();
 		}
 
-		const failPayload: Record<string, unknown> = {
-			success: false,
-			error: "Script output invalid (" + lastError + ") - try again"
-		};
+		const failPayload = failurePayload(
+			"writer",
+			"Script output invalid (" + lastError + ") - try again",
+			writerTrace.length
+		);
 		if (debugRequested) {
 			failPayload.debug = {
 				reqId,
@@ -2794,10 +3025,6 @@ export async function handleSeoScriptGeneration(
 				eventLoop: loop.stats()
 			};
 			failPayload.timings = stages;
-		}
-		if (activeNote) {
-			failPayload.noteId = activeNote.id;
-			failPayload.noteUrl = "/api/script/notes/" + activeNote.id;
 		}
 		return scriptJson(failPayload, 500);
 	} catch (err: unknown) {
@@ -2825,18 +3052,24 @@ export async function handleSeoScriptGeneration(
 		 */
 		const isAbort = (err as { code?: string })?.code === "SCRIPT_RUN_ABORTED";
 		if (activeNote && !isAbort) {
+			activeNote.failureStage = "pipeline";
 			noteRunFailed(activeNote, message);
 			/* Awaited, not deferred: this is the note's terminal verdict and an
 			 * untracked write could be dropped before the isolate unwound. */
 			await persistNote();
 		}
 
-		return scriptJson(
-			{
-				success: false,
-				error: message || "Script generation failed"
-			},
-			500
+		const caught = failurePayload(
+			"pipeline",
+			message || "Script generation failed",
+			plannerTrace.length + writerTrace.length
 		);
+		/* An aborted run is not worth another attempt; anything else is. */
+		if (isAbort) {
+			caught.retryable = false;
+			(caught.failure as Record<string, unknown>).retryable = false;
+			(caught.failure as Record<string, unknown>).stage = "aborted";
+		}
+		return scriptJson(caught, 500);
 	}
 }
