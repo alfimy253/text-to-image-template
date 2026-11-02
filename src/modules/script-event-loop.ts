@@ -62,7 +62,7 @@ export interface LoopScheduleOptions<T> {
 	id: string;
 	/* Reported in the snapshot: the named step this job represents. */
 	label?: string;
-	onStart?: () => void | Promise<void>;
+	onStart?: (context: LoopJobContext) => void | Promise<void>;
 	onFinish?: (result: T) => void | Promise<void>;
 	onError?: (error: unknown) => void | Promise<void>;
 	/* Wall-clock budget for the job body; 0/absent = unbounded. */
@@ -284,19 +284,16 @@ export class ScriptEventLoop {
 			error: new Error("script job did not run")
 		};
 		try {
-			if (job.options.onStart) await job.options.onStart();
+			/* The wall-clock budget covers lifecycle hooks as well as the body.
+			 * In particular, onStart commonly performs KV I/O; waiting for it
+			 * before starting the timer let a stalled KV pin a worker slot forever. */
 			const value = await this.withDeadline(job);
+			if (job.snapshot.state === "cancelled") return;
 			outcome = { ok: true, value };
 			this.completed++;
 			job.snapshot.state = "done";
-			if (job.options.onFinish) {
-				try {
-					await job.options.onFinish(value);
-				} catch {
-					/* hooks are bookkeeping */
-				}
-			}
 		} catch (error: unknown) {
+			if (job.snapshot.state === "cancelled") return;
 			outcome = { ok: false, error };
 			this.failed++;
 			job.snapshot.state = "error";
@@ -304,26 +301,60 @@ export class ScriptEventLoop {
 				(error as { message?: string })?.message || error || "script job failed"
 			).slice(0, 300);
 			if (job.options.onError) {
+				/* Error reporting must not turn a failed job into a hung job.
+				 * KV writes in this hook are best effort; note readers have their
+				 * independent stale-run watchdog if storage itself is unavailable. */
+				let timer: ReturnType<typeof setTimeout> | undefined;
 				try {
-					await job.options.onError(error);
+					await Promise.race([
+						Promise.resolve().then(() => job.options.onError?.(error)),
+						new Promise<void>((resolve) => {
+							timer = setTimeout(resolve, 1000);
+						})
+					]);
 				} catch {
 					/* hooks are bookkeeping */
+				} finally {
+					if (timer) clearTimeout(timer);
 				}
 			}
 		} finally {
-			job.snapshot.finishedAt = Date.now();
-			job.snapshot.runMs = job.snapshot.finishedAt - startedAt;
 			this.activeJobs.delete(job.snapshot.id);
-			job.settle(outcome);
-			/* Settled promises resume in the `pending` phase. */
-			this.pending.push(() => this.phaseCount.pending++);
-			this.pump();
+			/* close() already recorded and delivered the cancellation verdict.
+			 * A body that ignores its signal may finish later, but it must not
+			 * rewrite that verdict or schedule work on the closed loop. */
+			if (job.snapshot.state !== "cancelled") {
+				job.snapshot.finishedAt = Date.now();
+				job.snapshot.runMs = job.snapshot.finishedAt - startedAt;
+				job.settle(outcome);
+				/* Settled promises resume in the `pending` phase. */
+				this.pending.push(() => this.phaseCount.pending++);
+				this.pump();
+			}
 		}
 	}
 
 	private withDeadline<T>(job: QueuedJob): Promise<T> {
 		const deadlineMs = Number(job.options.deadlineMs);
-		if (!(deadlineMs > 0)) return job.run(job.context) as Promise<T>;
+		const work = async (): Promise<T> => {
+			if (job.options.onStart) await job.options.onStart(job.context);
+			if (job.context.signal.aborted) {
+				throw new Error("script event loop job was cancelled");
+			}
+			const value = await job.run(job.context) as T;
+			if (job.context.signal.aborted) {
+				throw new Error("script event loop job was cancelled");
+			}
+			if (job.options.onFinish) {
+				try {
+					await job.options.onFinish(value);
+				} catch {
+					/* hooks are bookkeeping */
+				}
+			}
+			return value;
+		};
+		if (!(deadlineMs > 0)) return work();
 		return new Promise<T>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				/*
@@ -342,7 +373,7 @@ export class ScriptEventLoop {
 					)
 				);
 			}, deadlineMs);
-			(job.run(job.context) as Promise<T>).then(
+			work().then(
 				(value) => {
 					clearTimeout(timer);
 					resolve(value);
@@ -577,7 +608,6 @@ export function resetScriptEventLoop(): void {
  * loop and the browser comes back to the note URL until `state` is terminal.
  */
 export const SCRIPT_JOB_POLL_AFTER_MS = 900;
-export const SCRIPT_JOB_MAX_WAIT_MS = 240000;
 
 export function isTerminalNoteState(state: unknown): boolean {
 	return state === "done" || state === "error" || state === "empty";

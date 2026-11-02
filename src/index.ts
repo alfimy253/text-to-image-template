@@ -36,6 +36,7 @@ import {
 	handleScriptNoteRead,
 	handleScriptNoteDelete,
 	matchScriptNoteRoute,
+	isScriptNoteRoute,
 	submitAsyncScriptJob
 } from "./modules/script-notes-api";
 import {
@@ -1611,10 +1612,7 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			loop: scriptEventLoop()
 		};
 
-		if (
-			url.pathname === "/api/script/notes" ||
-			matchScriptNoteRoute(url.pathname)
-		) {
+		if (isScriptNoteRoute(url.pathname)) {
 
 			if (request.method === "POST" && url.pathname === "/api/script/notes") {
 				return handleScriptNoteWrite(request, env, scriptNoteDeps);
