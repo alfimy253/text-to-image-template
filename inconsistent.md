@@ -117,3 +117,23 @@ Executed against the local working tree:
 - An earlier broad `npm test` on this working tree reported **273 passed, 57 failed, 6 cancelled**. Many failures target older AI-image contracts, but no controlled baseline proves all were pre-existing; this audit did not reclassify or fix them. An earlier `npx tsc --noEmit --pretty false` exited nonzero with existing router/index diagnostics; no clean project-wide typecheck is claimed.
 
 Fixtures mock TTS, Pixabay/network responses and browser media/WebCodecs components. They do not establish live provider behavior, production deployment, actual audible output, or real browser encoding quality. Findings labelled code-traced are hypotheses for targeted regressions, not claims that their full user scenarios were observed. No application fixes were made as part of this report.
+
+
+---
+
+## RULE 35 — script notes are client-side only (2026-11-03)
+
+> **FIXED IN CODE.** Script details (narration, keyword set, beat plan, research facts,
+> timings, note state and the success payload) are **never written to Cloudflare KV**. The
+> durable copy is the browser's `localStorage["ytvs.script-notes.v1"]` full note plus the
+> compact `ytvs_note` cookie mirror, reconciled by digest + timestamp + script-length checks
+> (`src/client/script-notes-client.ts`). The Worker keeps only an ephemeral per-isolate memory
+> copy (`src/modules/script-notes.ts`: 0 KV reads / 0 KV writes). The script route writes no
+> credit KV record, `?async=1` degrades to a synchronous response, and capabilities advertise
+> `asyncScript: 0`, `scriptNoteKvWrites: 0`,
+> `scriptNoteConsistency: "digest+timestamp+scriptLength"`.
+>
+> Canonical specification: [RULE-35-client-side-script-notes.md](RULE-35-client-side-script-notes.md)
+> · Normative rule: `system-rules.md` RULE 35 · Verification:
+> `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
+> document is superseded and void.

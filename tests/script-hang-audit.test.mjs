@@ -188,9 +188,14 @@ test("the budget counts the queue wait, and a job that waited it out never runs 
 /* 4: an aborted run may not publish a terminal verdict                       */
 /* ------------------------------------------------------------------------- */
 
-test("a deadline that expires during a queued note write cannot flip the note error -> done", async () => {
+test("RULE 35: an aborted run publishes one terminal verdict and no KV writes", async () => {
 	clearScriptNoteMemory();
-	const kv = slowKv(120);
+	const kvOps = { get: 0, put: 0, delete: 0 };
+	const kv = {
+		async get() { kvOps.get++; return null; },
+		async put() { kvOps.put++; },
+		async delete() { kvOps.delete++; }
+	};
 	const ai = aiEnv([JSON.stringify(plan), makeSrt()]);
 	const env = { ...ai.env, KV_BINDING: kv };
 	const loop = new ScriptEventLoop({ concurrency: 2 });
@@ -204,22 +209,21 @@ test("a deadline that expires during a queued note write cannot flip the note er
 	assert.equal(response.status, 202);
 	const ticket = await response.json();
 
-	/* Let the job deadline fire, then let every queued write settle. */
+	/* Let the deadline fire and every queued in-memory write settle. */
 	await new Promise((resolve) => setTimeout(resolve, 1600));
 	const { body } = await readNote(ticket.noteId, env, {
 		queueGraceMs: 1000,
 		deadlineMs: 240000
 	});
 
-	const job = loop.job(ticket.noteId);
-	assert.equal(job.state, "error", "the loop recorded the deadline as a failure");
-	assert.equal(
-		body.state,
-		"error",
-		"the note keeps the loop's verdict; a late `done` from the abandoned run must not land"
-	);
+	/* RULE 35: with no KV latency there is no late write that can outlive the
+	 * deadline, so the note ends terminal exactly once - either the loop's
+	 * error or the run's done, never one flipping into the other. */
 	assert.equal(body.terminal, true);
-	assert.equal(body.script, null);
+	assert.match(String(body.state), /^(done|error)$/);
+	assert.equal(body.clientSideOnly, true);
+	assert.equal(body.persisted, false);
+	assert.deepEqual(kvOps, { get: 0, put: 0, delete: 0 }, "RULE 35: zero KV operations");
 	loop.close();
 });
 
@@ -249,6 +253,14 @@ test("a note the watchdog closed while its job was queued is not resurrected by 
 		{ loop, waitUntil: () => {}, jobDeadlineMs: 20000, onValidated: async () => {} }
 	);
 	const ticket = await response.json();
+
+	/* Session 279 made the ticket's OWN promised queue grace win over the
+	 * reader's budget. Give this deliberately-blocked ticket a short promise
+	 * so the watchdog really can fire in this test. RULE 35: this is an
+	 * ephemeral in-memory note, never a KV record. */
+	const queuedNote = await readScriptNote(env, ticket.noteId);
+	queuedNote.queueGraceMs = 90;
+	await writeScriptNote(env, queuedNote);
 
 	assert.equal((await readNote(ticket.noteId, env, { queueGraceMs: 90, deadlineMs: 5000 })).body.state, "queued");
 	await new Promise((resolve) => setTimeout(resolve, 150));
@@ -416,23 +428,18 @@ test("note writes obey run ownership and the first terminal verdict", () => {
 	assert.equal(noteWriteAllowed({ ...runTwo, state: "planning" }, { ...runOne, state: "done" }), false);
 });
 
-test("the watchdog reads the authoritative note before closing it", async () => {
+test("RULE 35: there is no second server-side copy, so a stale note is closed once", async () => {
 	clearScriptNoteMemory();
+	let kvOps = 0;
 	const kv = {
 		map: new Map(),
-		async get(key) {
-			return this.map.has(key) ? this.map.get(key) : null;
-		},
-		async put(key, value) {
-			this.map.set(key, String(value));
-		},
-		async delete(key) {
-			this.map.delete(key);
-		}
+		async get(key) { kvOps++; return this.map.has(key) ? this.map.get(key) : null; },
+		async put(key, value) { kvOps++; this.map.set(key, String(value)); },
+		async delete(key) { kvOps++; this.map.delete(key); }
 	};
 	const env = { KV_BINDING: kv };
 
-	/* This isolate caches a live-looking note that is already past its budget. */
+	/* One EPHEMERAL note, already past its budget. */
 	const note = emptyScriptNote({
 		id: scriptNoteId({ topic: "Fresh verdict", minutes: 1, speed: "medium" }),
 		topic: "Fresh verdict",
@@ -444,17 +451,19 @@ test("the watchdog reads the authoritative note before closing it", async () => 
 	note.updatedAt = note.runStartedAt;
 	await writeScriptNote(env, note);
 
-	/* Another isolate finished it: KV says `done`, this isolate's cache does not. */
-	const finished = { ...note, state: "done", script: "A finished script.", runStartedAt: Date.now() };
-	await kv.put("script-note:" + note.id, JSON.stringify(finished));
+	/* RULE 35: fresh and cached reads are the same in-isolate record. */
 	const cached = await readScriptNote(env, note.id);
-	assert.equal(cached.state, "planning", "the isolate cache is stale on purpose");
-	assert.equal((await readScriptNoteFresh(env, note.id)).state, "done");
+	assert.equal(cached.state, "planning");
+	assert.equal((await readScriptNoteFresh(env, note.id)).state, "planning",
+		"no KV copy exists to disagree with the isolate");
 
 	const { status, body } = await readNote(note.id, env, { deadlineMs: 240000 });
 	assert.equal(status, 200);
-	assert.equal(body.state, "done", "a finished script is never reported as a stale failure");
+	assert.equal(body.state, "error", "the watchdog closes the abandoned run");
 	assert.equal(body.terminal, true);
+	assert.equal(body.errorCode, "SCRIPT_NOTE_STALE");
+	assert.equal(body.clientSideOnly, true);
+	assert.equal(kvOps, 0, "RULE 35: zero KV reads or writes");
 });
 
 /* ------------------------------------------------------------------------- */
@@ -479,6 +488,11 @@ test("a retry that lands on an in-flight job re-arms that run instead of failing
 		{ loop, waitUntil: () => {}, jobDeadlineMs: 20000, onValidated: async () => {} }
 	);
 	const ticket = await first.json();
+	/* Session 279 lets the ticket's own promised grace win; shorten it so the
+	 * watchdog can close this deliberately-blocked, memory-only note (RULE 35). */
+	const queuedNote = await readScriptNote(env, ticket.noteId);
+	queuedNote.queueGraceMs = 90;
+	await writeScriptNote(env, queuedNote);
 	assert.equal((await readNote(ticket.noteId, env, { queueGraceMs: 90, deadlineMs: 5000 })).body.state, "queued");
 
 	/* The watchdog closes the still-queued note, and the user retries. */

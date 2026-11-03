@@ -1,5 +1,18 @@
 /*
  * ---------------------------------------------------------------------------
+ * RULE 35 (2026-11-03) — SCRIPT NOTES ARE CLIENT-SIDE ONLY.                  
+ *                                                                            
+ * Script details (the narration text, keyword set, beat plan, research       
+ * facts and the exact success payload) MUST NOT be written to Cloudflare KV. 
+ * The Worker's note store is EPHEMERAL, per-isolate memory only: no KV get, 
+ * no KV put, no KV delete. `env.KV_BINDING` is deliberately ignored here.    
+ * The durable copy lives in the browser: localStorage                        
+ * (`ytvs.script-notes.v1`) plus the `ytvs_note` cookie mirror, with digest   
+ * consistency checks between the two (src/client/script-notes-client.ts).    
+ * A Worker restart loses every note; that is intended and safe because the   
+ * client re-sends its note with the next script request.                     
+ * ---------------------------------------------------------------------------
+ *
  * SCRIPT NOTES — the cheap half of the scriptwriting pipeline.
  *
  * WHY THIS FILE EXISTS
@@ -142,7 +155,8 @@ export interface ScriptNote {
 	payload?: Record<string, unknown>;
 }
 
-/* Minimal KV surface we need; `env.KV_BINDING` satisfies it. */
+/* Minimal KV surface we used to need. RULE 35: retained ONLY for
+ * signature compatibility - no code may call get/put/delete on it. */
 export interface ScriptNoteKv {
 	get(key: string): Promise<string | null>;
 	put(
@@ -159,7 +173,11 @@ export interface ScriptNoteStore {
 	delete?(id: string): Promise<void>;
 }
 
-export const SCRIPT_NOTE_PREFIX = "script-note:";
+/* RULE 35: the old KV key prefix is gone; memory keys are bare note ids. */
+export const SCRIPT_NOTE_STORAGE = "client:localStorage+cookie";
+export const SCRIPT_NOTE_KV_READS = 0;
+export const SCRIPT_NOTE_KV_WRITES = 0;
+/* In-isolate lifetime of the ephemeral job ledger (never persisted). */
 export const SCRIPT_NOTE_TTL_SECONDS = 60 * 60 * 24 * 7;
 /* A note older than this is refreshed from the URL before it is trusted. */
 export const SCRIPT_NOTE_RESEARCH_TTL_MS = 1000 * 60 * 60 * 12;
@@ -357,10 +375,18 @@ export function isScriptNoteId(value: unknown): boolean {
 }
 
 /* ------------------------------------------------------------------------- */
-/* Stores (KV first, in-memory fallback)                                      */
+/* Stores (EPHEMERAL IN-ISOLATE MEMORY ONLY - RULE 35)                       */
 /* ------------------------------------------------------------------------- */
 
 const memoryNotes = new Map<string, { note: ScriptNote; expiresAt: number }>();
+/** Bounded audit ring of note writes, used by tests instead of KV op counters. */
+const noteWriteLog: Array<{ id: string; state: string; at: number; hasScript: boolean }> = [];
+export function scriptNoteWriteLog(): Array<{ id: string; state: string; at: number; hasScript: boolean }> {
+	return noteWriteLog.slice();
+}
+export function clearScriptNoteWriteLog(): void {
+	noteWriteLog.length = 0;
+}
 export const SCRIPT_NOTE_MEMORY_LIMIT = 200;
 
 export function noteMemoryStore(): ScriptNoteStore {
@@ -376,11 +402,20 @@ export function noteMemoryStore(): ScriptNoteStore {
 			return cloneNote(hit.note);
 		},
 		async put(note, ttlSeconds = SCRIPT_NOTE_TTL_SECONDS) {
+			/* RULE 35: this is the ONLY place a note is ever written, and it is
+			 * process memory. It is not KV, not a database, not durable storage. */
 			memoryNotes.delete(note.id);
 			memoryNotes.set(note.id, {
 				note: cloneNote(note),
 				expiresAt: Date.now() + ttlSeconds * 1000
 			});
+			noteWriteLog.push({
+				id: note.id,
+				state: String(note.state || ""),
+				at: Date.now(),
+				hasScript: Boolean(note.script)
+			});
+			while (noteWriteLog.length > 400) noteWriteLog.shift();
 			while (memoryNotes.size > SCRIPT_NOTE_MEMORY_LIMIT) {
 				const oldest = memoryNotes.keys().next().value;
 				if (oldest === undefined) break;
@@ -395,150 +430,29 @@ export function noteMemoryStore(): ScriptNoteStore {
 
 export function clearScriptNoteMemory(): void {
 	memoryNotes.clear();
+	clearScriptNoteWriteLog();
 }
 
 /*
- * A KV operation is an external I/O and NOTHING in this Worker can cancel it.
- * `await env.KV_BINDING.get(...)` on a degraded binding therefore parks the
- * request (or, worse, the poller) for as long as the binding sits there - which
- * is the one await in these routes that had no ceiling at all. Every note read
- * and write is raced against this budget instead: a note is an optimisation, so
- * "the binding did not answer" is reported as "no note" rather than as a hung
- * request. The still-pending KV promise is left to settle on its own.
- */
-export const SCRIPT_NOTE_KV_TIMEOUT_MS = 2000;
-
-/*
- * "SLOW" IS NOT "MISSING".
+ * RULE 35 — NO KV ADAPTER.
  *
- * A note op that exceeds `SCRIPT_NOTE_KV_TIMEOUT_MS` must not be reported as
- * `null`, because `null` means "there is no note": the read route turned that
- * into `404 { state:"empty", terminal:true }`, i.e. a HEALTHY run behind a slow
- * store was declared finished and the browser stopped polling it (measured: a
- * KV at 2.5 s per op -> 404 terminal, where the pre-budget code simply took
- * 2.5 s and answered 202). Every read therefore reports whether the store
- * ANSWERED at all.
+ * This used to contain `kvNoteStore()` (a real `KV_BINDING.put("script-note:…")`
+ * writer) and a 2 s KV race around every read. Both are gone: a script note is
+ * client-side data and must never be persisted by the Worker. The function is
+ * kept as a deprecated, memory-only shim so old callers keep their signature;
+ * the binding argument is ignored on purpose and is never read or written.
  */
-export interface NoteReadResult {
-	note: ScriptNote | null;
-	/* The binding did not answer inside its budget: unknown, not absent. */
-	unavailable: boolean;
-}
-
-/* Same race as `withNoteBudget`, but it tells the caller which side won. */
-function kvRace<T>(task: Promise<T>, ms: number = SCRIPT_NOTE_KV_TIMEOUT_MS): Promise<{ value?: T; timedOut: boolean; failed: boolean }> {
-	return new Promise((resolve) => {
-		let settled = false;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const finish = (result: { value?: T; timedOut: boolean; failed: boolean }) => {
-			if (settled) return;
-			settled = true;
-			if (timer) clearTimeout(timer);
-			resolve(result);
-		};
-		timer = setTimeout(
-			() => finish({ timedOut: true, failed: false }),
-			Number(ms) > 0 ? Number(ms) : SCRIPT_NOTE_KV_TIMEOUT_MS
-		);
-		task.then(
-			(value) => finish({ value, timedOut: false, failed: false }),
-			() => finish({ timedOut: false, failed: true })
-		);
-	});
-}
-
-function withNoteBudget<T>(task: Promise<T>, fallback: T, ms: number = SCRIPT_NOTE_KV_TIMEOUT_MS): Promise<T> {
-	return new Promise<T>((resolve) => {
-		let settled = false;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const finish = (value: T) => {
-			if (settled) return;
-			settled = true;
-			if (timer) clearTimeout(timer);
-			resolve(value);
-		};
-		timer = setTimeout(
-			() => finish(fallback),
-			Number(ms) > 0 ? Number(ms) : SCRIPT_NOTE_KV_TIMEOUT_MS
-		);
-		task.then(
-			(value) => finish(value),
-			() => finish(fallback)
-		);
-	});
-}
-
-export function kvNoteStore(kv: ScriptNoteKv): ScriptNoteStore {
-	return {
-		async get(id) {
-			try {
-				const raw = await withNoteBudget<unknown>(
-					Promise.resolve(kv.get(SCRIPT_NOTE_PREFIX + id)),
-					null
-				);
-				if (!raw) return null;
-				const parsed = JSON.parse(String(raw)) as ScriptNote;
-				return parsed && parsed.id ? parsed : null;
-			} catch {
-				return null;
-			}
-		},
-		async put(note, ttlSeconds = SCRIPT_NOTE_TTL_SECONDS) {
-			try {
-				await withNoteBudget(
-					Promise.resolve(
-						kv.put(SCRIPT_NOTE_PREFIX + note.id, JSON.stringify(note), {
-							expirationTtl: ttlSeconds
-						})
-					),
-					undefined
-				);
-			} catch {
-				/* A note is an optimisation: never fail a script over it. */
-			}
-		},
-		async delete(id) {
-			try {
-				if (kv.delete) {
-					await withNoteBudget(Promise.resolve(kv.delete(SCRIPT_NOTE_PREFIX + id)), undefined);
-				}
-			} catch {
-				/* best effort */
-			}
-		}
-	};
+export function kvNoteStore(_kv?: ScriptNoteKv): ScriptNoteStore {
+	return noteMemoryStore();
 }
 
 /*
- * Reads from KV, but also mirrors into the in-process cache so two requests
- * inside the same Worker isolate (and every test without a KV binding) still
- * hit a warm note.
+ * RULE 35 — the script subsystem's ONLY store. `env.KV_BINDING` is ignored:
+ * no note read or write may touch KV. Everything here evaporates when the
+ * isolate is recycled; the browser is the durable owner of the note.
  */
-export function scriptNoteStore(env: { KV_BINDING?: ScriptNoteKv } | undefined): ScriptNoteStore {
-	const memory = noteMemoryStore();
-	const kv =
-		env && env.KV_BINDING && typeof env.KV_BINDING.get === "function"
-			? kvNoteStore(env.KV_BINDING)
-			: null;
-	if (!kv) return memory;
-	return {
-		async get(id) {
-			const cached = await memory.get(id);
-			if (cached) return cached;
-			const stored = await kv.get(id);
-			if (stored) await memory.put(stored);
-			return stored;
-		},
-		async put(note, ttlSeconds) {
-			await Promise.all([memory.put(note, ttlSeconds), kv.put(note, ttlSeconds)]);
-		},
-		async delete(id) {
-			await Promise.all([
-				memory.delete ? memory.delete(id) : Promise.resolve(),
-				kv.delete ? kv.delete(id) : Promise.resolve()
-			]);
-		}
-	};
+export function scriptNoteStore(_env: { KV_BINDING?: ScriptNoteKv } | undefined): ScriptNoteStore {
+	return noteMemoryStore();
 }
 
 function cloneNote(note: ScriptNote): ScriptNote {
@@ -582,20 +496,15 @@ export async function writeScriptNote(
 	ttlSeconds: number = SCRIPT_NOTE_TTL_SECONDS
 ): Promise<ScriptNote> {
 	note.updatedAt = Date.now();
+	/* RULE 35: memory only. Never `kv.put`, never a blob, never a Durable Object. */
 	await scriptNoteStore(env).put(note, ttlSeconds);
 	return note;
 }
 
 /*
- * A FRESH read: KV first, cache second.
- *
- * `readScriptNote` is cache-first, which is right for the hot path but wrong
- * for a verdict. A reader running in ANOTHER isolate can close this note (the
- * H2 stale watchdog) while this isolate still holds the pre-expiry copy in
- * `memoryNotes`; a terminal write decided from that copy resurrects a note the
- * browser was already told was dead (measured: watchdog at +150 ms closed the
- * note as SCRIPT_NOTE_STALE, the runner's `done` landed at +1050 ms on top of
- * it). Anything that PUBLISHES a verdict reads through this instead.
+ * A FRESH read used to mean "read through to KV" because another isolate might
+ * have closed the note. With a single per-isolate map there is no second copy,
+ * so fresh and cached are the same read. The signature is kept for callers.
  */
 export async function readScriptNoteFresh(
 	env: { KV_BINDING?: ScriptNoteKv } | undefined,
@@ -605,63 +514,28 @@ export async function readScriptNoteFresh(
 	return result.note;
 }
 
-/*
- * The read every VERDICT goes through: it says whether the store answered, so a
- * slow binding can never be mistaken for a settled (or a missing) note.
- */
+export interface NoteReadResult {
+	note: ScriptNote | null;
+	/* RULE 35: always false. Kept so old callers keep their contract. */
+	unavailable: boolean;
+}
+
+/* RULE 35: no KV race, so a note can never be "unavailable" - only present or
+ * absent. `unavailable` is kept in the contract for old callers. */
 export async function readScriptNoteChecked(
 	env: { KV_BINDING?: ScriptNoteKv } | undefined,
 	id: string,
-	options: { fresh?: boolean } = {}
+	_options: { fresh?: boolean } = {}
 ): Promise<NoteReadResult> {
 	if (!isScriptNoteId(id)) return { note: null, unavailable: false };
-	const memory = noteMemoryStore();
-	if (!options.fresh) {
-		const cached = await memory.get(id);
-		if (cached) return { note: cached, unavailable: false };
-	}
-	const kv = env && env.KV_BINDING;
-	if (!kv || typeof kv.get !== "function") {
-		/*
-		 * No KV binding: the in-process mirror IS the store, so it is also
-		 * authoritative. Returning `null` for a fresh read here made every
-		 * "is this note already settled?" check blind in a memory-only runtime
-		 * (and in the unit tests), which silently disabled the settled-note
-		 * guard - the measured symptom was a `done` written over a watchdog's
-		 * `SCRIPT_NOTE_STALE`.
-		 */
-		return { note: await memory.get(id), unavailable: false };
-	}
-	const raced = await kvRace(Promise.resolve(kv.get(SCRIPT_NOTE_PREFIX + id)));
-	if (raced.timedOut) return { note: null, unavailable: true };
-	if (raced.failed || !raced.value) return { note: null, unavailable: false };
-	try {
-		const parsed = JSON.parse(String(raced.value)) as ScriptNote;
-		if (!parsed || !parsed.id) return { note: null, unavailable: false };
-		await memory.put(parsed);
-		return { note: parsed, unavailable: false };
-	} catch {
-		return { note: null, unavailable: false };
-	}
+	const note = await noteMemoryStore().get(id);
+	return { note, unavailable: false };
 }
 
 /*
- * WHO MAY WRITE THIS NOTE.
- *
- * Two rules, and both of them exist because "last write wins" is not a
- * consistency model:
- *
- *  1. A DIFFERENT run may only take the note over when its run started LATER.
- *     A run that was already abandoned (the loop cancelled it, the watchdog
- *     closed it) therefore cannot publish anything any more.
- *  2. Within one run, the FIRST terminal state is final. `done` may not land
- *     on `error` and `error` may not land on `done`, whichever order the two
- *     racing writers reach the store in - and a late heartbeat may not reopen
- *     a note whose run has already been judged.
- *
- * A brand-new run (a retry, an explicit rewrite) mints a new `runId` and a new
- * `runStartedAt`, so rule 1 is what lets it legitimately reopen a terminal
- * note.
+ * WHO MAY WRITE THIS NOTE. Two rules, both still needed because several
+ * heartbeats and a verdict can race inside one isolate: a newer run may take
+ * over, and the FIRST terminal state wins. Nothing here persists anywhere.
  */
 export function noteWriteAllowed(current: ScriptNote | null, incoming: ScriptNote): boolean {
 	if (!current) return true;
@@ -678,38 +552,40 @@ export function noteWriteAllowed(current: ScriptNote | null, incoming: ScriptNot
 }
 
 export interface NoteWriteOptions {
-	/* Read THROUGH to KV before deciding: required for a terminal verdict. */
+	/* Kept for signature compatibility; RULE 35 makes it a no-op. */
 	fresh?: boolean;
 	ttlSeconds?: number;
 }
 
-/*
- * The only write path a RUN may use. Returns whether the write was applied.
- *
- * Explicit user writes (`POST /api/script/notes`) and a fresh ticket keep using
- * `writeScriptNote` directly: those are the two things that are SUPPOSED to
- * reopen a settled note.
- */
 export async function writeScriptNoteGuarded(
 	env: { KV_BINDING?: ScriptNoteKv } | undefined,
 	note: ScriptNote,
 	options: NoteWriteOptions = {}
 ): Promise<boolean> {
-	const current = options.fresh
-		? await readScriptNoteFresh(env, note.id)
-		: await readScriptNote(env, note.id);
-	if (!noteWriteAllowed(current, note)) {
+	const current = await readScriptNoteChecked(env, note.id, { fresh: options.fresh });
+	if (!noteWriteAllowed(current.note, note)) {
 		console.warn("[script-notes] write rejected: a newer verdict owns this note", {
 			noteId: note.id,
 			incomingState: note.state,
-			currentState: current ? current.state : null,
-			incomingRun: note.runId || null,
-			currentRun: current ? current.runId || null : null
+			currentState: current.note ? current.note.state : null
 		});
 		return false;
 	}
 	await writeScriptNote(env, note, options.ttlSeconds);
 	return true;
+}
+
+/** The note-store contract, exposed for tests and documentation. */
+export function scriptNotePersistencePolicy(): Record<string, unknown> {
+	return {
+		rule: 35,
+		storage: SCRIPT_NOTE_STORAGE,
+		server: "ephemeral-in-isolate-memory",
+		kvReads: SCRIPT_NOTE_KV_READS,
+		kvWrites: SCRIPT_NOTE_KV_WRITES,
+		clientStores: ["localStorage:ytvs.script-notes.v1", "cookie:ytvs_note"],
+		consistentBy: "digest+timestamp reconciliation in src/client/script-notes-client.ts"
+	};
 }
 
 /* ------------------------------------------------------------------------- */

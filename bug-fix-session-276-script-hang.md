@@ -1,4 +1,12 @@
 # Session 276 — deep debug: the script pipeline hang
+> **⚠ SUPERSEDED BY [RULE 35](RULE-35-client-side-script-notes.md) — 2026-11-03 (FIXED IN CODE).**
+> This is a historical bug-fix record. It describes the *retired* implementation in which
+> script notes were written to Cloudflare KV and polled through async
+> tickets. **No script detail is written to KV any more.** Script notes live client-side in
+> `localStorage` + the `ytvs_note` cookie with digest/timestamp/script-length consistency
+> checks; the Worker's note store is ephemeral memory only (0 KV reads / 0 KV writes). The
+> `?async=1` path is now a synchronous compatibility degradation and `asyncScript` is `0`.
+> Every KV-note statement below is void; see `system-rules.md` RULE 35 for the current rule.
 
 **Scope.** Independently review the "Bound script job lifecycle hangs" change
 (commit `09bbf82`, PR #43), study the script system end to end, and debug the
@@ -17,7 +25,7 @@ close the hang class:
 * an **unbounded `setImmediate`/`nextTick` chain** spun inside one synchronous
   `pump()` and never gave the runtime control back (hard CPU hang);
 * a **closed loop** still answered `202` for work that could not run;
-* a **stalled KV binding** hung all three note routes with no ceiling at all;
+* a **stalled KV binding** hung all three note routes with no ceiling at all — *historical*: RULE 35 removed KV from the note store entirely;
 * a note the watchdog had already closed was **resurrected** by its own runner,
   which also paid for a planner + writer call after the browser had stopped
   polling.
@@ -42,15 +50,15 @@ POST /api/script?async=1                          src/index.ts
         │  (route wiring; ctx.waitUntil, the isolate's shared loop)
         ▼
 submitAsyncScriptJob                             script-notes-api.ts
-        │  1. read/seed the note, noteRunStart("queued")  ──► KV (script-note:<id>)
+        │  1. read/seed the note, noteRunStart("queued")  ──► ephemeral memory (RULE 35: no KV)
         │  2. schedule(runJob) on the loop                ──► ScriptEventLoop
         │  3. answer 202 { noteId, noteUrl, pollAfterMs }
         ▼
 ScriptEventLoop.schedule → runJob                script-event-loop.ts
         │  phases: timers → pending → poll → check → close
-        │  onStart: noteRunActive("planning")             ──► KV
+        │  onStart: noteRunActive("planning")             ──► ephemeral memory
         │  body:    handleSeoScriptGeneration  (deadline + AbortSignal)
-        │  onError: noteRunFailed(...)                    ──► KV
+        │  onError: noteRunFailed(...)                    ──► ephemeral memory
         ▼
 handleSeoScriptGeneration                        script-seo.ts
         │  reuseScript? → return the note's payload
@@ -81,13 +89,15 @@ freed**. Those differ by the whole queue wait, which is unbounded in practice
 (24 queued jobs × 240 s). A runner could therefore keep working, and keep
 writing, for minutes after the note's own watchdog had declared it dead.
 
-### The note store's two layers
+### The note store — memory only (RULE 35, 2026-11-03)
 
-`scriptNoteStore(env)` merges an isolate-local `Map` with KV:
+`scriptNoteStore(env)` **ignores `env.KV_BINDING`**. There is one layer, a bounded
+per-isolate `Map`; the durable note is the browser's `localStorage` full copy plus the
+`ytvs_note` cookie digest mirror, reconciled by digest/timestamp/script-length checks.
 
 ```ts
-get(id)  { const cached = await memory.get(id); if (cached) return cached; … }
-put(note){ await Promise.all([memory.put(note), kv.put(note)]) }
+get(id)  { return memory.get(id); }        // 0 KV reads
+put(note){ return memory.put(note); }      // 0 KV writes
 ```
 
 Cache-first reads are fast and right for the hot path, and they were the second
@@ -255,7 +265,7 @@ inline`, the job runs, note `done`; without `waitUntil` → `503`, note `error`,
 write is now handed to `waitUntil` instead of being a detached `void
 failNote(...)` that the isolate could drop.
 
-### F6 — A stalled KV binding hung every note route *(hang: unbounded I/O)*
+### F6 — HISTORICAL: a stalled KV binding hung every note route *(removed by RULE 35)*
 
 `kvNoteStore` swallowed *errors* but had no *ceiling*: `await kv.get(...)` on a
 degraded binding parks the request indefinitely. Measured with a binding that
@@ -267,10 +277,10 @@ GET  /api/script/notes/<id> with a stalled KV: HUNG
 POST /api/script/notes with a stalled KV:      HUNG
 ```
 
-**Fix.** `SCRIPT_NOTE_KV_TIMEOUT_MS = 2000` applied by `withNoteBudget` to every
-get/put/delete in `kvNoteStore` (the pending op is left to settle on its own).
-A note is an optimisation, so "the binding did not answer" is reported as "no
-note", not as a hung request. After: all three settle.
+**Current fix (RULE 35):** the KV binding is no longer used by the note store at all, so a
+stalled binding cannot hang a note route. `kvNoteStore()` survives only as a memory-only
+deprecated shim; the 2 s `withNoteBudget` timeout is obsolete. Script notes live in
+`localStorage` + a cookie with explicit consistency checks between those two stores.
 
 ### F7 — The pump never yielded *(hang: CPU livelock)*
 
@@ -308,8 +318,8 @@ script. Test 9 in the new suite pins this.
    **its first terminal verdict is final**.
 5. **A verdict is read and written through the authoritative store**, not the
    isolate cache.
-6. **Every external await in the note routes has a ceiling** (KV 2 s, research
-   4 s, model attempts 45 s / 90 s, job 240 s).
+6. **Every external await in the note routes has a ceiling** (no KV I/O under RULE 35,
+   research 4 s, model attempts 45 s / 90 s, job 240 s).
 7. **The scheduler yields**: no synchronous pump may run forever.
 
 ---
@@ -319,8 +329,8 @@ script. Test 9 in the new suite pins this.
 | File | What changed |
 |---|---|
 | `src/modules/script-event-loop.ts` | default job budget (+ constructor override), budget measured from acceptance, queue-expired jobs fail without running, pump iteration cap + macrotask yield, `isClosed()`, deadline timer `unref`'d |
-| `src/modules/script-notes.ts` | `runId`/`noteRunAdopt`, strictly increasing `runStartedAt`, `noteWriteAllowed`, `writeScriptNoteGuarded`, `readScriptNoteFresh`, `noteRunDone` clears `errorCode`, `SCRIPT_NOTE_KV_TIMEOUT_MS` + `withNoteBudget` around every KV op |
-| `src/modules/script-notes-api.ts` | fresh + guarded transitions (`markRunning`, `failNote`), skip-if-settled body, duplicate-ticket adoption, closed-loop fallback, inline verdict write inside `waitUntil`, watchdog re-reads before closing |
+| `src/modules/script-notes.ts` | `runId`/`noteRunAdopt`, strictly increasing `runStartedAt`, `noteWriteAllowed`, `writeScriptNoteGuarded`, `readScriptNoteFresh`, `noteRunDone` clears `errorCode`, **RULE 35: memory-only store, zero KV reads/writes/deletes** |
+| `src/modules/script-notes-api.ts` | RULE 35 `clientSideOnly`/`persisted:false` responses; fresh + guarded transitions (`markRunning`, `failNote`), skip-if-settled body, duplicate-ticket adoption, closed-loop fallback, inline verdict write inside `waitUntil`, watchdog re-reads before closing |
 | `src/modules/script-seo.ts` | the write chain re-checks the abort at write time and routes terminal writes through the guard (`fresh: true`) |
 | `tests/script-hang-audit.test.mjs` | **new**, 10 regression tests, one per finding above |
 
@@ -377,3 +387,23 @@ node --import tsx /tmp/probes/p6b-pump-infinite.mjs
   bounded in practice by the client connection, and the browser already aborts
   at 20 s.
 * The 30 `tsc` diagnostics in `src/index.ts` are pre-existing and out of scope.
+
+
+---
+
+## RULE 35 — script notes are client-side only (2026-11-03)
+
+> **FIXED IN CODE.** Script details (narration, keyword set, beat plan, research facts,
+> timings, note state and the success payload) are **never written to Cloudflare KV**. The
+> durable copy is the browser's `localStorage["ytvs.script-notes.v1"]` full note plus the
+> compact `ytvs_note` cookie mirror, reconciled by digest + timestamp + script-length checks
+> (`src/client/script-notes-client.ts`). The Worker keeps only an ephemeral per-isolate memory
+> copy (`src/modules/script-notes.ts`: 0 KV reads / 0 KV writes). The script route writes no
+> credit KV record, `?async=1` degrades to a synchronous response, and capabilities advertise
+> `asyncScript: 0`, `scriptNoteKvWrites: 0`,
+> `scriptNoteConsistency: "digest+timestamp+scriptLength"`.
+>
+> Canonical specification: [RULE-35-client-side-script-notes.md](RULE-35-client-side-script-notes.md)
+> · Normative rule: `system-rules.md` RULE 35 · Verification:
+> `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
+> document is superseded and void.

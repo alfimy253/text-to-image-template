@@ -36,8 +36,9 @@ import {
 	handleScriptNoteRead,
 	handleScriptNoteDelete,
 	matchScriptNoteRoute,
-	isScriptNoteRoute,
-	submitAsyncScriptJob
+	isScriptNoteRoute
+	/* RULE 35: submitAsyncScriptJob is no longer used by the script route;
+	 * ?async=1 degrades to the synchronous handler. */
 } from "./modules/script-notes-api";
 import {
 	SCRIPT_NOTE_CLIENT_STALL_MS,
@@ -295,8 +296,20 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				 * src/modules/script-notes-api.ts). Additive: a client that does
 				 * not read these keeps the legacy synchronous /api/script path.
 				 */
-				scriptNotes: 1, asyncScript: 1, noteRepair: 1,
-				/* Poll hint for GET /api/script/notes/<id>. */
+				scriptNotes: 1, noteRepair: 1,
+				/*
+				 * RULE 35 (2026-11-03): script details are NEVER written to KV.
+				 * The async note poll is therefore disabled: the studio makes
+				 * ONE synchronous /api/script request and stores the finished
+				 * note in localStorage + cookie itself. `?async=1` below is a
+				 * compatibility path for cached old pages and degrades to the
+				 * same synchronous handler.
+				 */
+				asyncScript: 0,
+				scriptNoteStorage: "client:localStorage+cookie",
+				scriptNoteKvWrites: 0,
+				scriptNoteConsistency: "digest+timestamp+scriptLength",
+				/* Poll hint for GET /api/script/notes/<id> (legacy path only). */
 				scriptNotePollMs: 900,
 				/*
 				 * Hang budgets, advertised so the browser uses the server's
@@ -1689,43 +1702,34 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			url.pathname === "/api/script"
 		) {
 
+			/*
+			 * RULE 35 (2026-11-03) — NO KV WRITES FROM THE SCRIPT ROUTE.
+			 *
+			 * This used to call creditConsume()/guestCreditConsume(), which
+			 * wrote `credits:<user>` / `ipcredits:<hash>` KV records. Scripts
+			 * are unlimited on both plans, so the counter was informational
+			 * only; it is now recorded by the browser usage ledger
+			 * (src/client/usage-ledger.ts, counts only, no script text).
+			 * `onValidated` stays in the contract so validation still gates
+			 * the callback, but nothing is persisted server-side here.
+			 */
 			const scriptUsage = async () => {
-				/*
-				 * AI scripts are unlimited on both plans (free and
-				 * paid_user). Record usage only after request inputs
-				 * validate so 400/503 rejections do not inflate counters.
-				 */
-				if (env && env.KV_BINDING) {
-					const scriptCreditUser = await creditSessionUser(request, env);
-					if (scriptCreditUser) {
-						await creditConsume(
-							env,
-							scriptCreditUser.username,
-							scriptCreditUser.usertype,
-							"scripts"
-						);
-					} else if (hasFreemiumCookie(request)) {
-						await guestCreditConsume(
-							env,
-							await guestCreditIdentity(request),
-							"scripts"
-						);
-					}
-				}
+				try { console.info("[script] usage recorded client-side (RULE 35)"); }
+				catch { /* best effort */ }
 			};
 
 			/*
-			 * Async mode (?async=1): hand the caller a note id immediately and
-			 * let the event loop finish the script. The caller polls
-			 * GET /api/script/notes/<id> until state is done/error.
+			 * RULE 35 (2026-11-03): ?async=1 is a COMPATIBILITY PATH ONLY.
+			 *
+			 * The old async job parked the script in a KV note and the browser
+			 * polled it. Script notes are client-side now, so a cached old page
+			 * asking for async gets the SAME synchronous answer (200 with the
+			 * finished script) instead of a 202 ticket. Its `else` branch
+			 * already handles a non-202 JSON response, so no old client breaks
+			 * and no script detail is ever written to KV.
 			 */
-			if (url.searchParams.get("async") === "1") {
-				return submitAsyncScriptJob(request, env, SCRIPT_MODEL, {
-					...scriptNoteDeps,
-					onValidated: scriptUsage
-				});
-			}
-
+			/* Both fresh clients and cached old clients (?async=1) take the same
+			 * synchronous path; there is no ticket and no note to poll. */
 			return handleSeoScriptGeneration(
 				request,
 				url,
@@ -1989,14 +1993,28 @@ async function handleRequest(request: any, env: any, ctx: any) {
 					? body.assets
 					: [];
 
+			/* RULE 35 (2026-11-03) — DEFENSE IN DEPTH FOR RENDER JOBS.
+			 * The browser's collectVideoPayload() already omits the narration,
+			 * but the legacy remote renderer stores its whole job payload in a
+			 * KV blob. Strip any script-like field here too, so no AI script
+			 * detail can ever be persisted server-side through this route.
+			 * User-authored caption/subtitle overlays stay: they belong to the
+			 * RULE 4 render job family, not to the script-note store. */
+			const renderProject = body.project && typeof body.project === "object" && !Array.isArray(body.project)
+				? { ...body.project }
+				: {};
+			for (const scriptField of [
+				"script", "scriptText", "narration", "note", "scriptNote",
+				"outline", "seoHeadings", "seoPlan", "keywordSet"
+			]) delete renderProject[scriptField];
+
 			const payload =
 				JSON.stringify(
 					{
 						name:
 						name,
 						project:
-							body.project ||
-							{},
+							renderProject,
 						assets:
 						assets,
 						audio:

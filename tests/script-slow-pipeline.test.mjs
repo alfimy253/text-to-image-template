@@ -17,6 +17,11 @@
  *  S3  (NEW in session 276) the new KV budget turned a slow-but-healthy store
  *      into `null`, i.e. "no note", which the read route reported as
  *      `404 { state:"empty", terminal:true }`. A healthy run was declared dead.
+ *
+ * RULE 35 (2026-11-03) supersedes the KV half of these regressions: script
+ * notes are client-side only, so the Worker store is ephemeral in-isolate
+ * memory and NO KV get/put/delete happens. S2 now counts the in-memory write
+ * log; S3 now asserts a slow/unreadable KV binding is never consulted.
  *  S4  a deep queue still handed out a 202 for a job whose estimate exceeded its
  *      own budget, so the caller polled for seconds (minutes at production
  *      scale) to be told it never ran.
@@ -33,7 +38,9 @@ import {
 	clearScriptNoteMemory,
 	emptyScriptNote,
 	noteRunStart,
+	readScriptNote,
 	scriptNoteId,
+	scriptNoteWriteLog,
 	writeScriptNote
 } from "../src/modules/script-notes.ts";
 import {
@@ -271,7 +278,7 @@ test("S1: the async route hands the pipeline the ticket's deadline", async () =>
 /*        six dead ones                                                       */
 /* ------------------------------------------------------------------------- */
 
-test("S2: a six-attempt run writes a bounded number of notes and publishes `done` promptly", async () => {
+test("S2: a six-attempt run writes a bounded number of EPHEMERAL notes, never KV", async () => {
 	clearScriptNoteMemory();
 	const kv = tracingKv(40);
 	/* Two planner failures + two writer failures = six paid attempts. */
@@ -301,70 +308,58 @@ test("S2: a six-attempt run writes a bounded number of notes and publishes `done
 		if (note.terminal) break;
 		await new Promise((resolve) => setTimeout(resolve, 5));
 	}
-	/* The isolate cache reports `done` the moment the write is queued, so give
-	 * the KV write itself time to land before measuring it. */
-	for (let i = 0; i < 100; i++) {
-		if (kv.puts.every((put) => put.endMs)) break;
-		await new Promise((resolve) => setTimeout(resolve, 5));
-	}
 
 	assert.equal(note.state, "done");
 	assert.equal(note.terminal, true);
 	assert.equal(note.errorCode, null, "a done note carries no failure code");
+	assert.equal(note.clientSideOnly, true, "RULE 35: the note is owned by the browser");
+	assert.equal(note.persisted, false, "RULE 35: the Worker never persists it");
 
-	/* Six attempts used to mean 3 + 6 = 9 writes; coalescing bounds it. */
-	assert.ok(
-		kv.ops.put <= 6,
-		`a 6-attempt run must not write the note once per attempt (wrote ${kv.ops.put})`
-	);
-	assert.ok(kv.ops.put >= 3, "the run still records queued, active and terminal");
+	/* RULE 35: zero KV operations, even with a deliberately slow binding. */
+	assert.equal(kv.ops.put, 0, "no script note is ever written to KV");
+	assert.equal(kv.ops.get, 0, "no script note is ever read from KV");
+	assert.equal(kv.ops.delete, 0, "no script note is ever deleted from KV");
 
-	/* The verdict reached the store, and it is the one the client is told. */
-	const done = kv.puts.filter((put) => put.state === "done");
-	assert.equal(done.length, 1, "exactly one terminal write");
-	assert.equal(kv.puts[kv.puts.length - 1].state, "done", "the terminal write is the last one");
-
-	/*
-	 * And the terminal write did not queue behind six dead beats: at 40 ms per
-	 * write, the old chain needed 9 x 40 = 360 ms after the script was ready.
-	 */
-	const lastWriteEnd = kv.puts[kv.puts.length - 1].endMs;
-	const scriptReadyAt = model.calls[model.calls.length - 1].endMs;
-	assert.ok(
-		lastWriteEnd - scriptReadyAt < 250,
-		`\`done\` was published within one or two writes of the script (${lastWriteEnd - scriptReadyAt} ms)`
-	);
+	/* The ephemeral write log replaces the old KV op counter. */
+	const writes = scriptNoteWriteLog().filter((entry) => entry.id === ticket.noteId);
+	assert.ok(writes.length >= 3, "queued, active and terminal states were recorded");
+	/* In-isolate writes cost no network I/O: the bound is attempts + 3
+	 * (queued, active, terminal), and the important invariant is that the
+	 * FIRST terminal verdict is the LAST write and appears exactly once. */
+	assert.ok(writes.length <= 9, `a 6-attempt run must not write once per attempt (${writes.length})`);
+	assert.equal(writes.filter((entry) => entry.state === "done").length, 1, "exactly one terminal write");
+	assert.equal(writes[writes.length - 1].state, "done", "the terminal write is the last one");
 	loop.close();
 });
 
 /* ------------------------------------------------------------------------- */
-/* S3 — a slow store is "unknown", never "empty"                              */
+/* S3 — RULE 35: no KV binding is ever consulted by the script subsystem      */
 /* ------------------------------------------------------------------------- */
 
-test("S3: a note store that misses its budget answers 503 retryable, not a terminal 404", async () => {
+test("S3: a slow KV binding is never read (RULE 35), so the note stays live", async () => {
 	clearScriptNoteMemory();
-	const store = new Map();
+	let kvOps = 0;
 	const slowKv = {
-		async get(key) {
+		async get() {
+			kvOps++;
 			await new Promise((resolve) => setTimeout(resolve, 2600));
-			return store.has(key) ? store.get(key) : null;
+			return null;
 		},
-		async put(key, value) {
+		async put() {
+			kvOps++;
 			await new Promise((resolve) => setTimeout(resolve, 2600));
-			store.set(key, String(value));
 		},
-		async delete(key) {
-			store.delete(key);
-		}
+		async delete() { kvOps++; }
 	};
 	const env = { KV_BINDING: slowKv };
 
-	/* A healthy run is in flight: the note exists, the store is just slow. */
+	/* A healthy run is in flight - in EPHEMERAL memory, not in KV. */
 	const id = scriptNoteId({ topic: "Slow store", minutes: 1, speed: "medium" });
 	const note = emptyScriptNote({ id, topic: "Slow store", minutes: 1, speed: "medium" });
 	noteRunStart(note, "writing");
-	store.set("script-note:" + id, JSON.stringify(note));
+	await writeScriptNote(env, note);
 
+	const startedAt = Date.now();
 	const response = await handleScriptNoteRead(
 		id,
 		env,
@@ -373,38 +368,30 @@ test("S3: a note store that misses its budget answers 503 retryable, not a termi
 	);
 	const body = await response.json();
 
-	assert.equal(response.status, 503);
-	assert.notEqual(response.status, 404);
-	assert.equal(body.terminal, false, "an unknown note is not a finished one");
-	assert.equal(body.pending, true);
-	assert.equal(body.code, "SCRIPT_NOTE_STORE_BUSY");
-	assert.equal(body.retryable, true);
-	assert.ok(Number(body.retryAfterMs) > 0, "the client is told how soon to come back");
-
-	/* It also never reports the note as missing: `state` is absent, so the
-	 * client's "terminal && state" branches cannot fire. */
-	assert.equal(body.state, undefined);
+	assert.equal(kvOps, 0, "RULE 35: the slow KV binding was never touched");
+	assert.ok(Date.now() - startedAt < 1000, "no KV latency reaches the request");
+	assert.equal(response.status, 202);
+	assert.equal(body.state, "writing", "the live note is still live");
+	assert.equal(body.terminal, false);
+	assert.equal(body.clientSideOnly, true);
+	assert.equal(body.persisted, false);
 });
 
-test("S3: submitting against a store that misses its budget refuses instead of overwriting the note", async () => {
+test("S3: an unreadable KV binding cannot refuse, hang or clobber a note (RULE 35)", async () => {
 	clearScriptNoteMemory();
-	const store = new Map();
+	let kvOps = 0;
 	const unreadable = {
-		async get() {
-			return new Promise(() => {});
-		},
-		async put(key, value) {
-			store.set(key, String(value));
-		},
-		async delete(key) {
-			store.delete(key);
-		}
+		async get() { kvOps++; return new Promise(() => {}); },
+		async put() { kvOps++; },
+		async delete() { kvOps++; }
 	};
+	const env = { KV_BINDING: unreadable, AI: { run: async () => ({ response: "{}" }) } };
+
 	/* A warm note with the keyword set that makes the NEXT run cheap. */
 	const id = scriptNoteId({ topic: "Morning yoga", minutes: 1, speed: "medium" });
 	const warm = emptyScriptNote({ id, topic: "Morning yoga", minutes: 1, speed: "medium" });
 	warm.keywordSet = { ...plan, shorts: plan.short, titleMatchedShorts: [], headingMatchedShorts: [] };
-	store.set("script-note:" + id, JSON.stringify(warm));
+	await writeScriptNote(env, warm);
 
 	const loop = new ScriptEventLoop({ concurrency: 2 });
 	const response = await submitAsyncScriptJob(
@@ -412,15 +399,16 @@ test("S3: submitting against a store that misses its budget refuses instead of o
 			method: "POST",
 			body: JSON.stringify({ topic: "Morning yoga", minutes: 1, speed: "medium" })
 		}),
-		{ KV_BINDING: unreadable, AI: { run: async () => ({ response: "{}" }) } },
+		env,
 		"mock-instruct",
 		{ loop, waitUntil: () => {}, jobDeadlineMs: 30000 }
 	);
 	const body = await response.json();
-	assert.equal(response.status, 503);
-	assert.equal(body.code, "SCRIPT_NOTE_STORE_BUSY");
-	assert.equal(store.get("script-note:" + id), JSON.stringify(warm), "the warm note was not clobbered");
-	assert.equal(loop.stats().queued, 0, "no job was scheduled for a run that was refused");
+	assert.equal(response.status, 202, "an unreadable KV cannot refuse a script job");
+	assert.equal(body.clientSideOnly, true);
+	assert.equal(kvOps, 0, "RULE 35: zero KV operations");
+	const kept = await readScriptNote(env, id);
+	assert.ok(kept && kept.keywordSet, "the warm plan is preserved in memory");
 	loop.close();
 });
 

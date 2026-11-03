@@ -20039,6 +20039,18 @@ async function retryImagePromptFlow(n) {
 	 */
 
 	/*
+	 * RULE 35 (2026-11-03) — SCRIPT NOTES ARE CLIENT-SIDE ONLY.
+	 *
+	 * The Worker advertises "scriptNoteStorage: client:localStorage+cookie",
+	 * "asyncScript: 0", "scriptNoteKvWrites: 0" and a consistency mode. The
+	 * studio therefore makes ONE synchronous /api/script request, keeps the
+	 * finished narration in localStorage + cookie (checked against each other
+	 * by digest, timestamp and script length), and never depends on a
+	 * server-side KV note. The async poll below survives only as a
+	 * compatibility path for an OLD Worker that still advertises
+	 * "asyncScript" without the RULE 35 fields.
+	 */
+	/*
 	 * SCRIPT NOTES (dynamic URL) + ASYNC SCRIPT JOBS
 	 *
 	 * When the worker advertises "scriptNotes", every script request carries
@@ -20142,12 +20154,24 @@ async function retryImagePromptFlow(n) {
 	) {
 
 		try {
-			return scriptNoteMemory.get({
+			const hint = scriptNoteMemory.get({
 				topic: topic,
 				sourceUrl: project && project.scriptSourceUrl ? project.scriptSourceUrl : "",
 				minutes: minutes,
 				speed: speed
 			});
+			/* RULE 35: verify localStorage <-> cookie before trusting a hint. */
+			const audit = scriptNoteMemory.check({
+				topic: topic,
+				sourceUrl: project && project.scriptSourceUrl ? project.scriptSourceUrl : "",
+				minutes: minutes,
+				speed: speed
+			});
+			if (typeof window !== "undefined") window.__SCRIPT_NOTE_CONSISTENCY = audit;
+			if (!audit.consistent && !audit.repaired) {
+				console.warn("[script-notes] storage inconsistency", audit.reason);
+			}
+			return hint;
 		} catch (noteError) {
 			console.warn("[script-notes] browser note read failed", String(noteError && noteError.message || noteError).slice(0, 200));
 			return null;
@@ -20186,6 +20210,17 @@ async function retryImagePromptFlow(n) {
 				script: data.script,
 				durationMs: data.durationMs
 			});
+			/* RULE 35: the two client stores must agree after every write. */
+			const audit = scriptNoteMemory.check({
+				topic: topic,
+				sourceUrl: project && project.scriptSourceUrl ? project.scriptSourceUrl : "",
+				minutes: minutes,
+				speed: speed
+			});
+			if (typeof window !== "undefined") window.__SCRIPT_NOTE_CONSISTENCY = audit;
+			if (!audit.consistent && !audit.repaired) {
+				console.warn("[script-notes] storage inconsistency after write", audit.reason);
+			}
 			if (project && data.noteId) project.scriptNoteId = data.noteId;
 		} catch (noteError) {
 			console.warn("[script-notes] browser note write failed", String(noteError && noteError.message || noteError).slice(0, 200));
@@ -20500,13 +20535,27 @@ async function retryImagePromptFlow(n) {
 		 * \`browserScriptRetries\` for exactly that reason. Against a pre-279
 		 * worker this page simply runs its legacy ladder: slower, never a hang.
 		 */
-		const asyncEnabled = notesEnabled && Boolean(caps.asyncScript);
-		/* #5: 20 s per request once the worker can park the job in a note. */
+		/* RULE 35: a Worker that keeps notes in the browser must NEVER be
+		 * polled - there is no server-side note to poll. Old deployments that
+		 * do not advertise the new field keep their legacy async path. */
+		const clientSideNotes =
+			String(caps.scriptNoteStorage || "") === "client" ||
+			Number(caps.scriptNoteKvWrites) === 0 && Boolean(caps.scriptNoteConsistency);
+		const asyncEnabled = !clientSideNotes && notesEnabled && Boolean(caps.asyncScript);
+		/* 20 s per request only for the legacy async path; the client-side
+		 * notes path holds one synchronous request for the full run budget. */
 		const requestTimeout = asyncEnabled
 			? SCRIPT_REQUEST_TIMEOUT_MS
-			: SCRIPT_LEGACY_TIMEOUT_MS;
+			: clientSideNotes ? SCRIPT_NOTE_MAX_WAIT_MS : SCRIPT_LEGACY_TIMEOUT_MS;
 		const noteSeed = notesEnabled ? browserScriptNote(project, topic, minutes, speed) : null;
 		const scriptPath = asyncEnabled ? "/api/script?async=1" : "/api/script";
+		if (clientSideNotes) {
+			console.info("[script-notes] client-side storage (RULE 35)", {
+				storage: "localStorage+cookie",
+				kvWrites: 0,
+				requestTimeoutMs: requestTimeout
+			});
+		}
 		const isCancelled =
 			context && context.isCancelled
 				? context.isCancelled

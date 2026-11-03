@@ -39,7 +39,8 @@ export function createWorkerSim(options = {}) {
 	const env = {
 		AI: ai.env.AI,
 		PIXABAY_API_KEY: options.pixabayKey || "sim-pixabay-key",
-		/* No KV binding: credits open, notes in the isolate mirror. */
+		/* RULE 35: no KV binding, script notes live in browser localStorage + cookie
+		   and this Worker keeps only an ephemeral isolate-memory copy. */
 		PIXABAY_ALLOW_UNMETERED: "true"
 	};
 	if (!directMedia) env.PIXABAY_BROWSER_FETCH = "off";
