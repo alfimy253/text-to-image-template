@@ -1,4 +1,12 @@
 # Session 277 — deep debug: the *slow* script pipeline
+> **⚠ SUPERSEDED BY [RULE 35](RULE-35-client-side-script-notes.md) — 2026-11-03 (FIXED IN CODE).**
+> This is a historical bug-fix record. It describes the *retired* implementation in which
+> script notes were written to Cloudflare KV and polled through async
+> tickets. **No script detail is written to KV any more.** Script notes live client-side in
+> `localStorage` + the `ytvs_note` cookie with digest/timestamp/script-length consistency
+> checks; the Worker's note store is ephemeral memory only (0 KV reads / 0 KV writes). The
+> `?async=1` path is now a synchronous compatibility degradation and `asyncScript` is `0`.
+> Every KV-note statement below is void; see `system-rules.md` RULE 35 for the current rule.
 
 **Scope.** Session 276 made the script pipeline safe (bounded budgets, run
 ownership, authoritative reads). This pass studied the same flow with a
@@ -27,7 +35,7 @@ ScriptEventLoop (per isolate, shared, 2 lanes)
   run:  withDeadline(budget − waitMs)  ← session 276 fix (budget starts at t0)
 
 handleSeoScriptGeneration
-  note read ........................ ~1 KV op
+  note read ........................ 0 KV ops (ephemeral memory, RULE 35)
   planner  3 attempts × 45 s ceiling  ← ladder = 405 s
   research 1 fetch   × 4 s
   writer   3 attempts × 90 s ceiling  ← ladder = 405 s
@@ -63,7 +71,7 @@ attempt 6 → heartbeat write ┘
 Measured on the baseline (150 ms KV, 6 attempts): **9 writes**, `done` landing at
 **1534 ms** — i.e. ~600 ms after the script itself was ready. That is S2.
 
-Third axis — the session-276 KV budget. `SCRIPT_NOTE_KV_TIMEOUT_MS = 2000` made
+Third axis — HISTORICAL (superseded by RULE 35): the session-276 KV budget. `SCRIPT_NOTE_KV_TIMEOUT_MS = 2000` made
 a stalled binding a fast answer, but the store reported "timed out" as `null`,
 i.e. **"there is no note"**:
 
@@ -210,11 +218,11 @@ the note write, so a refused submission cannot rewrite a note it will not run.
 | attempt ceiling | 45 s / 90 s regardless | `min(ceiling, remaining)` | S1 |
 | note writes per run | 3 + attempts (9 at 6 attempts) | 3 + ~1 (5 at 6 attempts) | S2 |
 | time from "script ready" to `done` in the store | ~2 writes | ~1 write | S2 |
-| healthy run, 20 ms model | 87 ms | 80 ms | +2 authoritative reads, −1 stale write |
+| healthy run, 20 ms model | 87 ms | 80 ms | +2 authoritative memory reads, −1 stale write (RULE 35: no KV) |
 | slow store (2.5 s) | 2.5 s blocking 202 | 2.0 s → `503 retryable` | S3 |
 | deep queue (3 ahead) | 202 → failure at 4518 ms | inline → verdict at 63 ms | S4 |
 
-The trade is explicit: **+2 authoritative KV reads per run** (the settled-note
+The trade is explicit (RULE 35 removed all KV I/O): **+2 authoritative memory reads per run** (the settled-note
 guard and the resume point) in exchange for **-4 writes** and a verdict that is
 not behind a dead chain. On a warm store that is ~0 ms; on a 60 ms store it is
 +120 ms of reads against ~-240 ms of writes.
@@ -226,7 +234,7 @@ not behind a dead chain. On a warm store that is ~0 ms; on a 60 ms store it is
 | File | What changed |
 |---|---|
 | `src/modules/script-event-loop.ts` | `avgRunMs` EWMA in `stats()` (settled runs only) |
-| `src/modules/script-notes.ts` | `NoteReadResult` / `readScriptNoteChecked` (unavailable ≠ absent), `kvRace`, memory-only freshness, KV budget keeps the loop alive |
+| `src/modules/script-notes.ts` | `NoteReadResult` / `readScriptNoteChecked`, **RULE 35: memory-only note store, zero KV ops**, no KV budget needed |
 | `src/modules/script-notes-api.ts` | `estimateQueueWaitMs`, admission before the ticket, `SCRIPT_NOTE_STORE_BUSY` on both routes, `deadlineAtMs` handed to the pipeline, watchdog refuses to judge an unreadable store |
 | `src/modules/script-seo.ts` | `deadlineAtMs` + `planAttemptTimeoutMs`/`writeAttemptTimeoutMs`, `attemptSlot()` budget gate, clamped attempt timeouts, `SCRIPT_MIN_ATTEMPT_MS`, coalesced heartbeats |
 | `src/client/app-js.ts` | a busy-store 503 is a failed poll (`pollStatus` captured outside the `try`), never a note state |
@@ -280,3 +288,23 @@ node --import tsx /tmp/probes/m5-admission.mjs <root>            # S4 deep queue
   read (no watcher, no resume point).
 * `request.clone().json()` in the note routes remains unbounded (client connection
   bounded, browser aborts at 20 s).
+
+
+---
+
+## RULE 35 — script notes are client-side only (2026-11-03)
+
+> **FIXED IN CODE.** Script details (narration, keyword set, beat plan, research facts,
+> timings, note state and the success payload) are **never written to Cloudflare KV**. The
+> durable copy is the browser's `localStorage["ytvs.script-notes.v1"]` full note plus the
+> compact `ytvs_note` cookie mirror, reconciled by digest + timestamp + script-length checks
+> (`src/client/script-notes-client.ts`). The Worker keeps only an ephemeral per-isolate memory
+> copy (`src/modules/script-notes.ts`: 0 KV reads / 0 KV writes). The script route writes no
+> credit KV record, `?async=1` degrades to a synchronous response, and capabilities advertise
+> `asyncScript: 0`, `scriptNoteKvWrites: 0`,
+> `scriptNoteConsistency: "digest+timestamp+scriptLength"`.
+>
+> Canonical specification: [RULE-35-client-side-script-notes.md](RULE-35-client-side-script-notes.md)
+> · Normative rule: `system-rules.md` RULE 35 · Verification:
+> `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
+> document is superseded and void.

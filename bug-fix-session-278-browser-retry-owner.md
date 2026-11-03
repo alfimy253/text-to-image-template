@@ -1,4 +1,12 @@
 # Session 278 — who owns a retry? The browser.
+> **⚠ SUPERSEDED BY [RULE 35](RULE-35-client-side-script-notes.md) — 2026-11-03 (FIXED IN CODE).**
+> This is a historical bug-fix record. It describes the *retired* implementation in which
+> script notes were written to Cloudflare KV and polled through async
+> tickets. **No script detail is written to KV any more.** Script notes live client-side in
+> `localStorage` + the `ytvs_note` cookie with digest/timestamp/script-length consistency
+> checks; the Worker's note store is ephemeral memory only (0 KV reads / 0 KV writes). The
+> `?async=1` path is now a synchronous compatibility degradation and `asyncScript` is `0`.
+> Every KV-note statement below is void; see `system-rules.md` RULE 35 for the current rule.
 
 **Request (verbatim):** *"Study code and check if all retry of code is in browser, because I changed my mind — now the entries (retries) should be in **browser**."*
 
@@ -168,3 +176,23 @@ Results:
 * Every new field in the error body is additive; the only behaviour change for an old page
   is that a missing AI binding is now `503 retryable:false` instead of a bare 503 — an old
   page already treats `retryable: false` as "stop".
+
+
+---
+
+## RULE 35 — script notes are client-side only (2026-11-03)
+
+> **FIXED IN CODE.** Script details (narration, keyword set, beat plan, research facts,
+> timings, note state and the success payload) are **never written to Cloudflare KV**. The
+> durable copy is the browser's `localStorage["ytvs.script-notes.v1"]` full note plus the
+> compact `ytvs_note` cookie mirror, reconciled by digest + timestamp + script-length checks
+> (`src/client/script-notes-client.ts`). The Worker keeps only an ephemeral per-isolate memory
+> copy (`src/modules/script-notes.ts`: 0 KV reads / 0 KV writes). The script route writes no
+> credit KV record, `?async=1` degrades to a synchronous response, and capabilities advertise
+> `asyncScript: 0`, `scriptNoteKvWrites: 0`,
+> `scriptNoteConsistency: "digest+timestamp+scriptLength"`.
+>
+> Canonical specification: [RULE-35-client-side-script-notes.md](RULE-35-client-side-script-notes.md)
+> · Normative rule: `system-rules.md` RULE 35 · Verification:
+> `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
+> document is superseded and void.

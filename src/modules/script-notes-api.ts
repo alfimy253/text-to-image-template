@@ -1,5 +1,17 @@
 /*
  * ---------------------------------------------------------------------------
+ * RULE 35 (2026-11-03) — CLIENT-SIDE SCRIPT NOTES, NO KV WRITES.
+ *
+ * These routes expose the Worker's EPHEMERAL, per-isolate job ledger only.
+ * `handleScriptNoteWrite`, `submitAsyncScriptJob`, the read watchdog and every
+ * pipeline heartbeat now go through `writeScriptNote()` in
+ * `src/modules/script-notes.ts`, whose store is memory-only (no KV get/put).
+ * The durable copy of the narration text, keyword set and beat plan lives in
+ * the browser's localStorage + cookie (src/client/script-notes-client.ts),
+ * guarded by digest consistency checks. Nothing about a script is persisted
+ * server-side; a Worker restart simply loses the ledger.
+ * ---------------------------------------------------------------------------
+ *
  * SCRIPT NOTE API — the dynamic URL that a waiting script request returns to.
  *
  *   POST   /api/script/notes          write a note down (research a URL)
@@ -226,7 +238,12 @@ export async function handleScriptNoteWrite(
 		noteId: note.id,
 		noteUrl: "/api/script/notes/" + note.id,
 		researchMs,
-		note: clientNote(note)
+		note: clientNote(note),
+		/* RULE 35: the caller must persist this note in localStorage + cookie.
+		 * The Worker's copy is ephemeral memory and is never written to KV. */
+		clientSideOnly: true,
+		persisted: false,
+		storage: ["localStorage:ytvs.script-notes.v1", "cookie:ytvs_note"]
 	});
 }
 
@@ -270,6 +287,8 @@ export async function handleScriptNoteRead(
 		 * truth: the poll failed, the job did not.
 		 */
 		if (first.unavailable) {
+			/* RULE 35: unreachable - there is no KV binding to time out. Kept as
+			 * a defensive branch for an adapter that reports `unavailable`. */
 			console.warn("[script-notes] note store did not answer", { noteId: id });
 			return noteJson(
 				{
@@ -336,7 +355,11 @@ export async function handleScriptNoteRead(
 		success: true,
 		...clientNote(note, includeScript),
 		pending: !terminal,
-		terminal
+		terminal,
+		/* RULE 35: this is a transient job ledger, not server-side storage. */
+		clientSideOnly: true,
+		persisted: false,
+		storage: ["localStorage:ytvs.script-notes.v1", "cookie:ytvs_note"]
 	};
 	if (!terminal) {
 		payload.pollAfterMs = SCRIPT_JOB_POLL_AFTER_MS;
@@ -369,7 +392,10 @@ export async function handleScriptNoteDelete(id: string, env: NoteEnv): Promise<
 	if (!isScriptNoteId(id)) return noteJson({ success: false, error: "Unknown note id" }, 404);
 	const store = scriptNoteStore(env);
 	if (store.delete) await store.delete(id);
-	return noteJson({ success: true, noteId: id, deleted: true });
+	return noteJson({
+		success: true, noteId: id, deleted: true,
+		clientSideOnly: true, persisted: false
+	});
 }
 
 /* Cold-start guess for one run when the loop has no samples yet. */
@@ -808,7 +834,12 @@ export async function submitAsyncScriptJob(
 			noteId: id,
 			noteUrl: "/api/script/notes/" + id,
 			pollAfterMs: SCRIPT_JOB_POLL_AFTER_MS,
-			state: "queued"
+			state: "queued",
+			/* RULE 35: the ticket is an ephemeral in-isolate job, not a KV
+			 * record. The client owns the durable note. */
+			clientSideOnly: true,
+			persisted: false,
+			storage: ["localStorage:ytvs.script-notes.v1", "cookie:ytvs_note"]
 		},
 		202,
 		{ "Retry-After": String(Math.max(1, Math.round(SCRIPT_JOB_POLL_AFTER_MS / 1000))) }

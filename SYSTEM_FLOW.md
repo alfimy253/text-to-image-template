@@ -41,8 +41,8 @@ flowchart LR
 | Page/UI composition | `src/page.ts`, `src/client/markup.ts`, `src/client/styles.ts` | HTML shell, page markup and styles. Theme and plan mode are applied by the Worker before returning the page. |
 | Browser app | `src/client/app-js.ts` and `src/client/*` | UI state, script/voiceover requests, media planning/import, project and Quick Batch state, local preview/export. |
 | SEO/script | `src/modules/script-seo.ts` | SEO keyword-set planning and validated plain narration generation. |
-| Script notes / async jobs | `src/modules/script-notes.ts`, `src/modules/script-notes-api.ts`, `src/modules/script-event-loop.ts` | Dynamic-URL keyed notes (research, keyword set, beat plan), deterministic keyword repair, and a Node-style phased event loop that can run a script job past the response. See [`current_code_latest.md`](current_code_latest.md). |
-| Browser note memory | `src/client/script-notes-client.ts` | Keeps the note in `localStorage` (full) with a cookie mirror (compact) and an in-page map, so the plan travels with the script request (≈0.02 ms instead of a KV round trip). |
+| Script notes | `src/modules/script-notes.ts`, `src/modules/script-notes-api.ts`, `src/modules/script-event-loop.ts` | Dynamic-URL keyed notes (research, keyword set, beat plan), deterministic keyword repair, and a Node-style phased event loop. **RULE 35: the Worker note store is ephemeral memory only — 0 KV reads and 0 KV writes; script details live in browser localStorage + a cookie.** See [RULE 35](RULE-35-client-side-script-notes.md). |
+| Browser note memory | `src/client/script-notes-client.ts` | **RULE 35 authoritative store.** Keeps the full note in `localStorage` with a compact cookie mirror (`ytvs_note`) and an in-page fallback map; `digestOf()`/`consistencyReport()`/`reconcile()`/`check()` compare digest, timestamp and script length between the two stores and repair quota, corruption, staleness and expiry cases. |
 | Script hang guards | `src/modules/script-notes.ts` (`noteStaleReason`), `src/modules/script-notes-api.ts`, `src/client/app-js.ts` | Every async ticket is a promise that must end: queue-full runs inline or answers 503, a note whose isolate died is closed as `SCRIPT_NOTE_STALE` by the next reader, the page treats any `terminal` note as final, and it polls with a stall window and a wall-clock ceiling. One requester (`requestScriptWithNotes`) serves the editor accordion **and** the quick-batch table's ✨ script button. See `current_code_latest.md` §2b. |
 | Pixabay image retries | `src/client/app-js.ts` (`retryImagePromptFlow`, `scheduleImageAutoRetry`, `probeMp4DurationWithRetry`) | Nothing in the media flow gives up on the first bad answer: a `429`/`Retry-After` is waited out (in-scene, 3 attempts), a stalled scene is aborted and re-armed on a fresh controller (90 s), a scene-batch that goes silent for 120 s is *planned* as a retry rather than a verdict, and the flow re-searches only the scenes still missing — at most twice, with a visible countdown. Clips get 3 probe attempts. A missing key / `401` / `403` / full gallery stays a verdict. See `current_code_latest.md` §2c. || Stock keyword planning | `src/modules/image-prompts.ts` | Turns the full narration into scene-by-scene Pixabay search keywords and the required photo/video scene mix. Despite the historical filename, this does not generate images. |
 | Stock search/download | `src/modules/pixabay.ts` | Pixabay search, caching/coalescing, quota throttling, asset download and source metadata. |
@@ -79,7 +79,7 @@ flowchart TD
 
 - **Public pages:** `GET /`, `/account`, `/upgrade`, `/free`, `/studio`, `/paid`; `/signup` and `/login` redirect to account views. `/studio` requires a signed-in account; `/paid` requires a paid account; signed-out restricted visitors are sent to `/free`.
 - **Session and credits:** `/api/session`, `/api/login`, `/api/signup`, `/api/logout`, `/api/credits` (implemented in `src/index.ts`).
-- **SEO/script:** `POST /api/seo-plan`, `POST /api/script` (also `POST /api/script?async=1` → `202 {noteId, noteUrl}`), and the note resource `POST /api/script/notes`, `GET|DELETE /api/script/notes/<id>`. Notes reuse a validated keyword set + beat plan for the same dynamic URL/topic, and the async form lets the caller poll the note instead of holding the connection. Both are negotiated by the additive `scriptNotes`/`asyncScript` capability flags.
+- **SEO/script (RULE 35):** `POST /api/seo-plan`, `POST /api/script` (one synchronous request; `?async=1` is accepted for old clients and degrades to the same synchronous handler), and the note resource `POST /api/script/notes`, `GET|DELETE /api/script/notes/<id>` for legacy compatibility only. Notes reuse a validated keyword set + beat plan for the same dynamic URL/topic, are owned by the browser (localStorage + cookie), and never persist to KV. Capabilities advertise `asyncScript: 0`, `scriptNoteStorage: "client:localStorage+cookie"`, `scriptNoteKvWrites: 0` and `scriptNoteConsistency: "digest+timestamp+scriptLength"`.
 - **Media planning/import:** `POST /api/image-prompts`, `POST /api/image-batch`, `POST /api/image`; `GET /api/media/search`, `GET /api/media/asset`. `GET /image/<n>` is intentionally gone (410); older dynamic image-prompt job URLs return 410 because planning is a direct request/response, not a poll job.
 - **Voice:** `POST /api/voiceover`; `GET /tts` is the server-side external TTS proxy.
 - **Management:** day-specific `/<day>/config/uvxyz`, CMS routes, payment/receipt routes, relay routes and LLM route.
@@ -266,3 +266,23 @@ flowchart LR
 ```
 
 In one line: **write script → plan stock searches → get Pixabay media + narration → build the video in your browser.**
+
+
+---
+
+## RULE 35 — script notes are client-side only (2026-11-03)
+
+> **FIXED IN CODE.** Script details (narration, keyword set, beat plan, research facts,
+> timings, note state and the success payload) are **never written to Cloudflare KV**. The
+> durable copy is the browser's `localStorage["ytvs.script-notes.v1"]` full note plus the
+> compact `ytvs_note` cookie mirror, reconciled by digest + timestamp + script-length checks
+> (`src/client/script-notes-client.ts`). The Worker keeps only an ephemeral per-isolate memory
+> copy (`src/modules/script-notes.ts`: 0 KV reads / 0 KV writes). The script route writes no
+> credit KV record, `?async=1` degrades to a synchronous response, and capabilities advertise
+> `asyncScript: 0`, `scriptNoteKvWrites: 0`,
+> `scriptNoteConsistency: "digest+timestamp+scriptLength"`.
+>
+> Canonical specification: [RULE-35-client-side-script-notes.md](RULE-35-client-side-script-notes.md)
+> · Normative rule: `system-rules.md` RULE 35 · Verification:
+> `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
+> document is superseded and void.

@@ -346,9 +346,13 @@ Full API/deployment details: [Pixabay implementation reference](pixabay-media-mi
       RULES 20/21), the plan routes `/studio` and `/paid` (session, RULE 21), and the
       password-gated `/api/config/users` + `/api/config/ipcredits` (RULE 3).
   - The auth modal is built lazily when an account action is used; the HttpOnly cookie is the
-    persistence mechanism (no `localStorage`/`sessionStorage`/IndexedDB anywhere in the client).
-    - Restriction: closing the tab loses all unsaved studio state (uploads, prompts, scripts)
-      — nothing is persisted client-side.
+    persistence mechanism for authentication (no identity, token or session is ever put in
+    `localStorage`/`sessionStorage`/IndexedDB).
+    - Restriction (amended by RULE 35, 2026-11-03): closing the tab loses unsaved uploads,
+      prompts and media, but **script notes are deliberately persisted client-side** in
+      `localStorage["ytvs.script-notes.v1"]` plus the `ytvs_note` cookie, with digest/timestamp/
+      script-length consistency checks between those two stores. Script details must never be
+      written to KV. RULE 30's counts-only usage ledger is the other allowed client store.
 
 ---
 
@@ -882,9 +886,14 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
 
 ---
 
-## RULE 15 — Data lifetime is bounded by KV TTLs, and nothing is persisted client-side
+## RULE 15 — KV data lifetime is bounded by TTLs; script notes are client-side (RULE 35)
 
-- KV key families:
+> **Amended by RULE 35 (2026-11-03).** The old title's "nothing is persisted client-side" is
+> no longer true: script notes live in browser `localStorage` + a cookie. There is **no**
+> script-note KV key family, and no script detail may ever be written to KV. The KV families
+> below are for accounts, render jobs, quotas, CMS and configuration only.
+
+- KV key families (script notes are NOT among them — RULE 35):
   - `user:<lowercased username>` — no TTL (permanent).
   - `email:<lowercased address>` — no TTL (signup uniqueness index; plaintext address).
   - `session:<hex token>` — no TTL (permanent until logout).
@@ -896,10 +905,15 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
   - `ipcredits:<40-hex hash>` — TTL 2 days (RULE 21 guest counters).
 - Consequences to state plainly to users:
   - a delivered MP4 is downloadable for roughly 2 hours, and its job record disappears after 1;
-  - a browser tab close discards all studio work (no localStorage/IndexedDB usage at all);
+  - a browser tab close discards uploads, prompts and media, but **script notes survive** in
+    `localStorage` + the `ytvs_note` cookie (full note + compact digest mirror); the two stores
+    are reconciled by RULE 35's digest/timestamp/script-length checks on read and write-back;
+  - no script text, keyword set, beat plan, research facts, timings or success payload is ever
+    stored server-side; the Worker's note store is ephemeral per-isolate memory, so a Worker
+    restart loses it and the browser re-sends its own copy with the next script request;
   - accounts, sessions, the email index and the two config keys are permanent, so any KV cleanup
     must be manual; the two credit families are the only TTL-bounded user data and simply start
-    a fresh day at zero after they expire.
+    a fresh day at zero after they expire (the script route no longer writes either family).
 
 ---
 
@@ -957,6 +971,10 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
   constant; the older client-side duplicate exists only in the unimported `.original` snapshot.
 - **Unbounded-job detail:** a `busy` response is treated as success-with-fallback rather than an
   error by design — do not "fix" it to `429`, the client depends on `200 + status:"busy"`.
+- **Retention model (resolved by RULE 35):** RULE 15 and the 2026-10-22 inconsistency register
+  used to say all data lifetime is bounded by KV TTLs and that a tab close discards everything.
+  That is no longer the retention model for script notes — they are client-side only, with zero
+  KV reads and zero KV writes, and are reconciled between `localStorage` and a cookie.
 
 ---
 
@@ -2450,9 +2468,12 @@ Canonical implementation, limits, verification and rollout: [bug-fix-session-261
   can over- or under-count, so quotas/summaries are best-effort. Never describe them as exact;
   do not use the local record to paper over this or to create client-side denials. Exact paid
   accounting would require a server-side serialization store and a separate, deliberate change.
-- No persistent video jobs or media in client storage. More HTTP requests/browser work cost
-  resources; do not claim production CPU savings without measurements. Timeouts cannot cancel
-  active provider inference or guarantee refunds for invisible delivery.
+- No persistent video jobs or media in client storage. The RULE 35 script notes (text
+  metadata: narration, keyword set, beat plan) are the one deliberate exception and must be
+  stored in `localStorage` + a cookie, never in KV, with consistency checks between the two.
+  More HTTP requests/browser work cost resources; do not claim production CPU savings without
+  measurements. Timeouts cannot cancel active provider inference or guarantee refunds for
+  invisible delivery.
 
 ## RULE 31 — Bug fix #262: server-load balancing + request backoff replace hard image throttles (2026-10-26)
 
@@ -2756,3 +2777,68 @@ The mixed Pixabay pipeline must not depend on an indefinitely pending media oper
   **56/56 focused tests; two real Chromium exports; 450/450 decoded frames in each**.
   These short exports deliberately use labeled fixture providers and are silent (headless AAC
   unsupported); they do **not** certify live LLM/Pixabay/TTS calls or production deployment.
+
+---
+
+## RULE 35 — Script notes are client-side only (2026-11-03, FIXED IN CODE)
+
+> Canonical requirement-and-implementation record:
+> [RULE-35-client-side-script-notes.md](RULE-35-client-side-script-notes.md). This rule
+> supersedes every older statement in this file and in the historical session documents that
+> describes a `script-note:<id>` KV record, an "authoritative KV note", a KV credit write from
+> the script route, or a long-lived async ticket polled by the browser.
+
+**The requirement.** "The details about the script put in KV should not be existing anymore …
+remove all writes on KV using script and put it in localStorage and cookie in client side;
+there must be checks that make it consistent between those storages; write this requirement in
+all documentation … fix the entire system."
+
+- **No script KV writes, anywhere.** Narration text, keyword sets, beat/outline plans, research
+  facts, timings, note state and the exact success payload must never be written to
+  `KV_BINDING`. `src/modules/script-notes.ts` now uses a bounded, per-isolate `Map` only:
+  `SCRIPT_NOTE_KV_READS = 0` and `SCRIPT_NOTE_KV_WRITES = 0`. `scriptNoteStore(env)` ignores
+  `env.KV_BINDING`; `kvNoteStore()` is a deprecated memory-only shim, not a KV store.
+  `readScriptNoteFresh()` / `readScriptNoteChecked()` make no second authoritative copy.
+- **The script route writes nothing.** `scriptUsage` no longer calls `creditConsume()` or
+  `guestCreditConsume()` (scripts are unlimited on both plans), `?async=1` degrades to the
+  synchronous `handleSeoScriptGeneration()` handler, and the unused `submitAsyncScriptJob`
+  import is gone. `/api/render` strips script-like fields from the project before putting its
+  blob, and `collectVideoPayload()` never includes a `project.script`.
+- **Durable copy is client-side, in two stores.** `src/client/script-notes-client.ts` writes the
+  full note to `localStorage["ytvs.script-notes.v1"]` and a compact mirror to the `ytvs_note`
+  cookie (`{v,k,h,at,sl,sp,kw,o}`), with an in-page `Map` as the last fallback. Caps: 24
+  entries, 256 KB, 7-day TTL, 3400 cookie chars, 480-char script preview. Both stores are
+  user-editable; the Worker re-validates every browser hint.
+- **Consistency checks are mandatory.** `digestOf()` is an FNV-1a hash over a canonical
+  projection of the whole note (including the script). `consistencyReport()` compares key,
+  schema version, digest, `updatedAt` and script length; `reconcile()` repairs the lagging or
+  corrupt side from the newer valid one. `put()` re-reads both stores and repairs before
+  returning; `get()` reconciles on every read; `remove()` clears both; `storage` events
+  invalidate the in-page copy. Quota failures, invalid JSON/oversized payloads, TTL expiry,
+  truncation and cookie-only restores are handled explicitly. `stats()` exposes `checks`,
+  `mismatches`, `repairs`, `digestFailures`, `scriptChecks` and
+  `window.__SCRIPT_NOTE_CONSISTENCY` exposes the last check for QA.
+- **Capabilities and API contract.** `/api/pipeline-capabilities` advertises
+  `asyncScript: 0`, `scriptNoteStorage: "client:localStorage+cookie"`,
+  `scriptNoteKvWrites: 0`, `scriptNoteConsistency: "digest+timestamp+scriptLength"`. Note
+  write/read/delete and the compatibility 202 ticket reply with `clientSideOnly: true`,
+  `persisted: false` and `storage: ["localStorage:ytvs.script-notes.v1","cookie:ytvs_note"]`.
+  Fresh clients use one synchronous `POST /api/script` and never poll a note URL.
+- **The whole flow still works.** The SEO planner/writer/repair chain, editor accordion, Quick
+  Batch table, note routes, watchdog and legacy async compatibility ticket all operate on the
+  memory-only Worker store; no script detail leaves the browser. A Worker restart loses its
+  ephemeral note — intended, because the client re-sends its own reconciled copy.
+- **Out of scope.** Account/session/email keys, `config:*`, `credits:*` / `ipcredits:*` for
+  paid image quotas, CMS pages, payment proofs, API-relay state, and the RULE 4 `job:`/`blob:`
+  render families are unchanged. User-authored caption overlays belong to the render job, not
+  to the script-note store.
+- **Documentation.** Every Markdown file in this repository points at this rule. The historical
+  documents that described KV notes (`current_code_latest.md`, `bug-fix-session-276/277/278/279`)
+  are marked superseded; their KV-note statements are void.
+- **Verification.** `tests/script-note-client-only.test.mjs` (12/12) covers zero KV ops,
+  source-level absence of note KV/credit/async writes, client-only API responses, and
+  digest/reconciliation/corruption/staleness/expiry plus a studio end-to-end test with one
+  synchronous request and zero polls. `node --import tsx --test tests/script-*.test.mjs` is
+  **108/108**; `npm test` is 499/438/55 (pass/fail names are a strict subset of the
+  487/424/57 pre-change baseline, so there are zero regressions). `tsc --noEmit` reports no
+  errors in any edited module. **This requirement is implemented, not deferred.**

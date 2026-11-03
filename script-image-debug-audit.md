@@ -46,3 +46,23 @@ node --import tsx --test tests/script-seo.test.mjs tests/seo-plan-resilience.tes
 ```
 
 These tests use fixtures and mocked AI/browser boundaries. They exercise SRT and keyword validation, editor SEO-to-script-to-stock-planner wiring, both layouts' whole-script planning and 408 retry, first-page search and downloads, Unicode count parity, partial-plan reopening, renumber/deletion races, duplicate prevention and concurrent render draining. The older broad test suite includes superseded AI-image contracts; see the existing migration reference for that limitation.
+
+
+---
+
+## RULE 35 — script notes are client-side only (2026-11-03)
+
+> **FIXED IN CODE.** Script details (narration, keyword set, beat plan, research facts,
+> timings, note state and the success payload) are **never written to Cloudflare KV**. The
+> durable copy is the browser's `localStorage["ytvs.script-notes.v1"]` full note plus the
+> compact `ytvs_note` cookie mirror, reconciled by digest + timestamp + script-length checks
+> (`src/client/script-notes-client.ts`). The Worker keeps only an ephemeral per-isolate memory
+> copy (`src/modules/script-notes.ts`: 0 KV reads / 0 KV writes). The script route writes no
+> credit KV record, `?async=1` degrades to a synchronous response, and capabilities advertise
+> `asyncScript: 0`, `scriptNoteKvWrites: 0`,
+> `scriptNoteConsistency: "digest+timestamp+scriptLength"`.
+>
+> Canonical specification: [RULE-35-client-side-script-notes.md](RULE-35-client-side-script-notes.md)
+> · Normative rule: `system-rules.md` RULE 35 · Verification:
+> `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
+> document is superseded and void.

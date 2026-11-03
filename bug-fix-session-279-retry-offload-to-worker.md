@@ -1,4 +1,12 @@
 # Session 279 — three users, three videos each: measure it, then take the retries out of the browser
+> **⚠ SUPERSEDED BY [RULE 35](RULE-35-client-side-script-notes.md) — 2026-11-03 (FIXED IN CODE).**
+> This is a historical bug-fix record. It describes the *retired* implementation in which
+> script notes were written to Cloudflare KV and polled through async
+> tickets. **No script detail is written to KV any more.** Script notes live client-side in
+> `localStorage` + the `ytvs_note` cookie with digest/timestamp/script-length consistency
+> checks; the Worker's note store is ephemeral memory only (0 KV reads / 0 KV writes). The
+> `?async=1` path is now a synchronous compatibility degradation and `asyncScript` is `0`.
+> Every KV-note statement below is void; see `system-rules.md` RULE 35 for the current rule.
 
 **Request (verbatim).** *"study code make code the source of truth but make documentation
 secondary guide and make a testing for how fast can three user finish a set of three videos
@@ -35,7 +43,7 @@ isolate.
 | AI binding | `bench/pipeline-sim/model.mjs` | simulated: latency per stage + deterministic transient `AiError 3043` + deterministic invalid replies (an SEO audit rejection, an unparseable scene plan) |
 | Pixabay API/CDN, external TTS | `bench/pipeline-sim/model.mjs` | simulated: search 450 ms, photo 700 ms, clip 1400 ms, 5 % transient failures, real payload shapes and magic bytes |
 | Network | 60 ms round trip per request, both directions | simulated |
-| KV | absent | notes use the isolate mirror (session 277 made it authoritative for memory-only runtimes); credit gates open via `PIXABAY_ALLOW_UNMETERED`. Identical in every build compared, and not what retry ownership changes |
+| KV | absent | RULE 35: script notes use ONLY the isolate memory store plus browser localStorage/cookie; zero KV reads/writes. Credit gates open via `PIXABAY_ALLOW_UNMETERED`. Identical in every build compared, and not what retry ownership changes |
 | Local encode | `--render-ms 9000` per video, added after the row is finished | modelled: WebCodecs is stubbed, and the device encode is the one cost no retry strategy touches |
 
 Deliberately **not** simulated: nothing in the retry path. Attempts, backoffs, budgets, the
@@ -258,3 +266,23 @@ inherits the request's lifetime. Non-negotiable, and each is pinned by a test:
    so a retrying fleet cannot multiply its own load.
 7. **No floating promises** — every background write/task stays reachable
    (`ctx.waitUntil`, the note write chain) as sessions 276/277 established.
+
+
+---
+
+## RULE 35 — script notes are client-side only (2026-11-03)
+
+> **FIXED IN CODE.** Script details (narration, keyword set, beat plan, research facts,
+> timings, note state and the success payload) are **never written to Cloudflare KV**. The
+> durable copy is the browser's `localStorage["ytvs.script-notes.v1"]` full note plus the
+> compact `ytvs_note` cookie mirror, reconciled by digest + timestamp + script-length checks
+> (`src/client/script-notes-client.ts`). The Worker keeps only an ephemeral per-isolate memory
+> copy (`src/modules/script-notes.ts`: 0 KV reads / 0 KV writes). The script route writes no
+> credit KV record, `?async=1` degrades to a synchronous response, and capabilities advertise
+> `asyncScript: 0`, `scriptNoteKvWrites: 0`,
+> `scriptNoteConsistency: "digest+timestamp+scriptLength"`.
+>
+> Canonical specification: [RULE-35-client-side-script-notes.md](RULE-35-client-side-script-notes.md)
+> · Normative rule: `system-rules.md` RULE 35 · Verification:
+> `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
+> document is superseded and void.

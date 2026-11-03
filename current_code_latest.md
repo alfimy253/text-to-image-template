@@ -1,4 +1,12 @@
 # Current code (latest) — the scriptwriting pipeline, why it was slow, and the note + event-loop + browser-memory rewrite
+> **⚠ SUPERSEDED BY [RULE 35](RULE-35-client-side-script-notes.md) — 2026-11-03 (FIXED IN CODE).**
+> This is a historical bug-fix record. It describes the *retired* implementation in which
+> script notes were written to Cloudflare KV and polled through async
+> tickets. **No script detail is written to KV any more.** Script notes live client-side in
+> `localStorage` + the `ytvs_note` cookie with digest/timestamp/script-length consistency
+> checks; the Worker's note store is ephemeral memory only (0 KV reads / 0 KV writes). The
+> `?async=1` path is now a synchronous compatibility degradation and `asyncScript` is `0`.
+> Every KV-note statement below is void; see `system-rules.md` RULE 35 for the current rule.
 
 Snapshot of the scriptwriting pipeline on branch **`arena/baeafdab-text-to-image-template`** (base commit
 `093c054`). Everything below is derived from the code in `src/`, measured with
@@ -18,7 +26,7 @@ Snapshot of the scriptwriting pipeline on branch **`arena/baeafdab-text-to-image
 | Waiting request | held for the whole 20–90 s, dies with the connection | held (legacy path) | `202` in **3 ms**, script collected from the note URL | `202` in **3 ms** |
 | Client request ceiling | **105 s** on one response | **20 s** per request, retried | **20 s** | **20 s** |
 | Can the wait end by itself? | no (one promise, one connection) | no (polled without a budget) | no (no stall guard) | **yes**: terminal note, 3-strike reads, 15 s stall window, 185 s ceiling |
-| Where the plan lives | only in one response body | Worker KV note | KV + isolate cache | **+ `localStorage` (18 µs) and a cookie mirror (12 µs)** |
+| Where the plan lives | only in one response body | browser note | browser note + ephemeral isolate memory | **RULE 35: `localStorage` (full note) + cookie digest mirror, ZERO KV** |
 
 Measured with `node --import tsx bench/script-pipeline-bench.mjs` (planner 7.2 s, writer 21 s, page fetch
 1.8 s). Pipeline-only overhead with a 0 ms model and a 0 ms fetch: **2–4 ms**.
@@ -56,7 +64,7 @@ by **every** script pipeline in **both** layouts — see **§2b**.
 ### 2.1 ~~Two model calls, strictly one after the other~~ — **fixed**
 The planner ran inside the request and the writer could only start after it. Nothing carried the plan
 forward between requests, so every run paid `planner + writer`.
-**Fix:** the plan now lives in a note (browser first, KV second) and travels with the request — the first
+**Fix (RULE 35):** the plan now lives ONLY in a browser note (localStorage + cookie, never KV) and travels with the request — the first
 run after the user picks a keyword set is a **single writer call**. See §3.1, §3.5 and the bench row
 `note client + browser note (first run)`: **21.0 s, 0 planner calls**.
 
@@ -99,7 +107,7 @@ then the fix that now ships.
 | # | Trigger | Observed | Root cause | Fix |
 | --- | --- | --- | --- | --- |
 | **H1** | Event loop queue is full (`maxQueue`) when `?async=1` arrives | `202` with a ticket whose note sits in `queued` **forever** (`PROBE1 … state after 600 ms: queued`) | `schedule()` rejects, `submitAsyncScriptJob()` swallowed the rejection **after** it had already written the note, so the client polled a note nobody would ever run | a full queue now runs the job **inline** under `ctx.waitUntil` (degraded mode, the work still happens) and the ticket says `mode:"inline"`; without a `waitUntil` there is nowhere for it to run, so the note is closed as `error` `SCRIPT_LOOP_QUEUE_FULL` and the response is **503** `{kind:"overload", retryAfterMs:1500}` — never a ticket for work that will not run |
-| **H2** | Isolate dies (or the runtime evicts us) *after* the `202` | `GET /api/script/notes/<id>` answers `202 pending:true` **indefinitely** (`PROBE2 … terminal: false`) | nothing recorded when a run *starts* and nothing compared a note's age with anything | the note now carries `runStartedAt` + `deadlineMs`; `noteStaleReason()` (one rule, `src/modules/script-notes.ts`) is applied **inside the read handler**, which runs in a fresh isolate: a note `queued` past `queueGraceMs` (90 s) or running past `deadlineMs` (240 s) is closed as terminal `error` `SCRIPT_NOTE_STALE` and persisted, so every poller reaches an end. `GET` also returns `waitMs` (remaining budget) for live notes, which the page uses as its proof-of-life window |
+| **H2** | Isolate dies (or the runtime evicts us) *after* the `202` | `GET /api/script/notes/<id>` answers `202 pending:true` **indefinitely** (`PROBE2 … terminal: false`) | nothing recorded when a run *starts* and nothing compared a note's age with anything | the note now carries `runStartedAt` + `deadlineMs`; `noteStaleReason()` (one rule, `src/modules/script-notes.ts`) is applied **inside the read handler**, which runs in a fresh isolate: a note `queued` past `queueGraceMs` (90 s) or running past `deadlineMs` (240 s) is closed as terminal `error` `SCRIPT_NOTE_STALE` and closed in ephemeral memory (RULE 35: no KV persistence), so every poller reaches an end. `GET` also returns `waitMs` (remaining budget) for live notes, which the page uses as its proof-of-life window |
 | **H3** | Note was closed in state `empty` (planner produced nothing usable) | `200 {state:"empty", terminal:true}` and the client kept polling (`PROBE3`) | the client only treated `done` / `error` as terminal | the client treats **any** `terminal:true` as terminal: `done` → success, everything else → a retryable error carrying the note's `error` text, its `errorCode` and its `state`, so `empty` can never be polled again |
 | **H4** | A poll response itself hangs / the note never advances | 20 s per-request timeout retried forever with 250 ms backoff; legacy path still budgeted **105 s** | retries bounded by attempt count only, not by time, and no per-poll stall detector | one shared budget: **20 s per request** (a hung poll is one of 3 failed reads, then the note is declared unreadable), `pollAfterMs` from the server, a **15 s no-progress window** that the note's own `waitMs` extends (so a long, honest writer call is never mistaken for a stall), and a hard wall-clock ceiling (`scriptNoteWaitMs`, default **185 s**) that ends the flow with `SCRIPT_TIMEOUT` |
 | **H5** | Table layout (`layout-table`) had **no** note path at all — scripts were typed by hand, so the note + 20 s + async fix only existed in the editor accordion | the slow/hanging behaviour was unreachable from that layout, but so was the fix | the script request was welded to the accordion's `project` object | the requester is now a **layout-agnostic façade** `requestScriptWithNotes(context, {topic, minutes, speed})`, with `scriptContextForProject()` for the accordion and `batchRowScriptContext()` for a table row; the new per-row **✨ AI script** button (`data-batch-generate`, which opens no second `data-batch-action` slot) calls the same function, so both layouts get notes, async tickets, 20 s retries and every hang guard |
@@ -229,13 +237,12 @@ Three backends, tried in this order on every read:
 property access plus one `JSON.parse` — 18 µs measured, 5–6 orders of magnitude cheaper — and it works while
 offline. KV stays authoritative (shared across devices, validated server-side, survives a cleared browser).
 
-### 3.2 Worker notes (`src/modules/script-notes.ts`)
+### 3.2 Worker notes (`src/modules/script-notes.ts`) — EPHEMERAL MEMORY ONLY (RULE 35)
 
 A note record holds: dynamic-URL key, state (`queued → planning → writing → repairing → done|error`),
 researched source (title/description/headings/keywords/facts), validated `keywordSet`, `outline` (beat plan
 with word budgets), `script`, `durationMs`, `timings`, `repairedKeywords`, `origin` (`server`/`browser`) and
-the exact success `payload` for async pollers. Stored in KV as `script-note:<id>` (TTL 7 d, mirrored into a
-bounded in-isolate map).
+the exact success `payload` for compatibility pollers. **RULE 35: NEVER stored in KV.** The durable copy is the browser's `localStorage` full note plus the `ytvs_note` cookie digest mirror; the Worker keeps only a bounded, ephemeral in-isolate `Map` for one request chain (0 KV gets / 0 KV puts / 0 KV deletes).
 
 * `canonicalSourceUrl()` (`:169`) / `scriptNoteId()` (`:237`) — same collapse rules as the browser, FNV-1a id.
 * `topicFromUrl()` — a URL topic becomes a prompt subject (`/morning-yoga-routine` → "morning yoga routine"),
@@ -269,7 +276,7 @@ sequenceDiagram
     participant B as Browser (localStorage/cookie)
     participant W as Worker
     participant L as ScriptEventLoop
-    participant N as Note (KV)
+    participant N as Note (ephemeral memory, RULE 35 — no KV)
     B->>B: pick keyword set → note written locally (18 µs)
     B->>W: POST /api/script?async=1 {useNotes, note:{keywordSet,outline}}
     W->>N: state=queued
@@ -289,7 +296,7 @@ sequenceDiagram
 ```text
 validate ─► note context (body.note = browser hint) ─► read/create note (+hit)
    ├─ research page   (loop job, PARALLEL with the planner)
-   └─ keyword set     : top-level keywordSet ▸ body.note.keywordSet ▸ KV note ▸ planner
+   └─ keyword set     : top-level keywordSet ▸ body.note.keywordSet ▸ ephemeral memory note ▸ planner
         └─ await research ─► beat plan ─► writer brief
              └─ writer (1..3 attempts) ─► SRT valid but keyword short? ─► local repair
                   └─ success ─► note write-back + browser payload {noteId, outline, timings}
@@ -330,15 +337,15 @@ those budgets so the read handler and the page can never disagree about when a n
 * **Opt-in everywhere.** Notes need `useNotes`/`notes`/`noteId`/URL (or the async route); the client switches
   only when the Worker advertises `scriptNotes`/`asyncScript`. Old clients and old Workers behave exactly as
   before — the legacy "3 model calls on a keyword deficit" test still passes.
-* **Precedence is explicit:** top-level `keywordSet` ▸ `body.note.keywordSet` ▸ KV note ▸ planner. A server
-  note is never overwritten by a browser copy, so a stale tab cannot rewrite a plan.
+* **Precedence is explicit (RULE 35):** top-level `keywordSet` ▸ `body.note.keywordSet` ▸ ephemeral
+  memory note ▸ planner. The browser copy is authoritative and is re-validated server-side; no note is ever written to KV.
 * **Browser hints are untrusted:** re-validated (`parseKeywordSet`, clamped beats, 7-day TTL), ignored when
   corrupt/stale, and they only fill gaps.
 * **Repair is validated, not trusted:** the patched SRT is re-run through `validateSrt()` and
   `keywordUsageError()`, timings preserved, no cue loses a word.
 * **Research is bounded and SSRF-safe:** `http(s)` only, private hosts refused, 4 s, 400 KB, text only.
-* **Billing unchanged:** notes (Browser or KV) are non-billable metadata; async uses the same `onValidated`
-  credit callback as sync.
+* **Billing unchanged (RULE 35):** notes are non-billable metadata owned by the browser; the script route
+  no longer calls `creditConsume()`/`guestCreditConsume()` and writes no credit KV record.
 * **Failure containment:** storage errors, unreachable URLs, a full loop queue, a failed note write — all
   degrade to the previous behaviour instead of failing the script.
 
@@ -450,7 +457,7 @@ coverage; `tsc` reports **no new errors** versus the base commit (diff of the so
 | # | Item | Status |
 | --- | --- | --- |
 | 7.1 | Cancel the abandoned inference (`env.AI.run` keeps running after our timeout, so retries stack) | **open** — needs `AbortSignal` support or a single-flight gate |
-| 7.2 | Cross-isolate job state (the loop is per isolate; a poll on another isolate reads the KV note but cannot resume the job) | **open** — one Durable Object per note id would make jobs resumable |
+| 7.2 | Cross-isolate job state (the loop is per isolate; a poll on another isolate reads only ephemeral memory) | **resolved by RULE 35** — there is no durable server note to resume; the client re-sends its reconciled localStorage/cookie note |
 | 7.3 | Pre-warm the note during the walkthrough (research the URL while the user picks a set) | partially done — the browser note covers the plan; the page research still starts on the script request |
 | 7.4 | Notes for the scene planner (`src/modules/image-prompts.ts` re-derives scene keywords every request) | **open** |
 | 7.5 | Stream the writer so the first scenes can render before the script ends | **open** |
@@ -466,11 +473,11 @@ coverage; `tsc` reports **no new errors** versus the base commit (diff of the so
 | File | Change |
 | --- | --- |
 | `src/client/script-notes-client.ts` | **new** — browser note memory: localStorage → cookie → page map, canonical URL keying, client beat plan |
-| `src/modules/script-notes.ts` | **new** — dynamic-URL notes, research, beat plan, writer brief, deterministic repair, KV/memory store, `sanitizeClientNote` |
+| `src/modules/script-notes.ts` | **new** — dynamic-URL notes, research, beat plan, writer brief, deterministic repair, **memory-only store (RULE 35: no KV)**, `sanitizeClientNote` |
 | `src/modules/script-event-loop.ts` | **new** — phased scheduler, concurrency, queue cap, deadlines, stats |
 | `src/modules/script-notes-api.ts` | **new** — note routes + `POST /api/script?async=1` |
-| `src/modules/script-seo.ts` | note-aware pipeline: browser/KV note precedence, planner skip, parallel research, local repair, timings, write-back |
-| `src/index.ts` | note routes, async route, `ctx.waitUntil`, capability flags |
+| `src/modules/script-seo.ts` | note-aware pipeline: browser-owned note precedence, planner skip, parallel research, local repair, timings, ephemeral-memory write-back |
+| `src/index.ts` | note routes, `?async=1` sync compatibility, `ctx.waitUntil`, capability flags (`asyncScript: 0`, `scriptNoteKvWrites: 0`), no script-route KV writes |
 | `src/client/app-js.ts` | **this round:** `probeMp4DurationWithRetry` + `CLIP_PROBE_ATTEMPTS`, per-scene retries in `retryImagePromptFlow` (with a re-arming 90 s watchdog and `Retry-After` parsing), the flow-level `scheduleImageAutoRetry` / `maybeScheduleImageAutoRetry` countdown, and the retry markers set by the 120 s idle timer and the 429/503 batch path. Earlier: seed on keyword pick, send `note`, async submit + note polling, 20 s request ceiling, 250 ms retry backoff, mirror the finished note; **this round:** one layout-agnostic requester (`requestScriptWithNotes` + `scriptContextForProject` / `batchRowScriptContext`), the hang-proof poller (terminal state, 3-strike reads, stall window, ceiling), the quick-batch row's ✨ script button, `__SCRIPT_PIPELINE_TIMING` for tests |
 | `src/client/styles.ts` | `.batch-row-ai` (the row's script button) |
 | `src/client/browser-offload.ts` | `scriptRequest({timeout, path})` — per-call ceiling and async path |
@@ -506,3 +513,23 @@ workers are unaffected. `GET /api/pipeline-capabilities` advertises
 `scriptRetryOwner: "browser"` and `browserScriptRetries: 3`; a missing AI binding is now
 `503 { retryable: false }` instead of a bare 503 the page would have retried three times.
 Full details and measurements: `bug-fix-session-278-browser-retry-owner.md`.
+
+
+---
+
+## RULE 35 — script notes are client-side only (2026-11-03)
+
+> **FIXED IN CODE.** Script details (narration, keyword set, beat plan, research facts,
+> timings, note state and the success payload) are **never written to Cloudflare KV**. The
+> durable copy is the browser's `localStorage["ytvs.script-notes.v1"]` full note plus the
+> compact `ytvs_note` cookie mirror, reconciled by digest + timestamp + script-length checks
+> (`src/client/script-notes-client.ts`). The Worker keeps only an ephemeral per-isolate memory
+> copy (`src/modules/script-notes.ts`: 0 KV reads / 0 KV writes). The script route writes no
+> credit KV record, `?async=1` degrades to a synchronous response, and capabilities advertise
+> `asyncScript: 0`, `scriptNoteKvWrites: 0`,
+> `scriptNoteConsistency: "digest+timestamp+scriptLength"`.
+>
+> Canonical specification: [RULE-35-client-side-script-notes.md](RULE-35-client-side-script-notes.md)
+> · Normative rule: `system-rules.md` RULE 35 · Verification:
+> `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
+> document is superseded and void.

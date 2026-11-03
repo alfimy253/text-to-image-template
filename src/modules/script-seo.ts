@@ -1565,6 +1565,18 @@ function buildPinpointRetryInstructions(
 }
 
 /* ------------------------------------------------------------------------- */
+/* RULE 35 (2026-11-03) — CLIENT-OWNED SCRIPT NOTES.                           */
+/*                                                                            */
+/* The note hint below is a browser-owned copy from localStorage + cookie.    */
+/* Every write of it in this Worker goes to the per-isolate MEMORY store      */
+/* (src/modules/script-notes.ts): zero KV get/put/delete, zero server-side    */
+/* persistence of narration text, keyword sets or beat plans. The client     */
+/* re-sends its note with each script request and reconciles the two browser  */
+/* stores with a digest check. A Worker restart simply loses the note; that   */
+/* is intended. ?async=1 compatibility tickets are also memory-only.         */
+/* ------------------------------------------------------------------------- */
+
+/* ------------------------------------------------------------------------- */
 /* Note-aware generation (notes + event loop)                                 */
 /* ------------------------------------------------------------------------- */
 

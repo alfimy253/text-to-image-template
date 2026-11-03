@@ -473,7 +473,11 @@ test("the worker advertises the hang budgets the client must use", async () => {
 	);
 	const caps = await response.json();
 	assert.equal(caps.scriptNotes, 1);
-	assert.equal(caps.asyncScript, 1);
+	/* RULE 35: async note polling is disabled - script notes are client-side. */
+	assert.equal(caps.asyncScript, 0);
+	assert.equal(caps.scriptNoteStorage, "client:localStorage+cookie");
+	assert.equal(caps.scriptNoteKvWrites, 0);
+	assert.equal(caps.scriptNoteConsistency, "digest+timestamp+scriptLength");
 	assert.ok(Number(caps.scriptNotePollMs) > 0);
 	assert.ok(Number(caps.scriptNoteWaitMs) > 0);
 	assert.ok(Number(caps.scriptNoteStallMs) > 0);
