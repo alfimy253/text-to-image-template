@@ -165,16 +165,22 @@ test("a failed script is retried twice before the accordion reports it", async (
 	w.addVideoAccordion();
 	w.document.getElementById("va-script-topic-1").value = "Morning yoga";
 
-	/* /api/script is not mocked here, so every attempt fails. */
+	/* /api/script is not mocked here, so the request fails. */
 	const ok = await w.runSeoScriptRequest(1, "Morning yoga", 1, "medium");
 	assert.equal(ok, false);
 
+	/*
+	 * Session 279: the page makes ONE request. The retry ladder lives in the
+	 * worker (handleSeoScriptGeneration), so a page-level loop here would be a
+	 * second owner - three submissions, three poll streams and three queue
+	 * re-admissions for one script.
+	 */
 	const scripted = calls.filter((call) => call.path === "/api/script");
-	assert.equal(scripted.length, 3, "one request plus two retries");
+	assert.equal(scripted.length, 1, "one request; the worker owns the ladder");
 
 	const status = w.document.getElementById("va-script-status-1").textContent;
-	assert.match(status, /Script failed after 3 attempts/);
-	assert.ok(!/retrying \(3 of 2\)/.test(status));
+	assert.match(status, /Script failed:/);
+	assert.ok(!/retrying \(/.test(status), "the page never says it is retrying");
 });
 
 test("the script window tells the user they can walk away, and one modal per video stacks", () => {

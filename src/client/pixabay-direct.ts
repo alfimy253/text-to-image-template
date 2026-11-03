@@ -302,7 +302,18 @@ function createPixabayDirectRuntime(win) {
 			"&q=" + encodeURIComponent(query) +
 			"&per_page=" + PER_PAGE + "&page=1&safesearch=true";
 		if (type === "image") params += "&image_type=photo&orientation=" + orientationValue(input && input.orientation);
-		var url = state.apiOrigin + "/api/?" + params;
+		/*
+		 * Session 279 (F1): videos live on their own provider endpoint. The
+		 * Worker path has always known this (src/modules/pixabay.ts builds
+		 * "/api/videos/"), but this browser-first search asked "/api/" for
+		 * everything, so a clip search came back with PHOTO hits,
+		 * normalizeHits(type:"video") rejected all of them ("no-hit") and both
+		 * required clips of every video fell back to POST /api/image - the slow
+		 * transport this module exists to avoid. Measured in
+		 * bench/pipeline-sim/results/baseline-scale1.json: 20 fallback requests
+		 * and 22 clip downloads through the isolate for nine videos.
+		 */
+		var url = state.apiOrigin + (type === "video" ? "/api/videos/?" : "/api/?") + params;
 		counters.searches += 1;
 		record("info", "search.started", { type: type, queryLength: query.length, orientation: input && input.orientation || "" });
 		var payload = null, transportError = null;

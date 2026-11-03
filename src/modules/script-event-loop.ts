@@ -111,7 +111,23 @@ interface QueuedJob {
 	context: LoopJobContext;
 }
 
-export const SCRIPT_LOOP_DEFAULT_CONCURRENCY = 2;
+/*
+ * THREE LANES (session 279), was two.
+ *
+ * Measured on the workload this pipeline is sold as - three users finishing
+ * three videos each, so nine scripts at once - queueing was ~88 s of a 116 s
+ * median script stage (bench/pipeline-sim/results/baseline-scale1.json): the
+ * model, not the isolate, is what a lane waits on, so a lane is I/O-bound and a
+ * third one costs no CPU. It also stops the queue from being the thing that
+ * kills notes: with the retry ladder now inside the run, an unhealthy fleet
+ * makes each job LONGER exactly when the queue is longest, and a 90 s grace
+ * turned that into `SCRIPT_NOTE_STALE` verdicts instead of scripts.
+ *
+ * Still bounded: `maxQueue` refuses work beyond 24 tickets, every job keeps its
+ * own deadline, and admission (submitAsyncScriptJob) refuses a ticket whose ETA
+ * cannot finish inside the client's patience.
+ */
+export const SCRIPT_LOOP_DEFAULT_CONCURRENCY = 3;
 export const SCRIPT_LOOP_MAX_QUEUE = 24;
 
 /*

@@ -35,8 +35,10 @@ function studioWindow(options = {}) {
   };
   w.Image.prototype.decode = () => Promise.resolve();
 
-  /* Fast timers so a test does not sit through real backoffs. */
-  w.__PIXABAY_SCENE_RETRY = { attempts: 3, baseMs: 10, maxMs: 20, idleMs: 5000 };
+  /* Fast timers so a test does not sit through real backoffs. Session 279:
+   * a scene makes ONE provider attempt; the only in-request retry left is the
+   * stall re-arm, so the knob is `stallRearms`, not `attempts`. */
+  w.__PIXABAY_SCENE_RETRY = { stallRearms: 1, idleMs: 5000 };
   w.__IMAGE_AUTO_RETRY_TIMING = { limit: 2, minDelayMs: 10, maxDelayMs: 60, fallbackDelayMs: 20, tickMs: 5 };
 
   const calls = [];
@@ -102,7 +104,7 @@ async function waitFor(check, label, timeoutMs = 4000) {
 test('a 429 with Retry-After is waited out and retried automatically', async (t) => {
   /* Every search of the first pass answers 429; the automatic retry then finds
    * Pixabay healthy again. Nothing is clicked in between. */
-  const { w, calls, state } = studioWindow({ rateLimit: 3 });
+  const { w, calls, state } = studioWindow({ rateLimit: 1 });
   t.after(() => { try { w.close(); } catch (_) {} });
   w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
   await settle(40);
@@ -110,9 +112,11 @@ test('a 429 with Retry-After is waited out and retried automatically', async (t)
 
   await w.retryImagePromptFlow(1);
 
-  /* Pass 1: two scenes x three attempts, then a scheduled retry. */
-  assert.equal(state.searchPlans.length, 4,
-    'the rate-limited scene is attempted three times, the healthy one once');
+  /* Pass 1: one provider attempt per scene, then a scheduled retry. The
+   * in-request ladder is gone (session 279): the worker owns retries, and the
+   * only thing that can sit out a rate-limit window is this scheduler. */
+  assert.equal(state.searchPlans.length, 2,
+    'each scene is searched once: the rate-limited one fails, the healthy one lands');
   assert.ok(project._imageAutoRetry && project._imageAutoRetry.kind === 'rate-limit',
     'the 429 armed a scheduled automatic retry');
   const statusText = w.document.getElementById('va-ai-status-1').textContent;
@@ -122,14 +126,14 @@ test('a 429 with Retry-After is waited out and retried automatically', async (t)
   await waitFor(() => project.assets.length === 2, 'the automatic retry to import both scenes');
 
   assert.equal(project._imageAutoRetries, 1, 'exactly one automatic retry ran');
-  assert.equal(state.searchPlans.length, 5, 'the automatic retry searched only the missing scene');
+  assert.equal(state.searchPlans.length, 3, 'the automatic retry searched only the missing scene');
   assert.equal(project.imagePromptStates['0'].state, 'imported');
   assert.equal(project.imagePromptStates['1'].state, 'imported');
 
   const log = w.__IMAGE_AUTO_RETRY_LOG || [];
   assert.ok(log.some((e) => e.event === 'scheduled' && e.kind === 'rate-limit'), 'the retry was scheduled as a rate-limit wait');
   assert.ok(log.some((e) => e.event === 'running' && e.attempt === 1), 'the scheduled retry actually ran');
-  assert.equal(calls.filter((p) => p === '/api/media/search').length, 5);
+  assert.equal(calls.filter((p) => p === '/api/media/search').length, 3);
 });
 
 test('the automatic retry is capped and then hands control back to the button', async (t) => {

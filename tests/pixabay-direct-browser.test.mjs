@@ -86,7 +86,18 @@ function routedFetch(calls, options = {}) {
 			if (options.providerStatus) {
 				return new Response("{}", { status: options.providerStatus, headers: options.retryAfter ? { "Retry-After": String(options.retryAfter) } : {} });
 			}
-			const hits = url.searchParams.get("image_type") === null
+			/*
+			 * Pixabay answers a video query from a DIFFERENT endpoint than a
+			 * photo query: /api/videos/ for clips, /api/ for photos, and the
+			 * photo endpoint replies to a clip search with photos. Keying this
+			 * fixture off `image_type` alone hid that (session 279, F1: twenty
+			 * worker /api/image fallbacks in one nine-video run), so the fixture
+			 * now reproduces the provider: wrong path, wrong media, no hits.
+			 */
+			const wantsVideo = url.searchParams.get("image_type") === null;
+			const videoPath = url.pathname.startsWith("/api/videos");
+			if (wantsVideo !== videoPath) return Response.json({ totalHits: 0, hits: [] });
+			const hits = wantsVideo
 				? [video(21), video(22), video(23)]
 				: [photo(11), photo(12), photo(13)];
 			return Response.json({ totalHits: 100, hits });
@@ -130,9 +141,15 @@ test("videos send no image-only parameters and expose three clips", async () => 
 	assert.equal(result.per_page, 3);
 	assert.deepEqual(Array.from(result.hits, (hit) => hit.id), [21, 22, 23]);
 	assert.equal(result.hits[0].duration, 12);
-	const search = calls.find((entry) => entry.url.pathname === "/api/");
+	const search = calls.find((entry) => entry.url.pathname === "/api/videos/");
+	assert.ok(search, "clips are searched on the video endpoint");
 	assert.equal(search.url.searchParams.get("image_type"), null);
 	assert.equal(search.url.searchParams.get("orientation"), null);
+	assert.equal(
+		calls.filter((entry) => entry.url.hostname === "pixabay.com" && entry.url.pathname === "/api/").length,
+		0,
+		"a video search never spends a round trip on the photo endpoint"
+	);
 });
 
 test("a scene token downloads the selected hit in the browser and keeps provenance", async () => {

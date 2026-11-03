@@ -47,7 +47,9 @@ import {
 } from "./modules/script-notes";
 import {
 	handleGenerateImagePrompts,
-	handleRemovedImagePromptJobRoute
+	handleRemovedImagePromptJobRoute,
+	IMAGE_PROMPT_ATTEMPTS,
+	IMAGE_PROMPT_TOTAL_BUDGET_MS
 } from "./modules/image-prompts";
 import {
 	classifyImageFailure,
@@ -55,12 +57,19 @@ import {
 	handleImageBinary,
 	IMAGE_ATTEMPT_TIMEOUT_MS,
 	IMAGE_DAILY_LIMIT,
+	IMAGE_OVERLOAD_ATTEMPTS,
+	IMAGE_RETRY_BUDGET_MS,
 	type ImageModelResult,
 	runImageModel,
 	sharedImageLoadGovernor,
 	sharedImageTaskQueue
 } from "./modules/image-batch";
-import { handleVoiceover } from "./modules/voiceover";
+import {
+	handleVoiceover,
+	VOICEOVER_CHUNK_ATTEMPTS,
+	VOICEOVER_SERVER_CHUNKS,
+	VOICEOVER_TOTAL_BUDGET_MS
+} from "./modules/voiceover";
 import {
 	applyRelayCors,
 	handleRelayRoutes,
@@ -299,19 +308,39 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				scriptNoteQueueGraceMs: SCRIPT_NOTE_QUEUE_GRACE_MS,
 				scriptNoteDeadlineMs: SCRIPT_NOTE_DEADLINE_MS,
 				/*
-				 * RETRY OWNERSHIP (see handleSeoScriptGeneration).
+				 * RETRY OWNERSHIP: THE WORKER, EVERY STAGE (session 279).
 				 *
-				 * A client that sends `browserRetries: true` gets exactly ONE
-				 * planner attempt and ONE writer attempt per request, and a
-				 * structured `failure: { stage, reason, attempts }` plus the
-				 * validated `keywordSet` to resume from - this page then owns
-				 * the attempt count, the backoff and the retry decision.
-				 * `browserScriptRetries` is how many attempts a page should
-				 * make in total; without these fields (or without the request
-				 * flag) the worker keeps its legacy internal ladder.
+				 * The page makes ONE request per stage and waits; the worker
+				 * runs the ladder inside it and reports what it spent in
+				 * `failure.attempts`. The per-stage numbers below are what the
+				 * page shows the user and what the worker must not exceed.
+				 *
+				 * `browserScriptRetries` is kept ONLY for compatibility: a
+				 * cached pre-279 page reads it, sends `browserRetries: true`
+				 * and keeps its own three-attempt loop against a
+				 * one-attempt-per-stage worker. This page sends no such flag,
+				 * so it gets the worker's ladder. See handleSeoScriptGeneration.
 				 */
-				scriptRetryOwner: "browser",
+				retryOwner: "worker",
+				scriptRetryOwner: "worker",
+				workerScriptRetries: 3,
 				browserScriptRetries: 3,
+				/*
+				 * The same ownership for every other stage, with the ceiling the
+				 * worker will spend inside ONE request. A page that reads these
+				 * knows a retry of its own would be a second ladder on top of the
+				 * first: it waits for the verdict instead of re-asking.
+				 */
+				voiceRetryOwner: "worker",
+				serverVoiceChunks: VOICEOVER_SERVER_CHUNKS,
+				workerVoiceAttempts: VOICEOVER_CHUNK_ATTEMPTS,
+				voiceBudgetMs: VOICEOVER_TOTAL_BUDGET_MS,
+				promptRetryOwner: "worker",
+				workerPromptAttempts: IMAGE_PROMPT_ATTEMPTS,
+				promptBudgetMs: IMAGE_PROMPT_TOTAL_BUDGET_MS,
+				imageRetryOwner: "worker",
+				workerImageAttempts: IMAGE_OVERLOAD_ATTEMPTS,
+				imageRetryBudgetMs: IMAGE_RETRY_BUDGET_MS,
 				mediaProvider: "pixabay", per_page: 2, video_per_page: 3 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});

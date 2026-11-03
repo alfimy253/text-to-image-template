@@ -9130,25 +9130,38 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 	}
 
+	/*
+	 * SESSION 279: THE VOICE STEP RUNS ONCE.
+	 *
+	 * \`batchRunStep\`'s four silent attempts are for LOCAL device work (drawing
+	 * slides, decoding an image) - a voiceover request is a provider ladder the
+	 * worker now owns end to end, so wrapping it here would put a second retry
+	 * owner back in the page. The label is painted, the step runs, and the
+	 * verdict the worker returned is what the row shows.
+	 */
 	async function batchRunVoiceStep(row, stage, detail, step) {
-		if ((await studioOffload.capabilities()).chunkVoiceover) {
-			setBatchStage(row, stage, detail);
-			return step();
-		}
-		return batchRunStep(row, stage, detail, step);
+		if (row.stopRequested) throw batchError("The row was stopped", "AbortError");
+		setBatchStage(row, stage, detail);
+		refreshBatchRowCells();
+		return step();
 	}
 
-	/* Step 1: the script becomes the voiceover MP3 (worker-side chunked). */
+	/*
+	 * Step 1: the script becomes the voiceover audio.
+	 *
+	 * SESSION 279: ONE FULL-TEXT REQUEST. The worker splits the script into
+	 * <=400 char chunks, synthesises them through a bounded pool
+	 * (VOICEOVER_SERVER_CHUNKS lanes), retries each chunk up to three times on
+	 * the primary model before falling back to the English Workers AI voices and
+	 * the validated external TTS, joins one homogeneous container and answers
+	 * with the bytes - all inside a 90 s budget it owns.
+	 *
+	 * What is left here is not a retry ladder: the scheduler slot, the request
+	 * timeout, cancellation, and reporting the attempts the worker spent
+	 * (\`X-Voiceover-Attempts\` / \`failure.attempts\`).
+	 */
 	async function requestBatchVoiceover(row) {
-		if ((await studioOffload.capabilities()).chunkVoiceover) {
-			return studioOffload.voiceover(String(row.script || "").trim(), "en", {
-				isCancelled: function () { return Boolean(row.stopRequested); },
-				setController: function (controller) { row.controller = controller; },
-				clearController: function (controller) { if (row.controller === controller) row.controller = null; }
-			});
-		}
-		return await batchFetch(
-			row,
+		const response = await studioOffload.mediaResponse(
 			"/api/voiceover",
 			{
 				method: "POST",
@@ -9161,28 +9174,30 @@ ${SCRIPT_NOTES_CLIENT_JS}
 						lang: "en"
 					})
 			},
-			BATCH_REQUEST_TIMEOUT_MS,
-			async function (response) {
-
-				if (!response.ok) {
-
-					const data =
-						await response
-							.json()
-							.catch(function () { return {}; });
-
-					throw new Error(
-						(data && data.error) ||
-						("Voiceover failed (HTTP " + response.status + ")")
-					);
-
-				}
-
-				return await response.blob();
-
+			{
+				isCancelled: function () { return Boolean(row.stopRequested); },
+				setController: function (controller) { row.controller = controller; },
+				clearController: function (controller) { if (row.controller === controller) row.controller = null; }
 			}
 		);
 
+		if (!response.ok) {
+			const data = await response.json().catch(function () { return {}; });
+			const error = new Error(voiceFailureText(data, response.status));
+			error.status = response.status;
+			error.stage = (data && data.stage) || "voiceover";
+			error.attempts = Number(data && data.attempts) || 0;
+			error.retryable = data ? data.retryable !== false : true;
+			throw error;
+		}
+
+		console.info("[voiceover] worker-owned ladder", {
+			rowId: row.id,
+			requests: 1,
+			attempts: Number(response.headers && response.headers.get ? response.headers.get("X-Voiceover-Attempts") : 0) || 0
+		});
+
+		return await response.blob();
 	}
 
 	/* The MP3 gives the row its timing: length + subtitle spread. */
@@ -9281,6 +9296,9 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				error.status = response.status;
 				error.kind = (data && data.kind) || "";
 				error.retryAfterMs = data && Number(data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
+				/* Session 279: the worker ran the ladder; this is what it spent. */
+				error.attempts = Number(data && data.attempts) || 0;
+				error.retryOwner = (data && data.retryOwner) || "";
 				throw error;
 			}
 			return data.prompts;
@@ -9395,47 +9413,45 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	}
 
 	/*
-	 * #263: a retry wait that Stop can cut short. A plain setTimeout would keep
-	 * the row "generating" for up to 15 s after the user pressed Stop, which is
-	 * indistinguishable from a hung flow.
-	 */
-	function pauseWhileActive(ms, owner) {
-		return new Promise(function (resolve) {
-			const until = Date.now() + ms;
-			(function step() {
-				if (owner && owner.isCancelled && owner.isCancelled()) return resolve();
-				const left = until - Date.now();
-				if (left <= 0) return resolve();
-				setTimeout(step, Math.min(250, left));
-			})();
-		});
-	}
-
-	/*
-	 * #263: one chunk of binary images with bounded, load-aware retries.
+	 * #263 kept, #263's rounds moved to the worker (session 279).
 	 *
-	 * Before this, a chunk was requested exactly once. When every scene in the
-	 * *second* chunk hit a transient 5xx/overload (a busy fleet), the chunk
-	 * failed, the flow's stop reason was set and the pipeline threw — so a
-	 * 10-scene video "finished" with the 3 images of the first chunk. Now:
+	 * #263's complaint was real: a chunk was requested exactly once, so when the
+	 * *second* chunk hit a transient 5xx the flow's stop reason was set and a
+	 * 10-scene video "finished" with 3 images. Its fix was a browser-side round
+	 * ladder. The fix that stays is the part only the browser can do:
 	 *
 	 *   - already-delivered scenes are never re-requested (no duplicates, no
 	 *     double billing, no replay of an ambiguous paid image);
-	 *   - only the failed scenes are asked again, up to a bounded number of rounds;
-	 *   - the wait honours the server's Retry-After hint, then falls back to
-	 *     exponential backoff, so a burst of rows does not retry in lockstep;
-	 *   - permanent answers (400/401/403/404/422) are not retried at all; 429,
-	 *     408 and every 5xx are load/transient answers and are retried.
+	 *   - a chunk that comes back incomplete is a VERDICT, reported per scene,
+	 *     and the row keeps the images it has;
+	 *   - onImage(blob, index) receives the ORIGINAL prompt index, because
+	 *     gallery slots and scene numbers depend on it.
 	 *
-	 * onImage(blob, index) still receives the ORIGINAL prompt index, even for
-	 * a retried subset, because gallery slots and scene numbers depend on it.
+	 * The retrying itself belongs to the worker (generateOneWithRetry: up to 4
+	 * attempts inside a 45 s budget, Retry-After honoured, fatal verdicts stop
+	 * immediately) - see requestImageChunk below.
+	 */
+	/*
+	 * ONE PASS OVER THE SCENES (session 279).
+	 *
+	 * This used to run up to three rounds over the scenes that came back
+	 * missing, with min(max(hint, 800x2^round), 15000) between them. Each
+	 * round re-reserved credits, re-queued behind the browser's media scheduler
+	 * and re-asked a worker that had ALREADY retried: generateOneWithRetry
+	 * (src/modules/image-batch.ts) spends up to 4 attempts inside a 45 s budget,
+	 * honours Retry-After and stops on a fatal verdict. Three rounds on top of
+	 * that is up to twelve provider attempts for one scene, and the second
+	 * owner is the one that decides when the row gives up.
+	 *
+	 * So a scene that comes back failed is a VERDICT now. What this function
+	 * still owns is not a retry: the negotiated per-tab slot count, the
+	 * cancellation checks, the scene-index mapping for onImage/onError, and
+	 * reporting a hole left by a cancelled pass as a failure - never as success.
 	 */
 	async function requestImageChunk(prompts, frame, options) {
 		const owner = options || {};
-		const rounds = Math.max(1, Number(owner.attempts) || 3);
 		const results = new Array(prompts.length);
-		let pending = prompts.map(function (_, index) { return index; });
-		let hintMs = 0;
+		const batch = prompts.map(function (_, index) { return index; });
 		/*
 		 * Negotiated per-tab image ceiling (bug fix: image generation felt
 		 * serial). Absent/unknown keeps the documented adaptive limit (3 on
@@ -9444,85 +9460,69 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		const caps = await studioOffload.capabilities();
 		const imageSlots = Math.max(0, Math.min(8, Number(caps.imageSlots) || 0));
 
-		for (let round = 1; round <= rounds && pending.length; round++) {
-			if (owner.isCancelled && owner.isCancelled()) break;
-			const batch = pending.slice();
-			const perAttempt = {
-				slots: imageSlots || undefined,
-				isCancelled: owner.isCancelled,
-				priority: owner.priority,
-				setController: owner.setController,
-				clearController: owner.clearController,
-				onImage: function (blob, localIndex) {
-					const index = batch[localIndex];
-					if (typeof index !== "number") return;
-					if (owner.onImage) return owner.onImage(blob, index);
-				},
-				onError: function (error, localIndex) {
-					const index = batch[localIndex];
-					if (typeof index !== "number") return;
-					if (owner.onError) owner.onError(error, index);
-				}
-			};
-			let batchResults;
-			try {
-				batchResults = await studioOffload.images(
-					batch.map(function (index) { return prompts[index]; }),
-					frame || {},
-					perAttempt
-				);
-			} catch (roundError) {
-				/*
-				 * The media scheduler rejects (rather than resolving every scene)
-				 * when the flow is cancelled mid-round. That is a Stop, not a
-				 * transport failure: leave the round's scenes unset so they are
-				 * reported as cancellations below.
-				 */
-				const cancelled =
-					(roundError && roundError.name === "AbortError") ||
-					(owner.isCancelled && owner.isCancelled());
-				if (cancelled) break;
-				throw roundError;
+		if (owner.isCancelled && owner.isCancelled()) return cancelledResults(prompts, results);
+
+		const perAttempt = {
+			slots: imageSlots || undefined,
+			isCancelled: owner.isCancelled,
+			priority: owner.priority,
+			setController: owner.setController,
+			clearController: owner.clearController,
+			onImage: function (blob, localIndex) {
+				const index = batch[localIndex];
+				if (typeof index !== "number") return;
+				if (owner.onImage) return owner.onImage(blob, index);
+			},
+			onError: function (error, localIndex) {
+				const index = batch[localIndex];
+				if (typeof index !== "number") return;
+				if (owner.onError) owner.onError(error, index);
 			}
+		};
 
-			const retry = [];
-			batchResults.forEach(function (result, slot) {
-				const index = batch[slot];
-				/* Report the scene index, not the slot inside this retry round. */
-				if (result) result.index = index;
-				if (result && result.ok) {
-					results[index] = result;
-					return;
-				}
-				const error = result && result.error;
-				const hint = error && Number(error.retryAfterMs) > 0 ? Number(error.retryAfterMs) : 0;
-				if (hint > hintMs) hintMs = hint;
-				const status = error && Number(error.status);
-				/*
-				 * Credits/auth/validation will not change on a retry, but 429 and
-				 * 408 are load answers ("come back in a moment") and must be
-				 * retried, which is why they are excluded here.
-				 */
-				const permanent =
-					(status >= 400 && status < 500 && status !== 429 && status !== 408) ||
-					(error && error.retryable === false);
-				if (permanent || round === rounds) {
-					results[index] = result || { ok: false, index: index, error: error };
-					return;
-				}
-				retry.push(index);
-			});
-
-			pending = retry;
-			if (!pending.length) break;
-			const backoff = Math.min(
-				Math.max(hintMs, 800 * Math.pow(2, round - 1)),
-				15000
+		let batchResults;
+		try {
+			batchResults = await studioOffload.images(
+				prompts.slice(),
+				frame || {},
+				perAttempt
 			);
-			await pauseWhileActive(backoff, owner);
+		} catch (passError) {
+			/*
+			 * The media scheduler rejects (rather than resolving every scene)
+			 * when the flow is cancelled mid-pass. That is a Stop, not a
+			 * transport failure: leave the scenes unset so they are reported as
+			 * cancellations below.
+			 */
+			const cancelled =
+				(passError && passError.name === "AbortError") ||
+				(owner.isCancelled && owner.isCancelled());
+			if (cancelled) return cancelledResults(prompts, results);
+			throw passError;
 		}
 
-		/* Cancelled rounds leave holes: report them as failures, never as success. */
+		batchResults.forEach(function (result, slot) {
+			const index = batch[slot];
+			/* Report the scene index, not the slot inside this pass. */
+			if (result) result.index = index;
+			results[index] = result || { ok: false, index: index, error: null };
+			if (result && !result.ok) {
+				const error = result.error;
+				console.warn("[image-chunk] scene verdict", {
+					scene: index,
+					status: Number(error && error.status) || 0,
+					retryable: error ? error.retryable !== false : true,
+					attempts: Number(error && error.attempts) || 0,
+					error: String((error && error.message) || error || "").slice(0, 200)
+				});
+			}
+		});
+
+		return cancelledResults(prompts, results);
+	}
+
+	/* Holes left by a cancelled pass are failures, never successes. */
+	function cancelledResults(prompts, results) {
 		return prompts.map(function (_, index) {
 			if (results[index]) return results[index];
 			const cancelled = new Error("Image generation was cancelled");
@@ -18781,7 +18781,17 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				: Boolean((marker && marker.retryable) || IMAGE_RETRYABLE_REASON.test(text));
 
 		if (!retryable) return null;
-		if (!imageSceneGapCount(project)) return null;
+		/*
+		 * SESSION 279 (hang audit): a failure on the FIRST prompt chunk leaves
+		 * imagePrompts empty, and "nothing was planned" used to read as
+		 * "no scene is missing" - which turned a transient 408 on the first
+		 * request into a dead end the moment the page stopped re-asking inside
+		 * the request. The scene target this flow was asked for is the honest
+		 * gap while nothing has been planned yet.
+		 */
+		const missingScenes =
+			imageSceneGapCount(project) || (Number(project.imagePromptTarget) || 0);
+		if (!missingScenes) return null;
 
 		const limits =
 			imageAutoRetryLimits();
@@ -18801,7 +18811,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			kind: (marker && marker.kind) || "retry",
 			attempt: used + 1,
 			limit: limits.limit,
-			delayMs: delayMs
+			delayMs: delayMs,
+			missing: missingScenes
 		};
 
 	}
@@ -18943,7 +18954,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			kind: plan.kind,
 			attempt: plan.attempt,
 			delayMs: plan.delayMs,
-			missing: imageSceneGapCount(project),
+			missing: Number(plan.missing) || imageSceneGapCount(project),
 			reason: String(plan.reason || "").slice(0, 160)
 		});
 		console.info("[seo-image-flow] auto retry scheduled", {
@@ -19743,16 +19754,30 @@ async function retryImagePromptFlow(n) {
 	let controller = typeof AbortController !== "undefined" ? new AbortController() : null;
 	project._imageBatchController = controller;
 	/*
-	 * One Pixabay search per scene used to be all a scene ever got: a 429
-	 * ("please wait before searching again") on scene 3 of 7 dropped scene 3
-	 * for good. Each scene now gets SCENE_RETRY_ATTEMPTS tries, and a try
-	 * that the provider asked us to delay waits that long before it runs.
+	 * SESSION 279: ONE PROVIDER ATTEMPT PER SCENE, PLUS ONE STALL RE-ARM.
+	 *
+	 * The complaint this ladder answered is still real - a 429 ("please wait
+	 * before searching again") on scene 3 of 7 used to drop scene 3 for good -
+	 * but three tries per scene made the page a SECOND retry owner: every
+	 * attempt below already includes the browser-first search AND the
+	 * same-origin Worker fallback for that scene, and the worker side of that
+	 * fallback (generateOneWithRetry) spends up to 4 attempts inside a 45 s
+	 * budget, honours Retry-After and stops on a fatal verdict.
+	 *
+	 * What a scene keeps is not a provider ladder:
+	 *   - the stall watchdog below, which is a HANG guard: a scene that stops
+	 *     responding for SCENE_IDLE_TIMEOUT_MS is aborted and re-armed once on a
+	 *     fresh controller;
+	 *   - the provider's Retry-After hint, recorded on the flow marker so the
+	 *     SCHEDULED automatic retry waits the right amount - that scheduler is
+	 *     the only thing that can sit out a minutes-long rate-limit window, and
+	 *     no in-request ladder (browser or worker) can;
+	 *   - the visible per-scene verdict.
 	 */
 	const sceneRetryTiming =
 		(typeof window !== "undefined" && window.__PIXABAY_SCENE_RETRY) || {};
-	const SCENE_RETRY_ATTEMPTS = Math.max(1, Math.floor(Number(sceneRetryTiming.attempts) || 3));
-	const SCENE_RETRY_BASE_MS = Math.max(0, Math.floor(Number(sceneRetryTiming.baseMs) || 800));
-	const SCENE_RETRY_MAX_MS = Math.max(SCENE_RETRY_BASE_MS, Math.floor(Number(sceneRetryTiming.maxMs) || 15000));
+	const SCENE_STALL_REARMS = Math.max(0, Math.floor(Number(sceneRetryTiming.stallRearms) || 1));
+	const SCENE_ATTEMPTS = SCENE_STALL_REARMS + 1;
 	/*
 	 * The stall guard for a single scene. It aborts only THIS attempt and
 	 * then re-arms on a fresh controller; previously an abort of the shared
@@ -19807,7 +19832,9 @@ async function retryImagePromptFlow(n) {
 			let sceneOk = false;
 			let sceneError = null;
 			let sceneHintMs = 0;
-			for (let attempt = 1; attempt <= SCENE_RETRY_ATTEMPTS; attempt++) {
+			/* Session 279: the verdict the attempt produced, kept for the marker. */
+			let sceneRetryable = false;
+			for (let attempt = 1; attempt <= SCENE_ATTEMPTS; attempt++) {
 			armSceneWatchdog();
 			try {
 				/*
@@ -19912,13 +19939,13 @@ async function retryImagePromptFlow(n) {
 			} catch (error) {
 				if (error && error.name === "AbortError") {
 					const stalled = Boolean(project._imageFlowRetry && project._imageFlowRetry.kind === "timeout");
-					if (stalled && attempt < SCENE_RETRY_ATTEMPTS && !stale()) {
+					if (stalled && attempt < SCENE_ATTEMPTS && !stale()) {
 						/* The guard tripped, not the user: re-arm and try again. */
 						project._imageFlowRetry = null;
 						controller = typeof AbortController !== "undefined" ? new AbortController() : null;
 						project._imageBatchController = controller;
 						sceneError = error;
-						console.warn("[pixabay-retry] scene attempt stalled, re-arming", { scene: i, attempt: attempt, of: SCENE_RETRY_ATTEMPTS });
+						console.warn("[pixabay-retry] scene attempt stalled, re-arming", { scene: i, attempt: attempt, of: SCENE_ATTEMPTS });
 						setImagePromptState(project, i, "searching", "stalled; retrying");
 						await new Promise(function (resolve) { setTimeout(resolve, 1500); });
 						continue;
@@ -19930,27 +19957,22 @@ async function retryImagePromptFlow(n) {
 				const retryable =
 					SCENE_RETRYABLE.test(String(error && error.message || error)) ||
 					[408, 429, 500, 502, 503, 504].indexOf(Number(error && error.status)) >= 0;
-				if (attempt >= SCENE_RETRY_ATTEMPTS || !retryable) break;
+				sceneRetryable = retryable;
 				/*
-				 * Honour the provider's own wait when it gave one (a 429 reset
-				 * hint), otherwise back off 800 ms, 1.6 s. Never longer than
-				 * SCENE_RETRY_MAX_MS, so one scene cannot stall the flow.
+				 * SESSION 279: no second provider attempt from this page. The
+				 * worker fallback inside this attempt already spent its ladder,
+				 * so what is left is the verdict - recorded below on the flow
+				 * marker, where the scheduled automatic retry picks up the
+				 * Retry-After hint and waits it out.
 				 */
-				const waitMs = Math.min(
-					SCENE_RETRY_MAX_MS,
-					Math.max(SCENE_RETRY_BASE_MS, sceneHintMs || SCENE_RETRY_BASE_MS * Math.pow(2, attempt - 1))
-				);
-				project._imageFlowRetry = { kind: sceneHintMs ? "rate-limit" : "scene", retryable: true, hintMs: sceneHintMs, reason: String(error && error.message || error) };
-				setImagePromptState(project, i, "searching", "attempt " + attempt + " failed; retrying in " + Math.round(waitMs / 1000) + "s");
-				console.warn("[pixabay-retry] scene attempt failed, waiting to retry", {
+				console.warn("[pixabay-retry] scene attempt failed; the worker ladder is spent", {
 					scene: i,
-					attempt: attempt,
-					of: SCENE_RETRY_ATTEMPTS,
-					waitMs: waitMs,
+					retryable: retryable,
+					hintMs: sceneHintMs,
 					error: String(error && error.message || error).slice(0, 300)
 				});
-				await new Promise(function (resolve) { setTimeout(resolve, waitMs); });
-				if (stale()) break sceneLoop;
+				setImagePromptState(project, i, "searching", "attempt failed; the worker already retried");
+				break;
 			}
 			clearSceneWatchdog();
 			if (sceneOk) break;
@@ -19960,13 +19982,20 @@ async function retryImagePromptFlow(n) {
 				project._aiImageFailures++;
 				const message = sceneError && sceneError.message ? sceneError.message : String(sceneError || "Pixabay scene failed");
 				setImagePromptState(project, i, "failed", message);
-				console.error("[pixabay-retry] scene failed", { scene: i, type: selection.type, keyword: selection.q, attempts: SCENE_RETRY_ATTEMPTS, error: message.slice(0, 500) });
+				console.error("[pixabay-retry] scene failed", { scene: i, type: selection.type, keyword: selection.q, attempts: SCENE_ATTEMPTS, error: message.slice(0, 500) });
 				/*
 				 * Leave a retry marker only for reasons a re-run could fix. A
 				 * non-retryable marker stops the finalizer from looping on a
 				 * scene that will never succeed.
+				 *
+				 * SESSION 279 (hang audit): the marker must use the SAME verdict
+				 * the attempt computed - wording OR status. Testing the message
+				 * alone dropped a plain 502 ("Simulated ... redirect failure")
+				 * into the non-retryable branch, and with the in-click ladder
+				 * gone that left the user a failed scene and no scheduled
+				 * retry: a dead end the previous code had papered over.
 				 */
-				if (SCENE_RETRYABLE.test(message)) {
+				if (sceneRetryable) {
 					project._imageFlowRetry = { kind: sceneHintMs ? "rate-limit" : "scene", retryable: true, hintMs: sceneHintMs, reason: message };
 				} else {
 					project._imageFlowRetry = { kind: "scene", retryable: false, hintMs: 0, reason: message };
@@ -19991,30 +20020,23 @@ async function retryImagePromptFlow(n) {
 }
 
 /*
- * A failed /api/script is retried TWICE more by the browser before
-	 * the video accordion shows an error: three attempts in total
-	 * (1 + SCRIPT_RETRY_LIMIT retries). Negotiated #261 calls make one server inference per request;
-	 * only legacy calls retain server retries. These browser retries cover
-	 * the transient part a user actually notices - a cold Workers AI
-	 * container, a gateway 5xx, a dropped connection. The status line in
-	 * the accordion reports each retry, and the error text only appears
-	 * once the last attempt has failed, so a self-healing run never looks
-	 * like a failure.
+	 * SESSION 279 — ONE RETRY OWNER PER STAGE, AND IT IS NOT THE BROWSER.
+	 *
+	 * The page used to loop a failed /api/script THREE times (session 278),
+	 * each loop a fresh POST /api/script?async=1 plus a fresh 900 ms-quantised
+	 * note poll stream plus loop re-admission. Measured on nine videos
+	 * (bench/pipeline-sim/results/baseline-scale1.json): 12 submissions and
+	 * 934 note polls for nine scripts, inside a 183.3 s pipeline makespan.
+	 *
+	 * So the loop is gone. One request per script; the worker runs the ladder
+	 * inside it (planner 3 attempts, writer 3 attempts, each clamped to the
+	 * run's remaining budget by attemptSlot(), each rotating the model slug).
+	 * What the page keeps is NOT a retry ladder:
+	 *   - cancellation (Stop / a deleted project / a removed row);
+	 *   - the per-request timeouts below;
+	 *   - the note poll and its hang guards (stall, failed polls, ceiling);
+	 *   - reporting the worker's own attempt count (failure.attempts).
 	 */
-	const SCRIPT_RETRY_LIMIT =
-		2;
-	/*
-	 * The worker advertises how many attempts it expects the page to make
-	 * ("browserScriptRetries" in /api/pipeline-capabilities) because the worker
-	 * itself now makes exactly ONE attempt per stage. \`scriptAttemptLimit\` is
-	 * that number, clamped to something sane; the default below is what a page
-	 * uses until the capabilities land (and what an older worker gets).
-	 */
-	let scriptAttemptLimit =
-		SCRIPT_RETRY_LIMIT + 1;
-	function scriptAttempts() {
-		return Math.min(5, Math.max(1, Number(scriptAttemptLimit) || SCRIPT_RETRY_LIMIT + 1));
-	}
 
 	/*
 	 * SCRIPT NOTES (dynamic URL) + ASYNC SCRIPT JOBS
@@ -20056,15 +20078,12 @@ async function retryImagePromptFlow(n) {
 		20000;
 	const SCRIPT_LEGACY_TIMEOUT_MS =
 		105000;
-	const SCRIPT_RETRY_BACKOFF_MS =
-		250;
 
 	/* Exposed so tests / debugging can see the live script budgets. */
 	if (typeof window !== "undefined") {
 		window.__SCRIPT_PIPELINE_TIMING = {
 			requestTimeoutMs: SCRIPT_REQUEST_TIMEOUT_MS,
 			legacyTimeoutMs: SCRIPT_LEGACY_TIMEOUT_MS,
-			retryBackoffMs: SCRIPT_RETRY_BACKOFF_MS,
 			notePollMs: SCRIPT_NOTE_POLL_MS,
 			noteWaitMs: SCRIPT_NOTE_MAX_WAIT_MS,
 			noteStallMs: SCRIPT_NOTE_STALL_MS,
@@ -20409,6 +20428,32 @@ async function retryImagePromptFlow(n) {
 	}
 
 	/*
+	 * The verdict text for a script the worker could not deliver.
+	 *
+	 * The worker reports how many attempts ITS ladder spent, so the user still
+	 * sees "this was tried three times" - the page just no longer has to be the
+	 * thing doing the trying.
+	 */
+	function scriptFailureText(error) {
+		const message = (error && error.message) || "Script generation failed";
+		const attempts = Number(error && error.attempts) || 0;
+		if (attempts <= 0) return message;
+		return message + " (after " + attempts + (attempts === 1 ? " attempt)" : " attempts)");
+	}
+
+	/*
+	 * The verdict text for audio the worker could not deliver. Same rule as
+	 * \`scriptFailureText\`: the worker reports how many attempts ITS ladder
+	 * spent, so the user still learns that this was tried, and tried hard.
+	 */
+	function voiceFailureText(data, status) {
+		const message = (data && data.error) || ("Voiceover failed (HTTP " + status + ")");
+		const attempts = Number(data && data.attempts) || 0;
+		if (attempts <= 1) return message;
+		return message + " (the worker tried " + attempts + " attempts)";
+	}
+
+	/*
 	 * ONE REQUESTER FOR EVERY LAYOUT (H5).
 	 *
 	 * The editor accordion and the quick-batch table are different UIs, but a
@@ -20439,30 +20484,22 @@ async function retryImagePromptFlow(n) {
 			Number(options && options.minutes) > 0 ? Number(options.minutes) : 1;
 		const speed =
 			String(options && options.speed || "medium");
-		const attempt =
-			Number(options && options.attempt) || 0;
-		const previousFailure =
-			String(options && options.previousFailure || "").slice(0, 800);
 
 		const caps =
 			await studioOffload.capabilities();
 		const single = Boolean(caps.singleAttemptScript && project && project.selectedSeoSet);
 		const notesEnabled = Boolean(caps.scriptNotes);
 		/*
-		 * WHO OWNS THE RETRIES: THE BROWSER.
+		 * WHO OWNS THE RETRIES: THE WORKER (session 279).
 		 *
-		 * The worker advertises how many attempts it expects the page to make
-		 * ("browserScriptRetries"). When it does, every script request says
-		 * \`browserRetries: true\`, which makes the worker do exactly ONE attempt
-		 * per stage and report which stage failed; this loop decides whether to
-		 * spend another. Without that field the worker keeps its legacy ladder,
-		 * so a new page against an old worker (or the reverse) still works.
+		 * This page sends no \`browserRetries\` flag, so the worker keeps its
+		 * own ladder (planner 3 attempts + writer 3 attempts) inside the one
+		 * request it is already serving, and reports how many it spent in
+		 * \`failure.attempts\`. A cached pre-279 page still sends the flag and
+		 * still gets one attempt per stage - the field is still advertised as
+		 * \`browserScriptRetries\` for exactly that reason. Against a pre-279
+		 * worker this page simply runs its legacy ladder: slower, never a hang.
 		 */
-		const browserRetries = Number(caps.browserScriptRetries) > 0;
-		/* The worker's number, not this file's guess (see scriptAttempts). */
-		if (Number(caps.browserScriptRetries) > 0) {
-			scriptAttemptLimit = Number(caps.browserScriptRetries);
-		}
 		const asyncEnabled = notesEnabled && Boolean(caps.asyncScript);
 		/* #5: 20 s per request once the worker can park the job in a note. */
 		const requestTimeout = asyncEnabled
@@ -20487,26 +20524,17 @@ async function retryImagePromptFlow(n) {
 		};
 
 		/*
-		 * The keyword set is the RESUME POINT of a browser-owned retry: when an
-		 * attempt got as far as a validated plan and failed in the writer, the
-		 * next attempt sends that plan back and the planner is skipped (the
-		 * worker treats \`keywordSet\` exactly like a warm note).
+		 * The keyword set the user picked in the walkthrough (or the one this
+		 * project already holds). It is a FIRST-ATTEMPT input, not a resume
+		 * point: the worker's ladder keeps the validated plan in scope for its
+		 * own attempts, so the page never has to send one back.
 		 */
-		const seededKeywordSet =
+		const keywordSet =
 			context && context.keywordSet !== undefined && context.keywordSet !== null
 				? context.keywordSet
 				: project && project.selectedSeoSet
 					? project.selectedSeoSet
 					: null;
-		/*
-		 * A resume set WINS over a stale local seed: it is the plan the worker
-		 * itself validated on the failed attempt, so replaying it cannot
-		 * contradict the note (a seed can be older than the note's).
-		 */
-		const keywordSet =
-			options && options.resumeKeywordSet
-				? options.resumeKeywordSet
-				: seededKeywordSet;
 		const sourceUrl =
 			context && context.sourceUrl !== undefined && context.sourceUrl !== null
 				? context.sourceUrl
@@ -20516,8 +20544,13 @@ async function retryImagePromptFlow(n) {
 
 		const requestBody = {
 			singleAttempt: Boolean(single),
-			attempt: attempt,
-			previousFailure: previousFailure,
+			/*
+			 * Always attempt 0 and no \`previousFailure\`: there is no page-level
+			 * ladder left to report. The worker still honours both fields for a
+			 * cached pre-279 page (and its own ladder coaches itself internally).
+			 */
+			attempt: 0,
+			previousFailure: "",
 			topic: topic,
 			minutes: minutes,
 			speed: speed,
@@ -20543,9 +20576,7 @@ async function retryImagePromptFlow(n) {
 					: undefined,
 			/* Worker-derived note id: same topic + minutes + speed + URL. */
 			useNotes: notesEnabled || undefined,
-			sourceUrl: notesEnabled && sourceUrl ? sourceUrl : undefined,
-			/* The worker makes one attempt per stage; this page retries. */
-			browserRetries: browserRetries || undefined
+			sourceUrl: notesEnabled && sourceUrl ? sourceUrl : undefined
 		};
 
 		const response =
@@ -20631,9 +20662,16 @@ async function retryImagePromptFlow(n) {
 				: response.status === 408 || response.status === 429 || response.status >= 500 || response.ok;
 			error.stage = (data && data.failure && data.failure.stage) || "";
 			error.failureReason = (data && data.failure && data.failure.reason) || "";
-			error.attempts = (data && data.failure && Number(data.failure.attempts)) || 0;
-			/* Where the next attempt resumes from (planner already done). */
-			error.keywordSet = (data && data.keywordSet) || null;
+			/*
+			 * A verdict with no \`failure\` block (a validation 400, an older
+			 * worker) is still ONE attempt: the page never re-asks, so the
+			 * honest count is 1 rather than "unknown".
+			 */
+			error.attempts = (data && data.failure && Number(data.failure.attempts)) || 1;
+			error.retryOwner =
+				(data && data.retryOwner) ||
+				(data && data.failure && data.failure.retryOwner) ||
+				"";
 			throw error;
 
 		}
@@ -20721,49 +20759,26 @@ async function retryImagePromptFlow(n) {
 
 		try {
 			/*
-			 * A TABLE ROW NOW RETRIES TOO.
+			 * SESSION 279: ONE REQUEST, NO TABLE-ROW LADDER.
 			 *
-			 * It used to send exactly one request and lean on the worker's
-			 * internal ladder for every retry, so once the worker became
-			 * single-attempt per request this layout would have had exactly one
-			 * try. Same three attempts, same feedback loop as the editor.
+			 * The three attempts this row used to make were three submissions,
+			 * three poll streams and three queue re-admissions for one script.
+			 * The worker owns the ladder now (inside this single request), so
+			 * the row only decides whether to wait, to be cancelled, or to
+			 * report the verdict the worker returned - including how many
+			 * attempts the worker itself spent (failure.attempts).
 			 */
-			let data = null;
-			let lastError = null;
-			let usedAttempts = 0;
-			const attemptLimit = scriptAttempts();
-			for (let attempt = 1; attempt <= attemptLimit; attempt++) {
-				usedAttempts = attempt;
-				if (row.stopRequested || !getBatchRow(rowId)) {
-					const cancelled = new Error("Script generation was cancelled");
-					cancelled.name = "AbortError";
-					throw cancelled;
-				}
-				try {
-					if (attempt > 1) {
-						setBatchStage(row, "writing", "Retrying the script (" + attempt + " of " + attemptLimit + ")\u2026");
-						refreshBatchRowCells();
-					}
-					data = await requestScriptWithNotes(batchRowScriptContext(row), {
-						topic: topic,
-						minutes: minutes,
-						speed: "medium",
-						attempt: attempt - 1,
-						previousFailure: lastError ? (lastError.message || String(lastError)) : "",
-						resumeKeywordSet: lastError ? lastError.keywordSet : null
-					});
-					lastError = null;
-					break;
-				} catch (attemptError) {
-					lastError = attemptError;
-					if (attemptError && attemptError.retryable === false) break;
-					if (attempt >= attemptLimit) break;
-					const hinted = attemptError && Number(attemptError.retryAfterMs) > 0 ? Number(attemptError.retryAfterMs) : 0;
-					await batchDelay(hinted > 0 ? Math.min(5000, hinted) : SCRIPT_RETRY_BACKOFF_MS);
-				}
+			if (row.stopRequested || !getBatchRow(rowId)) {
+				const cancelled = new Error("Script generation was cancelled");
+				cancelled.name = "AbortError";
+				throw cancelled;
 			}
-			if (lastError) throw lastError;
-			console.info("[script-notes] table row script", { rowId: rowId, attempts: usedAttempts });
+			const data = await requestScriptWithNotes(batchRowScriptContext(row), {
+				topic: topic,
+				minutes: minutes,
+				speed: "medium"
+			});
+			console.info("[script-notes] table row script", { rowId: rowId, request: 1 });
 			const script = String((data && data.script) || "").trim();
 			if (!script) throw new Error("The script came back empty");
 			const live = getBatchRow(rowId);
@@ -20779,7 +20794,7 @@ async function retryImagePromptFlow(n) {
 			const live = getBatchRow(rowId);
 			if (!live) return false;
 			const cancelled = error && error.name === "AbortError";
-			setBatchStage(live, "error", cancelled ? "Script generation was cancelled" : ((error && error.message) || "Script generation failed"));
+			setBatchStage(live, "error", cancelled ? "Script generation was cancelled" : scriptFailureText(error));
 			refreshBatchRowCells();
 			return false;
 		} finally {
@@ -20793,10 +20808,7 @@ async function retryImagePromptFlow(n) {
 		n,
 		topic,
 		minutes,
-		speed,
-		attempt,
-		previousFailure,
-		resumeKeywordSet
+		speed
 	) {
 
 		const project =
@@ -20807,10 +20819,7 @@ async function retryImagePromptFlow(n) {
 			{
 				topic: topic,
 				minutes: minutes,
-				speed: speed,
-				attempt: attempt,
-				previousFailure: previousFailure,
-				resumeKeywordSet: resumeKeywordSet || null
+				speed: speed
 			}
 		);
 
@@ -21034,7 +21043,6 @@ async function retryImagePromptFlow(n) {
 
 		let lastError =
 			null;
-		let attemptsMade = 0;
 
 		btn.disabled = true;
 
@@ -21055,106 +21063,76 @@ async function retryImagePromptFlow(n) {
 			topic: topic,
 			minutes: minutes,
 			speed: speed,
-			attempts: scriptAttempts()
+			/* Session 279: one request from this page, ladder owned by the worker. */
+			requests: 1,
+			retryOwner: "worker"
 		});
 
 		try {
 
-			const attemptLimit = scriptAttempts();
+			/*
+			 * ONE REQUEST FROM THIS PAGE (session 279).
+			 *
+			 * The worker runs the ladder inside this request - planner up to 3
+			 * attempts, writer up to 3, every attempt clamped to the run's
+			 * remaining budget by attemptSlot() and served by a rotated model
+			 * slug - so a retry no longer costs a round trip, a queue
+			 * re-admission and a second 900 ms poll stream. What stays here is
+			 * cancellation, the request timeout, the note poll with its hang
+			 * guards, and the verdict.
+			 */
+			try {
+				if (project._deleted || videoProjects.indexOf(project) < 0) return false;
 
-			for (
-				let attempt = 1;
-				attempt <= attemptLimit;
-				attempt++
-			) {
-
-				try {
-					if (project._deleted || videoProjects.indexOf(project) < 0) return false;
-
-					attemptsMade = attempt;
-					const data =
-						await requestSeoScriptOnce(
-							videoProjects.indexOf(project) + 1,
-							topic,
-							minutes,
-							speed,
-							attempt - 1,
-							lastError && lastError.message,
-							/* Resume: the plan the previous attempt already paid for. */
-							lastError && lastError.keywordSet
-						);
-
-					if (project._deleted) return false;
-					const liveN = videoProjects.indexOf(project) + 1;
-					if (liveN <= 0) return false;
-					applySeoScript(
-						liveN,
-						data,
-						{
-							minutes: minutes,
-							speed: speed
-						}
+				const data =
+					await requestSeoScriptOnce(
+						videoProjects.indexOf(project) + 1,
+						topic,
+						minutes,
+						speed
 					);
 
-					scriptSucceeded =
-						true;
-
-					recordStudioUsage("scripts", "ok", 1);
-
-					lastError =
-						null;
-
-					break;
-
-				}
-				catch (err) {
-
-					lastError =
-						err;
-
-					console.warn("[script-seo] attempt failed", {
-						videoIndex: n,
-						attempt: attempt,
-						ms: Date.now() - scriptStartedAt,
-						error: (err && err.message) || String(err)
-					});
-
-					if (project._deleted) return false;
-					if (err && err.retryable === false) break;
-					if (attempt < attemptLimit) {
-						/* Not an error yet - the browser is retrying. */
-						const retryLine =
-							"Script generation failed \u2014 retrying (" +
-							attempt +
-							" of " +
-							attemptLimit +
-							")\u2026";
-
-						const liveStatus = document.getElementById("va-script-status-" + (videoProjects.indexOf(project) + 1));
-						if (liveStatus) liveStatus.textContent = retryLine;
-
-						setSeoWalkthroughScriptStatus(
-							videoProjects.indexOf(project) + 1,
-							retryLine
-						);
-						/* The worker may ask for a specific wait (a busy fleet,
-						 * a rate limit); otherwise the fixed backoff applies. */
-						const hinted = err && Number(err.retryAfterMs) > 0 ? Number(err.retryAfterMs) : 0;
-						await batchDelay(hinted > 0 ? Math.min(5000, hinted) : SCRIPT_RETRY_BACKOFF_MS);
+				if (project._deleted) return false;
+				const liveN = videoProjects.indexOf(project) + 1;
+				if (liveN <= 0) return false;
+				applySeoScript(
+					liveN,
+					data,
+					{
+						minutes: minutes,
+						speed: speed
 					}
+				);
 
-				}
+				scriptSucceeded =
+					true;
+
+				recordStudioUsage("scripts", "ok", 1);
+
+			}
+			catch (err) {
+
+				lastError =
+					err;
+
+				console.warn("[script-seo] request failed", {
+					videoIndex: n,
+					ms: Date.now() - scriptStartedAt,
+					stage: (err && err.stage) || "",
+					workerAttempts: Number(err && err.attempts) || 0,
+					retryable: err ? err.retryable !== false : false,
+					error: (err && err.message) || String(err)
+				});
+
+				if (project._deleted) return false;
 
 			}
 
 			if (lastError) {
 
-				/* Every attempt failed: now the UI may show the error. */
+				/* The worker's ladder is exhausted: now the UI may show the error. */
 				const failureLine =
-					"Script failed after " +
-					attemptsMade +
-					(attemptsMade === 1 ? " attempt: " : " attempts: ") +
-					(lastError.message || lastError);
+					"Script failed: " + scriptFailureText(lastError);
 
 				const liveStatus = document.getElementById("va-script-status-" + (videoProjects.indexOf(project) + 1));
 				if (liveStatus) liveStatus.textContent = failureLine;
@@ -21169,7 +21147,7 @@ async function retryImagePromptFlow(n) {
 				console.error("[script-seo] failed", {
 					videoIndex: n,
 					ms: Date.now() - scriptStartedAt,
-					attempts: attemptsMade,
+					workerAttempts: Number(lastError && lastError.attempts) || 0,
 					error: (lastError && lastError.message) || String(lastError)
 				});
 
@@ -21489,16 +21467,26 @@ async function retryImagePromptFlow(n) {
 
 	}
 
+	/*
+	 * SESSION 279: the editor asks the same one question the table row asks.
+	 *
+	 * It used to branch on \`chunkVoiceover\`: either split the script, fetch
+	 * every chunk, retry the whole set three times and assemble the container in
+	 * a Web Worker - or, on the legacy branch, a bare \`fetch\` with NO timeout
+	 * and no cancellation. Both are gone. One request through the offload
+	 * scheduler keeps the timeout (165 s), the abort plumbing and the queue slot,
+	 * and the worker's ladder does the rest.
+	 */
 	async function requestEditorVoiceover(project, text, lang) {
-		if ((await studioOffload.capabilities()).chunkVoiceover) {
-			const blob = await studioOffload.voiceover(text, lang, {
+		return studioOffload.mediaResponse(
+			"/api/voiceover",
+			{ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text, lang: lang }) },
+			{
 				isCancelled: function () { return Boolean(project._deleted); },
 				setController: function (controller) { project._voiceoverController = controller; },
 				clearController: function (controller) { if (project._voiceoverController === controller) project._voiceoverController = null; }
-			});
-			return { ok: true, blob: async function () { return blob; } };
-		}
-		return fetch("/api/voiceover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text, lang: lang }) });
+			}
+		);
 	}
 
 	async function generateVoiceover(
@@ -21577,11 +21565,7 @@ async function retryImagePromptFlow(n) {
 							() => ({})
 						);
 
-				throw new Error(
-					(data && data.error) ||
-					("HTTP " +
-						response.status)
-				);
+				throw new Error(voiceFailureText(data, response.status));
 
 			}
 

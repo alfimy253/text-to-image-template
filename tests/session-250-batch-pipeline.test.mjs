@@ -167,10 +167,19 @@ test("Stage 1: handleVoiceover falls back to native Workers AI Deepgram MP3 when
 	const audioBytes = new Uint8Array(await resp.arrayBuffer());
 	assert.ok(audioBytes.byteLength > 14);
 
-	/* MeloTTS failed on chunk 1 (3 attempts), Aura-2 succeeded and became sticky for chunk 2! */
+	/*
+	 * MeloTTS fails on both chunks and Aura-2 answers both. Session 279 runs the
+	 * chunks through a bounded pool instead of one after another, so the two
+	 * chunks are in flight TOGETHER and each spends its own three primary
+	 * attempts before the fallback is discovered - the price of not serialising
+	 * a narration. Stickiness still applies to every chunk that starts later, so
+	 * a longer script pays the discovery once per lane (VOICEOVER_SERVER_CHUNKS),
+	 * not once per chunk; the old sequential ladder paid three failing primary
+	 * calls per chunk for the whole script.
+	 */
 	const meloCalls = calls.filter((c) => c.model === "@cf/myshell-ai/melotts");
 	const auraCalls = calls.filter((c) => c.model === "@cf/deepgram/aura-2-en");
-	assert.equal(meloCalls.length, 3, "MeloTTS was not re-retried on chunk 2 once Aura became sticky");
+	assert.equal(meloCalls.length, 6, "two chunks in flight, three primary attempts each");
 	assert.ok(auraCalls.length >= 2, "Aura handled all chunks as MP3");
 	assert.equal(auraCalls[0].input.encoding, "mp3");
 });

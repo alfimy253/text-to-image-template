@@ -561,11 +561,11 @@ test("S3 client: three busy-store polls end the flow as retryable, and never as 
 	const elapsed = Date.now() - startedAt;
 
 	assert.equal(ok, false, "a store that cannot be read does not produce a script");
-	/* Three failed polls per attempt, three attempts (the documented retry
-	 * budget) - and no attempt treated the 503 as proof of life, so none of
-	 * them sat through the 15 s stall guard. */
-	assert.equal(polls, 9, "each of the three attempts gives up after three busy polls");
+	/* Session 279: three failed polls for the ONE request the page makes - and
+	 * it does not treat the 503 as proof of life, so it never sits through the
+	 * 15 s stall guard. (It used to be 3 polls x 3 browser attempts = 9.) */
+	assert.equal(polls, 3, "the single request gives up after three busy polls");
 	assert.ok(elapsed < 12000, `the flow ends on failed polls, not on the stall guard (${elapsed} ms)`);
 	assert.equal(w.__VIDEO_PROJECTS[0].script || "", "", "no script was invented");
-	assert.match(w.document.getElementById("va-script-status-1").textContent, /Script failed after 3 attempts/);
+	assert.match(w.document.getElementById("va-script-status-1").textContent, /Script failed:/);
 });

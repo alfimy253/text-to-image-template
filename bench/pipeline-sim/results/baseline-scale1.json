@@ -1,0 +1,1161 @@
+{
+ "label": "baseline (browser-owned retries), provider latency x1",
+ "generatedAt": "2026-11-02T16:32:27.607Z",
+ "config": {
+  "users": 3,
+  "videos": 3,
+  "scale": 1,
+  "netMs": 60,
+  "seed": "base100",
+  "minutes": 1,
+  "renderMs": 9000,
+  "media": "direct",
+  "loopConcurrency": 2,
+  "aiLatencyMs": {
+   "planner": 7200,
+   "writer": 21000,
+   "scenePlanner": 4000,
+   "tts": 3000
+  },
+  "aiFailureRate": {
+   "planner": 0.1,
+   "writer": 0.12,
+   "scenePlanner": 0.08,
+   "tts": 0.25
+  },
+  "invalidRate": {
+   "writer": 0.12,
+   "scenePlanner": 0.08
+  },
+  "providerLatencyMs": {
+   "search": 450,
+   "photo": 700,
+   "clip": 1400,
+   "externalTts": 2500
+  },
+  "providerFailureRate": {
+   "search": 0.05,
+   "photo": 0.05,
+   "clip": 0.05,
+   "externalTts": 0.2
+  }
+ },
+ "median": {
+  "makespanMs": 226086,
+  "pipelineMakespanMs": 183311,
+  "requestTotal": 1061,
+  "aiCalls": {
+   "planner": 9,
+   "writer": 12,
+   "scenePlanner": 21,
+   "tts": 29,
+   "other": 0
+  },
+  "aiFailures": {
+   "planner": 0,
+   "writer": 3,
+   "scenePlanner": 2,
+   "tts": 8,
+   "other": 0
+  },
+  "aiBusyMs": {
+   "planner": 64800,
+   "writer": 252000,
+   "scenePlanner": 84000,
+   "tts": 87000,
+   "other": 0
+  },
+  "provider": {
+   "searches": 65,
+   "photos": 36,
+   "clips": 22,
+   "externalTts": 0,
+   "failures": 7,
+   "bytes": 86400
+  },
+  "requests": {
+   "GET /api/credits": 21,
+   "GET /api/pipeline-capabilities": 3,
+   "POST /api/script?async=1": 12,
+   "GET /api/script/notes/nt-d770bc5df0": 144,
+   "GET /api/script/notes/nt-1308fbff40": 141,
+   "GET /api/script/notes/nt-3bbe141309": 62,
+   "POST /api/voiceover": 29,
+   "POST /api/image-prompts": 21,
+   "GET /api/media/config": 3,
+   "POST /api/media/claim": 18,
+   "POST /api/image": 20,
+   "GET /api/script/notes/nt-47c0b8cd40": 63,
+   "GET /api/script/notes/nt-618ee7a761": 91,
+   "GET /api/script/notes/nt-2514634032": 162,
+   "GET /api/script/notes/nt-2a2046a0a0": 119,
+   "GET /api/script/notes/nt-0ba07e45b1": 121,
+   "GET /api/script/notes/nt-c1fa9b4b7a": 31
+  },
+  "config": {
+   "users": 3,
+   "videos": 3,
+   "scale": 1,
+   "netMs": 60,
+   "seed": "base100",
+   "minutes": 1,
+   "renderMs": 9000,
+   "media": "direct",
+   "loopConcurrency": 2,
+   "aiLatencyMs": {
+    "planner": 7200,
+    "writer": 21000,
+    "scenePlanner": 4000,
+    "tts": 3000
+   },
+   "aiFailureRate": {
+    "planner": 0.1,
+    "writer": 0.12,
+    "scenePlanner": 0.08,
+    "tts": 0.25
+   },
+   "invalidRate": {
+    "writer": 0.12,
+    "scenePlanner": 0.08
+   },
+   "providerLatencyMs": {
+    "search": 450,
+    "photo": 700,
+    "clip": 1400,
+    "externalTts": 2500
+   },
+   "providerFailureRate": {
+    "search": 0.05,
+    "photo": 0.05,
+    "clip": 0.05,
+    "externalTts": 0.2
+   }
+  }
+ },
+ "runs": [
+  {
+   "run": 1,
+   "makespanMs": 226086,
+   "pipelineMakespanMs": 183311,
+   "requestTotal": 1061,
+   "requests": {
+    "GET /api/credits": 21,
+    "GET /api/pipeline-capabilities": 3,
+    "POST /api/script?async=1": 12,
+    "GET /api/script/notes/nt-d770bc5df0": 144,
+    "GET /api/script/notes/nt-1308fbff40": 141,
+    "GET /api/script/notes/nt-3bbe141309": 62,
+    "POST /api/voiceover": 29,
+    "POST /api/image-prompts": 21,
+    "GET /api/media/config": 3,
+    "POST /api/media/claim": 18,
+    "POST /api/image": 20,
+    "GET /api/script/notes/nt-47c0b8cd40": 63,
+    "GET /api/script/notes/nt-618ee7a761": 91,
+    "GET /api/script/notes/nt-2514634032": 162,
+    "GET /api/script/notes/nt-2a2046a0a0": 119,
+    "GET /api/script/notes/nt-0ba07e45b1": 121,
+    "GET /api/script/notes/nt-c1fa9b4b7a": 31
+   },
+   "ai": {
+    "calls": {
+     "planner": 9,
+     "writer": 12,
+     "scenePlanner": 21,
+     "tts": 29,
+     "other": 0
+    },
+    "failures": {
+     "planner": 0,
+     "writer": 3,
+     "scenePlanner": 2,
+     "tts": 8,
+     "other": 0
+    },
+    "busyMs": {
+     "planner": 64800,
+     "writer": 252000,
+     "scenePlanner": 84000,
+     "tts": 87000,
+     "other": 0
+    },
+    "models": {
+     "@cf/meta/llama-3.1-8b-instruct-fp8": 39,
+     "@cf/meta/llama-3.3-70b-instruct-fp8-fast": 3,
+     "@cf/myshell-ai/melotts": 14,
+     "@cf/deepgram/aura-2-en": 13,
+     "@cf/deepgram/aura-1": 2
+    }
+   },
+   "provider": {
+    "searches": 65,
+    "photos": 36,
+    "clips": 22,
+    "externalTts": 0,
+    "failures": 7,
+    "bytes": 86400
+   },
+   "perUser": [
+    {
+     "user": "u1",
+     "scriptsMs": 139621,
+     "mediaMs": 43690,
+     "exportMs": 27068,
+     "totalMs": 210379,
+     "finished": 3,
+     "requests": 393,
+     "providerRequests": 29
+    },
+    {
+     "user": "u2",
+     "scriptsMs": 157410,
+     "mediaMs": 37710,
+     "exportMs": 27064,
+     "totalMs": 222184,
+     "finished": 3,
+     "requests": 359,
+     "providerRequests": 29
+    },
+    {
+     "user": "u3",
+     "scriptsMs": 117928,
+     "mediaMs": 38139,
+     "exportMs": 27066,
+     "totalMs": 183134,
+     "finished": 3,
+     "requests": 309,
+     "providerRequests": 30
+    }
+   ],
+   "videos": [
+    {
+     "user": "u1",
+     "row": 2,
+     "topic": "morning yoga",
+     "finished": true,
+     "stage": "done",
+     "error": "",
+     "scenes": 6,
+     "slides": 6,
+     "stageMs": {
+      "ready": 77,
+      "writing": 139565,
+      "voice": 12103,
+      "timing": 44,
+      "prompts": 6878,
+      "images": 13633,
+      "animate": 19,
+      "done": 10992
+     }
+    },
+    {
+     "user": "u1",
+     "row": 3,
+     "topic": "home coffee",
+     "finished": true,
+     "stage": "done",
+     "error": "",
+     "scenes": 6,
+     "slides": 6,
+     "stageMs": {
+      "ready": 119,
+      "writing": 136783,
+      "empty": 2740,
+      "voice": 12847,
+      "timing": 41,
+      "prompts": 10520,
+      "images": 20228,
+      "animate": 33,
+      "done": 0
+     }
+    },
+    {
+     "user": "u1",
+     "row": 4,
+     "topic": "night running",
+     "finished": true,
+     "stage": "done",
+     "error": "",
+     "scenes": 6,
+     "slides": 6,
+     "stageMs": {
+      "ready": 168,
+      "writing": 59836,
+      "empty": 79638,
+      "voice": 11837,
+      "timing": 45,
+      "prompts": 3559,
+      "images": 20081,
+      "animate": 13,
+      "done": 8134
+     }
+    },
+    {
+     "user": "u2",
+     "row": 2,
+     "topic": "small garden",
+     "finished": true,
+     "stage": "done",
+     "error": "",
+     "scenes": 6,
+     "slides": 6,
+     "stageMs": {
+      "ready": 45,
+      "writing": 60956,
+      "empty": 96438,
+      "voice": 12767,
+      "timing": 40,
+      "prompts": 4856,
+      "images": 13895,
+      "animate": 19,
+      "done": 6104
+     }
+    },
+    {
+     "user": "u2",
+     "row": 3,
+     "topic": "desk stretches",
+     "finished": true,
+     "stage": "done",
+     "error": "",
+     "scenes": 6,
+     "slides": 6,
+     "stageMs": {
+      "ready": 87,
+      "writing": 88355,
+      "empty": 68997,
+      "voice": 9608,
+      "timing": 41,
+      "prompts": 3572,
+      "images": 15075,
+      "animate": 20,
+      "done": 9365
+     }
+    },
+    {
+     "user": "u2",
+     "row": 4,
+     "topic": "sourdough bread",
+     "finished": true,
+     "stage": "done",
+     "error": "",
+     "scenes": 6,
+     "slides": 6,
+     "stageMs": {
+      "ready": 136,
+      "writing": 157303,
+      "voice": 13153,
+      "timing": 45,
+      "prompts": 8804,
+      "images": 15626,
+      "animate": 53,
+      "done": 0
+     }
+    },
+    {
+     "user": "u3",
+     "row": 2,
+     "topic": "city cycling",
+     "finished": true,
+     "stage": "done",
+     "error": "",
+     "scenes": 6,
+     "slides": 6,
+     "stageMs": {
+      "ready": 24,
+      "writing": 115849,
+      "empty": 2090,
+      "voice": 9324,
+      "timing": 43,
+      "prompts": 9502,
+      "images": 9520,
+      "animate": 16,
+      "done": 9701
+     }
+    },
+    {
+     "user": "u3",
+     "row": 3,
+     "topic": "deep sleep",
+     "finished": true,
+     "stage": "done",
+     "error": "",
+     "scenes": 6,
+     "slides": 6,
+     "stageMs": {
+      "ready": 115,
+      "writing": 117848,
+      "voice": 3174,
+      "timing": 48,
+      "prompts": 3837,
+      "images": 9587,
+      "animate": 26,
+      "done": 21434
+     }
+    },
+    {
+     "user": "u3",
+     "row": 4,
+     "topic": "phone photos",
+     "finished": true,
+     "stage": "done",
+     "error": "",
+     "scenes": 6,
+     "slides": 6,
+     "stageMs": {
+      "ready": 150,
+      "writing": 29775,
+      "empty": 88038,
+      "voice": 5976,
+      "timing": 42,
+      "prompts": 5297,
+      "images": 26762,
+      "animate": 29,
+      "done": 0
+     }
+    }
+   ],
+   "loop": {
+    "ticks": 22,
+    "phases": {
+     "timers": 0,
+     "pending": 22,
+     "poll": 11,
+     "check": 0,
+     "close": 0
+    },
+    "concurrency": 2,
+    "active": 0,
+    "queued": 0,
+    "maxQueue": 24,
+    "started": 11,
+    "completed": 11,
+    "failed": 0,
+    "timerWaitMs": 0,
+    "checkJobs": 0,
+    "pendingWaitMs": 0,
+    "lastTickAt": 1793637082187,
+    "avgRunMs": 23895
+   },
+   "directMedia": [
+    {
+     "user": "u1",
+     "debug": {
+      "counters": {
+       "scenes": 18,
+       "direct": 11,
+       "fallback": 0,
+       "failed": 7,
+       "searches": 18,
+       "downloads": 11,
+       "claims": 6,
+       "refunded": 0
+      },
+      "events": [
+       {
+        "at": "2026-11-02T16:31:35.816Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 18,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:36.217Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "video",
+        "hits": 0,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:36.217Z",
+        "level": "warn",
+        "stage": "scene.failed",
+        "mediaType": "video",
+        "scene": 4,
+        "status": 404,
+        "kind": "no-hit",
+        "fallback": true,
+        "error": "No suitable Pixabay media for this scene. Try different search terms or upload media."
+       },
+       {
+        "at": "2026-11-02T16:31:36.263Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:36.263Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 392,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:36.286Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:36.290Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 372,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:36.841Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 392,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:36.841Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 5,
+        "assetId": 392,
+        "transport": "browser",
+        "bytes": 1200
+       },
+       {
+        "at": "2026-11-02T16:31:37.128Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 372,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:37.129Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 3,
+        "assetId": 372,
+        "transport": "browser",
+        "bytes": 1200
+       },
+       {
+        "at": "2026-11-02T16:31:45.735Z",
+        "level": "info",
+        "stage": "claim.granted",
+        "requested": 3,
+        "granted": 3,
+        "claimId": "open"
+       },
+       {
+        "at": "2026-11-02T16:31:45.736Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 11,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:45.736Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "video",
+        "queryLength": 13,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:45.736Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 10,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:46.172Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:46.173Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 542,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:46.208Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:46.208Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 522,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:46.219Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "video",
+        "hits": 0,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:46.219Z",
+        "level": "warn",
+        "stage": "scene.failed",
+        "mediaType": "video",
+        "scene": 4,
+        "status": 404,
+        "kind": "no-hit",
+        "fallback": true,
+        "error": "No suitable Pixabay media for this scene. Try different search terms or upload media."
+       },
+       {
+        "at": "2026-11-02T16:31:46.763Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 542,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:46.763Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 5,
+        "assetId": 542,
+        "transport": "browser",
+        "bytes": 1200
+       },
+       {
+        "at": "2026-11-02T16:31:46.854Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 522,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:46.854Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 3,
+        "assetId": 522,
+        "transport": "browser",
+        "bytes": 1200
+       }
+      ]
+     }
+    },
+    {
+     "user": "u2",
+     "debug": {
+      "counters": {
+       "scenes": 18,
+       "direct": 11,
+       "fallback": 0,
+       "failed": 7,
+       "searches": 18,
+       "downloads": 11,
+       "claims": 6,
+       "refunded": 0
+      },
+      "events": [
+       {
+        "at": "2026-11-02T16:31:52.659Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 12,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:52.659Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "video",
+        "queryLength": 10,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:52.659Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 14,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:53.025Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:53.025Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 602,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:53.058Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "video",
+        "hits": 0,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:53.058Z",
+        "level": "warn",
+        "stage": "scene.failed",
+        "mediaType": "video",
+        "scene": 4,
+        "status": 404,
+        "kind": "no-hit",
+        "fallback": true,
+        "error": "No suitable Pixabay media for this scene. Try different search terms or upload media."
+       },
+       {
+        "at": "2026-11-02T16:31:53.105Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:53.105Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 582,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:53.769Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 602,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:53.769Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 5,
+        "assetId": 602,
+        "transport": "browser",
+        "bytes": 1200
+       },
+       {
+        "at": "2026-11-02T16:31:53.869Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 582,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:53.869Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 3,
+        "assetId": 582,
+        "transport": "browser",
+        "bytes": 1200
+       },
+       {
+        "at": "2026-11-02T16:31:56.245Z",
+        "level": "info",
+        "stage": "claim.granted",
+        "requested": 3,
+        "granted": 3,
+        "claimId": "open"
+       },
+       {
+        "at": "2026-11-02T16:31:56.246Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 19,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:56.246Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "video",
+        "queryLength": 17,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:56.246Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 17,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:56.645Z",
+        "level": "warn",
+        "stage": "search.rejected",
+        "type": "image",
+        "status": 503,
+        "retryAfterMs": 5000,
+        "detail": "provider busy"
+       },
+       {
+        "at": "2026-11-02T16:31:56.645Z",
+        "level": "warn",
+        "stage": "scene.failed",
+        "mediaType": "image",
+        "scene": 5,
+        "status": 503,
+        "kind": "provider",
+        "fallback": true,
+        "error": "Pixabay search failed (HTTP 503)"
+       },
+       {
+        "at": "2026-11-02T16:31:56.681Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:56.681Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 612,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:56.739Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "video",
+        "hits": 0,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:56.739Z",
+        "level": "warn",
+        "stage": "scene.failed",
+        "mediaType": "video",
+        "scene": 4,
+        "status": 404,
+        "kind": "no-hit",
+        "fallback": true,
+        "error": "No suitable Pixabay media for this scene. Try different search terms or upload media."
+       },
+       {
+        "at": "2026-11-02T16:31:57.486Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 612,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:57.486Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 3,
+        "assetId": 612,
+        "transport": "browser",
+        "bytes": 1200
+       }
+      ]
+     }
+    },
+    {
+     "user": "u3",
+     "debug": {
+      "counters": {
+       "scenes": 18,
+       "direct": 12,
+       "fallback": 0,
+       "failed": 6,
+       "searches": 18,
+       "downloads": 12,
+       "claims": 6,
+       "refunded": 0
+      },
+      "events": [
+       {
+        "at": "2026-11-02T16:31:09.691Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 10,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:10.052Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "video",
+        "hits": 0,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:10.053Z",
+        "level": "warn",
+        "stage": "scene.failed",
+        "mediaType": "video",
+        "scene": 4,
+        "status": 404,
+        "kind": "no-hit",
+        "fallback": true,
+        "error": "No suitable Pixabay media for this scene. Try different search terms or upload media."
+       },
+       {
+        "at": "2026-11-02T16:31:10.054Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:10.055Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 152,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:10.173Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:10.173Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 172,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:10.771Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 172,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:10.771Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 5,
+        "assetId": 172,
+        "transport": "browser",
+        "bytes": 1200
+       },
+       {
+        "at": "2026-11-02T16:31:10.823Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 152,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:10.823Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 3,
+        "assetId": 152,
+        "transport": "browser",
+        "bytes": 1200
+       },
+       {
+        "at": "2026-11-02T16:31:19.380Z",
+        "level": "info",
+        "stage": "claim.granted",
+        "requested": 3,
+        "granted": 3,
+        "claimId": "open"
+       },
+       {
+        "at": "2026-11-02T16:31:19.381Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 12,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:19.381Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "video",
+        "queryLength": 11,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:19.381Z",
+        "level": "info",
+        "stage": "search.started",
+        "type": "image",
+        "queryLength": 13,
+        "orientation": "landscape"
+       },
+       {
+        "at": "2026-11-02T16:31:19.749Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:19.749Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 202,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:19.773Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "image",
+        "hits": 2,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:19.773Z",
+        "level": "info",
+        "stage": "download.started",
+        "mediaType": "image",
+        "assetId": 182,
+        "host": "cdn.pixabay.com"
+       },
+       {
+        "at": "2026-11-02T16:31:19.918Z",
+        "level": "info",
+        "stage": "search.completed",
+        "type": "video",
+        "hits": 0,
+        "totalHits": 500
+       },
+       {
+        "at": "2026-11-02T16:31:19.918Z",
+        "level": "warn",
+        "stage": "scene.failed",
+        "mediaType": "video",
+        "scene": 4,
+        "status": 404,
+        "kind": "no-hit",
+        "fallback": true,
+        "error": "No suitable Pixabay media for this scene. Try different search terms or upload media."
+       },
+       {
+        "at": "2026-11-02T16:31:20.503Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 202,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:20.503Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 5,
+        "assetId": 202,
+        "transport": "browser",
+        "bytes": 1200
+       },
+       {
+        "at": "2026-11-02T16:31:20.531Z",
+        "level": "info",
+        "stage": "download.completed",
+        "mediaType": "image",
+        "assetId": 182,
+        "mime": "image/png",
+        "bytes": 1200,
+        "transport": "browser"
+       },
+       {
+        "at": "2026-11-02T16:31:20.531Z",
+        "level": "info",
+        "stage": "scene.completed",
+        "mediaType": "image",
+        "scene": 3,
+        "assetId": 182,
+        "transport": "browser",
+        "bytes": 1200
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

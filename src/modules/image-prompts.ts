@@ -9,7 +9,7 @@ import { normalizeSearchQuery, PIXABAY_IMAGE_RESULTS } from "./pixabay";
  */
 
 import { IMAGE_PROMPT_TIMEOUT_MS, imageFrameFor } from "./image-batch";
-import { sharedImageLoadGovernor } from "./image-load";
+import { sharedImageLoadGovernor, type ImageFailureClassification } from "./image-load";
 
 export const IMAGE_STYLES = [
 	"Cinematic Film",
@@ -37,6 +37,34 @@ export const IMAGE_PROMPT_MAX_TOKENS = 3584;
 export const IMAGE_PROMPT_BATCH_TIMEOUT_MS = 45000;
 export const IMAGE_PROMPT_FALLBACK_MODELS: readonly string[] = [];
 
+/*
+ * SESSION 279 — THE WORKER OWNS THE SCENE-KEYWORD LADDER.
+ *
+ * `progressive-image-pipeline.ts` used to retry a failed batch three times from
+ * the page (attempt 0-2, `previousError` fed back, 800·2^n jittered backoff).
+ * Each of those attempts was a whole HTTP round trip through the browser's
+ * control lane, and the coaching it paid for is exactly the coaching this module
+ * already builds from `attempt` - so the ladder moved here, where the parsed
+ * reply, the slot plan and the governor's verdict are already in scope.
+ *
+ * Hang rules, same shape as script-seo's `attemptSlot()` and voiceover's pool:
+ *   - at most `IMAGE_PROMPT_ATTEMPTS` planner calls per request;
+ *   - `IMAGE_PROMPT_TOTAL_BUDGET_MS` for the whole ladder, and no attempt starts
+ *     unless at least `IMAGE_PROMPT_MIN_ATTEMPT_MS` of it is left;
+ *   - `request.signal` checked before every attempt;
+ *   - a fatal classification (`retryable: false` - auth, quota, 4xx) stops it;
+ *   - concurrency is unchanged: one planner call in flight per request, so a
+ *     retrying fleet cannot multiply its own load.
+ */
+export const IMAGE_PROMPT_ATTEMPTS = 3;
+export const IMAGE_PROMPT_TOTAL_BUDGET_MS = 60_000;
+export const IMAGE_PROMPT_MIN_ATTEMPT_MS = 3_000;
+export const IMAGE_PROMPT_RETRY_BASE_MS = 400;
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
 export const IMAGE_STYLE_GUIDANCE: Record<ImageStyle, string> = {
 	"Cinematic Film": "cinematic film still, motivated dramatic lighting, layered depth, natural lens perspective, rich film color grade",
 	"Editorial Magazine": "premium editorial photography, deliberate art direction, clean composition, refined palette, polished magazine imagery",
@@ -63,6 +91,12 @@ export interface ImagePromptInput {
 	orientation?: string;
 	/** Stateless browser-managed batch. Omitted by legacy callers. */
 	batch?: { offset: number; count: number; total: number; attempt: number; previous: string[]; previousError?: string };
+	/**
+	 * Session 279: the WORKER's own ladder attempt, so the coaching and the
+	 * temperature shift work for callers that send no `batch` at all. A cached
+	 * pre-279 page still drives `batch.attempt`; the higher of the two wins.
+	 */
+	retry?: { attempt: number; previousError?: string };
 }
 
 type AiEnv = {
@@ -1546,13 +1580,22 @@ export async function generateImagePrompts(
 	const slots = Array.from({ length: count }, (_, i) => ({ scene: offset + i,
 		type: positions.includes(offset + i) ? "video" : "image" }));
 	const baseInstruction = buildStockSearchInstruction(input, total, slots);
-	const attempt = input.batch ? Number(input.batch.attempt) || 0 : 0;
 	/*
-	 * The browser retries a failed batch (attempt 0-2). After a bad reply the
-	 * same request is re-asked with explicit JSON + exact slot-count/type coaching
-	 * and a shifted sampling temperature so 8B models do not repeat the same miss.
+	 * Session 279: the attempt counter belongs to whoever owns the ladder. This
+	 * worker's own ladder passes `retry.attempt`; a cached pre-279 page still
+	 * passes `batch.attempt` (0-2) and gets the identical coaching. The higher
+	 * of the two wins so a legacy page against this worker never loses its
+	 * retry instructions.
 	 */
-	const retryReason = input.batch?.previousError ? " Previous attempt failed with: " + input.batch.previousError + "." : "";
+	const browserAttempt = input.batch ? Number(input.batch.attempt) || 0 : 0;
+	const attempt = Math.min(2, Math.max(browserAttempt, Number(input.retry?.attempt) || 0));
+	/*
+	 * After a bad reply the same request is re-asked with explicit JSON + exact
+	 * slot-count/type coaching and a shifted sampling temperature so 8B models do
+	 * not repeat the same miss.
+	 */
+	const previousError = input.retry?.previousError || input.batch?.previousError || "";
+	const retryReason = previousError ? " Previous attempt failed with: " + previousError + "." : "";
 	const instruction = baseInstruction + (attempt > 0
 		? "\nRETRY: an earlier attempt did not return parseable JSON. Return ONLY the JSON object — no prose before or after it, no markdown code fences." +
 			retryReason +
@@ -1747,10 +1790,92 @@ export async function handleGenerateImagePrompts(
 		batch: input.batch ? { offset: input.batch.offset, count: input.batch.count, attempt: input.batch.attempt } : undefined
 	});
 
-	try {
-		const prompts = await generateImagePrompts(env, model, input);
+	/*
+	 * THE LADDER (session 279). One request, up to IMAGE_PROMPT_ATTEMPTS planner
+	 * calls, all inside IMAGE_PROMPT_TOTAL_BUDGET_MS. The page no longer sends
+	 * attempt 1 and 2, so the coaching (`retry.attempt` + `previousError`) and
+	 * the temperature shift happen here, where the failed reply is still in
+	 * scope. Every rule that keeps a ladder from becoming a hang is in place:
+	 * a per-attempt timeout (IMAGE_PROMPT_BATCH_TIMEOUT_MS inside
+	 * generateImagePrompts), a total budget, a minimum-remaining check before
+	 * each attempt, the request signal, and an immediate stop on a fatal
+	 * classification.
+	 */
+	const promptDeadlineAt = Date.now() + IMAGE_PROMPT_TOTAL_BUDGET_MS;
+	const baseAttempt = input.batch ? Number(input.batch.attempt) || 0 : 0;
+	const ladder = { attempts: 0, budgetExhausted: false };
+	let prompts: string[] | null = null;
+	let lastError: unknown = null;
+	let lastClassification: ImageFailureClassification | null = null;
+	let interrupted = false;
+
+	for (let step = 0; step < IMAGE_PROMPT_ATTEMPTS; step++) {
+		if (request.signal.aborted) {
+			interrupted = true;
+			break;
+		}
+		const leftMs = promptDeadlineAt - Date.now();
+		if (leftMs < IMAGE_PROMPT_MIN_ATTEMPT_MS) {
+			/* Never start a call whose answer the deadline would throw away. */
+			ladder.budgetExhausted = true;
+			console.warn("[image-prompts] ladder stopped: budget exhausted", {
+				attempts: ladder.attempts,
+				leftMs: Math.round(leftMs)
+			});
+			break;
+		}
+		ladder.attempts += 1;
+		const attemptInput: ImagePromptInput =
+			step === 0
+				? input
+				: {
+						...input,
+						retry: {
+							attempt: Math.min(2, baseAttempt + step),
+							previousError: errorMessage(lastError).slice(0, 300)
+						}
+					};
+		try {
+			prompts = await generateImagePrompts(env, model, attemptInput);
+			lastError = null;
+			break;
+		} catch (error) {
+			lastError = error;
+			const rawMessage = errorMessage(error);
+			if (/abort|signal/i.test(rawMessage)) {
+				/* Cancellation is not a retry reason. */
+				interrupted = true;
+				break;
+			}
+			/*
+			 * One classification per real model call - the same accounting three
+			 * browser requests used to give the governor, now inside one request.
+			 */
+			const classification = sharedImageLoadGovernor.observeFailure(error);
+			lastClassification = classification;
+			console.warn("[image-prompts] attempt failed", {
+				attempt: ladder.attempts,
+				of: IMAGE_PROMPT_ATTEMPTS,
+				kind: classification.kind,
+				retryable: classification.retryable,
+				retryAfterMs: classification.retryAfterMs,
+				leftMs: Math.round(promptDeadlineAt - Date.now()),
+				error: rawMessage
+			});
+			if (!classification.retryable) break;
+			if (step + 1 >= IMAGE_PROMPT_ATTEMPTS) break;
+			const waitMs = Math.min(
+				classification.retryAfterMs || IMAGE_PROMPT_RETRY_BASE_MS * Math.pow(2, step),
+				Math.max(0, promptDeadlineAt - Date.now())
+			);
+			if (waitMs > 0) await sleep(waitMs);
+		}
+	}
+
+	if (prompts) {
 		console.info("[image-prompts] ready", {
 			count: prompts.length,
+			attempts: ladder.attempts,
 			batch: input.batch ? { offset: input.batch.offset, requested: input.batch.count, nextOffset: input.batch.offset + prompts.length } : undefined,
 			expectedCount,
 			ms: Date.now() - startedAt
@@ -1759,6 +1884,8 @@ export async function handleGenerateImagePrompts(
 			success: true,
 			prompts,
 			count: prompts.length,
+			attempts: ladder.attempts,
+			retryOwner: "worker",
 			batch: input.batch ? { offset: input.batch.offset, requested: input.batch.count, nextOffset: input.batch.offset + prompts.length } : undefined,
 			expectedCount,
 			style: input.style,
@@ -1770,9 +1897,10 @@ export async function handleGenerateImagePrompts(
 			model: usedModel,
 			ms: Date.now() - startedAt
 		});
-	} catch (error) {
-		const rawMessage = errorMessage(error);
-		const interrupted = /abort|signal/i.test(rawMessage);
+	}
+
+	{
+		const rawMessage = errorMessage(lastError);
 		const message = interrupted
 			? "The scene prompt model request was interrupted. Please retry." : rawMessage;
 		/*
@@ -1781,18 +1909,20 @@ export async function handleGenerateImagePrompts(
 		 * The classification also feeds the SHARED governor, not just this
 		 * handler: the text fleet and the image fleet are the same account, so
 		 * a prompt-side overload is a real reason for the next image call to
-		 * wait too. `observeFailure` classifies and arms the isolate-wide
-		 * cooldown in one call, and answering 503 + Retry-After (plus the hint
-		 * in the body) is what lets the browser keep the video's
-		 * already-rendered images and continue the remaining scenes instead of
-		 * stopping after the first chunk of 3.
+		 * wait too. `observeFailure` already classified and armed the
+		 * isolate-wide cooldown for every attempt above, so the verdict is
+		 * reused here instead of being observed a second time. Answering 503 +
+		 * Retry-After (plus the hint in the body) is what lets the browser keep
+		 * the video's already-rendered images and continue the remaining scenes
+		 * instead of stopping after the first chunk of 3.
 		 */
 		const plannerOutputError = /^Scene keyword planner\b/i.test(rawMessage);
-		const classification = interrupted
-			? { kind: "transient" as const, retryable: true, retryAfterMs: null, reason: "aborted" }
-			: plannerOutputError
-				? { kind: "transient" as const, retryable: true, retryAfterMs: null, reason: "planner_output" }
-				: sharedImageLoadGovernor.observeFailure(error);
+		const classification: ImageFailureClassification = interrupted
+			? { kind: "transient", retryable: true, retryAfterMs: null, reason: "aborted" }
+			: lastClassification ||
+				(plannerOutputError
+					? { kind: "transient", retryable: true, retryAfterMs: null, reason: "planner_output" }
+					: sharedImageLoadGovernor.observeFailure(lastError));
 		const overload = classification.kind === "overload";
 		const hintMs =
 			classification.retryAfterMs ||
@@ -1806,6 +1936,8 @@ export async function handleGenerateImagePrompts(
 		}
 		console.error("[image-prompts] failed", {
 			ms: Date.now() - startedAt,
+			attempts: ladder.attempts,
+			budgetExhausted: ladder.budgetExhausted,
 			kind: classification.kind,
 			retryAfterMs: hintMs,
 			error: message
@@ -1817,9 +1949,14 @@ export async function handleGenerateImagePrompts(
 				code: "IMAGE_PROMPT_MODEL_FAILED",
 				kind: classification.kind,
 				retryAfterMs: hintMs > 0 ? hintMs : 0,
+				/* The worker spent its ladder: another identical request would
+				 * spend it again. Retryable, but only after the hint. */
+				attempts: ladder.attempts,
+				budgetExhausted: ladder.budgetExhausted,
+				retryOwner: "worker",
 				prompts: []
 			}),
-			{ status: overload ? 503 : 502, headers }
+			{ status: ladder.budgetExhausted ? 504 : overload ? 503 : 502, headers }
 		);
 	}
 }

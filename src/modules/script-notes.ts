@@ -116,6 +116,20 @@ export interface ScriptNote {
 	runId?: string;
 	/* The wall-clock budget that run promised (0/absent = the default). */
 	deadlineMs?: number;
+	/*
+	 * SESSION 279 — THE QUEUE WAIT THAT RUN WAS PROMISED.
+	 *
+	 * `submitAsyncScriptJob` admits a ticket only when the loop's own ETA fits
+	 * the client's patience, and it writes that ETA here. The staleness watchdog
+	 * then uses THIS number for a note that is still `queued` instead of the flat
+	 * SCRIPT_NOTE_QUEUE_GRACE_MS, because a flat 90 s grace contradicted
+	 * admission (which accepted waits up to the 240 s run deadline): the loop
+	 * handed out tickets it then killed while they were still waiting in line.
+	 * Measured with the browser's retry ladder removed - so nothing re-submitted
+	 * a killed note - as `SCRIPT_NOTE_STALE:queued:90s>90s` on three of nine
+	 * scripts, each one a dead row. Absent/0 = the documented default.
+	 */
+	queueGraceMs?: number;
 	/* Machine-readable failure reason, e.g. SCRIPT_NOTE_STALE. */
 	errorCode?: string;
 	/* Which pipeline stage failed ("planner" | "writer" | "pipeline"): the
@@ -1382,8 +1396,17 @@ export function noteStaleReason(
 	budgets: { queueGraceMs?: number; deadlineMs?: number } = {}
 ): string | null {
 	if (noteStateIsTerminal(note.state)) return null;
+	/*
+	 * The note's OWN promised wait wins (session 279): it is what admission
+	 * told this ticket it may spend in the queue. A caller-supplied budget is
+	 * the fallback, then the flat default.
+	 */
 	const queueGrace =
-		Number(budgets.queueGraceMs) > 0 ? Number(budgets.queueGraceMs) : SCRIPT_NOTE_QUEUE_GRACE_MS;
+		Number(note.queueGraceMs) > 0
+			? Number(note.queueGraceMs)
+			: Number(budgets.queueGraceMs) > 0
+				? Number(budgets.queueGraceMs)
+				: SCRIPT_NOTE_QUEUE_GRACE_MS;
 	const deadline =
 		Number(budgets.deadlineMs) > 0
 			? Number(budgets.deadlineMs)
