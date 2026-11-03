@@ -14,18 +14,21 @@
  *      Its retries were 500 ms, 1000 ms — shorter than the wait the fleet was
  *      asking for — so the same failure ended the video.
  *
- * The contract pinned here:
+ * The contract pinned here (updated by session 279, which moved every retry
+ * ladder out of the browser and into the request that owns the failure):
  *
- *   1. `requestImageChunk()` retries ONLY the scenes that failed, keeps the
- *      original scene indices, never re-requests a delivered image, gives up
- *      after a bounded number of rounds, and never retries 4xx (except 429/408,
- *      which are load answers).
+ *   1. `requestImageChunk()` makes ONE pass over its scenes. The retrying is
+ *      the worker's (`generateOneWithRetry`: up to 4 attempts inside a 45 s
+ *      budget, Retry-After honoured, a fatal verdict stops immediately), so a
+ *      scene that comes back failed is a VERDICT. What the page still owns is
+ *      the original scene indices, never re-asking for a delivered image,
+ *      reporting a hole as a failure, and cancellation.
  *   2. A failing image chunk no longer ends the row: the delivered images are
- *      kept and the retried scenes are appended, so a 10-scene video finishes
- *      with 10 images.
+ *      kept, and the flow-level scheduler - the only retry left in the browser,
+ *      because only a scheduler can sit out a minutes-long rate-limit window -
+ *      re-runs the missing scenes, so a 10-scene video finishes with 10 images.
  *   3. A prompt chunk overload answers 503 + `Retry-After` + `kind` +
- *      `retryAfterMs`, the browser waits that long, and the flow still finishes
- *      with every scene.
+ *      `retryAfterMs`, and the flow still finishes with every scene.
  *   4. Pacing is unchanged: 3 images per 3 s per row, 10,000 images/day.
  */
 
@@ -53,6 +56,27 @@ const json = (body, status = 200, headers = {}) =>
 		headers: Object.assign({ "Content-Type": "application/json" }, headers)
 	});
 const image = () => new Response(png, { status: 200, headers: { "Content-Type": "image/png" } });
+const mp4 = Uint8Array.from([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
+/*
+ * A finished Quick Batch row needs exactly TWO distinct stock clips, so the
+ * end-to-end rows below serve them for two of the ten scenes - with different
+ * provider ids, which is what the row's clip check compares.
+ */
+const CLIP_SCENES = ["Scene 1", "Scene 8"];
+const sceneMedia = (prompt) => (CLIP_SCENES.indexOf(prompt) >= 0
+	? new Response(mp4, {
+		status: 200,
+		headers: {
+			"Content-Type": "video/mp4",
+			"X-Pixabay-Source": encodeURIComponent(JSON.stringify({
+				provider: "pixabay",
+				id: 900 + (Number(String(prompt).split(" ")[1]) || 0),
+				type: "video",
+				duration: 4
+			}))
+		}
+	})
+	: image());
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 function client() {
@@ -70,6 +94,35 @@ function client() {
 		decodeAudioData() { return Promise.resolve({ duration: 60 }); }
 	};
 	w.Image = class { decode() { return Promise.resolve(); } };
+	/*
+	 * The two end-to-end rows below have to reach "done", which in jsdom means
+	 * real clip probing (loadedmetadata + a finite duration) and slide building.
+	 */
+	w.HTMLMediaElement.prototype.play = () => Promise.resolve();
+	w.HTMLMediaElement.prototype.pause = () => {};
+	w.HTMLMediaElement.prototype.load = function () {
+		queueMicrotask(() => this.dispatchEvent(new w.Event("loadedmetadata")));
+	};
+	const srcDescriptor = Object.getOwnPropertyDescriptor(w.HTMLMediaElement.prototype, "src");
+	Object.defineProperty(w.HTMLMediaElement.prototype, "src", {
+		configurable: true,
+		get() { return srcDescriptor.get.call(this); },
+		set(value) {
+			srcDescriptor.set.call(this, value);
+			queueMicrotask(() => this.dispatchEvent(new w.Event("loadedmetadata")));
+		}
+	});
+	Object.defineProperty(w.HTMLMediaElement.prototype, "readyState", { configurable: true, get() { return 4; } });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "duration", {
+		configurable: true,
+		get() { return this._duration === undefined ? 4 : this._duration; }
+	});
+	w.HTMLCanvasElement.prototype.getContext = function () {
+		return { canvas: this, fillRect() {}, clearRect() {}, drawImage() {}, fillText() {}, strokeText() {},
+			measureText: () => ({ width: 8 }), save() {}, restore() {}, beginPath() {}, closePath() {}, arc() {},
+			rect() {}, clip() {}, translate() {}, scale() {}, rotate() {}, setLineDash() {}, fill() {}, stroke() {},
+			createLinearGradient: () => ({ addColorStop() {} }) };
+	};
 	return { dom, w };
 }
 
@@ -88,10 +141,10 @@ test("#263 pacing stays 3 images per 3 s per row and 10,000 images per day", () 
 });
 
 /* ------------------------------------------------------------------ */
-/* 2. requestImageChunk: retry only the failed scenes                 */
+/* 2. requestImageChunk: one pass, verdicts keep their scene indices   */
 /* ------------------------------------------------------------------ */
 
-test("#263 a failed image chunk retries only its failed scenes and keeps original indices", async (t) => {
+test("#279 a failed scene is one verdict that keeps its original index", async (t) => {
 	const { dom, w } = client();
 	t.after(() => dom.window.close());
 
@@ -103,9 +156,10 @@ test("#263 a failed image chunk retries only its failed scenes and keeps origina
 			const prompt = JSON.parse(init.body).prompt;
 			const seen = (attempts.get(prompt) || 0) + 1;
 			attempts.set(prompt, seen);
-			/* The *second* chunk's scenes fail once with a transient 500. */
-			if (injected && /Scene [34]$/.test(prompt) && seen === 1) {
-				return json({ error: "internal error" }, 500);
+			/* The *second* chunk's scenes come back failed: the worker already
+			 * spent its own ladder inside this one request. */
+			if (injected && /Scene [34]$/.test(prompt)) {
+				return json({ error: "internal error", attempts: 4, retryOwner: "worker" }, 500);
 			}
 			return image();
 		}
@@ -122,18 +176,19 @@ test("#263 a failed image chunk retries only its failed scenes and keeps origina
 		onImage: (blob, index) => { delivered.push(index); }
 	});
 
-	assert.deepEqual(delivered.sort((a, b) => a - b), [0, 1, 2, 3, 4, 5], "every scene is delivered");
-	assert.deepEqual(results.map((r) => r.ok), [true, true, true, true, true, true]);
-	assert.deepEqual(results.map((r) => r.index), [0, 1, 2, 3, 4, 5], "results keep the original indices");
-	/* Delivered scenes were never asked twice; the two failures were retried once. */
-	assert.equal(attempts.get("Scene 0"), 1);
-	assert.equal(attempts.get("Scene 1"), 1);
-	assert.equal(attempts.get("Scene 3"), 2);
-	assert.equal(attempts.get("Scene 4"), 2);
-	assert.equal(attempts.get("Scene 5"), 1);
+	assert.deepEqual(delivered.sort((a, b) => a - b), [0, 1, 2, 5], "the scenes the worker delivered arrive");
+	assert.deepEqual(results.map((r) => r.ok), [true, true, true, false, false, true]);
+	assert.deepEqual(results.map((r) => r.index), [0, 1, 2, 3, 4, 5], "a hole keeps its scene index");
+	/* One request per scene: a second browser pass would be a second retry
+	 * owner on top of generateOneWithRetry's four attempts. */
+	for (const prompt of ["Scene 0", "Scene 1", "Scene 3", "Scene 4", "Scene 5"]) {
+		assert.equal(attempts.get(prompt), 1, prompt + " is asked exactly once");
+	}
+	assert.ok(results[3].error, "the failed scene says why it is missing");
+	assert.equal(results[3].error.attempts, 4, "and carries the worker's own attempt count");
 });
 
-test("#263 a chunk retries 429/5xx load answers but never a 4xx rejection", async (t) => {
+test("#279 a chunk reports load and rejection verdicts without a second pass", async (t) => {
 	const { dom, w } = client();
 	t.after(() => dom.window.close());
 
@@ -159,23 +214,30 @@ test("#263 a chunk retries 429/5xx load answers but never a 4xx rejection", asyn
 		onImage: (blob, index) => { delivered.push(index); }
 	});
 
-	assert.equal(attempts.get("busy"), 2, "429 is a load answer and is retried");
+	/* Both verdicts come from the worker's ladder, so the page asks once each:
+	 * a 429 is retried INSIDE the request (image-batch), never by a second
+	 * round trip from the browser. */
+	assert.equal(attempts.get("busy"), 1, "a load answer is not re-asked by the page");
 	assert.equal(attempts.get("rejected"), 1, "a 400 is never retried");
 	assert.equal(attempts.get("fine"), 1);
-	assert.deepEqual(delivered.sort((a, b) => a - b), [0, 2], "only the usable scenes arrive");
+	assert.deepEqual(delivered.sort((a, b) => a - b), [2], "only the usable scene arrives");
+	assert.equal(results[0].ok, false, "the load verdict is reported as a failure");
 	assert.equal(results[1].ok, false, "the rejected scene is reported as a failure");
-	assert.equal(results[0].ok, true);
+	assert.equal(results[2].ok, true);
 });
 
-test("#263 Stop cuts a retry wait short instead of leaving the row generating", async (t) => {
+test("#279 a load verdict comes back at once: no browser-side ladder to cut short", async (t) => {
 	const { dom, w } = client();
 	t.after(() => dom.window.close());
 
+	const imageRequests = [];
 	w.fetch = async (url, init = {}) => {
 		if (url === "/api/pipeline-capabilities") return capabilities();
 		if (url === "/api/image") {
-			/* The server asks for a 5 s wait; Stop arrives after ~50 ms. */
-			return json({ error: "capacity exceeded", kind: "overload", retryAfterMs: 5000 }, 503);
+			imageRequests.push(JSON.parse(init.body).prompt);
+			/* The server asks for a 5 s wait and says who owns the retries. */
+			return json({ error: "capacity exceeded", kind: "overload", retryAfterMs: 5000,
+				attempts: 4, budgetExhausted: false, retryOwner: "worker" }, 503, { "Retry-After": "5" });
 		}
 		return json({ success: true, remaining: {} });
 	};
@@ -183,29 +245,56 @@ test("#263 Stop cuts a retry wait short instead of leaving the row generating", 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
 	await tick();
 
-	let stopped = false;
-	setTimeout(() => { stopped = true; }, 50);
+	/*
+	 * The 5 s retryAfterMs used to arm a browser ladder that Stop had to
+	 * interrupt and that re-asked for scenes the worker had already refused
+	 * four times. Session 279: the verdict is served as soon as the worker
+	 * answers - one request per scene - and it carries what the WORKER spent,
+	 * so the page reports that count instead of keeping one of its own.
+	 */
 	const started = Date.now();
-	const results = await w.__REQUEST_IMAGE_CHUNK(["Scene 0", "Scene 1"], {}, {
-		isCancelled: () => stopped
-	});
-	const elapsed = Date.now() - started;
+	const first = await w.__REQUEST_IMAGE_CHUNK(["Scene 0"], {}, { isCancelled: () => false });
+	const firstMs = Date.now() - started;
 
-	assert.ok(elapsed < 1500, "the 5 s wait was interrupted by Stop: " + elapsed + "ms");
+	assert.ok(firstMs < 1500, "the first verdict is served at once: " + firstMs + "ms");
+	assert.deepEqual(first.map((r) => r.ok), [false]);
+	assert.equal(imageRequests.length, 1, "one request per scene: the ladder belongs to the worker");
+	assert.equal(first[0].error.retryAfterMs, 5000, "the server's hint survives for the scheduler");
+	assert.equal(first[0].error.attempts, 4, "the page reports the worker's attempt count");
+	assert.equal(first[0].error.retryOwner, "worker", "and the verdict names its owner");
+	assert.equal(first[0].error.budgetExhausted, false);
+
+	/*
+	 * What the page still does with a "wait 5 s" answer is LOAD SHEDDING, not
+	 * retrying: the shared media scheduler holds the next lane for the hint so a
+	 * saturated fleet is not hammered, and every scene is still asked exactly
+	 * once. That wait is the server's own, which is why it is not a ladder.
+	 */
+	const shed = Date.now();
+	const results = await w.__REQUEST_IMAGE_CHUNK(["Scene 1", "Scene 2"], {}, { isCancelled: () => false });
+	const shedMs = Date.now() - shed;
 	assert.deepEqual(results.map((r) => r.ok), [false, false]);
-	assert.equal(results[0].error.name, "AbortError", "a cancelled scene is reported as a cancellation");
+	assert.equal(imageRequests.length, 3, "still one request per scene after the hint");
+	assert.ok(shedMs >= 4000, "the scheduler waits the server's own hint: " + shedMs + "ms");
+
+	/* And a Stop before the pass starts still reports cancellations, not holes
+	 * that look like delivered scenes. */
+	const cancelled = await w.__REQUEST_IMAGE_CHUNK(["Scene 0", "Scene 1"], {}, { isCancelled: () => true });
+	assert.deepEqual(cancelled.map((r) => r.ok), [false, false]);
+	assert.equal(cancelled[0].error.name, "AbortError", "a cancelled scene is reported as a cancellation");
+	assert.equal(imageRequests.length, 3, "a cancelled pass makes no request at all");
 });
 
 /* ------------------------------------------------------------------ */
 /* 3. The reported bug: a chunk failure used to end the video at 3    */
 /* ------------------------------------------------------------------ */
 
-test("#263 a transient failure on the second image chunk no longer ends the video with 3 images", async (t) => {
+test("#279 a transient provider failure inside the second chunk no longer ends the video with 3 images", async (t) => {
 	const { dom, w } = client();
 	t.after(() => dom.window.close());
 
 	const imageCalls = [];
-	let failedChunk = false;
+	const absorbed = [];
 	w.fetch = async (url, init = {}) => {
 		if (url === "/api/pipeline-capabilities") return capabilities();
 		if (url === "/api/voiceover") return new Response(mp3, { headers: { "Content-Type": "audio/mpeg" } });
@@ -218,13 +307,19 @@ test("#263 a transient failure on the second image chunk no longer ends the vide
 		}
 		if (url === "/api/image") {
 			const prompt = JSON.parse(init.body).prompt;
+			/* One entry per PAGE request: this is what a second browser ladder
+			 * would have multiplied. */
 			imageCalls.push(prompt);
-			/* Everything from scene 3 on fails once — the old code stopped here. */
-			if (!failedChunk && /Scene (3|4|5)$/.test(prompt)) {
-				failedChunk = true;
-				return json({ error: "service unavailable" }, 503);
-			}
-			return image();
+			/*
+			 * Scene 3's first PROVIDER attempt lands on a busy fleet - the
+			 * failure that used to end the video after the first chunk. Since
+			 * session 279 that retry belongs to the worker
+			 * (generateOneWithRetry: up to 4 attempts in a 45 s budget, honouring
+			 * Retry-After), so it is absorbed INSIDE this one request and the
+			 * page still receives bytes.
+			 */
+			if (prompt === "Scene 3") absorbed.push(prompt);
+			return sceneMedia(prompt);
 		}
 		return json({ success: true, remaining: {} });
 	};
@@ -232,17 +327,20 @@ test("#263 a transient failure on the second image chunk no longer ends the vide
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
 	await tick();
 
-	const row = w.addBatchRow({ script: "A forest begins. " + "Nature is peaceful. ".repeat(40) + "A forest ends.", minutes: 1 });
+	/* 276 words: the word-count rule plans ten scenes, i.e. four prompt chunks. */
+	const row = w.addBatchRow({ script: "A forest begins. " + "Nature is peaceful. ".repeat(90) + "A forest ends.", minutes: 1 });
 	await w.runBatchRow(row);
 
 	assert.equal(w.batchRowFinished(row), true, "the row still reaches done");
 	assert.equal(row.images.length, 10, "all ten scenes are delivered, not the first three");
 	assert.deepEqual(Array.from(row.images, (entry) => entry.index), Array.from({ length: 10 }, (_, i) => i));
 	assert.equal(row.stage, "done");
-	/* The three delivered scenes were not paid for twice. */
-	assert.equal(imageCalls.filter((prompt) => prompt === "Scene 0").length, 1);
-	assert.equal(imageCalls.filter((prompt) => prompt === "Scene 1").length, 1);
-	assert.equal(imageCalls.filter((prompt) => prompt === "Scene 2").length, 1);
+	assert.equal(imageCalls.length, 10, "exactly one page request per scene");
+	/* No scene was paid for twice by a browser-side round of retries. */
+	for (const scene of ["Scene 0", "Scene 1", "Scene 2", "Scene 3"]) {
+		assert.equal(imageCalls.filter((prompt) => prompt === scene).length, 1, scene + " is asked once");
+	}
+	assert.deepEqual(absorbed, ["Scene 3"], "the transient failure was retried where it happened");
 });
 
 /* ------------------------------------------------------------------ */
@@ -328,14 +426,15 @@ test("#263 a prompt-chunk overload no longer stops the video mid-way", async (t)
 				prompts: Array.from({ length: body.batch.count }, (_, i) => "Scene " + (body.batch.offset + i))
 			});
 		}
-		if (url === "/api/image") return image();
+		if (url === "/api/image") return sceneMedia(JSON.parse(init.body).prompt);
 		return json({ success: true, remaining: {} });
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
 	await tick();
 
-	const row = w.addBatchRow({ script: "A forest begins. " + "Nature is peaceful. ".repeat(40) + "A forest ends.", minutes: 1 });
+	/* 276 words: the word-count rule plans ten scenes, i.e. four prompt chunks. */
+	const row = w.addBatchRow({ script: "A forest begins. " + "Nature is peaceful. ".repeat(90) + "A forest ends.", minutes: 1 });
 	await w.runBatchRow(row);
 
 	assert.equal(w.batchRowFinished(row), true, "the row reaches done despite the overload");

@@ -93,6 +93,9 @@ test('Pixabay search keywords planned from the script are shown in the video acc
   t.after(() => { domClose(w); });
   w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
   await new Promise((r) => setTimeout(r, 40));
+  /* Session 279: the page's only retry owner is the scheduled flow-level
+   * retry, so shrink its wait instead of sitting out the 15 s default. */
+  w.__IMAGE_AUTO_RETRY_TIMING = { limit: 2, minDelayMs: 0, maxDelayMs: 200, fallbackDelayMs: 20, tickMs: 0 };
 
   w.addVideoAccordion();
   const project = w.__VIDEO_PROJECTS[0];
@@ -130,8 +133,9 @@ test('Pixabay search keywords planned from the script are shown in the video acc
     file: { name: 'already-imported.jpg' } });
 
   /* Simulate the likely recovery case: one browser search gets the original
-   * redirect/provider error. That scene is now retried inside the click
-   * instead of being dropped, so the click completes every missing scene. */
+   * redirect/provider error (a 502). Session 279: the click does NOT re-ask -
+   * the scene is one verdict, and the scheduled flow-level retry recovers it,
+   * which is also the only owner that can wait out a rate-limit window. */
   const plansBefore = calls.filter((p) => p === '/api/image-prompts').length;
   const inlineRetry = retry.getAttribute('onclick');
   assert.equal(inlineRetry, 'retryImagePromptFlow(1)', 'visible control is wired to the browser retry flow');
@@ -141,9 +145,15 @@ test('Pixabay search keywords planned from the script are shown in the video acc
   failNextSearch();
   retry.click();
   await clickPromise;
+  /* The click ends with the 502 scene failed; the scheduled retry lands after it. */
+  for (let i = 0; i < 400 && project.imagePromptStates['1'].state !== 'imported'; i++) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
   assert.equal(calls.filter((p) => p === '/api/image-prompts').length, plansBefore, 'retry reuses the visible search keywords');
+  assert.equal(w.__IMAGE_AUTO_RETRY_LOG.filter((entry) => entry.event === 'scheduled').length, 1,
+    'the failed scene armed exactly one scheduled retry');
   assert.equal(calls.filter((p) => p === '/api/media/search').length, 6,
-    'four missing scenes plus one in-click retry of the scene that answered 502');
+    'four missing scenes plus the scheduled retry of the scene that answered 502');
   assert.equal(calls.filter((p) => p === '/api/media/asset').length, 5, 'only successful searches proceed to asset downloads');
   assert.equal(project.imagePromptStates['1'].state, 'imported', 'the retried scene ends up in the gallery');
   assert.equal(project.assets.length, 6, 'the retried scene is imported exactly once');

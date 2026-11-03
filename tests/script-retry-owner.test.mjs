@@ -1,27 +1,36 @@
 /*
- * WHO OWNS A SCRIPT RETRY? THE BROWSER (session 278).
+ * WHO OWNS A SCRIPT RETRY? THE WORKER (session 279).
  *
- * The pipeline used to retry for the caller: up to 3 planner attempts and 3
- * writer attempts inside ONE request, while the page ALSO retried the whole
- * request 3 times. One click could therefore cost ~27 paid inferences, and the
- * worker's 405 s ladder could not fit the 240 s the note layer promised.
+ * Session 278 moved the ladder into the page: the worker did exactly ONE
+ * attempt per request and the browser looped three times. That was measured
+ * (bench/pipeline-sim/results/baseline-scale1.json) as 12 submissions and 934
+ * note polls for nine scripts, because every browser attempt is a fresh
+ * POST /api/script?async=1, a fresh admission check against the 2-lane loop and
+ * a FRESH 900 ms-quantised poll stream. Session 279 moves the ladder back: the
+ * page makes one request and the worker retries inside it.
  *
  * The contract guarded here:
  *
- *  W1  `browserRetries: true` => exactly ONE planner inference and ONE writer
- *      inference per request, and a 500 that names the stage it failed in;
- *  W2  a request without the flag keeps the legacy 3+3 ladder (old clients are
- *      untouched) - measured as inference counts, not as shapes;
- *  W3  a writer-stage failure hands the validated `keywordSet` back, so the
- *      next attempt skips the planner entirely (the resume point);
- *  W4  attempt 1+ rotates the model slug, so a browser retry is not a replay;
- *  W5  a configuration failure (no AI binding) is `retryable: false`, so the
- *      page does not burn its three attempts on something no retry can fix;
- *  W6  the capabilities advertise `browserScriptRetries` + `scriptRetryOwner`,
- *      which is what makes the page send the flag at all;
- *  B1  the page's own loop makes exactly 3 attempts and stops (no 4th), and
- *  B2  it sends `browserRetries`, `previousFailure` and the resumed
- *      `keywordSet` on the retries - against the real APP_JS, not a copy.
+ *  W1  `browserRetries: true` (a cached pre-278/279 page) still gets exactly
+ *      ONE planner inference and ONE writer inference per request, and a 500
+ *      that names the stage it failed in;
+ *  W2  a request without the flag - what this page now sends - runs the
+ *      worker's own ladder: three planner attempts inside ONE request;
+ *  W3  a writer-stage failure still hands the validated `keywordSet` back
+ *      (diagnostics, and the resume point a cached page relies on);
+ *  W4  a cached page's `attempt: 1` replay rotates the model slug;
+ *  W4b the WORKER's own ladder rotates the slug too, so attempt 2 inside one
+ *      request is not a replay of attempt 1;
+ *  W5  a configuration failure (no AI binding) is `retryable: false`, so no
+ *      ladder - worker or browser - burns attempts on it;
+ *  W6  the capabilities advertise `retryOwner`/`scriptRetryOwner: "worker"`
+ *      plus `workerScriptRetries`, and keep `browserScriptRetries` ONLY so a
+ *      cached page keeps working;
+ *  W7  the async note carries the same verdict back to the browser, and
+ *  W8  a note run without the flag spends the worker's three planner attempts;
+ *  B1  the page makes exactly ONE request - no loop, no `browserRetries`, no
+ *      `previousFailure`, no resume set - and
+ *  B2  it reports the attempts the WORKER spent, against the real APP_JS.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -130,16 +139,36 @@ test("a browser-retried request spends exactly one planner inference", async () 
 /* W2: the legacy ladder is untouched                                         */
 /* ------------------------------------------------------------------------- */
 
-test("a legacy request (no flag) keeps the three planner attempts", async () => {
+test("a request without the flag runs the worker's three planner attempts", async () => {
 	clearScriptNoteMemory();
 	const { env, calls } = aiWith([new Error("AiError 3043: Internal server error")]);
+	/* This is what the shipped page sends now: no flag, one request. */
 	const response = await run(env, { topic: "Morning yoga", minutes: 1, speed: "medium" });
 	assert.equal(response.status, 500);
-	assert.equal(calls.length, 3, "an old client still gets the worker's ladder");
+	assert.equal(calls.length, 3, "the ladder ran inside the ONE request");
 
 	const data = await response.json();
 	assert.equal(data.failure.attempts, 3);
 	assert.equal(data.failure.stage, "planner");
+	assert.equal(data.retryOwner, "worker", "the verdict names the owner");
+});
+
+/* ------------------------------------------------------------------------- */
+/* W4b: the worker's ladder rotates the model, so attempt 2 is not a replay    */
+/* ------------------------------------------------------------------------- */
+
+test("the worker's own writer ladder rotates the model slug on attempt 2", async () => {
+	clearScriptNoteMemory();
+	/* Planner ok, writer overloaded once, then a valid SRT from the fallback. */
+	const { env, calls } = aiWith([JSON.stringify(plan), new Error("AiError 5001: overloaded"), makeSrt()]);
+	const response = await run(env, { topic: "Morning yoga", minutes: 1, speed: "medium" });
+	assert.equal(response.status, 200);
+	assert.equal(calls.length, 3, "1 planner + 2 writer attempts, all in one request");
+
+	const data = await response.json();
+	assert.equal(data.success, true);
+	assert.notEqual(calls[2].model, calls[1].model, "attempt 2 asked a different model");
+	assert.equal(data.model, calls[2].model, "the payload names the slug that produced the script");
 });
 
 /* ------------------------------------------------------------------------- */
@@ -210,7 +239,7 @@ test("a missing AI binding is reported as not retryable", async () => {
 /* W6: the capability the page reads to opt in                                */
 /* ------------------------------------------------------------------------- */
 
-test("capabilities advertise the browser as the retry owner", async () => {
+test("capabilities advertise the worker as the retry owner, for every stage", async () => {
 	const workerModule = await import("../src/index.ts");
 	const worker = workerModule.default || workerModule;
 	const response = await worker.fetch(
@@ -220,7 +249,14 @@ test("capabilities advertise the browser as the retry owner", async () => {
 	);
 	assert.equal(response.status, 200);
 	const caps = await response.json();
-	assert.equal(caps.scriptRetryOwner, "browser");
+	assert.equal(caps.retryOwner, "worker");
+	assert.equal(caps.scriptRetryOwner, "worker");
+	assert.equal(caps.workerScriptRetries, 3);
+	/*
+	 * Compatibility only: a cached pre-279 page reads this, sends
+	 * `browserRetries: true` and keeps its own three-attempt loop. It must
+	 * therefore still be advertised - and still mean "one attempt per stage".
+	 */
 	assert.equal(caps.browserScriptRetries, 3);
 });
 
@@ -267,7 +303,7 @@ test("the async note records which stage failed, and the poll carries it", async
 });
 
 /* ------------------------------------------------------------------------- */
-/* B1 + B2: the page's own attempt loop                                       */
+/* B1 + B2: what the page does now - one request, and the worker's verdict     */
 /* ------------------------------------------------------------------------- */
 
 function json(body, status = 200) {
@@ -286,8 +322,14 @@ async function walkthrough(w, scriptReplies) {
 		const body = init && init.body ? JSON.parse(init.body) : null;
 		const path = new URL(url, "https://studio.test").pathname;
 		if (path === "/api/pipeline-capabilities") {
-			/* Only the retry contract is advertised: the direct path is used. */
-			return json({ version: 261, browserScriptRetries: 3, scriptRetryOwner: "browser" });
+			/* The session-279 contract: the worker owns every ladder. */
+			return json({
+				version: 261,
+				retryOwner: "worker",
+				scriptRetryOwner: "worker",
+				workerScriptRetries: 3,
+				browserScriptRetries: 3
+			});
 		}
 		if (path === "/api/seo-plan") return json({ success: true, sets: [plan, otherPlan] });
 		if (path === "/api/script") {
@@ -306,7 +348,7 @@ async function walkthrough(w, scriptReplies) {
 	return requests;
 }
 
-test("the page makes three attempts and then stops", async (t) => {
+test("the page makes exactly one request and never loops", async (t) => {
 	const { w } = harness();
 	t.after(() => w.close());
 
@@ -315,67 +357,54 @@ test("the page makes three attempts and then stops", async (t) => {
 			success: false,
 			error: "Script output invalid (too short) - try again",
 			retryable: true,
-			failure: { stage: "writer", reason: "too short", attempts: 1, retryable: true }
+			/* The worker spent its whole ladder inside this one request. */
+			failure: { stage: "writer", reason: "too short", attempts: 3, retryable: true }
 		},
 		status: 500
 	};
 	const requests = await walkthrough(w, [failure]);
 	await w.confirmSeoStyleAndGenerate(1);
 
-	assert.equal(requests.length, 3, "SCRIPT_RETRY_LIMIT + 1 attempts, never a fourth");
-	for (const request of requests) {
-		assert.equal(request.body.browserRetries, true, "every attempt declares the contract");
-	}
-	assert.equal(requests[0].body.previousFailure, "");
-	assert.match(requests[1].body.previousFailure, /too short/, "the failure is fed forward");
-	assert.match(requests[2].body.previousFailure, /too short/);
+	assert.equal(requests.length, 1, "one request: the ladder belongs to the worker");
+	const body = requests[0].body;
+	assert.equal(body.browserRetries, undefined, "no flag, so the worker keeps its ladder");
+	assert.equal(body.attempt, 0, "the page has no attempt counter to report");
+	assert.equal(body.previousFailure, "", "and no failure of its own to feed forward");
+
+	const status = w.document.getElementById("va-script-status-1").textContent;
+	assert.match(status, /Script failed:/);
+	assert.match(status, /after 3 attempts/, "the user still learns it was retried: " + status);
+	assert.ok(!/retrying \(/.test(status), "the page never claims to be retrying");
 });
 
-test("the page resumes from the plan the worker handed back", async (t) => {
+test("the page still sends the keyword set the user picked", async (t) => {
 	const { w } = harness();
 	t.after(() => w.close());
 
-	const firstFailure = {
-		body: {
-			success: false,
-			error: "Script output invalid (too short) - try again",
-			retryable: true,
-			failure: { stage: "writer", reason: "too short", attempts: 1, retryable: true },
-			/* The plan attempt 1 already paid for. */
-			keywordSet: { title: otherPlan.title, headings: otherPlan.headings, longTail: otherPlan.longTail, short: otherPlan.short }
-		},
-		status: 500
-	};
 	const success = {
 		body: {
 			success: true,
 			script: sentences.join(" "),
 			durationMs: 60000,
-			title: otherPlan.title,
-			headings: otherPlan.headings,
+			title: plan.title,
+			headings: plan.headings,
 			keywords: {
-				longTail: { keyword: otherPlan.longTail, count: 1, min: 1, max: null },
-				short: otherPlan.short.map((keyword) => ({ keyword, count: 2, min: 2, max: null }))
+				longTail: { keyword: plan.longTail, count: 1, min: 1, max: null },
+				short: plan.short.map((keyword) => ({ keyword, count: 2, min: 2, max: null }))
 			}
 		},
 		status: 200
 	};
-	const requests = await walkthrough(w, [firstFailure, success]);
+	const requests = await walkthrough(w, [success]);
 	await w.confirmSeoStyleAndGenerate(1);
 
-	assert.equal(requests.length, 2, "the retry succeeded, so there is no third attempt");
+	assert.equal(requests.length, 1);
 	assert.equal(
 		requests[0].body.keywordSet.title,
 		plan.title,
-		"attempt 1 sends the set the user picked in the walkthrough"
+		"a first-attempt input, not a resume point: the worker keeps the plan in scope itself"
 	);
-	assert.deepEqual(
-		requests[1].body.keywordSet,
-		{ title: otherPlan.title, headings: otherPlan.headings, longTail: otherPlan.longTail, short: otherPlan.short },
-		"attempt 2 replays the worker's plan instead of paying for the planner again"
-	);
-	assert.equal(requests[1].body.browserRetries, true);
-	assert.match(requests[1].body.previousFailure, /too short/);
+	assert.equal(w.__VIDEO_PROJECTS[0].script, sentences.join(" "), "the script landed on the project");
 });
 
 test("the page stops immediately when the worker says the failure is permanent", async (t) => {
@@ -394,5 +423,38 @@ test("the page stops immediately when the worker says the failure is permanent",
 	const requests = await walkthrough(w, [permanent]);
 	await w.confirmSeoStyleAndGenerate(1);
 
-	assert.equal(requests.length, 1, "a configuration failure is not retried");
+	assert.equal(requests.length, 1, "a configuration failure is not retried by anybody");
+	assert.match(w.document.getElementById("va-script-status-1").textContent, /AI binding not configured/);
+});
+
+/* ------------------------------------------------------------------------- */
+/* W8: the note run spends the worker's ladder, not the page's                 */
+/* ------------------------------------------------------------------------- */
+
+test("an async note run without the flag spends three planner attempts", async () => {
+	clearScriptNoteMemory();
+	const { env, calls } = aiWith([new Error("AiError 3043: Internal server error")]);
+	const loop = new ScriptEventLoop({ concurrency: 1 });
+	const ticketResponse = await submitAsyncScriptJob(
+		new Request("https://studio.test/api/script?async=1", {
+			method: "POST",
+			body: JSON.stringify({ topic: "Morning yoga", minutes: 1, speed: "medium" })
+		}),
+		env,
+		"mock-instruct",
+		{ loop, waitUntil: () => {}, onValidated: async () => {} }
+	);
+	assert.equal(ticketResponse.status, 202);
+	const ticket = await ticketResponse.json();
+
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	const note = await (
+		await handleScriptNoteRead(ticket.noteId, env, new URL("https://studio.test" + ticket.noteUrl))
+	).json();
+	loop.close();
+
+	assert.equal(note.state, "error");
+	assert.equal(note.terminal, true);
+	assert.equal(calls.length, 3, "one submission, three planner attempts - all inside the note run");
+	assert.equal(note.failureStage, "planner");
 });

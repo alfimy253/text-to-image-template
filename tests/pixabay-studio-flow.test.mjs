@@ -179,7 +179,11 @@ test('Quick Batch does not mark two clips plus a partial photo set as complete a
 	};
 
 	await deadline(w.runBatchRow(row), 30000);
-	assert.equal(simulatedFailures, 3, 'browser exhausts its bounded per-scene retries for the failed photo');
+	/* Session 279: the page asks once per scene pass. The retries live in the
+	 * worker's image ladder (generateOneWithRetry: up to 4 attempts inside a
+	 * 45 s budget), so a failing photo is ONE request here, not three - and the
+	 * five scenes that did arrive are still kept as partial progress. */
+	assert.equal(simulatedFailures, 1, 'one image request per pass: the worker owns the retries');
 	assert.equal(row.images.length, 5, 'other scenes, including both required clips, were retained as partial progress');
 	assert.equal(row.images.filter(image => image.blob.type === 'video/mp4').length, 2);
 	assert.equal(w.batchRowFinished(row), false, 'partial delivery must not enable Preview/Export');
@@ -219,7 +223,7 @@ test('editor preparation rejects a photo decode that never settles',async t=>{
  await assert.rejects(deadline(w.prepareVideo(1),1000),/Editor photo decoding timed out/);
 });
 
-test('editor startImagePromptFlow recovers from a transient wrong-scene-count attempt and passes previousError on retry', async t => {
+test('editor startImagePromptFlow recovers from a transient wrong-scene-count attempt inside the worker ladder', async t => {
 	const { w } = setup(t);
 	const retryBatches = [];
 	let firstChunkCalls = 0;
@@ -268,10 +272,12 @@ test('editor startImagePromptFlow recovers from a transient wrong-scene-count at
 	project._imageFlowActive = true;
 	await deadline(w.startImagePromptFlow(1));
 
-	assert.equal(firstChunkCalls, 2, 'chunk 0 should fail once and succeed on retry');
-	assert.equal(retryBatches.length, 1);
-	assert.equal(retryBatches[0].attempt, 1);
-	assert.match(retryBatches[0].previousError, /wrong scene count/);
+	assert.equal(firstChunkCalls, 2, 'chunk 0 fails once and succeeds on the worker ladder');
+	/* Session 279: the page sends attempt 0 and no previousError. The ladder
+	 * that used to come back as batch.attempt 1 now runs inside
+	 * handleGenerateImagePrompts, where the failed reply is still in scope, so
+	 * the recovery costs no round trip and no browser backoff. */
+	assert.equal(retryBatches.length, 0, 'the browser never re-asks with batch.attempt > 0');
 	assert.equal(project.assets.length, 6);
 	assert.equal(project.assets.filter((a) => a.kind === 'mp4').length, 2);
 	const statusText = w.document.getElementById('va-ai-status-1').textContent;
@@ -333,24 +339,47 @@ test('both layouts plan the same eight scenes for punctuation-separated words an
  assert.deepEqual(Array.from(project.assets, a=>a.sceneIndex), [0,1,2,3,4,5,6,7]);
 });
 
-test('editor and Quick Batch retry transient HTTP 408 keyword-planning failures', async t => {
- const {w}=setup(t); const original=w.fetch; let promptRequests=0, failed=0;
+test('editor and Quick Batch recover from a transient HTTP 408 keyword-planning failure with one request per pass', async t => {
+ const {w}=setup(t); const original=w.fetch; let promptRequests=0, failuresLeft=1;
  w.fetch=async (input,init={})=>{
   if (new URL(String(input),'https://studio.test').pathname==='/api/image-prompts') {
    promptRequests++;
-   if (failed++ === 0) return Response.json({success:false,error:'planner timed out'}, {status:408});
+   if (failuresLeft-- > 0) return Response.json({success:false,error:'planner timed out'}, {status:408});
   }
   return original(input,init);
  };
+ /* Shrink the scheduled retry's wait so the test does not sit out 15 s. */
+ w.__IMAGE_AUTO_RETRY_TIMING={limit:2,minDelayMs:0,maxDelayMs:200,fallbackDelayMs:20,tickMs:0};
  w.addVideoAccordion(); const project=w.__VIDEO_PROJECTS[0];
  project.script='Gardens connect people.'; project._seoTopic='garden'; project._seoMinutes=1; project._imageFlowActive=true;
  await deadline(w.startImagePromptFlow(1));
- assert.equal(project.assets.length,6); assert.ok(promptRequests>=3);
- failed=0; promptRequests=0;
+ /* Session 279: ONE request per pass. A transient failure on the very first
+  * chunk used to be re-asked inside the request; now the flow ends, reports
+  * the reason, and the scheduled flow-level retry owns the recovery - which is
+  * also the only owner that can sit out a minutes-long rate-limit window. */
+ assert.equal(promptRequests,1,'the page asks the worker once per prompt pass');
+ assert.equal(project.assets.length,0);
+ assert.equal(project._imageFlowActive,false);
+ assert.match(w.document.getElementById('va-ai-status-1').textContent,/retry/i);
+ const scheduled=w.__IMAGE_AUTO_RETRY_LOG.filter(entry=>entry.event==='scheduled');
+ assert.equal(scheduled.length,1,'the failed flow armed one automatic retry');
+ assert.equal(scheduled[0].missing,6,'the retry counts the scenes the flow was asked for');
+ await deadline((async()=>{while(project.assets.length<6)await new Promise(resolve=>setTimeout(resolve,10));})(),20000);
+ assert.equal(project.assets.length,6);
+ assert.ok(promptRequests>=2,'the scheduled retry asked again and the worker answered');
+
+ /* Quick Batch has no scene-level retry control: the row reports the failure
+  * and the layout's Generate button reruns it. */
+ failuresLeft=1; promptRequests=0;
  while (w.__BATCH_ROWS.length) w.removeBatchRow(w.__BATCH_ROWS[0].id);
  const row=w.addBatchRow({script:'Gardens connect people.',minutes:1});
  await deadline(w.runBatchRow(row));
- assert.equal(w.batchRowFinished(row),true); assert.equal(row.images.length,6); assert.ok(promptRequests>=3);
+ assert.equal(promptRequests,1,'one prompt request per pass, not three');
+ assert.equal(row.stage,'error'); assert.equal(w.batchRowFinished(row),false);
+ failuresLeft=0; promptRequests=0;
+ await deadline(w.runBatchRow(row));
+ assert.equal(w.batchRowFinished(row),true); assert.equal(row.images.length,6);
+ assert.ok(promptRequests>=2);
 });
 
 test('editor Retry Pixabay search reuses visible terms and adds a missing stock clip without re-importing successful scenes', async t => {

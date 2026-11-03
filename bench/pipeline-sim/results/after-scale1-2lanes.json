@@ -1,0 +1,1318 @@
+{
+  "generatedAt": "2026-11-02T18:07:15.515Z",
+  "runs": [
+    {
+      "run": 1,
+      "config": {
+        "users": 3,
+        "videos": 3,
+        "scale": 1,
+        "netMs": 60,
+        "seed": "base100",
+        "minutes": 1,
+        "renderMs": 9000,
+        "media": "direct",
+        "loopConcurrency": 2,
+        "aiLatencyMs": {
+          "planner": 7200,
+          "writer": 21000,
+          "scenePlanner": 4000,
+          "tts": 3000
+        },
+        "aiFailureRate": {
+          "planner": 0.1,
+          "writer": 0.12,
+          "scenePlanner": 0.08,
+          "tts": 0.25
+        },
+        "invalidRate": {
+          "writer": 0.12,
+          "scenePlanner": 0.08
+        },
+        "providerLatencyMs": {
+          "search": 450,
+          "photo": 700,
+          "clip": 1400,
+          "externalTts": 2500
+        },
+        "providerFailureRate": {
+          "search": 0.05,
+          "photo": 0.05,
+          "clip": 0.05,
+          "externalTts": 0.2
+        }
+      },
+      "makespanMs": 200445,
+      "pipelineMakespanMs": 133864,
+      "perUser": [
+        {
+          "user": "u1",
+          "scriptsMs": 80505,
+          "mediaMs": 35574,
+          "exportMs": 27064,
+          "totalMs": 143144,
+          "finished": 3,
+          "requests": 220,
+          "providerRequests": 36
+        },
+        {
+          "user": "u2",
+          "scriptsMs": 133389,
+          "mediaMs": 36493,
+          "exportMs": 27066,
+          "totalMs": 196948,
+          "finished": 3,
+          "requests": 386,
+          "providerRequests": 36
+        },
+        {
+          "user": "u3",
+          "scriptsMs": 106091,
+          "mediaMs": 27773,
+          "exportMs": 27061,
+          "totalMs": 160926,
+          "finished": 3,
+          "requests": 279,
+          "providerRequests": 34
+        }
+      ],
+      "videos": [
+        {
+          "user": "u1",
+          "row": 2,
+          "topic": "morning yoga",
+          "finished": true,
+          "stage": "done",
+          "error": "",
+          "scenes": 6,
+          "slides": 6,
+          "scriptChars": 418,
+          "rowMs": 35536,
+          "stageMs": {
+            "ready": 83,
+            "writing": 51981,
+            "empty": 28491,
+            "voice": 6114,
+            "timing": 31,
+            "prompts": 8401,
+            "images": 20952,
+            "animate": 27,
+            "done": 0
+          }
+        },
+        {
+          "user": "u1",
+          "row": 3,
+          "topic": "home coffee",
+          "finished": true,
+          "stage": "done",
+          "error": "",
+          "scenes": 6,
+          "slides": 6,
+          "scriptChars": 404,
+          "rowMs": 28491,
+          "stageMs": {
+            "ready": 128,
+            "writing": 53898,
+            "empty": 26529,
+            "voice": 3110,
+            "timing": 41,
+            "prompts": 7890,
+            "images": 17419,
+            "animate": 41,
+            "done": 7024
+          }
+        },
+        {
+          "user": "u1",
+          "row": 4,
+          "topic": "night running",
+          "finished": true,
+          "stage": "done",
+          "error": "",
+          "scenes": 6,
+          "slides": 6,
+          "scriptChars": 412,
+          "rowMs": 20728,
+          "stageMs": {
+            "ready": 184,
+            "writing": 80371,
+            "voice": 2897,
+            "timing": 45,
+            "prompts": 3843,
+            "images": 13916,
+            "animate": 27,
+            "done": 14797
+          }
+        },
+        {
+          "user": "u2",
+          "row": 2,
+          "topic": "small garden",
+          "finished": true,
+          "stage": "done",
+          "error": "",
+          "scenes": 6,
+          "slides": 6,
+          "scriptChars": 408,
+          "rowMs": 30772,
+          "stageMs": {
+            "ready": 45,
+            "writing": 102945,
+            "empty": 30451,
+            "voice": 3385,
+            "timing": 42,
+            "prompts": 13240,
+            "images": 14071,
+            "animate": 15,
+            "done": 5688
+          }
+        },
+        {
+          "user": "u2",
+          "row": 3,
+          "topic": "desk stretches",
+          "finished": true,
+          "stage": "done",
+          "error": "",
+          "scenes": 6,
+          "slides": 6,
+          "scriptChars": 424,
+          "rowMs": 23234,
+          "stageMs": {
+            "ready": 90,
+            "writing": 111735,
+            "empty": 21616,
+            "voice": 3087,
+            "timing": 41,
+            "prompts": 9201,
+            "images": 10876,
+            "animate": 22,
+            "done": 13214
+          }
+        },
+        {
+          "user": "u2",
+          "row": 4,
+          "topic": "sourdough bread",
+          "finished": true,
+          "stage": "done",
+          "error": "",
+          "scenes": 6,
+          "slides": 6,
+          "scriptChars": 420,
+          "rowMs": 36423,
+          "stageMs": {
+            "ready": 146,
+            "writing": 133295,
+            "voice": 15482,
+            "timing": 41,
+            "prompts": 9777,
+            "images": 11106,
+            "animate": 35,
+            "done": 0
+          }
+        },
+        {
+          "user": "u3",
+          "row": 2,
+          "topic": "city cycling",
+          "finished": true,
+          "stage": "done",
+          "error": "",
+          "scenes": 6,
+          "slides": 6,
+          "scriptChars": 12,
+          "rowMs": 24345,
+          "stageMs": {
+            "ready": 23,
+            "writing": 105993,
+            "error": 134,
+            "voice": 2754,
+            "timing": 51,
+            "prompts": 7876,
+            "images": 13621,
+            "animate": 25,
+            "done": 3387
+          }
+        },
+        {
+          "user": "u3",
+          "row": 3,
+          "topic": "deep sleep",
+          "finished": true,
+          "stage": "done",
+          "error": "",
+          "scenes": 6,
+          "slides": 6,
+          "scriptChars": 10,
+          "rowMs": 17228,
+          "stageMs": {
+            "ready": 124,
+            "writing": 106026,
+            "voice": 2754,
+            "timing": 51,
+            "prompts": 4292,
+            "images": 10098,
+            "animate": 20,
+            "done": 10499
+          }
+        },
+        {
+          "user": "u3",
+          "row": 4,
+          "topic": "phone photos",
+          "finished": true,
+          "stage": "done",
+          "error": "",
+          "scenes": 6,
+          "slides": 6,
+          "scriptChars": 408,
+          "rowMs": 27704,
+          "stageMs": {
+            "ready": 165,
+            "writing": 29811,
+            "empty": 76174,
+            "voice": 9430,
+            "timing": 43,
+            "prompts": 9408,
+            "images": 8802,
+            "animate": 32,
+            "done": -1
+          }
+        }
+      ],
+      "stageTotalsMs": {
+        "ready": 988,
+        "writing": 776055,
+        "empty": 183261,
+        "voice": 49013,
+        "timing": 386,
+        "prompts": 73928,
+        "images": 120861,
+        "animate": 244,
+        "done": 54608,
+        "error": 134
+      },
+      "requests": {
+        "GET /api/credits": 21,
+        "GET /api/pipeline-capabilities": 3,
+        "POST /api/script?async=1": 9,
+        "GET /api/script/notes/nt-d770bc5df0": 54,
+        "GET /api/script/notes/nt-1308fbff40": 56,
+        "GET /api/script/notes/nt-3bbe141309": 83,
+        "POST /api/voiceover": 9,
+        "POST /api/image-prompts": 18,
+        "GET /api/media/config": 3,
+        "POST /api/media/claim": 18,
+        "GET /api/script/notes/nt-47c0b8cd40": 106,
+        "GET /api/script/notes/nt-618ee7a761": 115,
+        "GET /api/script/notes/nt-2514634032": 137,
+        "POST /api/image": 4,
+        "GET /api/script/notes/nt-2a2046a0a0": 109,
+        "GET /api/script/notes/nt-0ba07e45b1": 109,
+        "GET /api/script/notes/nt-c1fa9b4b7a": 31
+      },
+      "requestTotal": 885,
+      "ai": {
+        "calls": {
+          "planner": 9,
+          "writer": 12,
+          "scenePlanner": 21,
+          "tts": 24,
+          "other": 0
+        },
+        "failures": {
+          "planner": 0,
+          "writer": 3,
+          "scenePlanner": 2,
+          "tts": 8,
+          "other": 0
+        },
+        "busyMs": {
+          "planner": 64800,
+          "writer": 252000,
+          "scenePlanner": 84000,
+          "tts": 72000,
+          "other": 0
+        },
+        "models": {
+          "@cf/meta/llama-3.1-8b-instruct-fp8": 39,
+          "@cf/meta/llama-3.3-70b-instruct-fp8-fast": 3,
+          "@cf/myshell-ai/melotts": 22,
+          "@cf/deepgram/aura-2-en": 1,
+          "@cf/deepgram/aura-1": 1
+        }
+      },
+      "provider": {
+        "searches": 58,
+        "photos": 36,
+        "clips": 22,
+        "externalTts": 0,
+        "failures": 6,
+        "bytes": 86400
+      },
+      "loop": {
+        "ticks": 16,
+        "phases": {
+          "timers": 0,
+          "pending": 16,
+          "poll": 8,
+          "check": 0,
+          "close": 0
+        },
+        "concurrency": 2,
+        "active": 0,
+        "queued": 0,
+        "maxQueue": 24,
+        "started": 8,
+        "completed": 8,
+        "failed": 0,
+        "timerWaitMs": 0,
+        "checkJobs": 0,
+        "pendingWaitMs": 0,
+        "lastTickAt": 1793642799071,
+        "avgRunMs": 32167,
+        "jobs": [
+          {
+            "id": "nt-d770bc5df0",
+            "state": "done",
+            "phase": "poll",
+            "queuedAt": 1793642638713,
+            "startedAt": 1793642638714,
+            "finishedAt": 1793642690498,
+            "waitMs": 1,
+            "runMs": 51784
+          },
+          {
+            "id": "nt-1308fbff40",
+            "state": "done",
+            "phase": "poll",
+            "queuedAt": 1793642638721,
+            "startedAt": 1793642638721,
+            "finishedAt": 1793642692034,
+            "waitMs": 0,
+            "runMs": 53313
+          },
+          {
+            "id": "nt-3bbe141309",
+            "state": "done",
+            "phase": "poll",
+            "queuedAt": 1793642638747,
+            "startedAt": 1793642690498,
+            "finishedAt": 1793642718889,
+            "waitMs": 51751,
+            "runMs": 28391
+          },
+          {
+            "id": "nt-47c0b8cd40",
+            "state": "done",
+            "phase": "poll",
+            "queuedAt": 1793642638748,
+            "startedAt": 1793642692034,
+            "finishedAt": 1793642740902,
+            "waitMs": 53286,
+            "runMs": 48868
+          },
+          {
+            "id": "nt-618ee7a761",
+            "state": "done",
+            "phase": "poll",
+            "queuedAt": 1793642638749,
+            "startedAt": 1793642718889,
+            "finishedAt": 1793642749624,
+            "waitMs": 80140,
+            "runMs": 30735
+          },
+          {
+            "id": "nt-2514634032",
+            "state": "done",
+            "phase": "poll",
+            "queuedAt": 1793642638750,
+            "startedAt": 1793642740902,
+            "finishedAt": 1793642771687,
+            "waitMs": 102152,
+            "runMs": 30785
+          },
+          {
+            "id": "nt-2a2046a0a0",
+            "state": "done",
+            "phase": "poll",
+            "queuedAt": 1793642638751,
+            "startedAt": 1793642749624,
+            "finishedAt": 1793642774225,
+            "waitMs": 110873,
+            "runMs": 24601
+          },
+          {
+            "id": "nt-0ba07e45b1",
+            "state": "done",
+            "phase": "poll",
+            "queuedAt": 1793642638752,
+            "startedAt": 1793642771687,
+            "finishedAt": 1793642799071,
+            "waitMs": 132935,
+            "runMs": 27384
+          }
+        ]
+      },
+      "directMedia": [
+        {
+          "user": "u1",
+          "debug": {
+            "counters": {
+              "scenes": 18,
+              "direct": 18,
+              "fallback": 0,
+              "failed": 0,
+              "searches": 18,
+              "downloads": 18,
+              "claims": 6,
+              "refunded": 0
+            },
+            "events": [
+              {
+                "at": "2026-11-02T18:05:45.859Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "video",
+                "assetId": 115,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:05:45.868Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "image",
+                "hits": 2,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:05:45.868Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 122,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:05:46.466Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 122,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:05:46.466Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 3,
+                "assetId": 122,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:05:46.582Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 142,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:05:46.582Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 5,
+                "assetId": 142,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:05:47.531Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "video",
+                "assetId": 115,
+                "mime": "video/mp4",
+                "bytes": 2400,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:05:47.531Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "video",
+                "scene": 4,
+                "assetId": 115,
+                "transport": "browser",
+                "bytes": 2400
+              },
+              {
+                "at": "2026-11-02T18:05:52.881Z",
+                "level": "info",
+                "stage": "claim.granted",
+                "requested": 3,
+                "granted": 3,
+                "claimId": "open"
+              },
+              {
+                "at": "2026-11-02T18:05:52.882Z",
+                "level": "info",
+                "stage": "search.started",
+                "type": "image",
+                "queryLength": 12,
+                "orientation": "landscape"
+              },
+              {
+                "at": "2026-11-02T18:05:52.882Z",
+                "level": "info",
+                "stage": "search.started",
+                "type": "video",
+                "queryLength": 17,
+                "orientation": "landscape"
+              },
+              {
+                "at": "2026-11-02T18:05:52.882Z",
+                "level": "info",
+                "stage": "search.started",
+                "type": "image",
+                "queryLength": 18,
+                "orientation": "landscape"
+              },
+              {
+                "at": "2026-11-02T18:05:53.251Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "image",
+                "hits": 2,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:05:53.251Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 202,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:05:53.273Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "image",
+                "hits": 2,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:05:53.273Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 182,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:05:53.418Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "video",
+                "hits": 3,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:05:53.419Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "video",
+                "assetId": 121,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:05:54.066Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 182,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:05:54.066Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 3,
+                "assetId": 182,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:05:54.081Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 202,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:05:54.081Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 5,
+                "assetId": 202,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:05:54.568Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "video",
+                "assetId": 121,
+                "mime": "video/mp4",
+                "bytes": 2400,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:05:54.569Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "video",
+                "scene": 4,
+                "assetId": 121,
+                "transport": "browser",
+                "bytes": 2400
+              }
+            ]
+          }
+        },
+        {
+          "user": "u2",
+          "debug": {
+            "counters": {
+              "scenes": 18,
+              "direct": 17,
+              "fallback": 0,
+              "failed": 1,
+              "searches": 18,
+              "downloads": 18,
+              "claims": 6,
+              "refunded": 0
+            },
+            "events": [
+              {
+                "at": "2026-11-02T18:06:41.453Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 532,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:41.492Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "image",
+                "hits": 2,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:06:41.492Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 512,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:42.198Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 532,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:42.198Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 5,
+                "assetId": 532,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:06:42.257Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 512,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:42.257Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 3,
+                "assetId": 512,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:06:42.729Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "video",
+                "assetId": 154,
+                "mime": "video/mp4",
+                "bytes": 2400,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:42.729Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "video",
+                "scene": 4,
+                "assetId": 154,
+                "transport": "browser",
+                "bytes": 2400
+              },
+              {
+                "at": "2026-11-02T18:06:44.555Z",
+                "level": "info",
+                "stage": "claim.granted",
+                "requested": 3,
+                "granted": 3,
+                "claimId": "open"
+              },
+              {
+                "at": "2026-11-02T18:06:44.555Z",
+                "level": "info",
+                "stage": "search.started",
+                "type": "image",
+                "queryLength": 19,
+                "orientation": "landscape"
+              },
+              {
+                "at": "2026-11-02T18:06:44.555Z",
+                "level": "info",
+                "stage": "search.started",
+                "type": "video",
+                "queryLength": 17,
+                "orientation": "landscape"
+              },
+              {
+                "at": "2026-11-02T18:06:44.555Z",
+                "level": "info",
+                "stage": "search.started",
+                "type": "image",
+                "queryLength": 17,
+                "orientation": "landscape"
+              },
+              {
+                "at": "2026-11-02T18:06:44.993Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "image",
+                "hits": 2,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:06:44.993Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 542,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:45.008Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "image",
+                "hits": 2,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:06:45.008Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 562,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:45.026Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "video",
+                "hits": 3,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:06:45.026Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "video",
+                "assetId": 157,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:45.760Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 562,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:45.760Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 5,
+                "assetId": 562,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:06:45.797Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 542,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:45.797Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 3,
+                "assetId": 542,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:06:46.514Z",
+                "level": "warn",
+                "stage": "download.rejected",
+                "mediaType": "video",
+                "assetId": 157,
+                "status": 504,
+                "retryAfterMs": 0
+              },
+              {
+                "at": "2026-11-02T18:06:46.515Z",
+                "level": "warn",
+                "stage": "scene.failed",
+                "mediaType": "video",
+                "scene": 4,
+                "status": 504,
+                "kind": "provider",
+                "fallback": true,
+                "error": "Pixabay download failed"
+              }
+            ]
+          }
+        },
+        {
+          "user": "u3",
+          "debug": {
+            "counters": {
+              "scenes": 18,
+              "direct": 15,
+              "fallback": 0,
+              "failed": 3,
+              "searches": 18,
+              "downloads": 16,
+              "claims": 6,
+              "refunded": 0
+            },
+            "events": [
+              {
+                "at": "2026-11-02T18:06:07.599Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 332,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:07.622Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "video",
+                "hits": 3,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:06:07.622Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "video",
+                "assetId": 136,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:08.118Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 352,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:08.118Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 5,
+                "assetId": 352,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:06:08.438Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 332,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:08.438Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 3,
+                "assetId": 332,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:06:09.023Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "video",
+                "assetId": 136,
+                "mime": "video/mp4",
+                "bytes": 2400,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:09.023Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "video",
+                "scene": 4,
+                "assetId": 136,
+                "transport": "browser",
+                "bytes": 2400
+              },
+              {
+                "at": "2026-11-02T18:06:10.750Z",
+                "level": "info",
+                "stage": "claim.granted",
+                "requested": 3,
+                "granted": 3,
+                "claimId": "open"
+              },
+              {
+                "at": "2026-11-02T18:06:10.750Z",
+                "level": "info",
+                "stage": "search.started",
+                "type": "image",
+                "queryLength": 12,
+                "orientation": "landscape"
+              },
+              {
+                "at": "2026-11-02T18:06:10.751Z",
+                "level": "info",
+                "stage": "search.started",
+                "type": "video",
+                "queryLength": 11,
+                "orientation": "landscape"
+              },
+              {
+                "at": "2026-11-02T18:06:10.751Z",
+                "level": "info",
+                "stage": "search.started",
+                "type": "image",
+                "queryLength": 13,
+                "orientation": "landscape"
+              },
+              {
+                "at": "2026-11-02T18:06:11.151Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "image",
+                "hits": 2,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:06:11.151Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 382,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:11.210Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "image",
+                "hits": 2,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:06:11.210Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "image",
+                "assetId": 362,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:11.220Z",
+                "level": "info",
+                "stage": "search.completed",
+                "type": "video",
+                "hits": 3,
+                "totalHits": 500
+              },
+              {
+                "at": "2026-11-02T18:06:11.220Z",
+                "level": "info",
+                "stage": "download.started",
+                "mediaType": "video",
+                "assetId": 139,
+                "host": "cdn.pixabay.com"
+              },
+              {
+                "at": "2026-11-02T18:06:11.843Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 382,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:11.843Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 5,
+                "assetId": 382,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:06:12.002Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "image",
+                "assetId": 362,
+                "mime": "image/png",
+                "bytes": 1200,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:12.002Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "image",
+                "scene": 3,
+                "assetId": 362,
+                "transport": "browser",
+                "bytes": 1200
+              },
+              {
+                "at": "2026-11-02T18:06:12.410Z",
+                "level": "info",
+                "stage": "download.completed",
+                "mediaType": "video",
+                "assetId": 139,
+                "mime": "video/mp4",
+                "bytes": 2400,
+                "transport": "browser"
+              },
+              {
+                "at": "2026-11-02T18:06:12.410Z",
+                "level": "info",
+                "stage": "scene.completed",
+                "mediaType": "video",
+                "scene": 4,
+                "assetId": 139,
+                "transport": "browser",
+                "bytes": 2400
+              }
+            ]
+          }
+        }
+      ],
+      "logs": [
+        "u1 warn [render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "u1 warn [render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "u2 warn [pixabay-direct] download.rejected {\"mediaType\":\"video\",\"assetId\":157,\"status\":504,\"retryAfterMs\":0}",
+        "u2 warn [pixabay-direct] scene.failed {\"mediaType\":\"video\",\"scene\":4,\"status\":504,\"kind\":\"provider\",\"fallback\":true,\"error\":\"Pixabay download failed\"}",
+        "u2 warn [studio-image] browser Pixabay fetch fell back to the Worker {\"sceneIndex\":1,\"status\":504,\"kind\":\"provider\",\"retryable\":true,\"error\":\"Pixabay download failed\"}",
+        "u2 warn [render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "u2 warn [render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "u3 warn [pixabay-direct] search.rejected {\"type\":\"video\",\"status\":503,\"retryAfterMs\":5000,\"detail\":\"provider busy\"}",
+        "u3 warn [pixabay-direct] scene.failed {\"mediaType\":\"video\",\"scene\":1,\"status\":503,\"kind\":\"provider\",\"fallback\":true,\"error\":\"Pixabay search failed (HTTP 503)\"}",
+        "u3 warn [studio-image] browser Pixabay fetch fell back to the Worker {\"sceneIndex\":1,\"status\":503,\"kind\":\"provider\",\"retryable\":true,\"error\":\"Pixabay search failed (HTTP 503)\"}",
+        "u3 warn [pixabay-direct] search.rejected {\"type\":\"image\",\"status\":503,\"retryAfterMs\":5000,\"detail\":\"provider busy\"}",
+        "u3 warn [pixabay-direct] scene.failed {\"mediaType\":\"image\",\"scene\":3,\"status\":503,\"kind\":\"provider\",\"fallback\":true,\"error\":\"Pixabay search failed (HTTP 503)\"}",
+        "u3 warn [studio-image] browser Pixabay fetch fell back to the Worker {\"sceneIndex\":0,\"status\":503,\"kind\":\"provider\",\"retryable\":true,\"error\":\"Pixabay search failed (HTTP 503)\"}",
+        "u3 warn [pixabay-direct] download.rejected {\"mediaType\":\"video\",\"assetId\":131,\"status\":504,\"retryAfterMs\":0}",
+        "u3 warn [pixabay-direct] scene.failed {\"mediaType\":\"video\",\"scene\":1,\"status\":504,\"kind\":\"provider\",\"fallback\":true,\"error\":\"Pixabay download failed\"}",
+        "u3 warn [studio-image] browser Pixabay fetch fell back to the Worker {\"sceneIndex\":1,\"status\":504,\"kind\":\"provider\",\"retryable\":true,\"error\":\"Pixabay download failed\"}",
+        "u3 warn [render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "u3 warn [render] A clip has no decodable frame yet; its frames are captured by seeking."
+      ],
+      "warnings": [
+        "[render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "[render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "[pixabay-direct] download.rejected [object Object]",
+        "[pixabay-direct] scene.failed [object Object]",
+        "[studio-image] browser Pixabay fetch fell back to the Worker [object Object]",
+        "[render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "[render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "[pixabay-direct] search.rejected [object Object]",
+        "[pixabay-direct] scene.failed [object Object]",
+        "[studio-image] browser Pixabay fetch fell back to the Worker [object Object]",
+        "[pixabay-direct] search.rejected [object Object]",
+        "[pixabay-direct] scene.failed [object Object]",
+        "[studio-image] browser Pixabay fetch fell back to the Worker [object Object]",
+        "[pixabay-direct] download.rejected [object Object]",
+        "[pixabay-direct] scene.failed [object Object]",
+        "[studio-image] browser Pixabay fetch fell back to the Worker [object Object]",
+        "[render] A clip has no decodable frame yet; its frames are captured by seeking.",
+        "[render] A clip has no decodable frame yet; its frames are captured by seeking."
+      ]
+    }
+  ],
+  "median": {
+    "makespanMs": 200445,
+    "pipelineMakespanMs": 133864,
+    "requestTotal": 885,
+    "aiCalls": {
+      "planner": 9,
+      "writer": 12,
+      "scenePlanner": 21,
+      "tts": 24,
+      "other": 0
+    },
+    "aiFailures": {
+      "planner": 0,
+      "writer": 3,
+      "scenePlanner": 2,
+      "tts": 8,
+      "other": 0
+    },
+    "aiBusyMs": {
+      "planner": 64800,
+      "writer": 252000,
+      "scenePlanner": 84000,
+      "tts": 72000,
+      "other": 0
+    },
+    "provider": {
+      "searches": 58,
+      "photos": 36,
+      "clips": 22,
+      "externalTts": 0,
+      "failures": 6,
+      "bytes": 86400
+    },
+    "requests": {
+      "GET /api/credits": 21,
+      "GET /api/pipeline-capabilities": 3,
+      "POST /api/script?async=1": 9,
+      "GET /api/script/notes/nt-d770bc5df0": 54,
+      "GET /api/script/notes/nt-1308fbff40": 56,
+      "GET /api/script/notes/nt-3bbe141309": 83,
+      "POST /api/voiceover": 9,
+      "POST /api/image-prompts": 18,
+      "GET /api/media/config": 3,
+      "POST /api/media/claim": 18,
+      "GET /api/script/notes/nt-47c0b8cd40": 106,
+      "GET /api/script/notes/nt-618ee7a761": 115,
+      "GET /api/script/notes/nt-2514634032": 137,
+      "POST /api/image": 4,
+      "GET /api/script/notes/nt-2a2046a0a0": 109,
+      "GET /api/script/notes/nt-0ba07e45b1": 109,
+      "GET /api/script/notes/nt-c1fa9b4b7a": 31
+    },
+    "config": {
+      "users": 3,
+      "videos": 3,
+      "scale": 1,
+      "netMs": 60,
+      "seed": "base100",
+      "minutes": 1,
+      "renderMs": 9000,
+      "media": "direct",
+      "loopConcurrency": 2,
+      "aiLatencyMs": {
+        "planner": 7200,
+        "writer": 21000,
+        "scenePlanner": 4000,
+        "tts": 3000
+      },
+      "aiFailureRate": {
+        "planner": 0.1,
+        "writer": 0.12,
+        "scenePlanner": 0.08,
+        "tts": 0.25
+      },
+      "invalidRate": {
+        "writer": 0.12,
+        "scenePlanner": 0.08
+      },
+      "providerLatencyMs": {
+        "search": 450,
+        "photo": 700,
+        "clip": 1400,
+        "externalTts": 2500
+      },
+      "providerFailureRate": {
+        "search": 0.05,
+        "photo": 0.05,
+        "clip": 0.05,
+        "externalTts": 0.2
+      }
+    }
+  }
+}

@@ -41,6 +41,33 @@ export const VOICEOVER_MAX_CHUNK = 400;
 export const VOICEOVER_AI_TIMEOUT_MS = 35_000;
 export const VOICEOVER_EXTERNAL_TIMEOUT_MS = 15_000;
 
+/*
+ * SESSION 279 — THE WORKER OWNS THE VOICEOVER LADDER.
+ *
+ * The page used to split the script into <=400 char chunks, request them ONE
+ * AT A TIME, assemble the container itself and restart the WHOLE chunk set up
+ * to three times when a chunk failed (browser-offload.ts `voiceover()`). For a
+ * two-chunk narration that is a 6 s floor per video, and a 25 %-failing TTS
+ * model turned three restarts into a dead row - measured in
+ * bench/pipeline-sim/results/baseline-scale025.json as 8/9 videos finished.
+ *
+ * Now the page sends ONE full-text request and this module does the splitting,
+ * the retries, the fallbacks and the assembly, through a bounded pool:
+ *   - `VOICEOVER_SERVER_CHUNKS` lanes, so a retry fleet cannot multiply load;
+ *   - `VOICEOVER_CHUNK_ATTEMPTS` per chunk on the primary model, then the
+ *     English fallback models, then the validated external TTS;
+ *   - `VOICEOVER_TOTAL_BUDGET_MS` for the whole request: no attempt starts that
+ *     the remaining budget cannot finish (the rule script-seo's `attemptSlot()`
+ *     established), and every attempt's timeout is clamped to what is left;
+ *   - `request.signal` checked at every lane and chunk boundary.
+ * The browser chunk endpoint (`chunk: true`) stays exactly as it was, because a
+ * cached pre-279 page still calls it.
+ */
+export const VOICEOVER_SERVER_CHUNKS = 3;
+export const VOICEOVER_CHUNK_ATTEMPTS = 3;
+export const VOICEOVER_TOTAL_BUDGET_MS = 90_000;
+export const VOICEOVER_MIN_ATTEMPT_MS = 2_000;
+
 export interface VoiceoverEnv {
 	AI?: {
 		run: (model: string, input: Record<string, unknown>) => Promise<unknown>;
@@ -204,7 +231,19 @@ function splitByWordsOrSlice(text: string, maxChunk: number): string[] {
  * guaranteeing every returned chunk contains speakable letters or numbers.
  */
 export function splitVoiceoverChunks(text: string, maxChunk = VOICEOVER_MAX_CHUNK): string[] {
-	const clean = String(text || "").replace(/\s+/g, " ").trim();
+	/*
+	 * A lone surrogate is not speakable and is not valid UTF-8: MeloTTS answers
+	 * it with AiError 3043 and JSON.stringify of the chunk emits U+FFFD.
+	 * `sanitizeVoiceoverText` already drops them on the way into the route; this
+	 * keeps the guarantee for EVERY caller of the splitter (the legacy chunk
+	 * route included). It is the same rule the browser's `voiceChunks()` applied
+	 * while the page owned the splitting.
+	 */
+	const clean = String(text || "")
+		.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, "")
+		.replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
 	if (!clean || !hasSpeakableContent(clean)) return [];
 
 	const limit = Math.max(80, Math.min(Number(maxChunk) || VOICEOVER_MAX_CHUNK, 500));
@@ -492,6 +531,32 @@ export function joinVoiceoverPieces(pieces: Uint8Array[]): {
 			? pieces[0].subarray(fmtRef.off, fmtRef.off + fmtRef.sz)
 			: new Uint8Array(16);
 
+		/*
+		 * The joined file carries ONE fmt chunk, so every piece has to be the
+		 * same PCM format and its data has to be a whole number of frames.
+		 * Concatenating anything else is not a join, it is noise - and the
+		 * browser assembly this replaced refused it for the same reason.
+		 */
+		const fmtDv = fmtBytes.byteLength >= 14
+			? new DataView(fmtBytes.buffer, fmtBytes.byteOffset, fmtBytes.byteLength)
+			: null;
+		const blockAlign = fmtDv ? fmtDv.getUint16(12, true) : 0;
+		for (const piece of pieces) {
+			const ref = findWavChunk(piece, "fmt ");
+			const fmt = ref ? piece.subarray(ref.off, ref.off + ref.sz) : null;
+			if (
+				!fmt ||
+				fmt.byteLength !== fmtBytes.byteLength ||
+				fmt.some((value, index) => value !== fmtBytes[index])
+			) {
+				throw new Error("WAV sample formats differ across voiceover chunks");
+			}
+			const data = findWavChunk(piece, "data");
+			if (!data || data.sz === 0 || (blockAlign > 0 && data.sz % blockAlign !== 0)) {
+				throw new Error("WAV block alignment does not match the data chunk");
+			}
+		}
+
 		const dataParts: Uint8Array[] = [];
 		for (const piece of pieces) {
 			const dRef = findWavChunk(piece, "data");
@@ -539,6 +604,17 @@ export function joinVoiceoverPieces(pieces: Uint8Array[]): {
 			audioType: "audio/wav",
 			audioName: "voiceover.wav"
 		};
+	}
+
+	/*
+	 * Not every piece is WAV (that branch returned), so at least one is a frame
+	 * stream: splicing RIFF headers into it produces a file no decoder plays.
+	 * The container repair above is what prevents reaching this line; when a
+	 * repair could not be afforded, an honest failure the page can report beats
+	 * shipping corrupt audio.
+	 */
+	if (pieces.some(isWavBytes)) {
+		throw new Error("Mixed WAV and MP3 voiceover pieces cannot be joined");
 	}
 
 	if (pieces.length === 1) {
@@ -653,7 +729,15 @@ export async function handleVoiceover(
 			);
 		}
 
-		// #261: browser owns splitting, retry/fallback, format consistency and assembly.
+		/*
+		 * #261 LEGACY CHUNK ROUTE (kept, not owned).
+		 *
+		 * A page cached before session 279 still splits the script itself, asks
+		 * for one chunk at a time and runs its own retry/fallback ladder, so this
+		 * route must keep answering exactly one chunk with one inference. Nothing
+		 * new may use it: the current page sends the full text and gets the
+		 * worker's bounded pool below.
+		 */
 		if (body.chunk === true) {
 			const voiceIndex = body.voiceIndex ?? 0;
 			if (typeof body.text !== "string" || body.text.length > VOICEOVER_MAX_CHUNK ||
@@ -741,248 +825,357 @@ export async function handleVoiceover(
 			return null;
 		};
 
-		const pieces: Uint8Array[] = [];
-		let stickyModel: string | null = null;
-		let stickyExternal = false;
+		/*
+		 * ONE request, N chunks, `VOICEOVER_SERVER_CHUNKS` lanes.
+		 *
+		 * Everything below is the same ladder the sequential loop ran - sticky
+		 * healthy source first, primary model up to VOICEOVER_CHUNK_ATTEMPTS,
+		 * English Workers AI fallbacks, validated external TTS - but the chunks
+		 * are in flight together instead of one after another, and the whole
+		 * request has a deadline no attempt may overrun.
+		 */
+		const ai = env.AI;
+		const startedAt = Date.now();
+		const deadlineAt = startedAt + VOICEOVER_TOTAL_BUDGET_MS;
+		const remainingMs = (): number => Math.max(0, deadlineAt - Date.now());
+		const budgetReason = (): string =>
+			"the voiceover budget expired (" +
+			VOICEOVER_TOTAL_BUDGET_MS +
+			" ms for " +
+			chunks.length +
+			" chunk(s))";
 
-		for (let ci = 0; ci < chunks.length; ci++) {
-			if (request.signal && request.signal.aborted) {
-				return jsonResponse(
-					{ success: false, error: "Voiceover request aborted" },
-					499
-				);
-			}
+		/*
+		 * The hang guard this strategy has to keep: an attempt only starts when
+		 * the remaining budget can still cover it, and its timeout is clamped to
+		 * what is left. `null` means "stop the ladder and say why" - never
+		 * "start a call whose answer we will throw away".
+		 */
+		const attemptSlot = (timeoutMs: number): { timeoutMs: number } | null => {
+			const left = remainingMs();
+			if (left <= 0) return null;
+			const slot = Math.min(timeoutMs, left);
+			return slot < VOICEOVER_MIN_ATTEMPT_MS ? null : { timeoutMs: slot };
+		};
 
+		type ChunkPiece = {
+			bytes: Uint8Array;
+			source: "primary" | "sticky-ai" | "external";
+			model: string;
+		};
+		type ChunkError = { index: number; message: string; unexpected: boolean };
+
+		const pieces: (ChunkPiece | null)[] = new Array(chunks.length).fill(null);
+		/* A source an earlier chunk proved healthy is tried first by later ones. */
+		const sticky = { model: null as string | null, external: false };
+		const chunkErrors: ChunkError[] = [];
+		/*
+		 * Ladder state lives in an object on purpose: the lanes mutate it from
+		 * inside awaited closures, and a plain `let` is still narrowed to its
+		 * initial value by the time the pool settles.
+		 */
+		const ladder = {
+			attempts: 0,
+			budgetExhausted: false,
+			firstFailure: null as ChunkError | null,
+			aborted: false
+		};
+
+		const abortedNow = (): boolean => Boolean(request.signal && request.signal.aborted);
+
+		/* Synthesize ONE chunk. Returns null and records why on failure. */
+		const synthesizeChunk = async (ci: number): Promise<ChunkPiece | null> => {
 			const chunk = chunks[ci];
-			let piece: Uint8Array | null = null;
-			let pieceSource: "primary" | "sticky-ai" | "external" = "primary";
-			let lastTtsError = "";
+			let lastError = "";
 			let hadNullResult = false;
 
-			/*
-			 * If an earlier chunk already switched onto a healthy native Workers AI
-			 * MP3 fallback (Deepgram Aura), try that model first so long scripts do
-			 * not burn 3 failing MeloTTS calls per chunk.
-			 */
-			if (stickyModel && stickyModel !== primaryModel) {
+			const callModel = async (
+				model: string,
+				label: string,
+				wantContainer?: boolean
+			): Promise<Uint8Array | null> => {
+				if (abortedNow()) return null;
+				const slot = attemptSlot(VOICEOVER_AI_TIMEOUT_MS);
+				if (!slot) {
+					ladder.budgetExhausted = true;
+					lastError = budgetReason();
+					return null;
+				}
+				ladder.attempts += 1;
 				try {
-					const stickyRaw = await withTimeout(
-						env.AI.run(stickyModel, buildModelPayload(stickyModel, chunk, lang)),
-						VOICEOVER_AI_TIMEOUT_MS,
-						"TTS model"
+					const raw = await withTimeout(
+						ai.run(model, buildModelPayload(model, chunk, lang)),
+						slot.timeoutMs,
+						label
 					);
-					const bytes = await extractTtsAudioBytes(stickyRaw);
+					const bytes = await extractTtsAudioBytes(raw);
 					if (bytes && looksLikeAudioBytes(bytes)) {
-						piece = bytes;
-						pieceSource = "sticky-ai";
+						if (wantContainer === undefined || isWavBytes(bytes) === wantContainer) return bytes;
+						lastError = "TTS returned the wrong audio container";
+						return null;
 					}
-				} catch (stickyErr) {
-					lastTtsError =
-						stickyErr instanceof Error ? stickyErr.message : String(stickyErr);
-					stickyModel = null;
+					hadNullResult = true;
+					return null;
+				} catch (modelError) {
+					lastError = modelError instanceof Error ? modelError.message : String(modelError);
+					console.log("[voiceover] tts error", {
+						chunk: ci + 1,
+						of: chunks.length,
+						model,
+						err: lastError
+					});
+					return null;
 				}
-			} else if (stickyExternal && fallbackUrl) {
-				const extBytes = await fetchExternalChunk(chunk);
-				if (extBytes) {
-					piece = extBytes;
-					pieceSource = "external";
-				} else {
-					stickyExternal = false;
+			};
+
+			const callExternal = async (wantContainer?: boolean): Promise<Uint8Array | null> => {
+				if (!fallbackUrl) return null;
+				const slot = attemptSlot(VOICEOVER_EXTERNAL_TIMEOUT_MS);
+				if (!slot) {
+					ladder.budgetExhausted = true;
+					lastError = budgetReason();
+					return null;
+				}
+				ladder.attempts += 1;
+				const bytes = await fetchExternalChunk(chunk);
+				if (!bytes) return null;
+				if (wantContainer !== undefined && isWavBytes(bytes) !== wantContainer) {
+					lastError = "external TTS returned the wrong audio container";
+					return null;
+				}
+				return bytes;
+			};
+
+			/*
+			 * A model or endpoint an earlier chunk already proved healthy goes
+			 * first, so a long script does not burn three failing primary calls
+			 * per chunk. Under concurrency only chunks that START later see it,
+			 * which is why the container repair below still exists.
+			 */
+			if (sticky.model && sticky.model !== primaryModel) {
+				const bytes = await callModel(sticky.model, "TTS model");
+				if (bytes) return { bytes, source: "sticky-ai", model: sticky.model };
+			} else if (sticky.external) {
+				const bytes = await callExternal();
+				if (bytes) return { bytes, source: "external", model: "external" };
+				sticky.external = false;
+			}
+
+			for (let attempt = 1; attempt <= VOICEOVER_CHUNK_ATTEMPTS; attempt++) {
+				if (abortedNow()) return null;
+				console.log("[voiceover] tts call", {
+					model: primaryModel,
+					chunk: ci + 1,
+					of: chunks.length,
+					attempt,
+					chars: chunk.length
+				});
+				const bytes = await callModel(primaryModel, "TTS model");
+				if (bytes) return { bytes, source: "primary", model: primaryModel };
+				if (ladder.budgetExhausted) break;
+				if (attempt < VOICEOVER_CHUNK_ATTEMPTS) {
+					/*
+					 * Only an exhausted budget ends the ladder. `retryDelayMs: 0`
+					 * is a zero WAIT, not a zero budget: reading it as one quietly
+					 * shortened the ladder to two attempts (measured by
+					 * tests/session-250-batch-pipeline.test.mjs, which counts the
+					 * three primary calls before the English fallback).
+					 */
+					if (remainingMs() <= 0) {
+						ladder.budgetExhausted = true;
+						lastError = budgetReason();
+						break;
+					}
+					await sleep(Math.min(retryBaseMs * attempt, remainingMs()));
 				}
 			}
 
-			/* Primary model (`@cf/myshell-ai/melotts`) — up to 3 attempts. */
-			if (!piece) {
-				for (let attempt = 1; attempt <= 3; attempt++) {
-					if (request.signal && request.signal.aborted) {
-						return jsonResponse(
-							{ success: false, error: "Voiceover request aborted" },
-							499
-						);
-					}
-					try {
-						console.log("[voiceover] tts call", {
-							model: primaryModel,
-							chunk: ci + 1,
-							of: chunks.length,
-							attempt,
-							chars: chunk.length,
-							preview: chunk.slice(0, 60)
-						});
-						const raw = await withTimeout(
-							env.AI.run(
-								primaryModel,
-								buildModelPayload(primaryModel, chunk, lang)
-							),
-							VOICEOVER_AI_TIMEOUT_MS,
-							"TTS model"
-						);
-						const bytes = await extractTtsAudioBytes(raw);
-						if (bytes && looksLikeAudioBytes(bytes)) {
-							piece = bytes;
-							pieceSource = "primary";
-							lastTtsError = "";
-							break;
-						}
-						hadNullResult = true;
-						if (attempt < 3) {
-							await sleep(retryBaseMs * attempt);
-						}
-					} catch (ttsError) {
-						lastTtsError =
-							ttsError instanceof Error ? ttsError.message : String(ttsError);
-						console.log("[voiceover] tts error", {
-							chunk: ci + 1,
-							of: chunks.length,
-							attempt,
-							err: lastTtsError
-						});
-						if (attempt < 3) {
-							await sleep(retryBaseMs * attempt);
-						}
-					}
-				}
-			}
-
-			/* Native Workers AI MP3 fallbacks for English when MeloTTS fails or returns empty bytes. */
-			if (!piece && lang === "en") {
+			/* Native Workers AI MP3 fallbacks for English. */
+			if (lang === "en") {
 				for (const fbModel of VOICEOVER_EN_FALLBACK_MODELS) {
 					if (fbModel === primaryModel) continue;
-					try {
-						const fbRaw = await withTimeout(
-							env.AI.run(fbModel, buildModelPayload(fbModel, chunk, lang)),
-							VOICEOVER_AI_TIMEOUT_MS,
-							"Fallback TTS model"
-						);
-						const bytes = await extractTtsAudioBytes(fbRaw);
-						if (bytes && looksLikeAudioBytes(bytes)) {
-							piece = bytes;
-							pieceSource = "sticky-ai";
-							stickyModel = fbModel;
-							lastTtsError = "";
-							console.log("[voiceover] workers-ai fallback TTS", {
-								model: fbModel,
-								chunk: ci + 1,
-								of: chunks.length,
-								bytes: bytes.byteLength
-							});
-							break;
-						}
-					} catch (fbModelErr) {
-						console.log("[voiceover] workers-ai fallback TTS error", {
+					if (abortedNow() || ladder.budgetExhausted) break;
+					const bytes = await callModel(fbModel, "Fallback TTS model");
+					if (bytes) {
+						sticky.model = fbModel;
+						console.log("[voiceover] workers-ai fallback TTS", {
 							model: fbModel,
 							chunk: ci + 1,
 							of: chunks.length,
-							err:
-								fbModelErr instanceof Error
-									? fbModelErr.message
-									: String(fbModelErr)
+							bytes: bytes.byteLength
 						});
+						return { bytes, source: "sticky-ai", model: fbModel };
 					}
 				}
 			}
 
-			/* External HTTP fallback (time-boxed + content-validated). */
-			if (!piece && fallbackUrl) {
-				const fbBytes = await fetchExternalChunk(chunk);
-				if (fbBytes) {
-					piece = fbBytes;
-					pieceSource = "external";
-					stickyExternal = true;
-					lastTtsError = "";
+			if (!ladder.budgetExhausted && !abortedNow()) {
+				const bytes = await callExternal();
+				if (bytes) {
+					sticky.external = true;
+					return { bytes, source: "external", model: "external" };
 				}
 			}
 
-			if (!piece || piece.byteLength === 0) {
-				if (hadNullResult && !lastTtsError) {
-					return jsonResponse(
-						{
-							success: false,
-							error:
-								"Unexpected TTS output (chunk " +
-								(ci + 1) +
-								" of " +
-								chunks.length +
-								")"
-						},
-						500
-					);
-				}
-				return jsonResponse(
-					{
-						success: false,
-						error:
-							"TTS failed (chunk " +
-							(ci + 1) +
-							" of " +
-							chunks.length +
-							"): " +
-							(lastTtsError || "empty audio")
-					},
-					500
-				);
-			}
+			const failure: ChunkError = {
+				index: ci,
+				message: hadNullResult && !lastError ? "Unexpected TTS output" : lastError || "empty audio",
+				unexpected: hadNullResult && !lastError
+			};
+			chunkErrors.push(failure);
+			if (!ladder.firstFailure) ladder.firstFailure = failure;
+			return null;
+		};
 
-			/*
-			 * Guard against WAV + MP3 hybrid corruption: if chunk 0..ci-1 were WAV
-			 * (e.g. MeloTTS returned RIFF/WAVE) and chunk ci failed over to an MP3
-			 * fallback (or vice versa), re-synthesize earlier chunks on the working
-			 * fallback so `joinVoiceoverPieces` always receives a 100% homogeneous
-			 * container and consistent voice.
-			 */
-			if (pieces.length > 0 && isWavBytes(piece) !== isWavBytes(pieces[0])) {
-				const replacementPrefix: Uint8Array[] = [];
-				let prefixOk = true;
-				for (let prevIdx = 0; prevIdx < ci; prevIdx++) {
-					let reBytes: Uint8Array | null = null;
-					if (pieceSource === "sticky-ai" && stickyModel) {
-						try {
-							const reRaw = await withTimeout(
-								env.AI.run(
-									stickyModel,
-									buildModelPayload(stickyModel, chunks[prevIdx], lang)
-								),
-								VOICEOVER_AI_TIMEOUT_MS,
-								"Fallback TTS model"
-							);
-							const candidate = await extractTtsAudioBytes(reRaw);
-							if (
-								candidate &&
-								looksLikeAudioBytes(candidate) &&
-								isWavBytes(candidate) === isWavBytes(piece)
-							) {
-								reBytes = candidate;
-							}
-						} catch {
-							reBytes = null;
-						}
-					} else if (pieceSource === "external" && fallbackUrl) {
-						const candidate = await fetchExternalChunk(chunks[prevIdx]);
-						if (candidate && isWavBytes(candidate) === isWavBytes(piece)) {
-							reBytes = candidate;
-						}
-					}
-					if (!reBytes) {
-						prefixOk = false;
-						break;
-					}
-					replacementPrefix.push(reBytes);
+		/*
+		 * The pool. Lanes pull the next chunk index; a failure stops the lanes
+		 * from STARTING more work (in-flight chunks are awaited, so nothing is
+		 * left floating) and the request reports the first chunk that failed,
+		 * exactly as the sequential loop did.
+		 */
+		const lanes = Math.max(1, Math.min(VOICEOVER_SERVER_CHUNKS, chunks.length));
+		let nextIndex = 0;
+		const runLane = async (): Promise<void> => {
+			for (;;) {
+				if (ladder.firstFailure || abortedNow() || remainingMs() <= 0) return;
+				const ci = nextIndex++;
+				if (ci >= chunks.length) return;
+				const piece = await synthesizeChunk(ci);
+				if (abortedNow()) {
+					ladder.aborted = true;
+					return;
 				}
-				if (prefixOk && replacementPrefix.length === pieces.length) {
-					for (let prevIdx = 0; prevIdx < replacementPrefix.length; prevIdx++) {
-						pieces[prevIdx] = replacementPrefix[prevIdx];
-					}
-				}
+				if (!piece) return;
+				pieces[ci] = piece;
 			}
+		};
+		await Promise.all(Array.from({ length: lanes }, () => runLane()));
 
-			pieces.push(piece);
+		if (abortedNow() || ladder.aborted) {
+			return jsonResponse(
+				{ success: false, error: "Voiceover request aborted", attempts: ladder.attempts },
+				499
+			);
+		}
+		if (ladder.firstFailure) {
+			const failure = ladder.firstFailure;
+			return jsonResponse(
+				{
+					success: false,
+					error:
+						(failure.unexpected ? "Unexpected TTS output" : "TTS failed") +
+						" (chunk " +
+						(failure.index + 1) +
+						" of " +
+						chunks.length +
+						"): " +
+						failure.message,
+					stage: "voiceover",
+					chunk: failure.index + 1,
+					chunks: chunks.length,
+					attempts: ladder.attempts,
+					budgetExhausted: ladder.budgetExhausted,
+					/* The worker spent its ladder: another identical request
+					 * would spend it again. Retryable, but only after a wait. */
+					retryable: true,
+					retryOwner: "worker"
+				},
+				ladder.budgetExhausted ? 504 : 500
+			);
 		}
 
-		const joined = joinVoiceoverPieces(pieces);
+		/*
+		 * Container homogeneity: `joinVoiceoverPieces` concatenates, so WAV and
+		 * MP3 must never be mixed. The majority container wins (cheaper than the
+		 * old "redo the whole prefix" rule) and only the mismatching chunks are
+		 * re-synthesized, through the same bounded slots. If a repair cannot be
+		 * afforded or fails, the original bytes are kept - the same fallback the
+		 * sequential loop had when its prefix repair did not complete.
+		 */
+		const finished = pieces.filter((piece): piece is ChunkPiece => Boolean(piece));
+		/*
+		 * WHICH CONTAINER THE NARRATION ENDS UP IN.
+		 *
+		 * The source that is healthy RIGHT NOW decides, because it is also the
+		 * source that performs the repair below. A two-chunk narration whose
+		 * first chunk came back WAV from the primary and whose second came back
+		 * MP3 from the English fallback must heal toward MP3: a plain majority
+		 * vote ties 1:1 and, with `>=`, healed toward the FAILING container -
+		 * it re-synthesized the healthy chunk and shipped a RIFF header. With
+		 * nothing sticky the majority still decides, and a tie goes to MP3
+		 * (smaller, and what every fallback model produces).
+		 */
+		const stickyPiece = sticky.model
+			? finished.filter((piece) => piece.model === sticky.model).pop()
+			: sticky.external
+				? finished.filter((piece) => piece.source === "external").pop()
+				: undefined;
+		const wavVotes = finished.filter((piece) => isWavBytes(piece.bytes)).length;
+		const wantWav = stickyPiece
+			? isWavBytes(stickyPiece.bytes)
+			: wavVotes * 2 > finished.length;
+		const mismatched = finished.filter((piece) => isWavBytes(piece.bytes) !== wantWav);
+		if (mismatched.length && !abortedNow()) {
+			const preferred =
+				stickyPiece && isWavBytes(stickyPiece.bytes) === wantWav
+					? stickyPiece
+					: finished.find(
+						(piece) => isWavBytes(piece.bytes) === wantWav && piece.source !== "external"
+					);
+			for (const piece of mismatched) {
+				/* `finished` keeps chunk order, so its index IS the chunk index. */
+				const index = finished.indexOf(piece);
+				const slot = attemptSlot(VOICEOVER_AI_TIMEOUT_MS);
+				if (!slot) {
+					ladder.budgetExhausted = true;
+					break;
+				}
+				let repaired: Uint8Array | null = null;
+				if (preferred && preferred.model !== primaryModel) {
+					ladder.attempts += 1;
+					try {
+						const raw = await withTimeout(
+							ai.run(preferred.model, buildModelPayload(preferred.model, chunks[index], lang)),
+							slot.timeoutMs,
+							"Fallback TTS model"
+						);
+						const candidate = await extractTtsAudioBytes(raw);
+						if (candidate && looksLikeAudioBytes(candidate) && isWavBytes(candidate) === wantWav) repaired = candidate;
+					} catch {
+						repaired = null;
+					}
+				}
+				if (!repaired && fallbackUrl) {
+					const extSlot = attemptSlot(VOICEOVER_EXTERNAL_TIMEOUT_MS);
+					if (extSlot) {
+						ladder.attempts += 1;
+						const candidate = await fetchExternalChunk(chunks[index]);
+						if (candidate && isWavBytes(candidate) === wantWav) repaired = candidate;
+					}
+				}
+				if (repaired) {
+					piece.bytes = repaired;
+					piece.source = preferred ? "sticky-ai" : "external";
+				}
+			}
+			console.log("[voiceover] container repair", {
+				wantWav,
+				mismatched: mismatched.length,
+				budgetExhausted: ladder.budgetExhausted
+			});
+		}
+
+		const joinedPieces = finished.map((piece) => piece.bytes);
+
+		const joined = joinVoiceoverPieces(joinedPieces);
 		console.log("[voiceover] done", {
 			chunks: chunks.length,
 			format: joined.audioType,
-			bytes: joined.bytes.byteLength
+			bytes: joined.bytes.byteLength,
+			attempts: ladder.attempts,
+			lanes: Math.max(1, Math.min(VOICEOVER_SERVER_CHUNKS, chunks.length)),
+			ms: Date.now() - startedAt,
+			budgetMs: VOICEOVER_TOTAL_BUDGET_MS
 		});
 
 		const payload = new ArrayBuffer(joined.bytes.byteLength);
@@ -992,7 +1185,11 @@ export async function handleVoiceover(
 			status: 200,
 			headers: {
 				"Content-Type": joined.audioType,
-				"Content-Disposition": "attachment; filename=" + joined.audioName
+				"Content-Disposition": "attachment; filename=" + joined.audioName,
+				/* What the worker's ladder spent, for the page's status line. */
+				"X-Voiceover-Attempts": String(ladder.attempts),
+				"X-Voiceover-Chunks": String(chunks.length),
+				"X-Retry-Owner": "worker"
 			}
 		});
 	} catch (error) {

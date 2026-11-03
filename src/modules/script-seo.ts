@@ -1809,21 +1809,27 @@ export async function handleSeoScriptGeneration(
 	}
 
 	/*
-	 * WHO OWNS THE RETRIES?
+	 * WHO OWNS THE RETRIES? THE WORKER (session 279).
 	 *
-	 * Historically this route retried for the caller: up to 3 planner attempts
-	 * and 3 writer attempts inside ONE request, each planner call on the plain
-	 * path itself retrying transport twice. The browser then retried that whole
-	 * thing up to three times, so one click could cost 3 x (3 + 3) inferences -
-	 * and the 405 s ladder could not fit the 240 s the note layer promised
-	 * (see bug-fix-session-277-slow-pipeline.md).
+	 * The history: this route always retried for the caller (up to 3 planner +
+	 * 3 writer attempts inside ONE request). Session 278 then made the BROWSER
+	 * the owner - the page sent `browserRetries: true`, the worker did one
+	 * attempt per stage, and the page looped three times. That was measured in
+	 * bench/pipeline-sim/results/baseline-scale1.json as 12 submissions and 934
+	 * note polls for nine scripts, because every page-level attempt is a fresh
+	 * POST /api/script?async=1, a fresh admission check against the 2-lane loop
+	 * and a FRESH 900 ms-quantised poll stream.
 	 *
-	 * `browserRetries: true` moves the policy where it belongs: the worker makes
-	 * exactly ONE attempt per stage, reports the stage and the reason, and the
-	 * browser decides whether to spend another attempt (it already owns the
-	 * attempt counter, the backoff and the `previousFailure` feedback loop).
-	 * Requests that do not declare it keep the legacy server ladder, so an old
-	 * client is unaffected.
+	 * So the ladder lives here again, and only here: the page makes one request
+	 * and waits. `browserRetries: true` is still honoured, because a cached
+	 * pre-279 page still sends it and must keep getting exactly one attempt per
+	 * stage - that page still owns its own ladder. A pre-279 page against this
+	 * worker is therefore unchanged, and this page against a pre-279 worker
+	 * simply runs that worker's legacy ladder (slower, never a hang).
+	 *
+	 * Hang safety (the price of holding the ladder): every attempt is bounded by
+	 * attemptSlot() - it refuses to start a call the run cannot finish - the
+	 * stage boundaries check `aborted()`, and `deadlineAtMs` caps the whole run.
 	 */
 	const browserRetries = body.browserRetries === true;
 	const plannerAttemptLimit = browserRetries ? 1 : 3;
@@ -1850,6 +1856,18 @@ export async function handleSeoScriptGeneration(
 		? alternateModel : scriptModel;
 	const writerModel = (singleAttempt || browserRetries) && browserAttempt
 		? alternateModel : scriptModel;
+	/*
+	 * SESSION 279: THE LADDER ROTATES ITS OWN MODEL.
+	 *
+	 * A retry on the same slug with the same prompt is a replay. The page used
+	 * to be the only thing that could change the slug (through `attempt`); now
+	 * that the worker owns the attempts, the worker owns the rotation - attempt
+	 * 1 keeps the negotiated slug, attempt 2+ alternates to the fallback.
+	 */
+	const modelForAttempt = (base: string, attempt: number): string =>
+		attempt > 1 && alternateModel && alternateModel !== base ? alternateModel : base;
+	/* The slug that actually produced the script, for the payload and the note. */
+	let writerModelUsed = writerModel;
 
 	/*
 	 * Usage tracking is informational and independent of the note work, so it
@@ -2266,7 +2284,7 @@ export async function handleSeoScriptGeneration(
 			words: spokenWordCount,
 			durationMs: check.endMs || 0,
 			minutes: minutes,
-			model: writerModel
+			model: writerModelUsed
 		};
 		if (repair) {
 			payload.repaired = true;
@@ -2319,16 +2337,25 @@ export async function handleSeoScriptGeneration(
 		attemptsUsed: number
 	): Record<string, unknown> => {
 		const retryable = !permanentFailure(reason);
+		/*
+		 * SESSION 279: the verdict names its owner. A cached pre-279 page sends
+		 * `browserRetries: true`, gets ONE attempt per request and runs the
+		 * ladder itself; this page sends no flag, so `attemptsUsed` is what the
+		 * worker's own ladder spent and re-asking would spend it again.
+		 */
+		const retryOwner = browserRetries ? "browser" : "worker";
 		const payload: Record<string, unknown> = {
 			success: false,
 			error: reason,
-			/* Additive: an old client ignores both fields. */
+			/* Additive: an old client ignores these fields. */
 			retryable,
+			retryOwner,
 			failure: {
 				stage,
 				reason: String(reason || "").slice(0, 400),
 				attempts: attemptsUsed,
-				retryable
+				retryable,
+				retryOwner
 			}
 		};
 		if (keywordSet) {
@@ -2420,6 +2447,9 @@ export async function handleSeoScriptGeneration(
 				}
 				heartbeat("planning");
 				const attemptT0 = Date.now();
+				/* Session 279: a ladder attempt is never a replay - attempt 2+
+				 * alternates the slug (the page no longer sends `attempt`). */
+				const plannerAttemptModel = modelForAttempt(plannerModel, attempt);
 				const plannerTemp = attempt === 1 ? 0.55 : 0.4;
 				const prompt =
 					keywordPrompt +
@@ -2437,6 +2467,7 @@ export async function handleSeoScriptGeneration(
 				console.log("[script] keywords attempt", {
 					reqId,
 					attempt,
+					model: plannerAttemptModel,
 					temperature: plannerTemp,
 					maxTokens: 1024,
 					promptChars: prompt.length
@@ -2452,7 +2483,7 @@ export async function handleSeoScriptGeneration(
 
 				try {
 					const result = await runAiCallWithTimeout(
-						env.AI.run(plannerModel, {
+						env.AI.run(plannerAttemptModel, {
 							prompt,
 							max_tokens: 1024,
 							temperature: plannerTemp
@@ -2731,6 +2762,8 @@ export async function handleSeoScriptGeneration(
 			}
 			heartbeat("writing");
 			const attemptT0 = Date.now();
+			/* Session 279: same rotation rule as the planner. */
+			const writerAttemptModel = modelForAttempt(writerModel, attempt);
 			const writerTemp = attempt === 1 ? 0.65 : 0.4;
 			const prompt =
 				userPrompt +
@@ -2742,6 +2775,7 @@ export async function handleSeoScriptGeneration(
 			console.log("[script] attempt", {
 				reqId,
 				attempt,
+				model: writerAttemptModel,
 				temperature: writerTemp,
 				maxTokens: writerMaxTokens,
 				promptChars: prompt.length,
@@ -2751,10 +2785,11 @@ export async function handleSeoScriptGeneration(
 
 			/* Same rule as the planner: a thrown model error retries. */
 			let rawSrt = "";
+			writerModelUsed = writerAttemptModel;
 
 			try {
 				const result = await runAiCallWithTimeout(
-					env.AI.run(writerModel, {
+					env.AI.run(writerAttemptModel, {
 						prompt,
 						max_tokens: writerMaxTokens,
 						temperature: writerTemp
@@ -2911,7 +2946,7 @@ export async function handleSeoScriptGeneration(
 					noteRunDone(activeNote, {
 						script: plainScript,
 						durationMs: finalCheck.endMs || 0,
-						model: writerModel,
+						model: writerModelUsed,
 						keywordSet,
 						outline: buildNoteOutline(activeNote.source, keywordSet, wordTarget),
 						repairedKeywords,

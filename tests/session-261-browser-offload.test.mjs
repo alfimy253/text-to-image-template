@@ -12,7 +12,6 @@ import { handleSeoScriptGeneration, SEO_PLAN_FALLBACK_MODELS } from "../src/modu
 
 const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const mp3 = Uint8Array.from([255, 251, 144, 100, 1, 2]);
-const taggedMp3 = Uint8Array.from([73,68,51,4,0,0,0,0,0,0, ...mp3]);
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const request = (path, body) => new Request("https://studio.test" + path, { method: "POST", body: JSON.stringify(body) });
 const tick = () => new Promise((r) => setTimeout(r, 5));
@@ -25,14 +24,7 @@ function runtime(overrides = {}) {
 	vm.runInContext(BROWSER_OFFLOAD_JS + "\nthis.runtime = studioOffload;", context);
 	return { runtime: context.runtime, win, context };
 }
-function wav(data = [1,2,3,4], sampleRate = 22050) {
-	const out = new Uint8Array(44 + data.length), dv = new DataView(out.buffer);
-	out.set([82,73,70,70], 0); dv.setUint32(4, out.length - 8, true);
-	out.set([87,65,86,69,102,109,116,32], 8); dv.setUint32(16, 16, true);
-	dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, sampleRate, true);
-	dv.setUint32(28, sampleRate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
-	out.set([100,97,116,97], 36); dv.setUint32(40, data.length, true); out.set(data, 44); return out;
-}
+
 
 test("#261 capability negotiation is non-billable and old servers fall back before generation", async () => {
 	const entry = worker.fetch ? worker : worker.default;
@@ -142,52 +134,29 @@ test("#261 BroadcastChannel-only tabs exchange leases; unavailable APIs degrade 
 	assert.equal(await old.schedule(async () => "works"), "works"); old.dispose();
 });
 
-test("#261 prompt preparation is bounded and voice splitting is surrogate-safe without modern regex syntax", () => {
+test("#261 prompt preparation is bounded without modern regex syntax", () => {
 	const { runtime: r } = runtime();
 	const idea = r.compactIdea("First forest sentence. " + "Middle sentence. ".repeat(1000) + "Last scene closes.", "forest");
 	assert.match(idea, /First forest/); assert.match(idea, /Last scene/); assert.ok(idea.length <= 480);
-	const chunks = r.voiceChunks("✨ ".repeat(10) + "A forest begins. ".repeat(90) + " \ud800 end ");
-	assert.ok(chunks.length > 1); assert.ok(chunks.every((c) => c.length <= 400));
-	assert.ok(chunks.every((c) => !/[\ud800-\udfff]/.test(c)));
-	assert.equal(r.voiceChunks("✨ ... !!!").length, 0);
 });
 
-test("#261 browser MP3 assembly strips repeated ID3 and WAV assembly verifies formats", async () => {
+/*
+ * SESSION 279 — THE PAGE IS A TRANSPORT, NOT A RETRY OWNER.
+ *
+ * Voice text splitting, MP3/WAV assembly and the assembly Web Worker all lived
+ * here so the browser could run its own TTS ladder. The ladder moved into
+ * handleVoiceover (one request, chunks synthesised in a bounded pool, pieces
+ * joined by the worker), so none of that surface may come back: a page-side
+ * ladder on top of the worker's is two owners and three times the paid calls.
+ */
+test("#279 the offload runtime exports one media request and no retry ladder", () => {
 	const { runtime: r } = runtime();
-	const joined = await r.assembleAudio([taggedMp3.buffer, taggedMp3.buffer]);
-	assert.equal(joined.mime, "audio/mpeg");
-	assert.equal(joined.buffer.byteLength, taggedMp3.length + mp3.length);
-	const waves = await r.assembleAudio([wav().buffer, wav().buffer]);
-	assert.equal(waves.mime, "audio/wav"); assert.equal(waves.buffer.byteLength, 52);
-	assert.equal(new DataView(waves.buffer).getUint32(40, true), 8);
-	await assert.rejects(r.assembleAudio([wav().buffer, mp3.buffer]), /Mixed WAV and MP3/);
-	await assert.rejects(r.assembleAudio([wav().buffer, wav([1,2,3,4], 44100).buffer]), /sample formats differ/);
-	await assert.rejects(r.assembleAudio([wav([1]).buffer]), /block alignment/);
-});
-
-test("#261 CSP-blocked Worker uses cooperative audio assembly and FileReader replaces Blob.arrayBuffer", async () => {
-	const { runtime: r } = runtime({ Worker: class { constructor() { throw new Error("CSP blocked"); } } });
-	const assembled = await r.assembleBlobs([new Blob([taggedMp3]), new Blob([taggedMp3])], {});
-	assert.equal(assembled.type, "audio/mpeg"); assert.equal(assembled.size, taggedMp3.length + mp3.length);
-	const oldBlob = { bytes: mp3 };
-	const old = runtime({ FileReader: class {
-		readAsArrayBuffer(blob) { this.result = blob.bytes.buffer; queueMicrotask(() => this.onload()); }
-	} }).runtime;
-	assert.deepEqual(new Uint8Array(await old.readBlob(oldBlob)), mp3);
-});
-
-test("#261 audio worker transfers buffers; worker crashes recover from original Blobs", async () => {
-	let transferred = 0, terminated = 0;
-	const { runtime: r } = runtime({ Worker: class {
-		postMessage(buffers, transfer) {
-			transferred += transfer.length;
-			structuredClone(buffers, { transfer }); // Detach originals exactly as a browser does.
-			queueMicrotask(() => this.onerror(new Error("worker crashed")));
-		}
-		terminate() { terminated++; }
-	} });
-	const blob = await r.assembleBlobs([new Blob([taggedMp3]), new Blob([taggedMp3])], {});
-	assert.equal(transferred, 2); assert.equal(terminated, 1); assert.equal(blob.size, taggedMp3.length + mp3.length);
+	for (const gone of ["voiceover", "voiceChunks", "assembleAudio", "assembleBlobs", "readBlob"]) {
+		assert.equal(r[gone], undefined, gone + " belongs to the worker now");
+	}
+	for (const kept of ["capabilities", "images", "compactIdea", "timedFetch", "mediaResponse", "scriptRequest", "jsonRequest"]) {
+		assert.equal(typeof r[kept], "function", kept + " is still the page's transport");
+	}
 });
 
 test("#261 TTS chunks use one AI call, allowlisted voice indices and binary output", async () => {
@@ -198,20 +167,6 @@ test("#261 TTS chunks use one AI call, allowlisted voice indices and binary outp
 	assert.equal(calls.length, 1); assert.match(calls[0], /aura-2/);
 	assert.equal((await handleVoiceover(request("/api/voiceover", { chunk: true, text: "x".repeat(401) }), env)).status, 400);
 	assert.equal((await handleVoiceover(request("/api/voiceover", { chunk: true, text: "Forest", voiceIndex: 9 }), env)).status, 400);
-});
-
-test("#261 voiceover switches voice by restarting chunks instead of mixing formats", async () => {
-	const calls = [];
-	const { runtime: r } = runtime({ fetch: async (_url, init) => {
-		const body = JSON.parse(init.body); calls.push(body);
-		if (body.voiceIndex === 0 && calls.length === 2) return json({ error: "primary failed" }, 502);
-		return new Response(body.voiceIndex === 0 ? wav() : taggedMp3,
-			{ headers: { "Content-Type": body.voiceIndex === 0 ? "audio/wav" : "audio/mpeg" } });
-	} });
-	const result = await r.voiceover("A long forest sentence for a clear narration. ".repeat(18), "en", {});
-	assert.equal(result.type, "audio/mpeg");
-	const fallback = calls.filter((c) => c.voiceIndex === 1);
-	assert.ok(fallback.length >= 2); assert.equal(fallback[0].text, calls[0].text);
 });
 
 const keywords = { title: "Yoga Morning Balance", headings: ["Yoga for Calm", "Morning Stretch"],
@@ -276,40 +231,6 @@ test("#261 old-server capabilities preserve legacy UI requests", async (t) => {
 	await w.requestBatchVoiceover({ script: "Forest", stopRequested: false });
 	assert.equal(calls.filter((url) => url === "/api/voiceover").length, 1);
 	assert.equal(calls.includes("/api/image"), false);
-});
-
-test("#261 audio worker executes the actual standalone assembly source and transfers its result", async () => {
-	const sources = new Map(); let id = 0, transferred = 0, terminated = 0;
-	const URLMock = { createObjectURL(blob) { const url = "blob:worker/" + ++id; sources.set(url, blob); return url; }, revokeObjectURL(url) { sources.delete(url); } };
-	class AudioWorker {
-		constructor(url) { this.ready = sources.get(url).text(); }
-		postMessage(buffers, transfer) {
-			transferred += transfer.length;
-			const input = structuredClone(buffers, { transfer });
-			this.ready.then((source) => {
-				const context = vm.createContext({ postMessage: (result, transferOut) => {
-					const data = structuredClone(result, { transfer: transferOut });
-					queueMicrotask(() => this.onmessage({ data }));
-				} });
-				vm.runInContext(source, context); context.onmessage({ data: input });
-			});
-		}
-		terminate() { terminated++; }
-	}
-	const { runtime: r } = runtime({ URL: URLMock, Worker: AudioWorker });
-	const blob = await r.assembleBlobs([new Blob([wav()]), new Blob([wav()])], {});
-	assert.equal(blob.type, "audio/wav"); assert.equal(blob.size, 52);
-	assert.equal(transferred, 2); assert.equal(terminated, 1); assert.equal(sources.size, 0);
-});
-
-test("#261 worker assembly cancels logically even without AbortController", async () => {
-	let cancelled = false, terminated = false;
-	const { runtime: r } = runtime({ AbortController: undefined, Worker: class {
-		postMessage() {} terminate() { terminated = true; }
-	} });
-	const run = r.assembleBlobs([new Blob([mp3])], { isCancelled: () => cancelled });
-	await tick(); cancelled = true;
-	await assert.rejects(run, { name: "AbortError" }); assert.equal(terminated, true);
 });
 
 test("#261 missing AbortController still has a finite network/body deadline", async () => {
@@ -390,17 +311,27 @@ test("#261 cancelling queued prompt work does not wait for another video's occup
 	gate.resolve(); await first;
 });
 
-test("#261 negotiated TTS retries are not multiplied by the legacy Quick Batch step wrapper", async (t) => {
-	const { dom, w } = client(); t.after(() => dom.window.close()); let calls = 0;
-	w.fetch = async (url) => {
-		if (url === "/api/pipeline-capabilities") return json({ version: 261, chunkVoiceover: true });
-		if (url === "/api/voiceover") { calls++; return json({ error: "TTS failed" }, 502); }
+test("#279 Quick Batch asks for voiceover once and reports the worker's verdict", async (t) => {
+	const { dom, w } = client(); t.after(() => dom.window.close());
+	const bodies = [];
+	w.fetch = async (url, init) => {
+		if (url === "/api/pipeline-capabilities") {
+			return json({ version: 261, chunkVoiceover: true, voiceRetryOwner: "worker", workerVoiceAttempts: 3 });
+		}
+		if (url === "/api/voiceover") {
+			bodies.push(init && init.body ? JSON.parse(init.body) : null);
+			/* What an exhausted worker ladder answers: one verdict, three attempts. */
+			return json({ error: "TTS failed after 3 attempts", attempts: 3, budgetExhausted: true, retryOwner: "worker" }, 504);
+		}
 		return json({ success: true, remaining: {} });
 	};
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]")); await tick();
 	const row = w.addBatchRow({ script: "Forest", minutes: 1 });
 	await w.runBatchRow(row);
-	assert.equal(calls, 3); assert.equal(w.batchRowFinished(row), false);
+	assert.equal(bodies.length, 1, "a second request would be a second retry owner");
+	assert.equal(bodies[0] && bodies[0].text, "Forest");
+	assert.equal(w.batchRowFinished(row), false);
+	assert.match(String(row.error || ""), /TTS failed/, "the worker's own verdict is what the row shows");
 });
 
 test("#261 script cleanup follows its surviving project after accordion renumbering", async (t) => {

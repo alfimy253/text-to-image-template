@@ -314,13 +314,13 @@ test("H3: a terminal note in state empty stops the client instead of polling for
 
 	assert.equal(ok, false, "the flow ends in failure, not in a poll loop");
 	/*
-	 * One read per attempt (three attempts, the documented retry budget):
-	 * the note is terminal on the first read, so no attempt can loop.
+	 * Session 279: ONE request, so ONE read of a terminal note. The page used to
+	 * read it three times (once per browser attempt); the ladder is the worker's
+	 * now, and a terminal note is a verdict, not something to re-poll.
 	 */
-	assert.equal(polls, 3, "each attempt stops after one read");
-	assert.ok(polls <= 3, "no attempt polled twice");
+	assert.equal(polls, 1, "one request stops after one read");
 	assert.equal(w.__VIDEO_PROJECTS[0].script || "", "", "no script was invented");
-	assert.match(w.document.getElementById("va-script-status-1").textContent, /Script failed after 3 attempts/);
+	assert.match(w.document.getElementById("va-script-status-1").textContent, /Script failed:/);
 });
 
 /* ------------------------------------------------------------------------- */
@@ -373,11 +373,14 @@ test("H4: a note that never advances ends the flow inside the advertised budget"
 	const elapsed = Date.now() - startedAt;
 
 	assert.equal(ok, false);
-	/* three attempts x one wall-clock ceiling each, plus backoff */
+	/*
+	 * Session 279: one attempt, so one stall guard - the bound is the guard
+	 * itself, not three of them plus two backoffs.
+	 */
 	assert.ok(elapsed < 8000, "bounded by the advertised budget, took " + elapsed + "ms");
 	assert.ok(polls > 0, "the note was actually read");
 	const status = w.document.getElementById("va-script-status-1").textContent;
-	assert.match(status, /Script failed after 3 attempts/);
+	assert.match(status, /Script failed:/);
 	assert.match(status, /timed out|stopped advancing/i);
 });
 

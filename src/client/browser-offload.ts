@@ -45,16 +45,6 @@ function createStudioOffloadRuntime(win) {
 		if (base === 1) return 1;
 		return Math.min(8, Math.max(base, Math.floor(asked)));
 	}
-	async function readBlob(blob) {
-		if (blob && typeof blob.arrayBuffer === "function") return blob.arrayBuffer();
-		return new Promise(function (resolve, reject) {
-			if (!win.FileReader) return reject(new Error("This browser cannot read generated media"));
-			var reader = new win.FileReader();
-			reader.onload = function () { resolve(reader.result); };
-			reader.onerror = function () { reject(new Error("Media could not be read")); };
-			reader.readAsArrayBuffer(blob);
-		});
-	}
 	async function timedFetch(url, init, timeout, options, consume) {
 		var controller = typeof win.AbortController === "function" ? new win.AbortController() : null;
 		var timer, cancelTimer, expired = false, abortHandler;
@@ -296,6 +286,14 @@ function createStudioOffloadRuntime(win) {
 		 * real error message the user needs to see.
 		 */
 		error.retryable = (response.status >= 500 || response.status === 429) && error.kind !== "fatal";
+		/*
+		 * SESSION 279: the verdict carries what the WORKER's ladder spent, so the
+		 * page reports it ("failed after 4 attempts") instead of counting attempts
+		 * of its own and re-asking. Additive: an older worker omits all three.
+		 */
+		error.attempts = Number(data && data.attempts) > 0 ? Number(data.attempts) : 0;
+		error.retryOwner = data && data.retryOwner ? String(data.retryOwner) : "";
+		error.budgetExhausted = Boolean(data && data.budgetExhausted);
 		if (response.status === 503 && error.retryAfterMs > 0) noteBackoff(error.retryAfterMs);
 		throw error;
 	}
@@ -459,172 +457,23 @@ function createStudioOffloadRuntime(win) {
 		return first ? [first, last !== first ? last : ""].filter(Boolean).join(" ").slice(0, 480)
 			: "The video explains " + String(topic || "my video").slice(0, 120) + ".";
 	}
-	function voiceChunks(raw) {
-		var text = String(raw || "");
-		if (text.length > 8000) throw new Error("Voiceover text exceeds 8000 characters");
-		// No Unicode property escapes or lookbehind: parse-compatible with older browsers.
-		text = text.replace(/[☀-⟿]/g, " ").replace(/\[([^\]]+)\]\((?:https?:\/\/|\/)[^)]+\)/g, "$1").replace(/https?:\/\/\S+/gi, " ")
-			.replace(/[\x60*_~#]+/g, " ").replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\ufe0e\ufe0f\ufeff]/g, " ")
-			.replace(/[\u2013\u2014]/g, ", ").replace(/\u2026/g, "...").replace(/[\u2018\u2019]/g, "'")
-			.replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, " ").trim();
-		var clean = "";
-		for (var i = 0; i < text.length; i++) {
-			var c = text.charCodeAt(i);
-			if (c >= 0xd800 && c <= 0xdbff) {
-				var low = text.charCodeAt(i + 1);
-				if (low >= 0xdc00 && low <= 0xdfff) {
-					var cp = (c - 0xd800) * 1024 + low - 0xdc00 + 0x10000;
-					if (cp < 0x1f000 || cp > 0x1faff) clean += text.slice(i, i + 2);
-					i++;
-				}
-			} else if (c < 0xdc00 || c > 0xdfff) clean += text[i];
-		}
-		var speakable;
-		try { speakable = new RegExp("[" + "\\p{L}\\p{N}" + "]", "u"); }
-		catch (_) { speakable = /[A-Za-z0-9\u00c0-\u02ff\u0370-\u052f\u0590-\u1fff\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/; }
-		var chunks = [], remaining = clean.trim();
-		while (remaining) {
-			var end = Math.min(400, remaining.length);
-			if (end < remaining.length) {
-				// Prefer complete sentences, then words; never split a UTF-16 pair.
-				var prefix = remaining.slice(0, end), sentence = /[.!?;]\s+(?![\s\S]*[.!?;]\s+)/.exec(prefix);
-				var boundary = sentence ? sentence.index + 1 : prefix.lastIndexOf(" ");
-				if (boundary > 100) end = boundary;
-				var last = remaining.charCodeAt(end - 1);
-				if (last >= 0xd800 && last <= 0xdbff) end--;
-			}
-			var chunk = remaining.slice(0, end).trim();
-			if (speakable.test(chunk)) chunks.push(chunk);
-			remaining = remaining.slice(end).trim();
-		}
-		return chunks;
-	}
-	async function assembleAudio(buffers, yieldWork) {
-		var pieces = buffers.map(function (b) { return new Uint8Array(b); });
-		function mismatch(message) { var e = new Error(message); e.code = "AUDIO_FORMAT_MISMATCH"; throw e; }
-		function wav(p) { return p.length > 12 && p[0] === 82 && p[1] === 73 && p[2] === 70 && p[3] === 70 && p[8] === 87 && p[9] === 65 && p[10] === 86 && p[11] === 69; }
-		function wavPart(p, id) {
-			var view = new DataView(p.buffer, p.byteOffset, p.byteLength), off = 12;
-			while (off + 8 <= p.length) {
-				var size = view.getUint32(off + 4, true);
-				if (off + 8 + size > p.length) mismatch("Truncated WAV chunk");
-				if (String.fromCharCode.apply(null, p.subarray(off, off + 4)) === id) return p.subarray(off + 8, off + 8 + size);
-				off += 8 + size + size % 2;
-			}
-			mismatch("Missing WAV " + id);
-		}
-		if (!pieces.length) mismatch("No audio chunks");
-		var type = wav(pieces[0]), parts = [], mime, total = 0;
-		if (pieces.some(function (p) { return wav(p) !== type; })) mismatch("Mixed WAV and MP3 chunks");
-		if (type) {
-			var fmt = wavPart(pieces[0], "fmt ");
-			if (fmt.length < 16 || new DataView(fmt.buffer, fmt.byteOffset, fmt.byteLength).getUint16(0, true) !== 1) mismatch("Unsupported non-PCM WAV");
-			pieces.forEach(function (p) {
-				var f = wavPart(p, "fmt ");
-				if (f.length !== fmt.length || f.some(function (v, i) { return v !== fmt[i]; })) mismatch("WAV sample formats differ");
-				var data = wavPart(p, "data"), align = new DataView(fmt.buffer, fmt.byteOffset, fmt.byteLength).getUint16(12, true);
-				if (!align || data.length % align) mismatch("WAV block alignment differs");
-				parts.push(data); total += data.length;
-			});
-			var header = new Uint8Array(28 + fmt.length + fmt.length % 2), dv = new DataView(header.buffer);
-			header.set([82,73,70,70], 0); header.set([87,65,86,69,102,109,116,32], 8);
-			dv.setUint32(4, header.length + total + total % 2 - 8, true); dv.setUint32(16, fmt.length, true); header.set(fmt, 20);
-			var d = 20 + fmt.length + fmt.length % 2; header.set([100,97,116,97], d); dv.setUint32(d + 4, total, true);
-			parts.unshift(header); if (total % 2) parts.push(new Uint8Array(1)); mime = "audio/wav";
-		} else {
-			var reference = null;
-			pieces.forEach(function (p, index) {
-				var start = 0;
-				if (p.length >= 10 && p[0] === 73 && p[1] === 68 && p[2] === 51) {
-					start = 10 + ((p[6] & 127) * 2097152 + (p[7] & 127) * 16384 + (p[8] & 127) * 128 + (p[9] & 127)) + ((p[5] & 16) ? 10 : 0);
-				}
-				if (start + 4 > p.length || p[start] !== 255 || (p[start + 1] & 224) !== 224) mismatch("Invalid MP3 frame");
-				if (((p[start + 1] >> 3) & 3) === 1 || ((p[start + 1] >> 1) & 3) === 0 || ((p[start + 2] >> 2) & 3) === 3) mismatch("Invalid MP3 sample format");
-				var signature = [p[start + 1] & 30, p[start + 2] & 12, p[start + 3] >> 6 === 3 ? 1 : 2].join(":");
-				if (reference !== null && signature !== reference) mismatch("MP3 sample formats differ");
-				reference = signature; parts.push(index ? p.subarray(start) : p);
-			});
-			mime = "audio/mpeg";
-		}
-		var length = parts.reduce(function (n, p) { return n + p.length; }, 0);
-		if (length > 64 * 1024 * 1024) throw new Error("Voiceover exceeds browser assembly memory limit");
-		var output = new Uint8Array(length), offset = 0;
-		for (var i = 0; i < parts.length; i++) {
-			for (var j = 0; j < parts[i].length; j += 65536) {
-				var part = parts[i].subarray(j, j + 65536); output.set(part, offset); offset += part.length;
-				if (yieldWork) await yieldWork();
-			}
-		}
-		return { buffer: output.buffer, mime: mime };
-	}
-	async function assembleBlobs(blobs, options) {
-		if (blobs.reduce(function (size, blob) { return size + (blob.size || 0); }, 0) > 64 * 1024 * 1024) throw new Error("Voiceover exceeds browser assembly memory limit");
-		var buffers = await Promise.all(blobs.map(readBlob)), worker, url, timer, cancelTimer, abortListener;
-		check(options);
-		if (typeof win.Worker === "function" && win.URL && win.URL.createObjectURL) {
-			try {
-				url = win.URL.createObjectURL(new win.Blob(["var assembleAudio = " + assembleAudio.toString() + ";onmessage=function(e){assembleAudio(e.data).then(function(r){postMessage(r,[r.buffer]);},function(e){postMessage({error:e.message,code:e.code});});};"], { type: "text/javascript" }));
-				worker = new win.Worker(url);
-				var assembled = await new Promise(function (resolve, reject) {
-					worker.onmessage = function (event) {
-						if (event.data.error) { var e = new Error(event.data.error); e.code = event.data.code; reject(e); }
-						else resolve(event.data);
-					};
-					worker.onerror = function () { reject(new Error("Audio worker unavailable")); };
-					timer = win.setTimeout(function () { reject(new Error("Audio assembly worker timed out")); }, 30000);
-					if (options.signal && options.signal.addEventListener) {
-						abortListener = function () { reject(abortError()); };
-						options.signal.addEventListener("abort", abortListener, { once: true });
-					}
-					function watch() {
-						try { check(options); } catch (error) { reject(error); return; }
-						cancelTimer = win.setTimeout(watch, 100);
-					}
-					watch();
-					worker.postMessage(buffers, buffers);
-				});
-				check(options);
-				return new win.Blob([assembled.buffer], { type: assembled.mime });
-			} catch (error) {
-				check(options);
-				if (error.code === "AUDIO_FORMAT_MISMATCH") throw error;
-				// Original Blobs survive transferred buffers; reread only if transfer detached them.
-				if (buffers.some(function (b) { return !b.byteLength; })) buffers = await Promise.all(blobs.map(readBlob));
-			} finally {
-				win.clearTimeout(timer); win.clearTimeout(cancelTimer); if (worker) worker.terminate(); if (url) win.URL.revokeObjectURL(url);
-				if (abortListener) options.signal.removeEventListener("abort", abortListener);
-			}
-		}
-		var result = await assembleAudio(buffers, async function () { check(options); await sleep(0); });
-		check(options); return new win.Blob([result.buffer], { type: result.mime });
-	}
-	async function voiceover(text, lang, options) {
-		options = options || {};
-		lang = String(lang || "en").toLowerCase().trim();
-		var chunks = voiceChunks(text), g = group(options);
-		if (!chunks.length) throw new Error("No script text to speak");
-		try {
-			for (var attempt = 0; attempt < 3; attempt++) {
-				var blobs = [], voiceIndex = lang === "en" ? attempt : 0;
-				try {
-					for (var i = 0; i < chunks.length; i++) {
-						check(g.options);
-						blobs.push(await schedule(function (chunk) { return function () {
-							return timedFetch("/api/voiceover", { method: "POST", headers: { "Content-Type": "application/json" },
-								body: JSON.stringify({ chunk: true, text: chunk, lang: lang, voiceIndex: voiceIndex }) }, 45000, g.options,
-								async function (response) { if (!response.ok) return responseError(response); return response.blob(); });
-						}; }(chunks[i]), g.options));
-					}
-					return await assembleBlobs(blobs, g.options);
-				} catch (error) {
-					check(g.options);
-					if (error.retryable === false || attempt === 2) throw error;
-					await sleep(error.retryAfterMs > 0 ? error.retryAfterMs : 500 * (attempt + 1));
-					// Restart all chunks on one fallback voice; never concatenate mixed containers/voices.
-				}
-			}
-		} finally { if (options.clearController) options.clearController(g.owner); }
-	}
+	/*
+	 * SESSION 279 — THE BROWSER NO LONGER OWNS THE VOICEOVER LADDER.
+	 *
+	 * What lived here was the #261 offload: voiceChunks() split the script
+	 * into <=400 char chunks, voiceover() fetched them ONE AT A TIME and
+	 * restarted the WHOLE set up to three times (rotating voiceIndex), and
+	 * assembleAudio() / assembleBlobs() joined the containers in a Web
+	 * Worker. That is a second retry owner on top of the worker's own per-chunk
+	 * ladder, it serialises chunks the worker can synthesise in parallel, and a
+	 * restart re-buys chunks that already succeeded.
+	 *
+	 * The page now sends ONE full-text POST /api/voiceover; the worker splits,
+	 * retries (3 attempts per chunk -> English fallback models -> validated
+	 * external TTS), joins one homogeneous container and answers with the bytes
+	 * inside a budget it owns (src/modules/voiceover.ts). The chunk: true
+	 * endpoint itself is untouched, so a cached pre-279 page keeps working.
+	 */
 	function retainUrl(url, blob) { var size = Number(blob && blob.size) || 0; retainedBytes -= urls.get(url) || 0; urls.set(url, size); retainedBytes += size; return url; }
 	function releaseUrl(url) { retainedBytes = Math.max(0, retainedBytes - (urls.get(url) || 0)); urls.delete(url); }
 	function dispose() {
@@ -635,8 +484,14 @@ function createStudioOffloadRuntime(win) {
 	}
 	if (win.addEventListener) win.addEventListener("pagehide", dispose);
 	if (win.document && win.document.addEventListener) win.document.addEventListener("visibilitychange", pump);
-	return { capabilities: capabilities, images: images, voiceover: voiceover, compactIdea: compactIdea,
-		voiceChunks: voiceChunks, assembleAudio: assembleAudio, assembleBlobs: assembleBlobs, readBlob: readBlob,
+	/*
+	 * The surface this page uses: capabilities (negotiation), images
+	 * (browser-first media + per-scene worker fallback), mediaResponse (one
+	 * queued, timed, cancellable media request - what a worker-owned voiceover
+	 * is), scriptRequest / jsonRequest (control lane) and the object-URL
+	 * ledger. No retry ladder is exported, because none lives here any more.
+	 */
+	return { capabilities: capabilities, images: images, compactIdea: compactIdea,
 		timedFetch: timedFetch, mediaResponse: mediaResponse, scriptRequest: scriptRequest, jsonRequest: jsonRequest, schedule: schedule, limits: limits, retainUrl: retainUrl, releaseUrl: releaseUrl, dispose: dispose,
 		stats: function () { return { active: active, mediaActive: mediaActive, controlActive: controlActive, queued: queue.length, retainedBytes: retainedBytes, limit: limits(), backoffMs: backoffRemaining() }; },
 		noteBackoff: noteBackoff, backoff: function () { return backoffRemaining(); } };

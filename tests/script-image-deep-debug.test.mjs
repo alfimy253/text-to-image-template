@@ -155,7 +155,7 @@ test('permanent script request errors do not retry and report the actual attempt
  w.addVideoAccordion(); w.__VIDEO_PROJECTS[0].selectedSeoSet=setA;
  assert.equal(await w.runSeoScriptRequest(1,'garden',1,'medium'),false);
  assert.equal(calls,1);
- assert.match(w.document.getElementById('va-script-status-1').textContent,/after 1 attempt: bad keyword set/);
+ assert.match(w.document.getElementById('va-script-status-1').textContent,/Script failed: bad keyword set \(after 1 attempt\)/);
 });
 
 test('repeated confirmation cannot start duplicate script writers', async t => {

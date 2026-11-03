@@ -35,6 +35,7 @@ import {
 	researchSourceUrl,
 	scriptNoteStore,
 	scriptNoteId,
+	SCRIPT_NOTE_CLIENT_WAIT_MS,
 	SCRIPT_NOTE_DEADLINE_MS,
 	SCRIPT_NOTE_QUEUE_GRACE_MS,
 	SCRIPT_NOTE_RESEARCH_TTL_MS,
@@ -64,6 +65,13 @@ export interface ScriptNoteApiDeps {
 	onValidated?: () => Promise<void>;
 	/** Testable/configurable wall-clock budget for a parked job. */
 	jobDeadlineMs?: number;
+	/**
+	 * How long the caller will actually wait for the note (the page's
+	 * SCRIPT_NOTE_MAX_WAIT_MS, advertised as `scriptNoteWaitMs`). Admission
+	 * refuses a ticket that cannot finish inside it, so the two numbers must
+	 * agree; defaults to SCRIPT_NOTE_CLIENT_WAIT_MS.
+	 */
+	clientWaitMs?: number;
 }
 
 type NoteEnv = {
@@ -334,8 +342,12 @@ export async function handleScriptNoteRead(
 		payload.pollAfterMs = SCRIPT_JOB_POLL_AFTER_MS;
 		/* A live note tells the client how long it may still wait. */
 		const startedAt = Number(note.runStartedAt) > 0 ? Number(note.runStartedAt) : Date.now();
+		/* The note's own promised wait wins, exactly as in noteStaleReason: the
+		 * page must see the same budget the watchdog is judging it against. */
 		const budget = note.state === "queued"
-			? Number(budgets.queueGraceMs) > 0 ? Number(budgets.queueGraceMs) : SCRIPT_NOTE_QUEUE_GRACE_MS
+			? Number(note.queueGraceMs) > 0
+				? Number(note.queueGraceMs)
+				: Number(budgets.queueGraceMs) > 0 ? Number(budgets.queueGraceMs) : SCRIPT_NOTE_QUEUE_GRACE_MS
 			: Number(note.deadlineMs) > 0 ? Number(note.deadlineMs) : SCRIPT_NOTE_DEADLINE_MS;
 		payload.waitMs = Math.max(0, startedAt + budget - Date.now());
 		/*
@@ -451,7 +463,52 @@ export async function submitAsyncScriptJob(
 	 * already in the queue, so they add no wait.
 	 */
 	const queueEtaMs = alreadyRunning ? 0 : estimateQueueWaitMs(loopStats);
-	const admissionRefused = queueEtaMs > 0 && queueEtaMs >= jobDeadlineMs;
+	/*
+	 * ADMISSION AND THE WATCHDOG MUST AGREE (session 279).
+	 *
+	 * This used to refuse a ticket only when its ETA reached the RUN deadline
+	 * (240 s), while the reader-side watchdog killed a note that was still
+	 * `queued` after a flat 90 s grace. Every ticket with an ETA between the two
+	 * was therefore admitted and then killed while waiting in line - and once the
+	 * browser stopped re-submitting (its ladder moved into the worker), a killed
+	 * note was a dead row instead of a retry nobody noticed.
+	 *
+	 * The limit is now what the CLIENT will actually wait for
+	 * (SCRIPT_NOTE_CLIENT_WAIT_MS, advertised as `scriptNoteWaitMs`): a ticket
+	 * that cannot complete before the page gives up is refused immediately with
+	 * 503 + Retry-After, and a ticket that can is written with the wait it was
+	 * promised (`note.queueGraceMs`) so the watchdog judges it against that.
+	 */
+	const runEstimateMs =
+		Number(loopStats.avgRunMs) > 0
+			? Number(loopStats.avgRunMs)
+			: SCRIPT_NOTE_QUEUE_RUN_ESTIMATE_MS;
+	const clientWaitMs =
+		Number(deps.clientWaitMs) > 0 ? Number(deps.clientWaitMs) : SCRIPT_NOTE_CLIENT_WAIT_MS;
+	const admissionRefused =
+		queueEtaMs > 0 && (queueEtaMs >= clientWaitMs || queueEtaMs >= jobDeadlineMs);
+	/*
+	 * The grace this ticket is promised: its own ETA plus one run's worth of
+	 * slack (the ETA is a completion estimate, so it already contains the run),
+	 * never below the flat default and never above what the client waits for.
+	 */
+	const promisedQueueGraceMs = Math.min(
+		clientWaitMs,
+		Math.max(SCRIPT_NOTE_QUEUE_GRACE_MS, queueEtaMs + Math.min(runEstimateMs, SCRIPT_NOTE_QUEUE_GRACE_MS))
+	);
+	if (queueEtaMs > 0) {
+		console.log("[script] admission", {
+			noteId: id,
+			queued: loopStats.queued,
+			concurrency: loopStats.concurrency,
+			etaMs: queueEtaMs,
+			runEstimateMs,
+			clientWaitMs,
+			jobDeadlineMs,
+			refused: admissionRefused,
+			promisedQueueGraceMs
+		});
+	}
 	const loaded = await readScriptNoteChecked(env, id);
 	if (!alreadyRunning && !admissionRefused && loaded.unavailable) {
 		/*
@@ -486,6 +543,9 @@ export async function submitAsyncScriptJob(
 	if (!alreadyRunning) {
 		noteRunStart(note, "queued");
 		note.deadlineMs = jobDeadlineMs;
+		/* The wait this ticket was promised, so the watchdog cannot kill a job
+		 * the loop itself admitted (see admissionRefused above). */
+		note.queueGraceMs = promisedQueueGraceMs;
 		/*
 		 * Deliberately the UNGUARDED write: issuing a ticket is the one moment a
 		 * run is allowed to reopen a settled note (a retry after `error`). Every
