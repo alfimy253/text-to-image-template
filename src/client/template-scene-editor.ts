@@ -895,6 +895,7 @@ export const REEL_SCENE_EDITOR_JS = `
 			picker.setAttribute("role", "group");
 			picker.setAttribute("aria-label", label + " palette");
 
+			const uiRoot = field.closest ? (field.closest("#tpl-modal, #timeline-editor") || document) : document;
 			const closePicker = function () {
 				picker.style.display = "none";
 				current.setAttribute("aria-expanded", "false");
@@ -908,10 +909,10 @@ export const REEL_SCENE_EDITOR_JS = `
 				event.preventDefault();
 				event.stopPropagation();
 				const opening = picker.style.display === "none";
-				document.querySelectorAll("#tpl-modal .tm-scene-color-popover").forEach(function (other) {
+				uiRoot.querySelectorAll(".tm-scene-color-popover").forEach(function (other) {
 					other.style.display = "none";
 				});
-				document.querySelectorAll("#tpl-modal .tm-scene-color-current").forEach(function (other) {
+				uiRoot.querySelectorAll(".tm-scene-color-current").forEach(function (other) {
 					other.setAttribute("aria-expanded", "false");
 				});
 				if (opening) {
@@ -1514,5 +1515,14 @@ export const REEL_SCENE_EDITOR_JS = `
 		};
 		window.openTemplateModal = window.openTemplateModal;
 		window.closeTemplateModal = window.closeTemplateModal;
+		/* The separate Timeline Editor reuses this inspector UI vocabulary. */
+		window.__REEL_SCENE_CONTROL_UI__ = {
+			makeField: reelMakeField,
+			addTextInput: reelAddTextInput,
+			addSelect: reelAddSelect,
+			addRange: reelAddRange,
+			addCheckbox: reelAddCheckbox,
+			addSceneColor: reelAddSceneColor
+		};
 		ensureTicking();
 `;

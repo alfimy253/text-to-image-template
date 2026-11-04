@@ -1,7 +1,7 @@
 # Bug Fix Session 331 — Browser-owned pipeline management storage
 
 Date: 2026-11-04
-Branch: `arena/2b49505f-text-to-image-template`
+Branch: `arena/2aa7ded8-text-to-image-template` (active Arena task branch)
 Source of truth: the current code in this workspace. This session does **not** use older rules Markdown as authority.
 
 ## 1. Purpose
@@ -163,18 +163,18 @@ Implementation:
 
 Requirement: fix number four and explain it.
 
-Implementation in `openBatchEditPage()`:
+The active Quick Batch handoff is now the timeline route (the earlier editor-page implementation was superseded by Section 9):
 
-- the giant inline `projectJson` query is removed
-- the URL carries only `layout=editor`, `pipelinePage=<targetPageId>` and `projectEdit=<key>`
-- the full payload stays in shared localStorage under `MEDIA_TRANSITION_STORAGE_PREFIX + key`
-- a short cookie mirror carries `createdAt`, source/target page IDs and the row vid
+- the giant inline `projectJson` query remains removed
+- the URL carries `layout=timeline`, a stable `pipelinePage=<timeline-project-id>` for the row, and `projectEdit=<key>`
+- the transition-only payload, including the small scene/timing description, stays in shared localStorage under `MEDIA_TRANSITION_STORAGE_PREFIX + key`
+- a short cookie mirror carries `createdAt`, source/target IDs and the row vid
+- large scene/audio `Blob`s travel through IndexedDB, never through localStorage or the URL
 - no `child.__TRANSITION_PROJECT__` assignment is attempted
-- `readTransitionProjectPayload()` accepts the payload only when the localStorage `createdAt` matches the cookie mirror `createdAt`
-- both localStorage key and cookie mirror are removed after the read
-- `applyTransitionProject()` assigns `project._pipelineVid`
+- `readTransitionProjectPayload()` accepts the payload only when localStorage `createdAt` matches the cookie mirror `createdAt`; both handoff entries are consumed
+- `applyTransitionProject()` activates the timeline and returns before creating a `videoProjects` editor project or persisting pipeline-management state
 
-Explanation: with `noopener`, a child window object is not dependable; the short URL plus timestamp-matched localStorage/cookie handoff is. A new tab still gets its own pipeline page id, while the explicit Edit transition is the only deliberate cross-page handoff.
+Explanation: a child window object is not dependable for a new tab, so the short URL plus timestamp-matched localStorage/cookie handoff is used. Timing itself is stored separately under the stable row-specific timeline key, allowing Edit to reopen the row's prior timing without importing pipeline-management UI/state.
 
 ### 4.5 Number 7 — no TTL, timestamp match
 
@@ -194,18 +194,14 @@ Implementation:
 
 Requirement: “make opening a new tab require a new local storage page with id and the vids that will be drafted on that tab will have ids and every new tab will have empty vids on both layout because there is different local storage page.”
 
-Implementation:
+Pipeline-management pages still use a per-tab page id and page-scoped storage as described here. The active Quick Batch Edit route is a deliberate exception for timeline timing:
 
-- `sessionStorage["ytvs.pipeline-page.v1"]` holds the tab's page id
-- a URL `pipelinePage` value can force a new page id for a newly opened tab
-- `openBatchEditPage()` generates `targetPageId = pipelineManagementStore.freshPageId()` and puts it in the URL
-- localStorage key is `ytvs.pipeline-management.v1.<pageId>`
-- cookie names include `<pageId>`
-- every Quick Batch row gets `vid = <pageId>-row-<id>`
-- every Editor project gets `_pipelineVid = <pageId>-editor-<n>`
-- the snapshot carries `pageId` and `videoIds`
-- a new tab with a fresh page id has no matching localStorage key and no matching cookie chunks, so `load()` returns `none`
-- both layouts therefore start with empty vids in that tab; the explicit Edit transition is the only exception
+- the pipeline-management store can resolve its page id from `sessionStorage["ytvs.pipeline-page.v1"]` or a URL `pipelinePage` value
+- regular pipeline-management snapshots use `ytvs.pipeline-management.v1.<pageId>` plus four page-scoped cookies
+- Quick Batch rows on the source table keep their page-scoped `vid`; existing Editor projects keep `_pipelineVid`
+- Quick Batch Edit now uses `targetPageId = timeline-<sourcePageId>-row-<rowId>` as the timeline project's stable localStorage/IndexedDB key; it does not call `freshPageId()` for this route
+- the timeline page does not restore or persist a pipeline-management snapshot, and it creates no editor project/vids
+- the stable timeline ID is intentional so re-opening Edit for the same row restores timing; it does not imply that pipeline-management data is shared between tabs
 
 ## 5. Implementation contract
 
@@ -403,7 +399,7 @@ Static inventory of the workspace:
 10. **Browser offload is capability-gated.** `browser-offload.ts` accepts only capabilities `version === 261`, uses adaptive concurrency, a reserved control lane, Web Locks, `BroadcastChannel`, cancellation, retry-after backoff and binary `/api/image` delivery. It declares no local/session storage or provider secrets of its own; `pixabay-direct.ts` separately handles the Worker-issued Pixabay config.
 11. **Pipeline management is per tab.** `sessionStorage["ytvs.pipeline-page.v1"]` or `?pipelinePage=` defines `pageId`. localStorage uses `ytvs.pipeline-management.v1.<pageId>`; four session cookies use `ytvs_pipeline_management_<pageId>_1..4`. Rows receive `vid = <pageId>-row-<id>`; editor projects receive `_pipelineVid = <pageId>-editor-<n>`.
 12. **Pipeline management has no TTL.** Active cookies have no `Max-Age`; `pipelineManagementTtl: 0`. Trust requires the localStorage `updatedAt` to equal the cookie chunk `t` and the FNV digest to match. A mismatch repairs cookies from localStorage. A new page id has no matching stores, so it starts empty.
-13. **Edit transition is timestamp-matched.** `openBatchEditPage()` no longer puts full project JSON in the URL and no longer relies on a `noopener` child object. Shared localStorage `MEDIA_TRANSITION_STORAGE_PREFIX + key` plus a `ytvs_transition_project_<key>` cookie must have the same `createdAt`; both are removed after `readTransitionProjectPayload()` verifies them.
+13. **Edit transition is timestamp-matched.** `openBatchEditPage()` no longer puts full project JSON in the URL and no longer relies on a child-window object. Shared localStorage `MEDIA_TRANSITION_STORAGE_PREFIX + key` plus a `ytvs_transition_project_<key>` cookie must have the same `createdAt`; both are removed after `readTransitionProjectPayload()` verifies them. The active Edit target is `layout=timeline`; see Section 9 for its stable row-scoped local timing store and IndexedDB-only Blob transfer.
 14. **Quick Batch completion is strict.** `batchRowFinished()` requires MP3, animation, 12 images, 12 slides, 4 MP4 clips and 12 unique stock filenames. Preview and Export unlock together; the Actions column has no AI enhancer button.
 15. **API rotation is scoped.** `api-rotation.ts` rotates only allow-listed AI paths to verified backup Workers with a ticket and `credentials: "omit"`; cookies and non-AI routes stay on the primary origin. `api-relay.ts` rotates the Worker's inference hop while KV, credits, CMS and payments remain local.
 16. **Export is client-side in the active Quick Batch path.** `exportBatchRow()` uses browser WebCodecs/MP4 generation. `/api/render*` and `workerRunJob` remain present as legacy worker-job code in `app-js.ts`; no active `apiRenderVideo()` call was found in the static scan.
@@ -587,7 +583,81 @@ The JSDOM tests simulate a `Storage.prototype.setItem` quota failure, visible wa
 
 ### 8.8 Status
 
-- Documented on branch `arena/2b49505f-text-to-image-template`.
+- The original Session 331 storage work was recorded on `arena/2b49505f-text-to-image-template`; the active timeline follow-up is on `arena/2aa7ded8-text-to-image-template`.
 - `bug-fix-session-331.md` is the documentation target.
 - `git diff --check` is clean; `git status` still shows the existing working-tree changes.
 - **No commit, push, merge, branch switch or PR was made.**
+
+## 9. Quick Batch timeline-editor follow-up
+
+This section records the active follow-up request and supersedes the earlier `layout=editor` description in Sections 4.4 and 4.6. Current code plus this section are authoritative; other Markdown files in the repository are stale for this task.
+
+### 9.1 Request and acceptance criteria
+
+The Quick Batch row's Edit action opens a new browser page/layout with:
+
+- a preview on the left at about 30% of the page width and selected-element controls on the right;
+- a Canva-like timeline dock along the bottom, focused on changing/extending scene and element durations;
+- the visible arrangement starts with one background/media lane and one shared text/graphics lane; there is no separate overlay lane;
+- Soundtrack is collapsed initially and contains three audio lanes (voiceover, sound effects and background music) when expanded. Users can add text/graphics lanes up to four total; text and graphics share each lane;
+- client-side JavaScript/CSS only for timeline behavior: no server computation and no pipeline-management UI/state in the timeline;
+- browser localStorage timing data per scene and per element;
+- inspector controls reused from the inner scene editor of the existing Add video from template modal.
+
+### 9.2 Active route and isolation
+
+- Quick Batch Edit sets `layout=timeline`, `pipelinePage=<stable row-specific id>` and the short timestamp-matched `projectEdit` handoff key.
+- The stable project ID is `timeline-<sourcePageId>-row-<rowId>`, so reopening Edit for a row recovers its timeline instead of creating a different timing key each time.
+- `applyTransitionProject()` activates `#view-timeline`, exposes `#studio-app`, hides the landing/table/editor views and returns before creating a `videoProjects` editor project.
+- The timeline startup branch skips `initVideoStudio()`, `bindStudioShell()`, `restorePipelineManagementState()`, pipeline-management persistence/listeners, landing action binding and auth initialization. The timeline module is an independent client layout; it does not run a Quick Batch generation, Worker, export or pipeline-management operation.
+- `src/client/template-scene-editor.ts` exposes the existing text/range/select/checkbox/color inspector builders through `window.__REEL_SCENE_CONTROL_UI__`; its color palette is scoped to the active template-modal or timeline root.
+
+### 9.3 Layout and track behavior
+
+- `#view-timeline` is a separate view in `src/client/markup.ts`; `src/client/styles.ts` gives the preview/inspector workspace an approximately 30/70 split and places the horizontally scrollable track dock at the bottom.
+- At boot, `normalizeState()` creates five state tracks: three audio lanes, one background-media lane and one shared text/graphics lane. The visible dock order is background media, text/graphics, then the collapsed Soundtrack group; expanding Soundtrack reveals its three audio lanes. Users can add visual lanes up to four total.
+- Text and graphic clips share the same visual lane type. A migration folds legacy dedicated text tracks into the first shared lane and keeps their clips; existing visual/overlay-lane clips are retained as visual clips, not presented as a separate overlay lane.
+- Media uploads fill empty scene placeholders first and append only after those are used. Media timing remains scene-based: extending or shortening a background scene ripples following scene starts and moves elements associated with that scene. Audio and visual-clip start/duration values remain independently editable in seconds.
+- Text and graphic clips use absolute timeline seconds and may span multiple background-media scenes. The canvas renders active visual clips by their timeline ranges rather than gating them to the current scene, so text/graphics stay visible as the playhead crosses media boundaries. Existing template scene inspector controls remain available for editing their appearance.
+- The canvas previews local images/GIFs/MP4s and timed text/graphics. localStorage holds timing/project metadata only; media bytes remain in IndexedDB.
+
+### 9.4 Timing persistence and media handoff
+
+- localStorage key: `ytvs.timeline-editor.v1.<timelineProjectId>`.
+- The stored versioned state includes `durationSec`, `playheadSec`, `scenes[]` and `tracks[]`; each scene includes `startSec`, `durationSec`, media metadata and `elements[]`; every track item stores its own ID, start, duration, kind and selected visual/audio controls.
+- Quick Batch builds the initial 12-scene timeline from its current slides, media, audio duration and subtitle cue start/end times. Subsequent edits update the corresponding scene and element timing before local persistence.
+- Large Blob values (Pixabay media and voiceover) cross tabs through IndexedDB database `ytvs-timeline-editor-assets-v1`, object store `projects`, keyed by the stable timeline project ID. localStorage contains timing/metadata only.
+- The timeline page waits briefly for the opener's IndexedDB write and then registers browser object URLs for preview. If a Blob cannot be transferred, timing still works and the page offers local file upload.
+
+### 9.5 Files changed for the follow-up
+
+| File | Change |
+|---|---|
+| `src/client/app-js.ts` | Builds the 12-scene handoff with three audio tracks, one background-media track and one shared text/graphics track; uses a stable row ID, transfers Blobs through IndexedDB, routes Edit to `layout=timeline`, and bypasses pipeline/video-studio startup on that route. |
+| `src/client/markup.ts` | Adds the timeline page scaffold and script placeholder; updates the Quick Batch Edit hint. |
+| `src/client/styles.ts` | Adds isolated responsive preview/inspector/timeline styling with a 30/70 workspace split. |
+| `src/client/timeline-editor.ts` | Adds the client-only track UI, canvas preview, timing inspector, accordion controls, localStorage model and IndexedDB media bridge. |
+| `src/client/template-scene-editor.ts` | Exposes the reusable inspector helpers and scopes the color picker to the active editor root. |
+| `src/page.ts` | Imports and injects the timeline client script. |
+| `tests/final-media-cap-actions.test.mjs` | Updates the Edit handoff contract for `layout=timeline` and stable per-row timing IDs. |
+| `tests/timeline-editor.test.mjs` | Covers route isolation, the two initially visible lanes, collapsed Soundtrack, four-lane cap, legacy track migration, cross-scene visual timing, IndexedDB Blob transfer, reopen persistence, scene ripple behavior and layout split. |
+| `bug-fix-session-331.md` | This section; it is the sole documentation target for the timeline follow-up. |
+
+### 9.6 Validation status for the timeline follow-up
+
+Validation completed for the corrected timeline track model:
+
+```text
+focused Quick Batch/timeline tests             29/29 pass
+full npm test                                  521 total / 475 pass / 40 fail / 6 cancelled
+baseline at HEAD (Section 8.7)                514 total / 468 pass / 40 fail / 6 cancelled
+comparison                                     7 additional passes; failure/cancellation counts unchanged
+npx wrangler deploy --dry-run                  exit 0; 2890.14 KiB (1332.19 KiB gzip)
+npx tsc --noEmit --pretty false                30 diagnostics, all in src/index.ts
+new timeline/app/page files                    no TypeScript diagnostics
+JSDOM route and generated client scripts       parse and execute in focused tests
+local Wrangler route check                    HTTP 200 for /free?layout=timeline&pipelinePage=timeline-preview-row-1
+git diff --check                               clean
+```
+
+The full suite remains non-green. Its failure/cancellation totals match the Section 8.7 baseline; exact failure identities were not compared. All 29 focused Quick Batch/timeline tests pass, including legacy-track migration, four-lane cap, text and graphic preview across media-scene boundaries, IndexedDB Blob transfer, and row reopen persistence. The reopen test seeds `ytvs.timeline-editor.v1.<targetPageId>` after the transition-project localStorage entry. JSDOM plus an in-memory IndexedDB test validates Blob handoff and storage separation; the local route check is not a real-browser media-decoding test. No server-side timeline computation was added.

@@ -397,7 +397,7 @@ export const PAGE_MARKUP = `
 				The last <strong>Actions</strong> cell has Preview, Process Export and
 				Edit icons. Until a row is finished it reads <strong>Preview Here</strong>
 				and <strong>Export Video</strong>; the first two icons unlock at the same
-				moment, Edit opens a new page, and the export is built in this browser.
+				moment, Edit opens the timeline editor in a new page, and the export is built in this browser.
 			</p>
 
 			<p class="va-note">Stock photos and clips from <a href="https://pixabay.com/" target="_blank" rel="noopener noreferrer">Pixabay</a> · 12 results per search: 8 distinct photos and 4 clips for every script. Source dimensions vary; resolution controls the output frame.</p>
@@ -818,6 +818,75 @@ export const PAGE_MARKUP = `
 
 	</section>
 
+	<!-- ======================================================
+	     TIMELINE EDITOR (opened from a Quick Batch row)
+	     Browser-only visual timing editor. It does not run the
+	     video-generation pipeline or call a server route.
+	     ====================================================== -->
+	<section id="view-timeline" class="view" aria-label="Timeline editor">
+		<div class="timeline-editor-shell" id="timeline-editor">
+			<div class="te-topbar">
+				<button type="button" class="te-back" id="timeline-back" title="Close the timeline editor and return to Quick Batch">\u2190 Quick Batch</button>
+				<div class="te-project-heading">
+					<strong id="timeline-project-title">Timeline editor</strong>
+					<span id="timeline-project-subtitle">Adjust scene and element timing</span>
+				</div>
+				<span id="timeline-save-status" class="te-save-status" role="status" aria-live="polite">Local timing edits</span>
+				<button type="button" class="te-play te-primary" data-timeline-action="play">\u25b6 Play</button>
+			</div>
+
+			<div class="te-workspace">
+				<section class="te-preview-panel" aria-label="Video preview">
+					<div class="te-panel-heading"><strong>Preview</strong><span id="timeline-current-scene">Scene 1</span></div>
+					<div class="te-preview-stage">
+						<canvas id="timeline-preview-canvas" width="720" height="1280" aria-label="Timeline preview canvas"></canvas>
+						<div id="timeline-preview-placeholder" class="te-preview-placeholder">Select or upload media to preview this scene</div>
+					</div>
+					<div class="te-preview-controls">
+						<button type="button" data-timeline-action="restart" title="Return to the start">\u21ba</button>
+						<button type="button" data-timeline-action="step-back" title="Previous scene">\u2039</button>
+						<button type="button" data-timeline-action="step-forward" title="Next scene">\u203a</button>
+						<output id="timeline-time-readout">0:00 / 1:00</output>
+					</div>
+					<p class="te-preview-note" id="timeline-preview-note">Preview and timing changes stay in this browser.</p>
+				</section>
+
+				<aside class="te-inspector-panel" aria-label="Selected element controls">
+					<div class="tm-scene-panel">
+						<div class="tm-scene-panel-head">
+							<div><div class="tm-scene-kicker">TIMELINE EDITOR</div><div class="tm-sec-title">Selected element</div></div>
+							<div class="tm-scene-panel-actions">
+								<button type="button" id="timeline-add-text" class="tm-scene-add" data-timeline-action="add-text">\uff0b Text</button>
+								<button type="button" id="timeline-add-graphic" class="tm-scene-add" data-timeline-action="add-graphic">\uff0b Graphic</button>
+								<button type="button" id="timeline-delete-element" class="tm-scene-delete" data-timeline-action="delete" hidden disabled>Delete</button>
+							</div>
+						</div>
+						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it.</p>
+						<div id="timeline-element-selector" class="tm-scene-objects" aria-label="Scene elements"></div>
+						<div id="timeline-inspector" class="tm-scene-inspector"></div>
+						<div id="timeline-inspector-empty" class="te-inspector-empty">Choose a track or element to see its controls.</div>
+					</div>
+				</aside>
+			</div>
+
+			<section class="te-dock" aria-label="Timeline tracks">
+				<div class="te-dock-toolbar">
+					<div><strong>Timeline</strong><span id="timeline-duration-label">1:00</span></div>
+					<div class="te-dock-actions">
+							<button type="button" class="te-secondary" data-timeline-action="add-layer" title="Add a text and graphics lane, up to four">\uff0b Lane <span id="timeline-layer-count">1 / 4</span></button>
+						<label class="te-zoom">Zoom <input id="timeline-zoom" type="range" min="0.5" max="2" step="0.1" value="1"><output id="timeline-zoom-value">1\u00d7</output></label>
+					</div>
+				</div>
+				<div class="te-timeline-scroll" id="timeline-scroll">
+					<div class="te-track-grid" id="timeline-track-grid"></div>
+				</div>
+				<div class="te-dock-footer"><span>Soundtrack starts collapsed. One background-media lane and one shared text and graphics lane are visible; add up to four visual lanes.</span><span id="timeline-status" role="status" aria-live="polite"></span></div>
+			</section>
+			<input type="file" id="timeline-media-upload" accept="image/*,image/gif,video/mp4,.mp4,.gif" multiple hidden>
+			<input type="file" id="timeline-audio-upload" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg" hidden>
+		</div>
+	</section>
+
 	</main>
 	<!--__CMS_STUDIO_FOOTER__-->
 
@@ -856,7 +925,7 @@ export const PAGE_MARKUP = `
 
 <script>
 __API_ROTATION_JS__
-__APP_JS____TEMPLATE_COMPOSER_JS__
+__APP_JS____TEMPLATE_COMPOSER_JS____TIMELINE_EDITOR_JS__
 </script>
 
 </body>
