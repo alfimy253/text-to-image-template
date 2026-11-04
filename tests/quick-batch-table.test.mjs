@@ -5,7 +5,7 @@
  *     the browser, so there is nothing for the voiceover model to misread;
  *  2. every scene prompt is a three-paragraph art direction (worker side);
  *  3-4. the script window tells the user they can walk away, and a failed
- *     script is retried twice by the browser before the accordion reports it;
+ *     script is retried seven times silently by the browser before it stops;
  *  5. one walkthrough / voiceover window per video, stacked;
  *  6. the table layout is an editable quick-batch table whose Preview and
  *     Export cells unlock together, once a row's MP3 + images + animation
@@ -41,7 +41,34 @@ function makeApp() {
 	w.URL.createObjectURL = () => "blob:batch-test-" + (++objectUrlId);
 	w.URL.revokeObjectURL = () => { };
 	w.__PLAN_MODE = "freemium";
+	/* JSDOM is hidden/2-core by default; the concurrency tests model a visible 8-core tab. */
+	Object.defineProperty(w.document, "hidden", { configurable: true, get: () => false });
+	Object.defineProperty(w.navigator, "hardwareConcurrency", { configurable: true, get: () => 8 });
+	Object.defineProperty(w.navigator, "deviceMemory", { configurable: true, get: () => 8 });
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* The fixed plan includes four mock MP4s; make their metadata probe succeed. */
+	w.__CLIP_PROBE_TIMING = { timeoutMs: 1 };
+	Object.defineProperty(w.HTMLMediaElement.prototype, "src", {
+		configurable: true,
+		get: function () { return this.getAttribute("src") || ""; },
+		set: function (value) {
+			this.setAttribute("src", value);
+			w.setTimeout(() => this.dispatchEvent(new w.Event("loadedmetadata")), 0);
+		}
+	});
+	w.HTMLMediaElement.prototype.load = function () {
+		w.setTimeout(() => this.dispatchEvent(new w.Event("loadedmetadata")), 0);
+	};
+	w.HTMLMediaElement.prototype.pause = function () { };
+	Object.defineProperty(w.HTMLMediaElement.prototype, "duration", { configurable: true, get: () => 1 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "readyState", { configurable: true, get: () => 2 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "videoWidth", { configurable: true, get: () => 1024 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "videoHeight", { configurable: true, get: () => 576 });
+	/* Keep the seven-retry ladder, but make its 40 s backoffs instant here. */
+	w.__SCRIPT_RETRY_TIMING.maxRetries = 7;
+	w.__SCRIPT_RETRY_TIMING.backoffMs = 0;
+	w.__SCRIPT_RETRY_TIMING.uiCheckMs = 0;
 	return { dom, w };
 }
 
@@ -65,6 +92,26 @@ async function waitFor(w, predicate, timeoutMs = 6000) {
 }
 
 const pngBase64 = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64");
+
+function mediaBatchEvents(body) {
+	const scenes = Array.isArray(body.sceneIndexes)
+		? body.sceneIndexes.map((value) => Number(value))
+		: body.prompts.map((_, index) => index);
+	const clipSlots = [1, 4, 7, 10];
+	const events = [{ type: "start", count: body.prompts.length, width: 1024, height: 576 }];
+	body.prompts.forEach((_, index) => {
+		const scene = Number.isInteger(scenes[index]) ? scenes[index] : index;
+		const clip = clipSlots.indexOf(scene) !== -1;
+		events.push({
+			type: "image", index, ok: true,
+			mime: clip ? "video/mp4" : "image/png",
+			data: pngBase64,
+			source: { id: "media-" + scene, type: clip ? "video" : "image" }
+		});
+	});
+	events.push({ type: "done", generated: body.prompts.length, failed: 0 });
+	return events;
+}
 
 function jsonResponse(data, status = 200) {
 	return {
@@ -108,9 +155,7 @@ function mockBatchRoutes(w, calls, options = {}) {
 		}
 		if (path === "/api/image-batch" && method === "POST") {
 			const body = JSON.parse(opts.body);
-			const events = [{ type: "start", count: body.prompts.length, width: 1024, height: 576 }];
-			body.prompts.forEach((_, index) => events.push({ type: "image", index, ok: true, mime: "image/png", data: pngBase64 }));
-			events.push({ type: "done", generated: body.prompts.length, failed: 0 });
+			const events = mediaBatchEvents(body);
 			return {
 				ok: true,
 				status: 200,
@@ -155,7 +200,7 @@ test("the client carries no subtitle format at all", () => {
 	assert.equal(plain, "Hello there. Keep the breath steady.");
 });
 
-test("a failed script is retried twice before the accordion reports it", async () => {
+test("a failed script is silently retried seven times and never reports an error", async () => {
 	const calls = [];
 	const { dom, w } = makeApp();
 	test.after(() => dom.window.close());
@@ -169,18 +214,17 @@ test("a failed script is retried twice before the accordion reports it", async (
 	const ok = await w.runSeoScriptRequest(1, "Morning yoga", 1, "medium");
 	assert.equal(ok, false);
 
-	/*
-	 * Session 279: the page makes ONE request. The retry ladder lives in the
-	 * worker (handleSeoScriptGeneration), so a page-level loop here would be a
-	 * second owner - three submissions, three poll streams and three queue
-	 * re-admissions for one script.
-	 */
+	/* The browser owns the ladder: one initial write plus seven silent retries. */
 	const scripted = calls.filter((call) => call.path === "/api/script");
-	assert.equal(scripted.length, 1, "one request; the worker owns the ladder");
+	assert.equal(scripted.length, 8, "one initial write plus seven retries");
 
 	const status = w.document.getElementById("va-script-status-1").textContent;
-	assert.match(status, /Script failed:/);
-	assert.ok(!/retrying \(/.test(status), "the page never says it is retrying");
+	assert.match(status, /Writing your SEO script/);
+	assert.doesNotMatch(status, /Script failed|retry|attempt|error/i, "no retry or failure wording reaches the UI");
+	const box = w.document.getElementById("va-script-box-1");
+	assert.equal(box.classList.contains("va-script-loading"), true);
+	assert.notEqual(box.style.display, "none");
+	assert.ok(box.querySelector(".va-spinner"), "the loading animation remains continuously");
 });
 
 test("the script window tells the user they can walk away, and one modal per video stacks", () => {
@@ -234,7 +278,7 @@ test("the table is an editable quick-batch grid with a Generate at its top right
 	assert.match(html, /<section id="view-table"[\s\S]*?<\/section>/);
 	const table = html.match(/<section id="view-table"[\s\S]*?<\/section>/)[0];
 
-	for (const column of ["Script", "Video style", "Min", "Preview", "Export"]) {
+	for (const column of ["Script", "Video style", "Min", "Actions"]) {
 		assert.ok(table.includes(">" + column + "<"), column + " is a table column");
 	}
 
@@ -248,9 +292,9 @@ test("the table is an editable quick-batch grid with a Generate at its top right
 	assert.ok(APP_CSS.includes(".batch-pending"));
 
 	/* Preview / Export come from ONE renderer and ONE flag: together, or not at all */
-	const actionCells = APP_JS.match(/batchActionCell\(row, kind\)/g) || [];
-	assert.ok(actionCells.length >= 2, "both cells share one renderer");
-	assert.match(APP_JS, /row\.mp3 &&\s+row\.images\.length &&\s+row\.animated &&\s+row\.slides\.length/);
+	const actionCells = APP_JS.match(/batchActionCell\(row, "(preview|export|edit)"\)/g) || [];
+	assert.ok(actionCells.length >= 3, "Preview, Process Export and Edit share one renderer");
+	assert.match(APP_JS, /AUTO_MEDIA_TOTAL = 12/);
 
 	/* the style column reuses the script modal's fixed list of ten styles */
 	assert.ok(APP_JS.includes("batchStyleOptionsHTML"));
@@ -280,10 +324,10 @@ test("one Generate runs every row that has a script and unlocks both cells toget
 	w.document.getElementById("batch-generate").click();
 	await waitFor(w, () => w.batchRowFinished(w.getBatchRow(filled.id)));
 
-	/* Only the filled row ran: one voiceover, five progressive batches for 14 scenes. */
+	/* Only the filled row ran: one voiceover and four progressive batches for 12 scenes. */
 	assert.equal(calls.filter((call) => call.path === "/api/voiceover").length, 1);
-	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 5);
-	assert.equal(calls.filter((call) => call.path === "/api/image-batch").length, 5);
+	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 4);
+	assert.equal(calls.filter((call) => call.path === "/api/image-batch").length, 4);
 
 	const voice = JSON.parse(calls.find((call) => call.path === "/api/voiceover").body);
 	assert.equal(voice.text, script, "the voice reads the row script verbatim");
@@ -300,28 +344,30 @@ test("one Generate runs every row that has a script and unlocks both cells toget
 	/* the finished row: both cells are live buttons */
 	const row = w.getBatchRow(filled.id);
 	assert.ok(row.mp3, "the row has its MP3");
-	assert.equal(row.slides.length, 14, "the row has its animation");
+	assert.equal(row.slides.length, 12, "the row has its animation");
 	assert.ok(w.batchRowFinished(row));
 	const ready = w.document.querySelector('[data-batch-row="' + row.id + '"]');
-	assert.equal(ready.querySelectorAll('[data-batch-slot="preview"] button').length, 1);
-	assert.equal(ready.querySelectorAll('[data-batch-slot="export"] button').length, 1);
+	assert.equal(ready.querySelectorAll('[data-batch-action="preview"]').length, 1);
+	assert.equal(ready.querySelectorAll('[data-batch-action="export"]').length, 1);
+	assert.equal(ready.querySelectorAll('[data-batch-action="edit"]').length, 1);
 
 	/* the empty rows stay text-only, and nothing about them was requested */
 	for (const idleRow of [blank, whitespace]) {
 		const idle = w.document.querySelector('[data-batch-row="' + idleRow.id + '"]');
 		assert.ok(idle, "row " + idleRow.id + " is still in the table");
-		assert.equal(idle.querySelectorAll("button[data-batch-action]").length, 1, "only the remove button");
-		assert.match(idle.querySelector('[data-batch-slot="preview"]').textContent, /Preview Here/);
-		assert.match(idle.querySelector('[data-batch-slot="export"]').textContent, /Export Video/);
+		assert.equal(idle.querySelectorAll("button[data-batch-action]").length, 2, "remove and Edit only");
+		const actions = idle.querySelector('[data-batch-slot="actions"]');
+		assert.match(actions.textContent, /Preview Here/);
+		assert.match(actions.textContent, /Export Video/);
 	}
 
 	/* defaults: an unwritten style / length never reach the request */
 	assert.equal(w.getBatchRow(blank.id).minutes, 1);
 	assert.equal(w.getBatchRow(blank.id).style, "Cinematic Film");
 
-	/* the toolbar counts the rows that can run and is clickable again */
-	assert.equal(w.document.getElementById("batch-generate").disabled, false);
-	assert.match(w.document.getElementById("batch-note").textContent, /3 rows . 1 with a script/);
+	/* the toolbar counts Ready rows, not merely rows with a script */
+	assert.equal(w.document.getElementById("batch-generate").disabled, true);
+	assert.match(w.document.getElementById("batch-note").textContent, /3 rows . 1 with a script . 0 ready/);
 });
 
 /*
@@ -358,7 +404,7 @@ test("a row that keeps failing stays quiet and keeps its cells as text", async (
 	/* every attempt was a quiet retry, never a visible error */
 	assert.equal(calls.filter((call) => call.path === "/api/voiceover").length, 2);
 	/* a failed row keeps its cells as text: no dead buttons to press */
-	assert.equal(w.document.querySelectorAll('[data-batch-slot="preview"] button').length, 0);
+	assert.equal(w.document.querySelectorAll('[data-batch-action="preview"]').length, 0);
 	/* and the table never touched the accordion state */
 	assert.equal(w.document.querySelectorAll("#video-accordions > .video-accordion").length, 0);
 });
@@ -423,14 +469,18 @@ function mockSlowRoutes(w, calls, state, options = {}) {
 		}
 
 		if (path === "/api/image-prompts" && method === "POST") {
-			return jsonResponse({ success: true, prompts: ["Scene one lead.\n\nScene one middle.\n\nScene one close."], count: 1, expectedCount: 1, style: "Neon Night" });
+			const batch = JSON.parse(opts.body).batch || { count: 3, offset: 0 };
+			const count = Math.min(batch.count, 3);
+			return jsonResponse({
+				success: true,
+				prompts: Array.from({ length: count }, (_, i) => "Scene " + (batch.offset + i + 1) + " lead.\n\nMiddle.\n\nClose."),
+				count, expectedCount: count, style: "Neon Night"
+			});
 		}
 
 		if (path === "/api/image-batch" && method === "POST") {
 			const body = JSON.parse(opts.body);
-			const events = [{ type: "start", count: body.prompts.length, width: 1024, height: 576 }];
-			body.prompts.forEach((_, index) => events.push({ type: "image", index, ok: true, mime: "image/png", data: pngBase64 }));
-			events.push({ type: "done", generated: body.prompts.length, failed: 0 });
+			const events = mediaBatchEvents(body);
 			return {
 				ok: true,
 				status: 200,
@@ -476,20 +526,19 @@ test("three rows render at the same time, and a finished row is never generated 
 
 	const voiceCalls = calls.filter((call) => call.path === "/api/voiceover").length;
 
-	/* Pressing Generate again must not re-bill a finished row. */
+	/* Finished rows are not Ready, so Generate is disabled and cannot re-bill them. */
+	assert.equal(w.document.getElementById("batch-generate").disabled, true);
+	assert.match(w.document.getElementById("batch-note").textContent, /0 ready/);
 	w.document.getElementById("batch-generate").click();
 	await new Promise((resolve) => setTimeout(resolve, 120));
 	assert.equal(calls.filter((call) => call.path === "/api/voiceover").length, voiceCalls, "no finished row was generated again");
-	assert.match(
-		w.document.getElementById("required-modal-list").textContent,
-		/already finished/
-	);
 
 	/* ...and every finished row still offers both live buttons. */
 	for (const row of rows) {
 		const tr = w.document.querySelector('[data-batch-row="' + row.id + '"]');
-		assert.equal(tr.querySelectorAll('[data-batch-slot="preview"] button').length, 1);
-		assert.equal(tr.querySelectorAll('[data-batch-slot="export"] button').length, 1);
+		assert.equal(tr.querySelectorAll('[data-batch-action="preview"]').length, 1);
+		assert.equal(tr.querySelectorAll('[data-batch-action="export"]').length, 1);
+		assert.equal(tr.querySelectorAll('[data-batch-action="edit"]').length, 1);
 	}
 });
 
@@ -573,7 +622,7 @@ test("the worker validates the frame and writes it into every scene prompt", asy
 	assert.match(landscape, /Compose wide/);
 });
 
-test("the accordion's Generate AI Image button is locked only while its own walkthrough renders", async () => {
+test("the accordion's own script controls are locked only while its own walkthrough renders", async () => {
 	const calls = [];
 	const state = { inFlight: 0, maxInFlight: 0 };
 	const { dom, w } = makeApp();
@@ -594,16 +643,16 @@ test("the accordion's Generate AI Image button is locked only while its own walk
 	const flow = w.startImagePromptFlow(1);
 
 	/* Synchronously locked for video 1 only. */
-	assert.equal(w.document.getElementById("va-ai-btn-1").disabled, true, "video 1 is locked");
-	assert.equal(w.document.getElementById("va-ai-btn-2").disabled, false, "video 2 may still generate");
+	assert.equal(w.document.getElementById("va-script-btn-1").disabled, true, "video 1 is locked");
+	assert.equal(w.document.getElementById("va-script-btn-2").disabled, false, "video 2 may still generate");
 
-	/* A programmatic submit is refused while the flow owns the gallery. */
-	await w.submitAiImages(1);
-	assert.match(w.document.getElementById("va-ai-status-1").textContent, /unlocks when it finishes/);
+	/* A programmatic retry is refused while the flow owns the gallery. */
+	await w.retryImagePromptFlow(1);
+	assert.match(w.document.getElementById("va-ai-status-1").textContent, /Planning Pixabay|Searching Pixabay|Pixabay/i);
 
 	await flow;
-	assert.equal(w.document.getElementById("va-ai-btn-1").disabled, false, "video 1 unlocks when the flow ends");
-	assert.equal(w.document.getElementById("va-ai-btn-2").disabled, false, "video 2 was never touched");
+	assert.equal(w.document.getElementById("va-script-btn-1").disabled, false, "video 1 unlocks when the flow ends");
+	assert.equal(w.document.getElementById("va-script-btn-2").disabled, false, "video 2 was never touched");
 });
 
 test("Quick Batch renders its first chunk before the next prompt batch finishes", async (t) => {
@@ -630,8 +679,8 @@ test("Quick Batch renders its first chunk before the next prompt batch finishes"
 	assert.equal(w.batchRowFinished(row), false);
 	release();
 	await run;
-	assert.equal(row.images.length, 10);
-	assert.deepEqual(Array.from(row.images, (image) => image.index), Array.from({ length: 10 }, (_, i) => i));
+	assert.equal(row.images.length, 12);
+	assert.deepEqual(Array.from(row.images, (image) => image.index), Array.from({ length: 12 }, (_, i) => i));
 	assert.equal(w.batchRowFinished(row), true);
 });
 

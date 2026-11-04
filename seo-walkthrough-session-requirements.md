@@ -228,7 +228,7 @@ next to `/api/script`, and driven by MODULE 8b’s
 - **Polling (SR-16, second half).** After validating the returned dynamic
   same-origin URL, job id and expected count, the client polls immediately,
   then every `IMAGE_PROMPT_POLL_MS = 30000` (`window.__SEO_FLOW_TIMING`).
-  Poll requests time out at 60 s and retry up to three transient failures;
+  Poll requests time out at 60 s and retry up to four transient failures;
   a terminal job error or `404` enters finalization instead of merely
   stopping the poller.
 - **Queued generation (SR-15, SR-17, SR-18).** When a poll returns the
@@ -266,7 +266,7 @@ next to `/api/script`, and driven by MODULE 8b’s
 | SR-9 | Implemented | Theme-aware labelled dropdown with exactly ten canonical styles; the selected value persists when reopened. |
 | SR-10 | Implemented with a defect | Loading animation shows while awaiting the script and the old display path is kept; a failed **re**-generation leaves the spinner in the box instead of restoring the previous SRT (A-5). |
 | SR-11 | Implemented | Image-prompt job is created only after script success is displayed. |
-| SR-12 | Implemented (+ assumption) | 10/14/20 for 1 / 2–3 / 4–5 min; 6 min (unspecified) also maps to 20. |
+| SR-12 | Implemented (+ assumption) | 12 for 1 / 2–3 / 4–5 min; 6 min (unspecified) also maps to 20. |
 | SR-13 | Implemented | Minutes come from the existing dropdown, default/selected 1; server also defaults omitted minutes to 1. |
 | SR-14 | Implemented | The LLM receives a ≤480-character opening/closing script idea and instructions for concise general scenes; styles are canonicalized and consistent direction is appended to every validated prompt. |
 | SR-15 | Implemented | First image immediately on prompt arrival, then each next request 20 s after the previous attempt settles; the queue respects cap, credit and retry limits. |
@@ -289,7 +289,7 @@ sessions):
   `tests/seo-walkthrough.test.mjs` tests: two different plan sets from
   `/api/seo-plan`; `/api/script` with a selected `keywordSet` calls only
   the writer (planner skipped); an invalid selected set is `400` with zero
-  AI calls; prompt counts 10/14/20 and instruction/parse behaviour; and the
+  AI calls; prompt counts 12 and instruction/parse behaviour; and the
   create → poll-until-ready → DELETE → `404` job lifecycle.
 - `npx tsc` — **36 errors**, all pre-existing in `src/index.ts`; none in
   `src/modules/script-seo.ts`, `src/modules/image-prompts.ts` or the client
@@ -656,3 +656,18 @@ attempt DELETE (retry once), report actual inserted images and re-enable the con
 > · Normative rule: `system-rules.md` RULE 35 · Verification:
 > `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
 > document is superseded and void.
+
+---
+
+## FINAL RULE — QUICK BATCH TABLE LAYOUT (2026-11-04)
+
+This is the final, code-backed rule for the **Quick Batch table layout** and the **shared Editor media pipeline**. It supersedes every older Markdown/session note about one-request tables, Worker-owned media retries, variable scene totals, separate Preview/Export columns, or row script buttons.
+
+1. Client JavaScript owns retries for every failed **non-media** pipeline stage in this layout: voice, scene plan / prompts and animation. One initial attempt is followed by at most **7 retries** (8 total attempts); every retry waits **40 seconds** first. Only the failed stage is reset and repeated. Earlier successful stages are kept; there is no whole-row restart and no duplicate paid batch.
+2. **Image and video imports are the exception in BOTH layouts.** Only the individually failed photo or clip is retried from client JavaScript, using the same 7-retry / 40-second ladder per item. Successful media, object URLs and recorded filenames are preserved. There is no whole-stage, whole-batch or whole-row media restart, and a failed stage-level retry must not revoke a successful image.
+3. Every automatic video in **both** the Editor and Quick Batch table plans exactly **12 Pixabay scenes for every script length and duration**: **4 silent videos + 8 photos**. Scene planning and Pixabay searches always target those same 12 results (8 image results and 4 video results). Client JS records the filename of every selected scene and rejects duplicate filenames in one video; alternate Pixabay result indexes/pages are searched for the failed item so no similar image repeats in one video. A duplicate or missing scene is retried individually and must not strand the row.
+4. Retries are silent. The row keeps its script textarea, working stage label and `.va-spinner` continuously; no error, retry, attempt, warning or abort wording is painted in the table UI. After an exhausted ladder the row returns silently to `ready`.
+5. A missing scene plan must be retried by client JS, and the row must continue to the next pipeline once a plan arrives.
+6. In the **Editor layout**, the script textbox is pinned while script writing/retries run: no state paint, toggle or accordion renumber may hide it over time.
+7. The **last table column is `Actions`** with icons for **Preview** (same existing function), **Process Export** and **Edit**. Edit opens a new page with a **transition-only project JSON** payload carrying the row's basic settings from `batchProjectJson()`; `applyTransitionProject()` consumes it for the transition only. The rows have **no AI enhancer button**.
+8. `src/client/app-js.ts` is the source of truth. `AUTO_MEDIA_TOTAL = 12`, `AUTO_VIDEO_SCENES = 4`, `AUTO_IMAGE_SCENES = 8`, `MEDIA_ITEM_MAX_RETRIES = 7`, `MEDIA_ITEM_RETRY_BACKOFF_MS = 40000`, `retryFailedMediaOnly()`, `requestBatchImagesWithIndividualRetries()`, `runEditorMediaWithIndividualRetries()`, `batchActionCell()`, `batchProjectJson()` and `applyTransitionProject()` define the live contract. Worker capabilities advertise `mediaSceneCap: 12`, `mediaVideoScenes: 4`, `mediaImageScenes: 8`, `mediaItemRetryOwner: "browser"`, `mediaItemRetries: 7`, `mediaItemRetryBackoffMs: 40000`, `mediaFilenameDedupe: "per-video"` and `quickBatchActionsColumn: "preview-process-export-edit"`. `BATCH_PIPELINE_MAX_RETRIES = 7` and `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000` still govern the non-media stage ladder. Older Quick Batch table statements in this file are superseded wherever they conflict.

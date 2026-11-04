@@ -39,7 +39,7 @@ flowchart LR
 | --- | --- | --- |
 | Worker entry/router | `src/index.ts` | Request routing, relay/CORS wrapping, page assembly, account/credit checks, config and management route delegation. |
 | Page/UI composition | `src/page.ts`, `src/client/markup.ts`, `src/client/styles.ts` | HTML shell, page markup and styles. Theme and plan mode are applied by the Worker before returning the page. |
-| Browser app | `src/client/app-js.ts` and `src/client/*` | UI state, script/voiceover requests, media planning/import, project and Quick Batch state, local preview/export. |
+| Browser app | `src/client/app-js.ts` and `src/client/*` | UI state, script/voiceover requests, media planning/import, project and Quick Batch state, local Actions. |
 | SEO/script | `src/modules/script-seo.ts` | SEO keyword-set planning and validated plain narration generation. |
 | Script notes | `src/modules/script-notes.ts`, `src/modules/script-notes-api.ts`, `src/modules/script-event-loop.ts` | Dynamic-URL keyed notes (research, keyword set, beat plan), deterministic keyword repair, and a Node-style phased event loop. **RULE 35: the Worker note store is ephemeral memory only — 0 KV reads and 0 KV writes; script details live in browser localStorage + a cookie.** See [RULE 35](RULE-35-client-side-script-notes.md). |
 | Browser note memory | `src/client/script-notes-client.ts` | **RULE 35 authoritative store.** Keeps the full note in `localStorage` with a compact cookie mirror (`ytvs_note`) and an in-page fallback map; `digestOf()`/`consistencyReport()`/`reconcile()`/`check()` compare digest, timestamp and script length between the two stores and repair quota, corruption, staleness and expiry cases. |
@@ -135,7 +135,9 @@ sequenceDiagram
 
 1. **SEO planning is optional.** The walkthrough asks for two selectable plans from `/api/seo-plan`. The selected plan is submitted to `/api/script`; the server validates the final narration against the plan. Script and voiceover usage counters are informational/unlimited rather than image-credit gates.
 2. **Voiceover provides timing.** The browser requests chunked speech when supported. The Worker validates language/text and returns audio chunks; fallback TTS is available. The browser decodes the audio and uses its duration to lay out scenes/captions.
-3. **Scene count is derived from script length.** The stock planner's canonical totals are 6 / 8 / 10 scenes based on word count (≤130 / ≤240 / above that, capped at 10); a smaller editor slot limit can reduce the requested total. Exactly two slots are videos, scene index 0 and `total - 2`; the other slots are photo images.
+3. **Scene count is fixed.** Every script length and duration plans exactly **12 Pixabay scenes**,
+   with **four evenly spaced video slots** and eight distinct photo slots. Client JS records
+   selected filenames and retries only failed media items; the editor never reduces the fixed total.
 4. **Planner output is search vocabulary.** `/api/image-prompts` calls the text model with the entire script and asks for short (1–5 word) Pixabay search terms, not art prompts. Browser requests are batched and may look ahead while earlier scenes are being processed.
 5. **Media bytes are fetched by the browser first.** `src/client/pixabay-direct.ts` validates the selection/frame, searches `pixabay.com` and downloads from `cdn.pixabay.com` using a short-lived config from `GET /api/media/config`. Import units are reserved with `POST /api/media/claim` and refunded for undelivered scenes with `POST /api/media/settle`. The Worker routes (`/api/image`, `/api/image-batch`, `/api/media/search`, `/api/media/asset`) remain as the per-scene fallback and for old clients. See [`IMAGE_FETCH_BROWSER_MIGRATION.md`](IMAGE_FETCH_BROWSER_MIGRATION.md) for the verified flow and debug guide.
 6. **Rendering stays in the browser.** The editor uses browser decode/canvas/WebCodecs facilities and `mp4-muxer` to produce the MP4; it is not a server-rendering workflow. The narration track remains the master audio.
@@ -146,7 +148,7 @@ Quick Batch is a second UI entry point but reuses the same Worker APIs and brows
 
 ```mermaid
 flowchart TD
-    Start[Creator clicks Generate for queued rows] --> Parallel[Start up to three early-stage rows]
+    Start[Creator clicks Generate for queued rows] --> Parallel[Start up to four early-stage rows]
     Parallel --> Voice[Request voiceover for row]
     Voice --> Decode[Decode MP3; establish duration/timing]
     Decode --> Prompt[POST /api/image-prompts with full script + row frame]
@@ -242,7 +244,7 @@ The Pixabay module requests three results upstream (provider minimum), returns a
 
 1. **Open the studio and start the SEO walkthrough.** The Worker serves the page through `appPageResponse()` in `src/index.ts`. The browser's `generateScript(n)` opens the walkthrough and requests keyword ideas from `POST /api/seo-plan`.
 2. **Choose the keyword idea and visual style.** `selectSeoKeywordSet(n, idx)` saves the user's selection; `confirmSeoStyleAndGenerate(n)` continues when both choices are ready.
-3. **Get the narration.** The browser's `runSeoScriptRequest()` calls `requestSeoScriptOnce()`, which sends `POST /api/script`. The Worker delegates to `handleSeoScriptGeneration()` in `src/modules/script-seo.ts` and returns validated narration text.
+3. **Get the narration.** The browser's `runSeoScriptRequest()` calls `requestSeoScriptOnce()`, which wraps `requestScriptWritingWithClientRetries()` around `POST /api/script`. Any writing error is retried silently up to seven times, with 40 seconds of backoff before each retry; the UI checker keeps the textbox, spinner and neutral writing state continuously. The Worker delegates each attempt to `handleSeoScriptGeneration()` in `src/modules/script-seo.ts`, performs one inference per stage, and returns validated narration text. For Quick Batch table rows, client JS additionally retries every failed pipeline stage with the same 7-retry / 40 s rule (see FINAL RULE).
 4. **Plan and import stock scenes.** `startImagePromptFlow(n)` calls `runProgressiveImagePipeline()` in `src/client/progressive-image-pipeline.ts`. It requests Pixabay search terms from `POST /api/image-prompts`; the Worker handles that with `handleGenerateImagePrompts()`. It then sends scene selections to the media routes, which authorize credits and import media from Pixabay. `handleImageBatch()` / `handleImageBinary()` in `src/modules/image-batch.ts` return the media; the browser adds successful photos and clips to the gallery and keeps usable partial results if a later scene fails.
 5. **Make the video.** The user previews or exports using the browser renderer, including `generateMP4()` in `src/client/app-js.ts`. WebCodecs and the MP4 muxer create the file locally; the Worker does not render the final video.
 
@@ -286,3 +288,18 @@ In one line: **write script → plan stock searches → get Pixabay media + narr
 > · Normative rule: `system-rules.md` RULE 35 · Verification:
 > `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
 > document is superseded and void.
+
+---
+
+## FINAL RULE — QUICK BATCH TABLE LAYOUT (2026-11-04)
+
+This is the final, code-backed rule for the **Quick Batch table layout** and the **shared Editor media pipeline**. It supersedes every older Markdown/session note about one-request tables, Worker-owned media retries, variable scene totals, separate Preview/Export columns, or row script buttons.
+
+1. Client JavaScript owns retries for every failed **non-media** pipeline stage in this layout: voice, scene plan / prompts and animation. One initial attempt is followed by at most **7 retries** (8 total attempts); every retry waits **40 seconds** first. Only the failed stage is reset and repeated. Earlier successful stages are kept; there is no whole-row restart and no duplicate paid batch.
+2. **Image and video imports are the exception in BOTH layouts.** Only the individually failed photo or clip is retried from client JavaScript, using the same 7-retry / 40-second ladder per item. Successful media, object URLs and recorded filenames are preserved. There is no whole-stage, whole-batch or whole-row media restart, and a failed stage-level retry must not revoke a successful image.
+3. Every automatic video in **both** the Editor and Quick Batch table plans exactly **12 Pixabay scenes for every script length and duration**: **4 silent videos + 8 photos**. Scene planning and Pixabay searches always target those same 12 results (8 image results and 4 video results). Client JS records the filename of every selected scene and rejects duplicate filenames in one video; alternate Pixabay result indexes/pages are searched for the failed item so no similar image repeats in one video. A duplicate or missing scene is retried individually and must not strand the row.
+4. Retries are silent. The row keeps its script textarea, working stage label and `.va-spinner` continuously; no error, retry, attempt, warning or abort wording is painted in the table UI. After an exhausted ladder the row returns silently to `ready`.
+5. A missing scene plan must be retried by client JS, and the row must continue to the next pipeline once a plan arrives.
+6. In the **Editor layout**, the script textbox is pinned while script writing/retries run: no state paint, toggle or accordion renumber may hide it over time.
+7. The **last table column is `Actions`** with icons for **Preview** (same existing function), **Process Export** and **Edit**. Edit opens a new page with a **transition-only project JSON** payload carrying the row's basic settings from `batchProjectJson()`; `applyTransitionProject()` consumes it for the transition only. The rows have **no AI enhancer button**.
+8. `src/client/app-js.ts` is the source of truth. `AUTO_MEDIA_TOTAL = 12`, `AUTO_VIDEO_SCENES = 4`, `AUTO_IMAGE_SCENES = 8`, `MEDIA_ITEM_MAX_RETRIES = 7`, `MEDIA_ITEM_RETRY_BACKOFF_MS = 40000`, `retryFailedMediaOnly()`, `requestBatchImagesWithIndividualRetries()`, `runEditorMediaWithIndividualRetries()`, `batchActionCell()`, `batchProjectJson()` and `applyTransitionProject()` define the live contract. Worker capabilities advertise `mediaSceneCap: 12`, `mediaVideoScenes: 4`, `mediaImageScenes: 8`, `mediaItemRetryOwner: "browser"`, `mediaItemRetries: 7`, `mediaItemRetryBackoffMs: 40000`, `mediaFilenameDedupe: "per-video"` and `quickBatchActionsColumn: "preview-process-export-edit"`. `BATCH_PIPELINE_MAX_RETRIES = 7` and `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000` still govern the non-media stage ladder. Older Quick Batch table statements in this file are superseded wherever they conflict.

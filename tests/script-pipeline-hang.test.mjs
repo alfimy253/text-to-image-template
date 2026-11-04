@@ -280,6 +280,11 @@ function makeApp() {
 	w.URL.revokeObjectURL = () => {};
 	w.__PLAN_MODE = "freemium";
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* These hang guards measure ONE request; the retry ladder is tested separately. */
+	w.__SCRIPT_RETRY_TIMING.maxRetries = 0;
+	w.__SCRIPT_RETRY_TIMING.backoffMs = 0;
+	w.__SCRIPT_RETRY_TIMING.uiCheckMs = 0;
 	return { dom, w };
 }
 
@@ -320,7 +325,7 @@ test("H3: a terminal note in state empty stops the client instead of polling for
 	 */
 	assert.equal(polls, 1, "one request stops after one read");
 	assert.equal(w.__VIDEO_PROJECTS[0].script || "", "", "no script was invented");
-	assert.match(w.document.getElementById("va-script-status-1").textContent, /Script failed:/);
+	assert.match(w.document.getElementById("va-script-status-1").textContent, /Writing your SEO script/);
 });
 
 /* ------------------------------------------------------------------------- */
@@ -380,8 +385,8 @@ test("H4: a note that never advances ends the flow inside the advertised budget"
 	assert.ok(elapsed < 8000, "bounded by the advertised budget, took " + elapsed + "ms");
 	assert.ok(polls > 0, "the note was actually read");
 	const status = w.document.getElementById("va-script-status-1").textContent;
-	assert.match(status, /Script failed:/);
-	assert.match(status, /timed out|stopped advancing/i);
+	assert.match(status, /Writing your SEO script/);
+	assert.doesNotMatch(status, /failed|error|timed out|stopped advancing|retry/i);
 });
 
 /* ------------------------------------------------------------------------- */
@@ -440,23 +445,19 @@ test("H5: a quick-batch row writes its script through the note pipeline", async 
 	assert.equal(await w.generateBatchRowScript(blank.id), false);
 	assert.match(w.getBatchRow(blank.id).error || "", /topic/i);
 
-	/* and the click path reaches the same code (delegated listener, not a hook) */
+	/* The final table has no AI enhancer row button; scripts are written programmatically. */
 	const clicked = w.addBatchRow({ script: "evening yoga wind down", minutes: 1 });
 	const before = requests.length;
-	const button = w.document.querySelector('[data-batch-row="' + clicked.id + '"] [data-batch-generate]');
-	assert.ok(button, "the row carries the script button");
-	button.click();
-	const deadline = Date.now() + 5000;
-	while (Date.now() < deadline && w.getBatchRow(clicked.id).script === "evening yoga wind down") {
-		await new Promise((resolve) => setTimeout(resolve, 10));
-	}
-	assert.equal(w.getBatchRow(clicked.id).script, scriptText, "the click wrote the script into the row");
+	assert.equal(w.document.querySelector('[data-batch-row="' + clicked.id + '"] [data-batch-generate]'), null,
+		"the AI enhancer row button is gone");
+	assert.equal(await w.generateBatchRowScript(clicked.id), true);
+	assert.equal(w.getBatchRow(clicked.id).script, scriptText, "the note pipeline wrote the script into the row");
 	assert.equal(requests.length, before + 1);
 	assert.equal(requests[before].body.topic, "evening yoga wind down");
-	/* the table contract is unchanged: one action button per row */
+	/* Remove and Edit are the row's two action buttons; no AI enhancer. */
 	assert.equal(
 		w.document.querySelectorAll('[data-batch-row="' + clicked.id + '"] button[data-batch-action]').length,
-		1
+		2
 	);
 });
 
@@ -891,5 +892,5 @@ test("H6: a huge advertised waitMs cannot disable the client stall guard", async
 	 * ~15 s. */
 	assert.ok(elapsed < 3000, "gave up on the progress budget, took " + elapsed + "ms");
 	const status = w.document.getElementById("va-script-status-1").textContent;
-	assert.match(status, /stopped advancing/i, "reported as a stall, not a timeout");
+	assert.match(status, /Writing your SEO script/, "a stall stays in silent writing mode");
 });

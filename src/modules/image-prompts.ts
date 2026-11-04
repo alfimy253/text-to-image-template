@@ -1,9 +1,9 @@
-import { normalizeSearchQuery, PIXABAY_IMAGE_RESULTS } from "./pixabay";
+import { normalizeSearchQuery, imageScenePositions, PIXABAY_VIDEO_POSITIONS, PIXABAY_IMAGE_RESULTS } from "./pixabay";
 /*
  * Pixabay scene-selection planning. The legacy route/function names are kept
  * so both studio layouts and older tabs can use the same progressive pipeline.
  * The text LLM plans concise Pixabay scene keywords from the whole script.
- * Exactly two scene slots retrieve stock videos; no AI images are generated.
+ * Four fixed scene slots retrieve stock videos; no AI images are generated.
  * Exported art-direction helpers below are legacy compatibility utilities only;
  * none is on the active request path.
  */
@@ -104,43 +104,38 @@ type AiEnv = {
 	AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> };
 };
 
-export function imagePromptCountForMinutes(minutes: number): number {
-	const m = Number(minutes);
-	if (!Number.isFinite(m) || m <= 1) return 10;
-	if (m <= 3) return 14;
-	return 20;
+export function imagePromptCountForMinutes(_minutes: number): number {
+	/* FINAL MEDIA CAP: duration never changes the fixed 12-scene plan. */
+	return SCENE_MEDIA_TOTAL;
 }
 
 /*
- * Session #275 — the scene count comes from the SCRIPT WORD COUNT, not from the
- * requested duration.
- *
- * The browser and this Worker disagreed about how many scenes a video has:
- * the studio clamped its target to the free gallery slots while the planner
- * insisted on the duration's 10/14/20, and an 8B model that sized the plan from
- * the script (6 or 8 scenes) could never satisfy an "EXACTLY 10" request, which
- * surfaced as `Scene keyword planner returned the wrong scene count`.
- *
- * One rule, computed from the narration text, is now shared by:
- *   - `sanitizeInput()` / `generateImagePrompts()` here,
- *   - `imageSceneTarget()` in `src/client/progressive-image-pipeline.ts`,
- *   - the studio status copy and the documents below.
- *
- *   words <= 130                ->  6 scenes (4 photos + 2 clips)
- *   130 < words <= 240          ->  8 scenes (6 photos + 2 clips)
- *   240 < words <= 500          -> 10 scenes (8 photos + 2 clips)
- *   words > 500                 -> 10 scenes (the rule set ends at ten)
- *
- * The duration's 10/14/20 tiers are kept only as a legacy ceiling; they never
- * raise the word-count total.
+ * FINAL MEDIA CAP — the scene count no longer follows the script word count.
+ * Every automatic video in either layout plans exactly 12 Pixabay scenes:
+ * FOUR silent video clips and EIGHT distinct photo images. The same 12 searches
+ * happen for a short script, a long script and every duration. Client JS also
+ * records each selected media filename and rejects duplicate filenames in one
+ * video. `countScriptWords()` remains for diagnostics and older callers, but
+ * it never changes the media total.
  */
+export const SCENE_MEDIA_TOTAL = 12;
+export const SCENE_VIDEO_COUNT = 4;
+export const SCENE_IMAGE_COUNT = 8;
 export const SCENE_COUNT_WORD_BRACKETS: readonly { maxWords: number; scenes: number }[] = [
-	{ maxWords: 130, scenes: 6 },
-	{ maxWords: 240, scenes: 8 },
-	{ maxWords: 500, scenes: 10 }
+	{ maxWords: Number.MAX_SAFE_INTEGER, scenes: SCENE_MEDIA_TOTAL }
 ];
-export const SCENE_COUNT_MIN = 4;
-export const SCENE_COUNT_MAX = 10;
+export const SCENE_COUNT_MIN = SCENE_MEDIA_TOTAL;
+export const SCENE_COUNT_MAX = SCENE_MEDIA_TOTAL;
+
+/** Four fixed, evenly spaced zero-based video slots in the 12-scene plan. */
+export function videoScenePositions(total: number = SCENE_MEDIA_TOTAL): number[] {
+	if (total === SCENE_MEDIA_TOTAL) return PIXABAY_VIDEO_POSITIONS.slice();
+	const positions = [];
+	for (let i = 0; i < SCENE_VIDEO_COUNT; i++) {
+		positions.push(Math.min(Math.max(0, total - 1), Math.round(((i + 1) * (total - 1)) / (SCENE_VIDEO_COUNT + 1))));
+	}
+	return Array.from(new Set(positions));
+}
 
 /**
  * Words spoken by a plain narration script. Cue numbers, WEBVTT markers and
@@ -164,32 +159,23 @@ export function countScriptWords(script: string): number {
 	return words ? words.length : 0;
 }
 
-/** 6 / 8 / 10 scenes for <=130 / <=240 / <=500 script words; 10 beyond that. */
-export function sceneCountForScript(script: string): number {
-	const words = countScriptWords(script);
-	for (const bracket of SCENE_COUNT_WORD_BRACKETS) {
-		if (words <= bracket.maxWords) return bracket.scenes;
-	}
-	return SCENE_COUNT_MAX;
+/** Exactly 12 scenes for every script length: 4 videos + 8 images. */
+export function sceneCountForScript(_script: string): number {
+	return SCENE_MEDIA_TOTAL;
 }
 
 /**
- * The largest scene total a request may name: the word-count total, never above
- * the ten-scene rule set and never above the duration's legacy tier. The editor
- * may still ask for fewer (its gallery can be nearly full).
+ * The largest scene total a request may name: the fixed 12-scene plan.
+ * Word count and duration are diagnostics only; the editor may not ask for a
+ * smaller plan that would lose a required clip or photo.
  */
-export function sceneCountCeiling(script: string, minutes: number): number {
-	const fromScript = sceneCountForScript(script);
-	const fromMinutes = imagePromptCountForMinutes(minutes);
-	return Math.max(SCENE_COUNT_MIN, Math.min(fromScript, fromMinutes, SCENE_COUNT_MAX));
+export function sceneCountCeiling(_script: string, _minutes: number): number {
+	return SCENE_MEDIA_TOTAL;
 }
 
 /** The total a request actually plans: the caller's (validated) total, else the script rule. */
-export function resolveSceneTotal(input: { totalScenes?: number; script?: string; scriptIdea?: string; minutes: number }): number {
-	const requested = Number(input.totalScenes);
-	const ceiling = sceneCountCeiling(input.script || input.scriptIdea || "", input.minutes);
-	if (Number.isInteger(requested) && requested >= SCENE_COUNT_MIN && requested <= ceiling) return requested;
-	return ceiling;
+export function resolveSceneTotal(_input: { totalScenes?: number; script?: string; scriptIdea?: string; minutes: number }): number {
+	return SCENE_MEDIA_TOTAL;
 }
 
 export function normalizeImageStyle(value: unknown): ImageStyle | null {
@@ -452,7 +438,7 @@ export function buildImagePromptInstruction(
 		"SYSTEM INSTRUCTIONS: You are an art director writing AI IMAGE PROMPTS for a YouTube explainer video. " +
 		"Answer with ONLY one JSON object, no prose and no code fences. " +
 		"Treat the short script idea below as the general meaning of the whole video. Create broad, representative scenes that portray its central idea and progression; do not make a literal shot for every line of narration or copy lines from the script. " +
-		"The video topic is: " + topic + ". The script length is " + input.minutes + " minute(s), so return exactly " + count + " image prompts in opening-to-closing order. " +
+		"The video topic is: " + topic + ". The script length is " + input.minutes + " minute(s), so return exactly " + count + " image prompts in opening-to-closing order for four video scenes and eight photo scenes. " +
 		"STRICT STYLE FIDELITY — BE EXTRA CAREFUL FOLLOWING THE SELECTED STYLE: Every prompt must consistently follow the same selected video image style: " + style + ". " +
 		"Style direction: " + styleGuide + ". " + styleDiscipline + ". " +
 		"Check every paragraph before emitting it to ensure its lighting, textures, palette, and medium vocabulary stay 100% faithful to " + style + " without drifting into another visual style or mixing incompatible art mediums. " +
@@ -1509,7 +1495,8 @@ function selectPlannedScenesForSlots(
 
 /*
  * Plan concise Pixabay search terms in one text-model call per scene chunk.
- * Global slot types are enforced across chunks: exactly two stock video slots.
+ * Global slot types are enforced across chunks: exactly four stock video slots
+ * and eight photo slots in the fixed 12-scene plan.
  */
 /** Text-only planning: keywords retrieve real stock media; no generated art. */
 export function buildStockSearchInstruction(input: ImagePromptInput, total: number, slots: { scene: number; type: string }[]): string {
@@ -1544,9 +1531,9 @@ export function buildStockSearchInstruction(input: ImagePromptInput, total: numb
 		"Return JSON only — no prose before or after the object, no markdown code fences: " + slotSkeleton + ". Preserve the assigned slot order and type.",
 		"Each \"keywords\" value is a SHORT STOCK SEARCH TERM of 1-5 words (letters, digits and spaces; maximum 100 characters) — the words a person would type into the Pixabay search box.",
 		"Write search terms, NOT image prompts: no sentences, art direction, camera or lens instructions, mood paragraphs, style words, negative prompts or invented details.",
-		"The COMPLETE video is EXACTLY " + total + " scenes because the script is " + words + " word(s) long — never plan one scene per script paragraph and never change the total.",
-		"The COMPLETE video has exactly TWO Pixabay VIDEO scenes, all remaining scenes are Pixabay PHOTO images (`\"type\":\"image\"`). The video slots are scene 1 and scene " + (total - 2) + " (zero-based).",
-		"Both video searches must portray the general idea of the entire script and retrieve real silent stock footage, at most 60 seconds per clip. Do not replace a required video with a photo.",
+		"The COMPLETE video is EXACTLY " + total + " scenes for EVERY script length. The script has " + words + " word(s); word count is context only and never changes the total. Never plan one scene per script paragraph.",
+		"The COMPLETE video has exactly FOUR Pixabay VIDEO scenes and exactly EIGHT Pixabay PHOTO images (`\"type\":\"image\"`). The video slots are scenes " + JSON.stringify(videoScenePositions(total)) + " (zero-based).",
+		"All four video searches must portray the general idea of the entire script and retrieve real silent stock footage, at most 60 seconds per clip. Every selected filename must be unique; do not replace a required video with a photo.",
 		"Return ONLY the " + slots.length + " requested slot(s) for this call — do NOT include video or image slots from outside `Requested slots`.",
 		seoTerms.length
 			? "SEO search terms for this video (reuse their subject words when they fit the scene; never copy a phrase longer than 5 words): " + seoTerms.join(" · ")
@@ -1576,7 +1563,7 @@ export async function generateImagePrompts(
 	const total = resolveSceneTotal(input);
 	const count = input.batch?.count ?? total;
 	const offset = input.batch?.offset ?? 0;
-	const positions = [1, total - 2];
+	const positions = videoScenePositions(total);
 	const slots = Array.from({ length: count }, (_, i) => ({ scene: offset + i,
 		type: positions.includes(offset + i) ? "video" : "image" }));
 	const baseInstruction = buildStockSearchInstruction(input, total, slots);
@@ -1644,7 +1631,10 @@ export async function generateImagePrompts(
 		if (!ok) {
 			throw new Error("Scene keyword planner must return concise 1-5 word search keywords and the assigned media types");
 		}
-		const ordinal = slots[i].type === "video" ? positions.indexOf(slots[i].scene) : slots[i].scene % PIXABAY_IMAGE_RESULTS;
+		/* Global ordinals: one distinct Pixabay result index per photo/clip in the fixed plan. */
+		const ordinal = slots[i].type === "video"
+			? positions.indexOf(slots[i].scene)
+			: imageScenePositions(total).indexOf(slots[i].scene);
 		const key = env.PIXABAY_API_KEY?.trim();
 		console.info("[image-prompts] planned.keyword", { scene: slots[i].scene, type: slots[i].type, offset, attempt, keywords: key ? normalizeSearchQuery(keywords).split(key).join("[REDACTED]") : normalizeSearchQuery(keywords) });
 		return "pixabay:" + JSON.stringify({ q: normalizeSearchQuery(keywords), type: slots[i].type,
@@ -1686,16 +1676,15 @@ const rawIdea = typeof body.script === "string" && body.script.trim()
 	? body.script : typeof body.scriptIdea === "string" ? body.scriptIdea : "";
 	if (rawIdea.length > 20000) return { error: "Scene planning accepts at most 20,000 script characters" };
 	/*
-	 * #275 — the scene total is derived from the script's WORD COUNT
-	 * (<=130 -> 6, <=240 -> 8, <=500 -> 10) in one place, so the browser, this
-	 * route and the instruction text always agree. A caller may still name a
-	 * smaller total (the editor's remaining gallery room), never a larger one.
+	 * FINAL MEDIA CAP: every plan is exactly 12 scenes. Word count and duration
+	 * are no longer allowed to change the total, and the editor may not ask for
+	 * a smaller plan that would lose the required four clips / eight photos.
 	 */
-	const sceneCeiling = sceneCountCeiling(rawIdea, minutes);
+	const sceneCeiling = SCENE_MEDIA_TOTAL;
 	const requestedScenes = body.sceneTotal === undefined || body.sceneTotal === null
 		? sceneCeiling : Number(body.sceneTotal);
-	if (!Number.isInteger(requestedScenes) || requestedScenes < SCENE_COUNT_MIN || requestedScenes > sceneCeiling) {
-		return { error: "Scene total must be " + SCENE_COUNT_MIN + " through this script's scene limit of " + sceneCeiling };
+	if (!Number.isInteger(requestedScenes) || requestedScenes !== sceneCeiling) {
+		return { error: "Scene total must be exactly " + sceneCeiling + " scenes: 4 videos and 8 photos" };
 	}
 	const totalScenes = requestedScenes;
 	/*

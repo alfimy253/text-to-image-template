@@ -57,8 +57,8 @@ export {
 
 export const IMAGE_MODEL = "pixabay";
 
-/* A video gallery holds 25 stills; no batch may exceed the 20-prompt maximum. */
-export const IMAGE_BATCH_MAX_PROMPTS = 20;
+/* FINAL MEDIA CAP: every automatic video has exactly 12 Pixabay scenes. */
+export const IMAGE_BATCH_MAX_PROMPTS = 12;
 
 /*
  * ONE shared daily image ceiling for every actor (free, paid_user, guest):

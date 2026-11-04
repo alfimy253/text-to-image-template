@@ -301,6 +301,16 @@ export const PAGE_MARKUP = `
 		>\u2726 Generate</button>
 
 	</header>
+	<div
+		id="pipeline-storage-alert"
+		role="alert"
+		aria-live="assertive"
+		hidden
+		style="margin: 12px 16px 0; padding: 10px 12px; border: 1px solid #b45309; background: #fff7ed; color: #7c2d12; border-radius: 8px; font-size: 14px;"
+	>
+		<span id="pipeline-storage-message">Pipeline management storage is unavailable.</span>
+		<button type="button" id="pipeline-storage-reset" style="margin-left: 12px;">Reset pipeline state</button>
+	</div>
 	<!--__CMS_STUDIO_TOP_LINKS__-->
 
 
@@ -383,14 +393,14 @@ export const PAGE_MARKUP = `
 				Every row that has a script is spoken (MP3), illustrated with
 				Pixabay images and animated; a row that is empty is skipped, and so is
 				a row that is already finished (its Preview and Export buttons are
-				live \u2014 it is never generated or billed twice). Three rows
-				render at the same time. Until a row is finished its last two
-				cells read <strong>Preview Here</strong> and
-				<strong>Export Video</strong> \u2014 both unlock at the same
-				moment, and the export is built in this browser.
+				live \u2014 it is never generated or billed twice). Three rows render at the same time.
+				The last <strong>Actions</strong> cell has Preview, Process Export and
+				Edit icons. Until a row is finished it reads <strong>Preview Here</strong>
+				and <strong>Export Video</strong>; the first two icons unlock at the same
+				moment, Edit opens a new page, and the export is built in this browser.
 			</p>
 
-			<p class="va-note">Stock photos from <a href="https://pixabay.com/" target="_blank" rel="noopener noreferrer">Pixabay</a> · 3 results per search. Source dimensions vary; resolution controls the output frame.</p>
+			<p class="va-note">Stock photos and clips from <a href="https://pixabay.com/" target="_blank" rel="noopener noreferrer">Pixabay</a> · 12 results per search: 8 distinct photos and 4 clips for every script. Source dimensions vary; resolution controls the output frame.</p>
 			<div class="table-scroll">
 
 				<table class="batch-table batch-table-edit">
@@ -402,8 +412,7 @@ export const PAGE_MARKUP = `
 							<th class="batch-col-min">Min</th>
 							<th class="batch-col-resolution">Resolution</th>
 							<th class="batch-col-orientation">Orientation</th>
-							<th class="batch-col-preview">Preview</th>
-							<th class="batch-col-export">Export</th>
+					<th class="batch-col-actions">Actions</th>
 						</tr>
 					</thead>
 

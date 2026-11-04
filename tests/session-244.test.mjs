@@ -41,6 +41,7 @@ function makeApp() {
 	w.URL.revokeObjectURL = () => { };
 	w.__PLAN_MODE = "freemium";
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	/* keep the silent retries instant in the tests */
 	w.__BATCH_RETRY.attempts = 3;
 	w.__BATCH_RETRY.baseMs = 1;
@@ -220,7 +221,7 @@ test("abort wording ('signal is aborted without reason') never reaches the table
 	assert.doesNotMatch(text, /\u26a0/, "no warning glyph");
 	assert.equal(row.error, "");
 	assert.equal(w.batchRowFinished(row), false);
-	assert.equal(w.document.querySelectorAll('[data-batch-slot="preview"] button').length, 0, "no dead buttons");
+	assert.equal(w.document.querySelectorAll('[data-batch-action="preview"]').length, 0, "no dead buttons");
 	/* and the row is simply pending again */
 	assert.equal(row.stage, "ready");
 });
@@ -305,12 +306,12 @@ test("the batch table keeps a fixed layout and wraps its status line", () => {
 	assert.match(APP_CSS, /\.batch-table-edit\s*\{[\s\S]{0,900}table-layout:\s*fixed/);
 	assert.match(APP_CSS, /\.batch-table-edit\s*\{[\s\S]{0,900}min-width:\s*\d+px/);
 	assert.match(APP_CSS, /\.batch-row-status\s*\{[\s\S]{0,400}overflow-wrap:\s*anywhere/);
-	/* seven columns, still declared, still percentaged */
-	for (const column of ["script", "style", "min", "resolution", "orientation", "preview", "export"]) {
+	/* six columns: the final one is Actions with Preview/Process Export/Edit icons. */
+	for (const column of ["script", "style", "min", "resolution", "orientation", "actions"]) {
 		assert.match(APP_CSS, new RegExp("\\.batch-col-" + column + "\\b"));
 	}
 	assert.equal(
-		(APP_CSS.match(/\.batch-col-[a-z]+\s*\{\s*width:/g) || []).length >= 6,
+		(APP_CSS.match(/\.batch-col-[a-z]+\s*\{\s*width:/g) || []).length >= 5,
 		true,
 		"the column widths are still declared"
 	);

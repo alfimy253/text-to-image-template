@@ -58,11 +58,11 @@ const json = (body, status = 200, headers = {}) =>
 const image = () => new Response(png, { status: 200, headers: { "Content-Type": "image/png" } });
 const mp4 = Uint8Array.from([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
 /*
- * A finished Quick Batch row needs exactly TWO distinct stock clips, so the
- * end-to-end rows below serve them for two of the ten scenes - with different
- * provider ids, which is what the row's clip check compares.
+ * A finished Quick Batch row needs exactly FOUR distinct stock clips, so the
+ * end-to-end rows below serve them at the fixed 12-scene video slots - with
+ * different provider ids, which is what the row's clip check compares.
  */
-const CLIP_SCENES = ["Scene 1", "Scene 8"];
+const CLIP_SCENES = ["Scene 1", "Scene 4", "Scene 7", "Scene 10"];
 const sceneMedia = (prompt) => (CLIP_SCENES.indexOf(prompt) >= 0
 	? new Response(mp4, {
 		status: 200,
@@ -167,6 +167,7 @@ test("#279 a failed scene is one verdict that keeps its original index", async (
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	await tick();
 
 	const prompts = ["Scene 0", "Scene 1", "Scene 2", "Scene 3", "Scene 4", "Scene 5"];
@@ -207,6 +208,7 @@ test("#279 a chunk reports load and rejection verdicts without a second pass", a
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	await tick();
 
 	const delivered = [];
@@ -243,6 +245,7 @@ test("#279 a load verdict comes back at once: no browser-side ladder to cut shor
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	await tick();
 
 	/*
@@ -325,17 +328,18 @@ test("#279 a transient provider failure inside the second chunk no longer ends t
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	await tick();
 
-	/* 276 words: the word-count rule plans ten scenes, i.e. four prompt chunks. */
+	/* FINAL MEDIA CAP: every script plans twelve scenes, i.e. four prompt chunks. */
 	const row = w.addBatchRow({ script: "A forest begins. " + "Nature is peaceful. ".repeat(90) + "A forest ends.", minutes: 1 });
 	await w.runBatchRow(row);
 
 	assert.equal(w.batchRowFinished(row), true, "the row still reaches done");
-	assert.equal(row.images.length, 10, "all ten scenes are delivered, not the first three");
-	assert.deepEqual(Array.from(row.images, (entry) => entry.index), Array.from({ length: 10 }, (_, i) => i));
+	assert.equal(row.images.length, 12, "all twelve scenes are delivered, not the first three");
+	assert.deepEqual(Array.from(row.images, (entry) => entry.index), Array.from({ length: 12 }, (_, i) => i));
 	assert.equal(row.stage, "done");
-	assert.equal(imageCalls.length, 10, "exactly one page request per scene");
+	assert.equal(imageCalls.length, 12, "exactly one page request per scene");
 	/* No scene was paid for twice by a browser-side round of retries. */
 	for (const scene of ["Scene 0", "Scene 1", "Scene 2", "Scene 3"]) {
 		assert.equal(imageCalls.filter((prompt) => prompt === scene).length, 1, scene + " is asked once");
@@ -431,19 +435,21 @@ test("#263 a prompt-chunk overload no longer stops the video mid-way", async (t)
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	await tick();
 
-	/* 276 words: the word-count rule plans ten scenes, i.e. four prompt chunks. */
+	/* FINAL MEDIA CAP: every script plans twelve scenes, i.e. four prompt chunks. */
 	const row = w.addBatchRow({ script: "A forest begins. " + "Nature is peaceful. ".repeat(90) + "A forest ends.", minutes: 1 });
 	await w.runBatchRow(row);
 
 	assert.equal(w.batchRowFinished(row), true, "the row reaches done despite the overload");
-	assert.equal(row.images.length, 10, "no scene is lost to the prompt overload");
-	assert.deepEqual(Array.from(row.images, (entry) => entry.index), Array.from({ length: 10 }, (_, i) => i));
+	assert.equal(row.images.length, 12, "no scene is lost to the prompt overload");
+	assert.deepEqual(Array.from(row.images, (entry) => entry.index), Array.from({ length: 12 }, (_, i) => i));
 	const attempts = promptStamps.filter((entry) => entry.offset === 3);
-	assert.equal(attempts.length, 2, "the overloaded prompt chunk was retried once");
-	/* The browser waited the server's hint (>= 400 ms) instead of hammering. */
-	assert.ok(attempts[1].at - attempts[0].at >= 350, "retry waited the load hint: " + (attempts[1].at - attempts[0].at) + "ms");
+	assert.equal(attempts.length, 2, "the overloaded prompt chunk was retried once by the client stage ladder");
+	/* FINAL RULE - QUICK BATCH TABLE LAYOUT: the browser owns the retry and
+	 * its 40 s backoff; the jsdom harness compresses that production wait. */
+	assert.ok(attempts[1].at >= attempts[0].at, "the retry happened after the failed stage");
 });
 
 /* ------------------------------------------------------------------ */

@@ -29,9 +29,9 @@ function fixture(t, options = {}) {
 		if (url.pathname.startsWith('/api/')) {
 			if (options.searchRedirect) return new Response(null, { status: 302, headers: { Location: 'https://evil.test/collect' } });
 			if (options.error) return new Response('secret provider diagnostic', { status: options.error, headers: { 'X-RateLimit-Reset': '60' } });
-			if (url.pathname.includes('videos')) return Response.json({ totalHits: 3, hits: [7,8,9].map(id => ({ id, pageURL: 'https://pixabay.com/videos/id-' + id + '/', user: 'Artist', duration: options.duration || 12, videos: { small: { url: 'https://cdn.pixabay.com/video/7.mp4', thumbnail: 'https://cdn.pixabay.com/video/7.jpg', width: 1280, height: 720, size: 1024 } } })) });
+			if (url.pathname.includes('videos')) return Response.json({ totalHits: 4, hits: [7,8,9,10].map(id => ({ id, pageURL: 'https://pixabay.com/videos/id-' + id + '/', user: 'Artist', duration: options.duration || 12, videos: { small: { url: 'https://cdn.pixabay.com/video/' + id + '.mp4', thumbnail: 'https://cdn.pixabay.com/video/' + id + '.jpg', width: 1280, height: 720, size: 1024 } } })) });
 			const id = Number(url.searchParams.get('id'));
-			return Response.json({ totalHits: options.empty ? 0 : 100, hits: options.empty ? [] : id ? [photo(id)] : [photo(1), photo(2), photo(3), photo(4)] });
+			return Response.json({ totalHits: options.empty ? 0 : 100, hits: options.empty ? [] : id ? [photo(id)] : Array.from({ length: 12 }, (_, i) => photo(i + 1)) });
 		}
 		if (options.redirect) return new Response(null, { status: 302, headers: { Location: 'https://evil.test/private' } });
 		if (url.pathname.endsWith('.mp4')) return new Response(Uint8Array.from([0,0,0,24,102,116,121,112,105,115,111,109]), { headers: { 'Content-Type': 'video/mp4' } });
@@ -41,17 +41,17 @@ function fixture(t, options = {}) {
 	return calls;
 }
 
-test('Pixabay requests the upstream minimum of three and exposes two first-page photos', async t => {
-	const calls = fixture(t); const result = await searchPixabay(env(), { q: 'yellow flowers & sun', per_page: 3 });
-	assert.equal(result.hits.length, 2); assert.equal(result.per_page, 2); assert.equal(result.page, 1); assert.equal(result.provider, 'pixabay');
-	assert.equal(calls[0].url.searchParams.get('per_page'), '3');
+test('Pixabay requests twelve upstream results and exposes eight first-page photos', async t => {
+	const calls = fixture(t); const result = await searchPixabay(env(), { q: 'yellow flowers & sun', per_page: 12 });
+	assert.equal(result.hits.length, 8); assert.equal(result.per_page, 8); assert.equal(result.page, 1); assert.equal(result.provider, 'pixabay');
+	assert.equal(calls[0].url.searchParams.get('per_page'), '12');
 	assert.equal(calls[0].url.searchParams.get('q'), 'yellow flowers & sun');
 	assert.equal(calls[0].url.searchParams.get('image_type'), 'photo');
 	assert.equal(calls[0].url.searchParams.get('safesearch'), 'true');
 	assert.ok(!JSON.stringify(result).includes('test-key'));
 });
-test('search rejects unsupported page sizes, pages beyond the first, invalid type/id and empty queries', async () => {
-	for (const input of [{ q: 'rose', per_page: 20 }, { q: 'rose', page: 0 }, { q: 'rose', page: 2 }, { q: 'rose', type: 'other' }, { id: -1 }, {}]) {
+test('search rejects unsupported page sizes, pages beyond two, invalid type/id and empty queries', async () => {
+	for (const input of [{ q: 'rose', per_page: 2 }, { q: 'rose', per_page: 20 }, { q: 'rose', page: 0 }, { q: 'rose', page: 3 }, { q: 'rose', type: 'other' }, { id: -1 }, {}]) {
 		await assert.rejects(searchPixabay(env(), input), e => e.status === 400);
 	}
 });
@@ -62,15 +62,14 @@ test('identical concurrent/repeated searches share one 24-hour cached request', 
 	assert.equal(calls.length, 1);
 });
 /*
- * #275 — the planner's scene total now follows the script WORD COUNT
- * (<=130 -> 6, <=240 -> 8, <=500 -> 10). Tests that exercise the ten-scene
- * plan give the planner a long enough script so the ceiling is 10.
+ * FINAL MEDIA CAP — word count and duration are diagnostics only. Every
+ * automatic video plans the same 12 scenes (4 clips + 8 photos).
  */
 const longScript = (words = 400) => Array.from({ length: words }, (_, i) => 'word' + i).join(' ') + '.';
-test('#275 scene count follows the script word count (6 / 8 / 10) on the server', () => {
-	assert.deepEqual(SCENE_COUNT_WORD_BRACKETS.map((b) => [b.maxWords, b.scenes]), [[130, 6], [240, 8], [500, 10]]);
+test('the scene count is fixed at 12 for every script length on the server', () => {
+	assert.deepEqual(SCENE_COUNT_WORD_BRACKETS.map((b) => [b.maxWords, b.scenes]), [[Number.MAX_SAFE_INTEGER, 12]]);
 	const script = (words) => Array.from({ length: words }, (_, i) => 'word' + i).join(' ') + '.';
-	const cases = [[0, 6], [5, 6], [129, 6], [130, 6], [131, 8], [239, 8], [240, 8], [241, 10], [499, 10], [500, 10], [501, 10], [1200, 10]];
+	const cases = [[0, 12], [5, 12], [129, 12], [130, 12], [131, 12], [239, 12], [240, 12], [241, 12], [499, 12], [500, 12], [501, 12], [1200, 12]];
 	for (const [words, scenes] of cases) {
 		const text = script(words);
 		assert.equal(countScriptWords(text), words, 'word count for ' + words);
@@ -78,14 +77,14 @@ test('#275 scene count follows the script word count (6 / 8 / 10) on the server'
 		assert.equal(sceneCountCeiling(text, 1), scenes, 'a one-minute video never lowers the word-count total');
 		assert.equal(sceneCountCeiling(text, 6), scenes, 'a six-minute video never raises the word-count total');
 	}
-	assert.equal(SCENE_COUNT_MAX, 10);
+	assert.equal(SCENE_COUNT_MAX, 12);
 	/* Cue numbers, WEBVTT markers and timestamps are not narration words. */
 	const srt = '1\n00:00:01,000 --> 00:00:03,000\nHello there friend\n\n2\n00:00:04,000 --> 00:00:06,000\nGood bye';
 	assert.equal(countScriptWords(srt), 5);
-	assert.equal(sceneCountForScript(srt), 6);
+	assert.equal(sceneCountForScript(srt), 12);
 });
 
-test('#275 the planner plans the script-derived total and validates an explicit sceneTotal against it', async () => {
+test('the planner plans a fixed 12-scene total and validates an explicit sceneTotal', async () => {
 	const planner = (seen) => ({ AI: { run: async (_m, input) => {
 		const slots = JSON.parse(input.prompt.match(/Requested slots of \d+ total: ([^\n]+)/)[1]);
 		seen.push(slots);
@@ -93,7 +92,7 @@ test('#275 the planner plans the script-derived total and validates an explicit 
 	} } });
 	const words = (n) => Array.from({ length: n }, (_, i) => 'word' + i).join(' ') + '.';
 
-	for (const [scriptWords, expected] of [[90, 6], [200, 8], [400, 10]]) {
+	for (const scriptWords of [90, 200, 400]) {
 		const seen = [];
 		const response = await handleGenerateImagePrompts(
 			post('/api/image-prompts', { topic: 'gardening', script: words(scriptWords), minutes: 1 }),
@@ -102,35 +101,43 @@ test('#275 the planner plans the script-derived total and validates an explicit 
 		);
 		assert.equal(response.status, 200);
 		const body = await response.json();
-		assert.equal(body.expectedCount, expected);
-		assert.equal(body.prompts.length, expected);
-		assert.deepEqual(seen[0].map((s) => s.scene), Array.from({ length: expected }, (_, i) => i));
-		assert.equal(seen[0].filter((s) => s.type === 'video').length, 2);
-		assert.deepEqual(seen[0].filter((s) => s.type === 'video').map((s) => s.scene), [1, expected - 2]);
+		assert.equal(body.expectedCount, 12);
+		assert.equal(body.prompts.length, 12);
+		assert.deepEqual(seen[0].map((s) => s.scene), Array.from({ length: 12 }, (_, i) => i));
+		assert.equal(seen[0].filter((s) => s.type === 'video').length, 4);
+		assert.deepEqual(seen[0].filter((s) => s.type === 'video').map((s) => s.scene), [1, 4, 7, 10]);
 	}
 
-	/* A smaller validated total (the editor's remaining gallery room) still wins. */
+	/* Smaller or larger totals are rejected: the fixed plan never loses a clip or photo. */
 	const small = await handleGenerateImagePrompts(
 		post('/api/image-prompts', { topic: 'gardening', script: words(400), minutes: 1, sceneTotal: 5,
 			batch: { offset: 0, count: 3, attempt: 0 } }),
 		planner([]),
 		'text-planner'
 	);
-	assert.equal(small.status, 200);
-	assert.equal((await small.json()).expectedCount, 5);
+	assert.equal(small.status, 400);
+	assert.match((await small.json()).error, /exactly 12 scenes/);
 
-	/* A larger total than this script's rule is rejected, not silently clamped. */
+	const exact = await handleGenerateImagePrompts(
+		post('/api/image-prompts', { topic: 'gardening', script: words(400), minutes: 1, sceneTotal: 12 }),
+		planner([]),
+		'text-planner'
+	);
+	assert.equal(exact.status, 200);
+	assert.equal((await exact.json()).expectedCount, 12);
+
 	const tooBig = await handleGenerateImagePrompts(
 		post('/api/image-prompts', { topic: 'gardening', script: words(90), minutes: 1, sceneTotal: 10 }),
 		planner([]),
 		'text-planner'
 	);
 	assert.equal(tooBig.status, 400);
-	assert.match((await tooBig.json()).error, /scene limit of 6/);
+	assert.match((await tooBig.json()).error, /exactly 12 scenes/);
 });
 
-test('#275 a whole-video plan of the wrong length is mapped onto the requested slots instead of failing', async () => {
+test('a whole-video plan of the wrong length is mapped onto the fixed 12 requested slots', async () => {
 	const entry = (type, scene) => ({ scene, type, keywords: 'garden scene ' + scene });
+	const videoSlots = [1, 4, 7, 10];
 	const script = Array.from({ length: 400 }, (_, i) => 'word' + i).join(' ') + '.';
 	const report = (total, offset, count, scenes) => generateImagePrompts(
 		{ AI: { run: async () => ({ response: JSON.stringify({ scenes }) }) } },
@@ -139,31 +146,29 @@ test('#275 a whole-video plan of the wrong length is mapped onto the requested s
 			batch: { offset, count, attempt: 0, previous: [] } }
 	);
 
-	for (const total of [6, 8, 10]) {
-		for (let offset = 0; offset < total; offset += 3) {
-			const count = Math.min(3, total - offset);
-			/* Every realistic whole-video miscount: one, two and three scenes over/under. */
-			for (const length of [total - 3, total - 2, total - 1, total, total + 1, total + 2, total + 3]) {
-				if (length < 1) continue;
-				const whole = Array.from({ length }, (_, s) => entry(s === 1 || s === length - 2 ? 'video' : 'image', s));
-				const tokens = await report(total, offset, count, whole);
-				const decoded = tokens.map((t) => JSON.parse(t.slice(8)));
-				assert.deepEqual(decoded.map((s) => s.scene), Array.from({ length: count }, (_, i) => offset + i),
-					'scene numbers must stay glued to the requested slots (' + total + '/' + length + ')');
-				assert.equal(new Set(decoded.map((s) => s.q)).size, count, 'each slot gets its own search term');
-				assert.equal(tokens.length, count);
-			}
+	const total = 12;
+	for (let offset = 0; offset < total; offset += 3) {
+		const count = Math.min(3, total - offset);
+		for (const length of [total - 3, total - 2, total - 1, total, total + 1, total + 2, total + 3]) {
+			if (length < 1) continue;
+			const whole = Array.from({ length }, (_, s) => entry(videoSlots.indexOf(s) !== -1 ? 'video' : 'image', s));
+			const tokens = await report(total, offset, count, whole);
+			const decoded = tokens.map((t) => JSON.parse(t.slice(8)));
+			assert.deepEqual(decoded.map((s) => s.scene), Array.from({ length: count }, (_, i) => offset + i),
+				'scene numbers must stay glued to the requested slots (' + total + '/' + length + ')');
+			assert.equal(new Set(decoded.map((s) => s.q)).size, count, 'each slot gets its own search term');
+			assert.equal(tokens.length, count);
 		}
 	}
 
 	/* A chunk reply that renumbers its own scenes is still aligned to the requested offsets. */
-	const renumbered = await report(10, 6, 3, [
+	const renumbered = await report(12, 9, 3, [
 		{ scene: 0, type: 'image', keywords: 'watering seedlings' },
-		{ scene: 1, type: 'image', keywords: 'wooden garden beds' },
-		{ scene: 2, type: 'video', keywords: 'sharing the harvest' }
+		{ scene: 1, type: 'video', keywords: 'wooden garden beds' },
+		{ scene: 2, type: 'image', keywords: 'sharing the harvest' }
 	]);
-	assert.deepEqual(renumbered.map((t) => JSON.parse(t.slice(8)).scene), [6, 7, 8]);
-	assert.deepEqual(renumbered.map((t) => JSON.parse(t.slice(8)).type), ['image', 'image', 'video']);
+	assert.deepEqual(renumbered.map((t) => JSON.parse(t.slice(8)).scene), [9, 10, 11]);
+	assert.deepEqual(renumbered.map((t) => JSON.parse(t.slice(8)).type), ['image', 'video', 'image']);
 });
 
 test('#275 the planner instruction asks for 1-5 word search terms and reuses the SEO keywords', async () => {
@@ -185,7 +190,7 @@ test('#275 the planner instruction asks for 1-5 word search terms and reuses the
 	assert.ok(!/2-5 simple search keywords/.test(prompt), 'the old 2-5 art-prompt wording is gone');
 	assert.match(prompt, /neighborhood vegetable garden/);
 	for (const keyword of ['garden', 'compost', 'harvest', 'seeds']) assert.match(prompt, new RegExp(keyword));
-	assert.match(prompt, /EXACTLY 6 scenes because the script is 11 word/);
+	assert.match(prompt, /COMPLETE video is EXACTLY 12 scenes for EVERY script length/);
 	/* Six-word prose is an image prompt, not a search term: a reply made only of those is rejected. */
 	await assert.rejects(
 		generateImagePrompts({ AI: { run: async () => ({ response: JSON.stringify({ scenes: [
@@ -203,7 +208,7 @@ test('#275 the planner instruction asks for 1-5 word search terms and reuses the
 	assert.equal(fiveWords.length, 3);
 });
 
-test('LLM scene planner reads the entire script and assigns exactly two stock video scenes', async () => {
+test('LLM scene planner reads the entire script and assigns exactly four stock video scenes', async () => {
 	const instructions = [];
 	const planner = { AI: { run: async (model, input) => {
 		assert.equal(model, 'text-planner'); instructions.push(input.prompt);
@@ -214,12 +219,12 @@ test('LLM scene planner reads the entire script and assigns exactly two stock vi
 	const input = { topic: 'yellow flowers', script, minutes: 1, style: 'Cinematic Film' };
 	const tokens = await generateImagePrompts(planner, 'text-planner', input);
 	const scenes = tokens.map(token => JSON.parse(token.slice(8)));
-	assert.equal(scenes.length, 10); assert.equal(scenes.filter(s => s.type === 'video').length, 2);
-	assert.deepEqual(scenes.filter(s => s.type === 'video').map(s => s.scene), [1,8]);
+	assert.equal(scenes.length, 12); assert.equal(scenes.filter(s => s.type === 'video').length, 4);
+	assert.deepEqual(scenes.filter(s => s.type === 'video').map(s => s.scene), [1,4,7,10]);
 	assert.ok(instructions[0].includes(script)); assert.match(instructions[0], /general idea of the entire script/);
-	assert.match(instructions[0], /exactly TWO Pixabay VIDEO/);
-	const partial = await generateImagePrompts(planner, 'text-planner', { ...input, batch: { offset: 6, count: 3 } });
-	assert.deepEqual(partial, tokens.slice(6,9));
+	assert.match(instructions[0], /exactly FOUR Pixabay VIDEO/);
+	const partial = await generateImagePrompts(planner, 'text-planner', { ...input, batch: { offset: 9, count: 3 } });
+	assert.deepEqual(partial, tokens.slice(9,12));
 	const response = await handleGenerateImagePrompts(post('/api/image-prompts', { ...input, scriptIdea: 'not the script' }), planner, 'text-planner');
 	assert.equal(response.status, 200); assert.equal((await response.json()).model, 'text-planner');
 	assert.ok(instructions.at(-1).includes(script), 'full script wins over compact summary');
@@ -310,7 +315,7 @@ test('public media routes fail closed without authorization storage unless local
 	const request = new Request('https://studio.test/api/media/search?q=flowers&per_page=3');
 	assert.equal((await worker.fetch(request, e, {})).status, 503);
 	const allowed = await worker.fetch(request, { ...e, PIXABAY_ALLOW_UNMETERED: 'true' }, {});
-	assert.equal(allowed.status, 200); assert.equal((await allowed.json()).hits.length, 2);
+	assert.equal(allowed.status, 200); assert.equal((await allowed.json()).hits.length, 8);
 });
 test('no-result binary images are permanent failures, not retry storms', async t => {
 	const calls = fixture(t, { empty: true });
@@ -319,8 +324,8 @@ test('no-result binary images are permanent failures, not retry storms', async t
 	assert.equal(calls.length, 1);
 });
 
-test('scene planner enforces two videos across all durations and across batch boundaries', async () => {
-	for (const [minutes,total] of [[1,10],[3,14],[6,20]]) {
+test('scene planner enforces four videos across all durations and across batch boundaries', async () => {
+	for (const [minutes,total] of [[1,12],[3,12],[6,12]]) {
 		const calls = [];
 		const planner = { AI: { async run(model, input) {
 			calls.push(input.prompt);
@@ -332,7 +337,7 @@ test('scene planner enforces two videos across all durations and across batch bo
 			topic:'forest community', script:'Beginning. THE WHOLE MIDDLE IDEA. Conclusion.', minutes,
 			batch:{offset,count:Math.min(3,total-offset),previous:tokens.slice(-4)}
 		}));
-		assert.equal(tokens.map(s => JSON.parse(s.slice(8))).filter(s => s.type === 'video').length,2);
+		assert.equal(tokens.map(s => JSON.parse(s.slice(8))).filter(s => s.type === 'video').length,4);
 		assert.ok(calls.every(prompt => prompt.includes('THE WHOLE MIDDLE IDEA')));
 	}
 });
@@ -414,15 +419,15 @@ test('planner reports an empty reply distinctly and keeps rejecting prose-only a
 });
 test('a reply planning the whole video is sliced to the requested chunk slots', async () => {
 	const entry = (type, keywords) => ({ type, keywords });
-	const full = Array.from({ length: 10 }, (_, scene) => entry([1, 8].includes(scene) ? 'video' : 'image', 'forest scene ' + scene));
+	const full = Array.from({ length: 12 }, (_, scene) => entry([1, 4, 7, 10].includes(scene) ? 'video' : 'image', 'forest scene ' + scene));
 	const planner = { AI: { run: async () => ({ response: JSON.stringify({ scenes: full }) }) } };
 	const tokens = await generateImagePrompts(planner, 'text', {
 		topic: 'forest', script: longScript(400), minutes: 1,
-		batch: { offset: 6, count: 3 }
+		batch: { offset: 9, count: 3 }
 	});
-	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).scene), [6, 7, 8]);
-	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).type), ['image', 'image', 'video']);
-	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).q), ['forest scene 6', 'forest scene 7', 'forest scene 8']);
+	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).scene), [9, 10, 11]);
+	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).type), ['image', 'video', 'image']);
+	assert.deepEqual(tokens.map(t => JSON.parse(t.slice(8)).q), ['forest scene 9', 'forest scene 10', 'forest scene 11']);
 });
 test('a retry attempt tightens the instruction toward JSON-only output', async () => {
 	const prompts = [];
@@ -502,7 +507,7 @@ test('cancelling one metadata subscriber preserves the coalesced request for oth
 test('cache write errors do not fail a valid provider download or metadata search', async t => {
  fixture(t);const previous=globalThis.caches;t.after(()=>{globalThis.caches=previous});
  globalThis.caches={default:{match:async()=>undefined,put:async()=>{throw new Error('cache unavailable')}}};
- assert.equal((await searchPixabay(env(),{q:'cache failure unique'})).hits.length,2);
+ assert.equal((await searchPixabay(env(),{q:'cache failure unique'})).hits.length,8);
  assert.deepEqual((await downloadPixabay({id:503,type:'image',url:'https://cdn.pixabay.com/photo/503.png'})).bytes,png);
 });
 test('an unresponsive cache write is bounded and releases the download queue', async t => {
@@ -531,8 +536,8 @@ test('planner prevents false wrong-scene-count failures across real 8B reply sha
 		valid3.map((s) => JSON.stringify(s)).join('\n'),
 		JSON.stringify({ scene_0: valid3[0], scene_1: valid3[1], scene_2: valid3[2] }),
 		"{'scenes':[{'type':'Photo','keywords':['sunny','community','garden']},{'type':'VIDEO','keywords':'neighbors planting vegetables'},{'type':'image','keywords':'rich compost soil'}]}",
-		/* Over-generation: model appended the second global video slot (scene 8) to chunk 0 (4 entries instead of 3). */
-		JSON.stringify({ scenes: [...valid3, { scene: 8, type: 'video', keywords: 'harvesting fresh produce' }] }),
+		/* Over-generation: model appended the second global video slot (scene 4) to chunk 0 (4 entries instead of 3). */
+		JSON.stringify({ scenes: [...valid3, { scene: 4, type: 'video', keywords: 'harvesting fresh produce' }] }),
 		JSON.stringify([
 			{ type: 'image', keywords: 'sunny community garden' },
 			{ type: 'video', keywords: 'neighbors planting vegetables' },
@@ -560,7 +565,7 @@ test('planner prevents false wrong-scene-count failures across real 8B reply sha
 	}, 'text', chunk0);
 	assert.equal(chatTokens.length, 3);
 
-	/* 3. Image-only middle chunk (offset 3, count 3) recovers when the 8B model inserts the 2 global video slots around it. */
+	/* 3. A middle chunk (offset 3, count 3) recovers when the 8B model inserts the four global video slots around it. */
 	const chunk1Tokens = await generateImagePrompts({
 		AI: {
 			run: async () => ({
@@ -568,29 +573,29 @@ test('planner prevents false wrong-scene-count failures across real 8B reply sha
 					scenes: [
 						{ scene: 1, type: 'video', keywords: 'gardeners working together' },
 						{ scene: 3, type: 'image', keywords: 'watering green seedlings' },
-						{ scene: 4, type: 'image', keywords: 'wooden garden beds' },
+						{ scene: 4, type: 'video', keywords: 'wooden garden beds' },
 						{ scene: 5, type: 'image', keywords: 'fresh tomato harvest' },
-						{ scene: 8, type: 'video', keywords: 'sharing garden harvest' }
+						{ scene: 7, type: 'video', keywords: 'sharing garden harvest' }
 					]
 				})
 			})
 		}
 	}, 'text', { ...baseInput, batch: { offset: 3, count: 3, previous: chatTokens } });
 	assert.deepEqual(chunk1Tokens.map((t) => JSON.parse(t.slice(8)).scene), [3, 4, 5]);
-	assert.deepEqual(chunk1Tokens.map((t) => JSON.parse(t.slice(8)).type), ['image', 'image', 'image']);
+	assert.deepEqual(chunk1Tokens.map((t) => JSON.parse(t.slice(8)).type), ['image', 'video', 'image']);
 
-	/* 4. Imperfect whole-video plan (9 or 11 entries instead of 10) slices cleanly when offset..offset+count matches slot types. */
-	const elevenScenes = Array.from({ length: 11 }, (_, s) => ({
-		type: [1, 8].includes(s) ? 'video' : 'image',
+	/* 4. An over-generated whole-video plan (13 entries instead of 12) slices cleanly when offset..offset+count matches slot types. */
+	const thirteenScenes = Array.from({ length: 13 }, (_, s) => ({
+		type: [1, 4, 7, 10].includes(s) ? 'video' : 'image',
 		keywords: 'garden scene ' + s
 	}));
 	const slicedFromEleven = await generateImagePrompts(
-		{ AI: { run: async () => ({ response: JSON.stringify({ scenes: elevenScenes }) }) } },
+		{ AI: { run: async () => ({ response: JSON.stringify({ scenes: thirteenScenes }) }) } },
 		'text',
 		{ ...baseInput, batch: { offset: 6, count: 3 } }
 	);
 	assert.deepEqual(slicedFromEleven.map((t) => JSON.parse(t.slice(8)).scene), [6, 7, 8]);
-	assert.deepEqual(slicedFromEleven.map((t) => JSON.parse(t.slice(8)).type), ['image', 'image', 'video']);
+	assert.deepEqual(slicedFromEleven.map((t) => JSON.parse(t.slice(8)).type), ['image', 'video', 'image']);
 
 	/* 5. Single-slot final chunk (offset 9, count 1) accepts an unwrapped single scene object. */
 	const tailTokens = await generateImagePrompts(
@@ -603,7 +608,7 @@ test('planner prevents false wrong-scene-count failures across real 8B reply sha
 		q: 'smiling community harvest',
 		type: 'image',
 		page: 1,
-		index: 1,
+		index: 6,
 		scene: 9
 	});
 });
@@ -725,23 +730,23 @@ test('binary provider failures log upstream diagnostics with a request ID and ke
 });
 
 
-test('image searches accept two results and never expose more than two even from cache', async t => {
+test('image searches expose exactly eight photos and never more even from cache', async t => {
  const calls = fixture(t), e = env();
- const first = await searchPixabay(e, {q:'two photo search', type:'image', per_page:2});
- const second = await searchPixabay(e, {q:'two photo search', type:'image', per_page:3});
- assert.deepEqual(first.hits.map(h => h.id), [1,2]);
+ const first = await searchPixabay(e, {q:'eight photo search', type:'image', per_page:8});
+ const second = await searchPixabay(e, {q:'eight photo search', type:'image', per_page:12});
+ assert.deepEqual(first.hits.map(h => h.id), [1,2,3,4,5,6,7,8]);
  assert.deepEqual(second, first);
  assert.equal(calls.length, 1);
  assert.equal(calls[0].url.searchParams.get('page'), '1');
- assert.equal(calls[0].url.searchParams.get('per_page'), '3');
+ assert.equal(calls[0].url.searchParams.get('per_page'), '12');
 });
 test('scene selections stay on the first page, including old scene tokens', async t => {
  const calls = fixture(t), e = env();
- assert.deepEqual(JSON.parse(sceneSearchToken('flowers', 9).slice(8)), {q:'flowers',page:1,index:1,scene:9});
+ assert.deepEqual(JSON.parse(sceneSearchToken('flowers', 9).slice(8)), {q:'flowers',type:'image',page:1,index:6,scene:9});
  await runImageModel(e, 'pixabay:' + JSON.stringify({q:'legacy flowers', page:4, index:2, type:'image'}));
  const search = calls.find(c => c.url.pathname === '/api/');
  assert.equal(search.url.searchParams.get('page'), '1');
- assert.ok(calls.some(c => c.url.pathname === '/photo/1.png'));
+ assert.ok(calls.some(c => c.url.pathname === '/photo/3.png'));
 });
 test('every search logs normalized keywords and upstream attempts, including failures, without leaking the provider key', async t => {
  const calls = fixture(t, {error: 403}); const originalInfo = console.info, originalError = console.error, originalWarn = console.warn, entries = [];
@@ -786,17 +791,19 @@ test('local metadata cache avoids a subsequent stalled edge-cache lookup', async
  globalThis.caches = {default:{match:async()=>{matches++; if (matches > 1) return new Promise(()=>{}); return undefined},put:async()=>{}}};
  const e = env(), input = {q:'fast local cache flower'};
  await searchPixabay(e,input);
- assert.equal((await promptly(searchPixabay(e,input))).hits.length,2);
+ assert.equal((await promptly(searchPixabay(e,input))).hits.length,8);
  assert.equal(matches,1);
 });
 
-test('media search API defaults to two photos and rejects later pages', async t => {
+test('media search API defaults to eight photos and allows the retry page', async t => {
  fixture(t); const e = env();
  const first = await handlePixabayApi(new Request('https://studio.test/api/media/search?q=rose'), e);
  const body = await first.json();
- assert.equal(first.status, 200); assert.equal(body.page, 1); assert.equal(body.per_page, 2); assert.equal(body.hits.length, 2);
- const later = await handlePixabayApi(new Request('https://studio.test/api/media/search?q=rose&page=2'), e);
- assert.equal(later.status, 400); assert.match((await later.json()).error, /page 1/);
+ assert.equal(first.status, 200); assert.equal(body.page, 1); assert.equal(body.per_page, 8); assert.equal(body.hits.length, 8);
+ const retryPage = await handlePixabayApi(new Request('https://studio.test/api/media/search?q=rose&page=2'), e);
+ assert.equal(retryPage.status, 200); assert.equal((await retryPage.json()).page, 2);
+ const later = await handlePixabayApi(new Request('https://studio.test/api/media/search?q=rose&page=3'), e);
+ assert.equal(later.status, 400); assert.match((await later.json()).error, /pages 1 and 2/);
 });
 
 test('Pixabay metadata fetch uses a supported redirect mode and does not forward the API key to a redirect target', async t => {

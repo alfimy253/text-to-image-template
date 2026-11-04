@@ -210,6 +210,7 @@ test("#261 Quick Batch uses binary images, chunked audio and compact prompts end
 		return json({ success: true, remaining: {} });
 	};
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]")); await tick();
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	const row = w.addBatchRow({ script: "A forest begins. " + "Nature is peaceful. ".repeat(40) + "A forest ends.", minutes: 1 });
 	await w.runBatchRow(row);
 	assert.equal(w.batchRowFinished(row), true); assert.equal(row.images.length, 10);
@@ -228,6 +229,7 @@ test("#261 old-server capabilities preserve legacy UI requests", async (t) => {
 		return json({ success: true, remaining: {} });
 	};
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]")); await tick();
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	await w.requestBatchVoiceover({ script: "Forest", stopRequested: false });
 	assert.equal(calls.filter((url) => url === "/api/voiceover").length, 1);
 	assert.equal(calls.includes("/api/image"), false);
@@ -273,6 +275,7 @@ test("#261 Editor uses binary chunks, single-attempt script requests and compact
 		return json({ success: true, remaining: {} });
 	};
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]")); await tick(); w.addVideoAccordion();
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	const project = w.__VIDEO_PROJECTS ? w.__VIDEO_PROJECTS[0] : null;
 	assert.ok(project, "live project debug hook exists");
 	project.selectedSeoSet = keywords;
@@ -326,6 +329,7 @@ test("#279 Quick Batch asks for voiceover once and reports the worker's verdict"
 		return json({ success: true, remaining: {} });
 	};
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]")); await tick();
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	const row = w.addBatchRow({ script: "Forest", minutes: 1 });
 	await w.runBatchRow(row);
 	assert.equal(bodies.length, 1, "a second request would be a second retry owner");
@@ -345,6 +349,7 @@ test("#261 script cleanup follows its surviving project after accordion renumber
 		return json({ success: true, remaining: {} });
 	};
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]")); await tick();
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	w.addVideoAccordion(); w.addVideoAccordion();
 	const project = w.__VIDEO_PROJECTS[1]; project.selectedSeoSet = keywords;
 	const run = w.runSeoScriptRequest(2, "Forest", 1, "medium");

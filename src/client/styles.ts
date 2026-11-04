@@ -7771,9 +7771,8 @@ export const APP_CSS = `
 			width: 12%;
 		}
 
-		#studio-app .batch-table-edit .batch-col-preview,
-		#studio-app .batch-table-edit .batch-col-export {
-			width: 11.5%;
+		#studio-app .batch-table-edit .batch-col-actions {
+			width: 23%;
 		}
 
 		#studio-app .batch-table-edit td.batch-cell {
@@ -7813,32 +7812,35 @@ export const APP_CSS = `
 			color: #ef4444;
 		}
 
-		/* The table layout's script button: same note pipeline as the accordion. */
-		#studio-app .batch-row-ai {
-			margin-left: auto;
+		/* One Actions cell: Preview, Process Export and Edit icons. */
+		#studio-app .batch-action-icons {
+			display: flex;
+			align-items: center;
+			justify-content: flex-end;
+			flex-wrap: wrap;
+			gap: 6px;
+		}
+
+		#studio-app .batch-action-btn {
 			border: 1px solid var(--t-line, #2e3440);
 			border-radius: 6px;
 			background: transparent;
-			color: var(--t-muted, #9ca3af);
+			color: var(--t-fg, #e5e7eb);
 			cursor: pointer;
-			font-size: 0.72rem;
+			font-size: 0.9rem;
 			line-height: 1;
-			padding: 4px 6px;
+			min-width: 30px;
+			padding: 6px 8px;
 		}
 
-		#studio-app .batch-row-ai:hover {
+		#studio-app .batch-action-btn:hover:not(:disabled) {
 			border-color: var(--t-accent, #6366f1);
 			color: var(--t-accent, #6366f1);
 		}
 
-		#studio-app .batch-row-ai:disabled {
-			opacity: 0.5;
+		#studio-app .batch-action-btn:disabled {
+			opacity: 0.45;
 			cursor: default;
-		}
-
-		/* the delete button keeps its own right edge when the wand is present */
-		#studio-app .batch-row-ai + .batch-row-del {
-			margin-left: 4px;
 		}
 
 		#studio-app .batch-script-input,

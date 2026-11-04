@@ -3,12 +3,21 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { PROGRESSIVE_IMAGE_PIPELINE_JS } from '../src/client/progressive-image-pipeline.ts';
 import { countScriptWords, sceneCountForScript } from '../src/modules/image-prompts.ts';
-import { harness } from './studio-render-harness.mjs';
+import { harness as studioHarness } from './studio-render-harness.mjs';
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 function deferred() { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 const setA = { title:'Garden Guide', headings:['Garden basics'], longTail:'garden flowers', short:['garden','flowers','plants','soil'] };
+
+/* Most of these cases measure one request; the retry ladder has its own suite. */
+function harness() {
+ const h = studioHarness();
+ h.w.__SCRIPT_RETRY_TIMING.maxRetries = 0;
+ h.w.__SCRIPT_RETRY_TIMING.backoffMs = 0;
+ h.w.__SCRIPT_RETRY_TIMING.uiCheckMs = 0;
+ return h;
+}
 
 test('browser and worker count punctuation, emoji, Unicode and subtitle text identically at scene boundaries', () => {
  const context = vm.createContext({}); vm.runInContext(PROGRESSIVE_IMAGE_PIPELINE_JS, context);
@@ -86,7 +95,7 @@ test('script completion starts keyword planning on the surviving project after r
  w.deleteVideoAccordion(1); gate.resolve(); await run;
  const body=await Promise.race([planned.promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error('keyword planning did not start')),2000))]);
  assert.equal(body.script,'A forest has trees and flowers.');
- assert.equal(w.__VIDEO_PROJECTS[0],project); assert.equal(project.imagePromptTarget,6);
+ assert.equal(w.__VIDEO_PROJECTS[0],project); assert.equal(project.imagePromptTarget,12);
 });
 
 test('a deleted project cannot apply a late SEO plan to a replacement accordion', async t => {
@@ -145,8 +154,10 @@ test('editor passes a validated SEO writer result and selected vocabulary into t
  assert.equal(w.__VIDEO_PROJECTS[0]._imageFlowActive,false);
 });
 
-test('permanent script request errors do not retry and report the actual attempt count', async t => {
+test('permanent script request errors are retried seven times without a UI failure', async t => {
  const {w} = harness(); t.after(()=>w.close()); let calls=0;
+ w.__SCRIPT_RETRY_TIMING.maxRetries = 7;
+ w.__SCRIPT_RETRY_TIMING.backoffMs = 0;
  const original=w.fetch; w.fetch=async(input,init)=>{
   if (String(input)==='/api/pipeline-capabilities') return json({singleAttemptScript:false});
   if (String(input)==='/api/script') {calls++; return json({success:false,error:'bad keyword set'},400);}
@@ -154,8 +165,10 @@ test('permanent script request errors do not retry and report the actual attempt
  };
  w.addVideoAccordion(); w.__VIDEO_PROJECTS[0].selectedSeoSet=setA;
  assert.equal(await w.runSeoScriptRequest(1,'garden',1,'medium'),false);
- assert.equal(calls,1);
- assert.match(w.document.getElementById('va-script-status-1').textContent,/Script failed: bad keyword set \(after 1 attempt\)/);
+ assert.equal(calls,8,'one initial write plus seven retries');
+ assert.match(w.document.getElementById('va-script-status-1').textContent,/Writing your SEO script/);
+ assert.doesNotMatch(w.document.getElementById('va-script-status-1').textContent,/failed|error|retry|attempt/i);
+ assert.equal(w.document.getElementById('va-script-box-1').classList.contains('va-script-loading'),true);
 });
 
 test('repeated confirmation cannot start duplicate script writers', async t => {

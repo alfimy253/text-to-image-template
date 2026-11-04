@@ -3,8 +3,13 @@ export interface PixabayEnv {
 	PIXABAY_API_KEY?: string;
 	PIXABAY_RATE_LIMITER?: DurableObjectNamespace;
 }
-export const PIXABAY_PER_PAGE = 3; // Pixabay upstream minimum, including videos.
-export const PIXABAY_IMAGE_RESULTS = 2;
+/* Fixed 12-scene plan: every automatic video searches the same 12 Pixabay results. */
+export const PIXABAY_PER_PAGE = 12; // Upstream results requested; Pixabay minimum is 3.
+export const PIXABAY_IMAGE_RESULTS = 8; // Eight distinct photo scenes.
+export const PIXABAY_VIDEO_RESULTS = 4; // Four distinct video scenes.
+export const PIXABAY_MAX_PAGES = 2; // Second page supplies further unique filenames on retries.
+/** The four fixed, evenly spaced zero-based video slots in the 12-scene plan. */
+export const PIXABAY_VIDEO_POSITIONS: readonly number[] = [1, 4, 7, 10];
 export const PIXABAY_CACHE_SECONDS = 86400;
 export const PIXABAY_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const PIXABAY_MAX_VIDEO_BYTES = 16 * 1024 * 1024;
@@ -131,10 +136,10 @@ function edgeCache(): Cache | undefined {
 const localSearch = new Map<string, { until: number; data: SearchResult }>();
 const inFlight = new Map<string, Promise<SearchResult>>();
 const budgets = new Map<string, { start: number; calls: number; until: number }>();
-export interface SearchResult { provider: "pixabay"; per_page: 2 | 3; page: number; totalHits: number; hits: StockHit[] }
+export interface SearchResult { provider: "pixabay"; per_page: number; page: number; totalHits: number; hits: StockHit[] }
 export interface SearchInput { q?: string; type?: MediaType; page?: number; per_page?: number; orientation?: string; id?: number }
 
-/** Photos expose at most two results; Pixabay itself requires at least three upstream. */
+/** The fixed plan exposes eight photos or four clips from twelve upstream results. */
 export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?: AbortSignal, trace?: PixabayTrace): Promise<SearchResult> {
 	if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
 	const key = keyFor(env);
@@ -143,16 +148,17 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 	const q = normalizeSearchQuery(input.q);
 	const type = input.type || "image";
 	if (type !== "image" && type !== "video") throw new PixabayError("type must be image or video", 400);
-	const resultLimit = type === "image" ? PIXABAY_IMAGE_RESULTS : PIXABAY_PER_PAGE;
-	// Accept the former image page size for existing API clients, but return only two.
-	if (input.per_page !== undefined && input.per_page !== resultLimit && !(type === "image" && input.per_page === PIXABAY_PER_PAGE)) throw new PixabayError("Invalid per_page for media type", 400);
+	const resultLimit = type === "image" ? PIXABAY_IMAGE_RESULTS : PIXABAY_VIDEO_RESULTS;
+	// Legacy clients may still ask for 3; the fixed plan uses 12 upstream results and returns 8/4 scenes.
+	const allowedPerPage = [3, PIXABAY_PER_PAGE, resultLimit];
+	if (input.per_page !== undefined && allowedPerPage.indexOf(Number(input.per_page)) === -1) throw new PixabayError("Invalid per_page for media type", 400);
 	const page = input.page ?? 1;
-	if (page !== 1) throw new PixabayError("Only page 1 is available", 400);
+	if (page !== 1 && page !== 2) throw new PixabayError("Only pages 1 and 2 are available", 400);
 	if (input.id !== undefined && (!Number.isSafeInteger(input.id) || input.id < 1)) throw new PixabayError("Invalid Pixabay ID", 400);
 	if (!q && !input.id) throw new PixabayError("Enter Pixabay search terms", 400);
 	const orientation = input.orientation === "portrait" ? "vertical" : input.orientation === "landscape" ? "horizontal" : "all";
 	traceLog("info", "search.keywords", trace, { type, page, orientation, keywords: redactProviderText(q, key) });
-	const params = new URLSearchParams({ q, per_page: "3", page: String(page), safesearch: "true" });
+	const params = new URLSearchParams({ q, per_page: String(PIXABAY_PER_PAGE), page: String(page), safesearch: "true" });
 	if (input.id) params.set("id", String(input.id));
 	if (type === "image") { params.set("image_type", "photo"); params.set("orientation", orientation); }
 	const fingerprint = await digest(key);
@@ -259,7 +265,7 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 				...(type === "video" ? { duration } : {}) });
 			if (hits.length >= resultLimit) break;
 		}
-		const data: SearchResult = { provider: "pixabay", per_page: resultLimit as 2 | 3, page, totalHits: Number(raw.totalHits) || 0, hits };
+		const data: SearchResult = { provider: "pixabay", per_page: resultLimit, page, totalHits: Number(raw.totalHits) || 0, hits };
 		traceLog("info", "provider-search.completed", trace, { status: response.status, totalHits: data.totalHits, acceptedHits: hits.length, type });
 		/*
 		 * Deep debug: a zero-hit answer used to be cached for a full 24 hours,
@@ -405,8 +411,20 @@ export async function reservePixabayBudget(
 	}
 	return { ok: true };
 }
+export function imageScenePositions(total: number = PIXABAY_PER_PAGE): number[] {
+	const positions = [];
+	for (let scene = 0; scene < total; scene++) {
+		if (PIXABAY_VIDEO_POSITIONS.indexOf(scene) === -1) positions.push(scene);
+	}
+	return positions;
+}
+
 export function sceneSearchToken(q: string, scene: number): string {
-	return "pixabay:" + JSON.stringify({ q: normalizeSearchQuery(q), page: 1, index: scene % PIXABAY_IMAGE_RESULTS, scene });
+	const normalized = ((Number(scene) % PIXABAY_PER_PAGE) + PIXABAY_PER_PAGE) % PIXABAY_PER_PAGE;
+	const imagePositions = imageScenePositions(PIXABAY_PER_PAGE);
+	const ordinal = imagePositions.indexOf(normalized);
+	return "pixabay:" + JSON.stringify({ q: normalizeSearchQuery(q), type: "image", page: 1,
+		index: ordinal >= 0 ? ordinal : normalized % PIXABAY_IMAGE_RESULTS, scene });
 }
 export async function pixabaySceneImage(env: PixabayEnv, token: string, options: { signal?: AbortSignal; width?: number; height?: number; trace?: PixabayTrace } = {}) {
 	let q = token, page = 1, index = 0, type: MediaType = "image";
@@ -422,23 +440,23 @@ export async function pixabaySceneImage(env: PixabayEnv, token: string, options:
 			 * saved projects write. Defaults keep those tokens usable; the
 			 * bounds check below still rejects real nonsense.
 			 */
-			page = Number.isInteger(t.page) && t.page > 0 ? t.page : 1;
+			/* Retired multi-page tokens fall back to the first page; page 2 is the retry page. */
+			page = Number.isInteger(t.page) && t.page > 0 && t.page <= PIXABAY_MAX_PAGES ? t.page : 1;
 			index = Number.isInteger(t.index) && t.index >= 0 ? t.index : 0;
 		}
 		catch { throw new PixabayError("Invalid stock scene selection", 400); }
 	}
-	if (!["image", "video"].includes(type) || typeof q !== "string" || !Number.isInteger(index) || index < 0 || index > 2 || !Number.isInteger(page) || page < 1) throw new PixabayError("Invalid stock scene selection", 400);
-	// Old saved scene tokens may refer to later pages or the third photo.
-	page = 1;
-	if (type === "image") index %= PIXABAY_IMAGE_RESULTS;
+	const resultLimit = type === "video" ? PIXABAY_VIDEO_RESULTS : PIXABAY_IMAGE_RESULTS;
+	if (!["image", "video"].includes(type) || typeof q !== "string" || !Number.isInteger(index) || index < 0 || index >= resultLimit || !Number.isInteger(page) || page < 1 || page > PIXABAY_MAX_PAGES) throw new PixabayError("Invalid stock scene selection", 400);
 	traceLog("info", "scene.selection", options.trace, { mediaType: type, page, index, queryLength: q.length, width: options.width || 0, height: options.height || 0 });
-	const results = await searchPixabay(env, { q, page, type, per_page: type === "image" ? PIXABAY_IMAGE_RESULTS : PIXABAY_PER_PAGE,
+	const results = await searchPixabay(env, { q, page, type, per_page: PIXABAY_PER_PAGE,
 		orientation: (options.height || 0) > (options.width || 0) ? "portrait" : "landscape" }, options.signal, options.trace);
 	const hit = results.hits[index] || results.hits[0];
 	if (!hit) { traceLog("error", "scene.no-hit", options.trace, { mediaType: type, page, index, totalHits: results.totalHits }); throw new PixabayError("No suitable Pixabay media for this scene. Try different search terms or upload media.", 404); }
 	traceLog("info", "scene.hit-selected", options.trace, { mediaType: type, assetId: hit.id, page, index });
 	const image = await downloadPixabay(hit, options.signal, options.trace);
-	return { ...image, source: { provider: "pixabay", id: hit.id, pageURL: hit.pageURL, user: hit.user, type, duration: hit.duration } };
+	return { ...image, source: { provider: "pixabay", id: hit.id, pageURL: hit.pageURL, user: hit.user,
+		filename: "pixabay-" + String(hit.id) + (type === "video" ? ".mp4" : ".jpg"), type, duration: hit.duration } };
 }
 export async function handlePixabayApi(request: Request, env: PixabayEnv): Promise<Response> {
 	const u = new URL(request.url);

@@ -121,8 +121,17 @@ test('quick batch and editor exports both pass their cues to the shared renderer
     assert.equal(project.status, 'done');
     assert.deepEqual(received[0], plain(cues));
     received = [];
-    const rowClip = w.document.createElement('video');
-    const row = w.addBatchRow({ script, mp3: new w.Blob(['voice']), images: [{}], animated: true, subtitles: cues, slides: [{ id: 'slide', type: 'mp4', videoEl: rowClip, img: rowClip, duration: 2 }] });
+    const clipScenes = [1, 4, 7, 10];
+    const rowImages = Array.from({ length: 12 }, (_, i) => {
+      const clip = clipScenes.includes(i);
+      return { blob: new w.Blob([i], { type: clip ? 'video/mp4' : 'image/png' }), stockFilename: 'media-' + i + (clip ? '.mp4' : '.jpg') };
+    });
+    const rowSlides = Array.from({ length: 12 }, (_, i) => {
+      const clip = clipScenes.includes(i);
+      const el = w.document.createElement(clip ? 'video' : 'img');
+      return { id: 'slide-' + i, type: clip ? 'mp4' : 'image', videoEl: el, img: el, duration: 2 };
+    });
+    const row = w.addBatchRow({ script, mp3: new w.Blob(['voice']), images: rowImages, animated: true, subtitles: cues, slides: rowSlides });
     await w.exportBatchRow(row.id);
     assert.equal(row.stage, 'done');
     assert.deepEqual(received[0], plain(cues));

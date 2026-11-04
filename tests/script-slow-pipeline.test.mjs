@@ -498,6 +498,11 @@ function makeApp() {
 	w.URL.revokeObjectURL = () => {};
 	w.__PLAN_MODE = "freemium";
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* This guard measures one note request, not the browser retry ladder. */
+	w.__SCRIPT_RETRY_TIMING.maxRetries = 0;
+	w.__SCRIPT_RETRY_TIMING.backoffMs = 0;
+	w.__SCRIPT_RETRY_TIMING.uiCheckMs = 0;
 	return { dom, w };
 }
 
@@ -555,5 +560,5 @@ test("S3 client: three busy-store polls end the flow as retryable, and never as 
 	assert.equal(polls, 3, "the single request gives up after three busy polls");
 	assert.ok(elapsed < 12000, `the flow ends on failed polls, not on the stall guard (${elapsed} ms)`);
 	assert.equal(w.__VIDEO_PROJECTS[0].script || "", "", "no script was invented");
-	assert.match(w.document.getElementById("va-script-status-1").textContent, /Script failed:/);
+	assert.match(w.document.getElementById("va-script-status-1").textContent, /Writing your SEO script/);
 });
