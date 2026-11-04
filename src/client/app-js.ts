@@ -7364,12 +7364,48 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	let studioLayout =
 		"editor";
 
+	function timelineEditorRouteRequested() {
+		try {
+			return new URLSearchParams(window.location.search || "").get("layout") === "timeline";
+		} catch (error) { return false; }
+	}
+
+	function activateTimelineEditorLayout() {
+		const studioApp = document.getElementById("studio-app");
+		const tableView = document.getElementById("view-table");
+		const editorView = document.getElementById("view-editor");
+		const timelineView = document.getElementById("view-timeline");
+		const landingPage = document.getElementById("landing-page");
+		if (landingPage) landingPage.hidden = true;
+		if (studioApp) {
+			studioApp.hidden = false;
+			studioApp.classList.add("timeline-mode");
+		}
+		if (document.body) document.body.classList.add("timeline-editor-page");
+		if (tableView) tableView.classList.remove("active");
+		if (editorView) editorView.classList.remove("active");
+		if (timelineView) timelineView.classList.add("active");
+		const viewSwitch = document.getElementById("view-switch");
+		const topGenerate = document.getElementById("top-generate");
+		const storageAlert = document.getElementById("pipeline-storage-alert");
+		if (viewSwitch) viewSwitch.hidden = true;
+		if (topGenerate) topGenerate.hidden = true;
+		if (storageAlert) storageAlert.hidden = true;
+	}
+
 	function setStudioLayout(name) {
 
 		studioLayout =
 			name === "table"
 				? "table"
 				: "editor";
+
+		const studioApp = document.getElementById("studio-app");
+		if (studioApp) studioApp.classList.remove("timeline-mode");
+		if (document.body) document.body.classList.remove("timeline-editor-page");
+
+		const timelineView = document.getElementById("view-timeline");
+		if (timelineView) timelineView.classList.remove("active");
 
 		const tableView =
 			document.getElementById(
@@ -7488,7 +7524,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	//             or portrait 9:16 (passed to both image calls)
 	//   column 6  Actions: Preview, Process Export and Edit icons. Preview
 	//             and Process Export stay pending until the row finishes;
-	//             Edit opens a new page with transition-only project JSON.
+	//             Edit opens the client-only Timeline Editor with row timing.
 	//
 	// The \u2726 Generate button at the TOP RIGHT of the table runs every
 	// row that has a script and is NOT finished yet. A row without one
@@ -9123,6 +9159,118 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
+	function batchTimelineState(row) {
+		const images = Array.isArray(row && row.images) ? row.images : [];
+		const slides = Array.isArray(row && row.slides) ? row.slides : [];
+		const prompts = Array.isArray(row && row.prompts) ? row.prompts : [];
+		const cues = Array.isArray(row && row.subtitles) ? row.subtitles : [];
+		const requestedMinutes = Number(row && row.minutes) > 0 ? Number(row.minutes) : 1;
+		const slideSpan = slides.reduce(function (sum, slide) {
+			return sum + slideDurationSec(slide);
+		}, 0);
+		const voiceSpan = Number(row && row.audio && row.audio.duration) || 0;
+		let durationSec = voiceSpan || slideSpan || requestedMinutes * 60;
+		durationSec = Math.max(1, Math.min(3600, Number(durationSec) || 60));
+		const defaultSceneSpan = durationSec / AUTO_MEDIA_TOTAL;
+		const scenes = [];
+		const mediaItems = [];
+		const visualItems = [];
+		let cursor = 0;
+
+		for (let index = 0; index < AUTO_MEDIA_TOTAL; index++) {
+			const slide = slides[index] || null;
+			const media = images.find(function (candidate) { return Number(candidate && candidate.index) === index; }) || null;
+			const sceneSpan = slide ? slideDurationSec(slide) : defaultSceneSpan;
+			const startSec = cursor;
+			const endSec = startSec + Math.max(0.25, sceneSpan);
+			const sceneId = "scene-" + (index + 1);
+			const blobType = String(media && media.blob && media.blob.type || "");
+			const mediaType = blobType === "video/mp4" || (slide && slide.type === "mp4")
+				? "video"
+				: blobType === "image/gif" ? "gif" : "image";
+			const assetId = media ? "scene-" + (index + 1) : "";
+			const scene = {
+				id: sceneId,
+				index: index,
+				name: "Scene " + (index + 1),
+				startSec: startSec,
+				durationSec: Math.max(0.25, sceneSpan),
+				mediaType: mediaType,
+				mediaAssetId: assetId,
+				mediaName: String(media && (media.stockFilename || media.blob && media.blob.stockFilename) || ""),
+				mediaSource: media && media.stockSource && media.stockSource.provider ? String(media.stockSource.provider) : (media ? "Pixabay" : "pending"),
+				prompt: String(prompts[index] || ""),
+				elements: []
+			};
+			mediaItems.push({
+				id: "media-" + (index + 1),
+				kind: "media",
+				sceneId: sceneId,
+				assetId: assetId,
+				label: scene.mediaName || (scene.name + " · " + (media ? mediaType : "media pending")),
+				mediaType: mediaType,
+				mediaSource: scene.mediaSource,
+				startSec: startSec,
+				durationSec: Math.max(0.25, sceneSpan),
+				trimStartSec: 0,
+				fit: "cover",
+				visible: true
+			});
+
+			for (let cueIndex = 0; cueIndex < cues.length; cueIndex++) {
+				const cue = cues[cueIndex] || {};
+				const cueStart = Math.max(0, Number(cue.startMs) || 0) / 1000;
+				const cueEndMs = Number(cue.endMs);
+				const cueEnd = Number.isFinite(cueEndMs) && cueEndMs > 0 ? cueEndMs / 1000 : cueStart + 0.25;
+				const visibleStart = Math.max(startSec, cueStart);
+				const visibleEnd = Math.min(endSec, cueEnd);
+				if (visibleEnd <= visibleStart) continue;
+				const element = {
+					id: sceneId + "-caption-" + (cueIndex + 1),
+					kind: "text",
+					type: "text",
+					name: "Caption " + (cueIndex + 1),
+					text: String(cue.text || ""),
+					sceneId: sceneId,
+					startSec: visibleStart,
+					durationSec: Math.max(0.25, visibleEnd - visibleStart),
+					x: 50,
+					y: 78,
+					fontSize: 28,
+					color: "#ffffff",
+					font: "sans",
+					align: "center",
+					visible: true
+				};
+				scene.elements.push(Object.assign({}, element));
+				visualItems.push(element);
+			}
+			scenes.push(scene);
+			cursor = endSec;
+		}
+
+		durationSec = Math.max(durationSec, cursor);
+		return {
+			version: 3,
+			durationSec: Math.min(3600, durationSec),
+			playheadSec: 0,
+			soundExpanded: false,
+			scenes: scenes,
+			tracks: [
+				{
+					id: "voiceover", kind: "audio", label: "Voiceover", expanded: true,
+					items: row && row.mp3 ? [{ id: "audio-voiceover", kind: "audio", assetId: "voiceover", label: "Generated voiceover", startSec: 0, durationSec: durationSec, volume: 1, muted: false }] : []
+				},
+				{ id: "sound-fx", kind: "audio", label: "Sound effects", expanded: true, items: [] },
+				{ id: "background-music", kind: "audio", label: "Background music", expanded: true, items: [] },
+				{ id: "background-media", kind: "media", label: "Pixabay & uploaded media", expanded: true, items: mediaItems },
+				{ id: "visual-1", kind: "visual", label: "Text & graphics 1", expanded: true, items: visualItems }
+			],
+			selectedTrackId: "background-media",
+			selectedItemId: mediaItems.length ? mediaItems[0].id : ""
+		};
+	}
+
 	function batchProjectJson(row) {
 		if (!row) return null;
 		const script = String(row.script || "");
@@ -9142,7 +9290,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				resolution: row.resolution || "",
 				orientation: row.orientation || "",
 				quality: row.quality || "balanced"
-			}
+			},
+			timelineState: batchTimelineState(row)
 		};
 	}
 
@@ -9150,10 +9299,34 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const payload = batchProjectJson(row);
 		if (!payload) return null;
 		const key = "edit-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
-		const targetPageId = pipelineManagementStore.freshPageId();
+		/* Keep the timeline project id stable for this Quick Batch row so its local timing survives reopen/reload. */
+		const targetPageId = ("timeline-" + String(pipelineManagementStore.pageId || "local") + "-row-" + String(row.id)).replace(/[^a-zA-Z0-9_-]/g, "");
 		payload.sourcePageId = pipelineManagementStore.pageId;
 		payload.targetPageId = targetPageId;
 		payload.basicSettings.vid = row.vid || pipelineManagementStore.pageId + "-row-" + String(row.id);
+		/* Large media blobs travel browser-to-browser through IndexedDB, never through localStorage or a URL. */
+		try {
+			const assetTransfer = {
+				voiceover: row.mp3 || null,
+				assets: (Array.isArray(row.images) ? row.images : []).map(function (media) {
+					const sceneIndex = Number(media && media.index);
+					return {
+						id: "scene-" + (Number.isInteger(sceneIndex) && sceneIndex >= 0 ? sceneIndex + 1 : 1),
+						blob: media && media.blob || null,
+						name: String(media && (media.stockFilename || media.blob && media.blob.stockFilename) || ""),
+						type: String(media && media.blob && media.blob.type || ""),
+						source: media && media.stockSource || null
+					};
+				}).filter(function (asset) { return Boolean(asset.blob); })
+			};
+			if (window.__TIMELINE_EDITOR__ && typeof window.__TIMELINE_EDITOR__.storeProjectAssets === "function") {
+				const savingAssets = window.__TIMELINE_EDITOR__.storeProjectAssets(targetPageId, assetTransfer);
+				if (savingAssets && typeof savingAssets.then === "function") {
+					savingAssets.then(function (result) { window.__TIMELINE_ASSET_SAVE__ = result; })
+						.catch(function (error) { window.__TIMELINE_ASSET_SAVE__ = { ok: false, reason: String(error && error.message || error) }; });
+				}
+			}
+		} catch (assetError) { window.__TIMELINE_ASSET_SAVE__ = { ok: false, reason: String(assetError && assetError.message || assetError) }; }
 		try {
 			window.localStorage.setItem(MEDIA_TRANSITION_STORAGE_PREFIX + key, JSON.stringify(payload));
 			window.document.cookie = "ytvs_transition_project_" + key.replace(/[^a-zA-Z0-9_-]/g, "_") +
@@ -9168,20 +9341,20 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		window.__BATCH_EDIT_URL__ = "";
 		persistPipelineManagementState("quick-batch-edit-handoff");
 		/*
-		 * Session 331: the URL is short and carries only a page id + handoff key.
-		 * The full project lives in shared localStorage; no noopener child object
-		 * and no giant projectJson query are needed.
+		 * Session 331: the URL is short and carries only the timeline layout,
+		 * target page id and handoff key. Timing metadata lives in localStorage;
+		 * large media blobs use browser IndexedDB, never a query string.
 		 */
 		let href = "";
 		try {
 			const url = new URL(window.location.href);
 			url.searchParams.delete("projectJson");
-			url.searchParams.set("layout", "editor");
+			url.searchParams.set("layout", "timeline");
 			url.searchParams.set("pipelinePage", targetPageId);
 			url.searchParams.set("projectEdit", key);
 			href = url.pathname + url.search + url.hash;
 		} catch (urlError) {
-			href = window.location.pathname + "?layout=editor&pipelinePage=" + encodeURIComponent(targetPageId) +
+			href = window.location.pathname + "?layout=timeline&pipelinePage=" + encodeURIComponent(targetPageId) +
 				"&projectEdit=" + encodeURIComponent(key);
 		}
 		window.__BATCH_EDIT_URL__ = href;
@@ -9195,7 +9368,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const id = escapeHTML(row.id);
 		if (kind === "edit") {
 			return '<button type="button" class="upload-btn small batch-live batch-action-btn" data-batch-action="edit" data-batch-row="' +
-				id + '" title="Edit in a new page" aria-label="Edit">✎</button>';
+				id + '" title="Edit timing in the new timeline editor" aria-label="Open timeline editor">✎</button>';
 		}
 		if (!batchRowFinished(row)) {
 			return kind === "preview"
@@ -23333,10 +23506,16 @@ async function retryImagePromptFlow(n) {
 	}
 
 	function applyTransitionProject() {
+		const timelineMode = timelineEditorRouteRequested();
+		if (timelineMode) activateTimelineEditorLayout();
 		const payload = readTransitionProjectPayload();
 		if (!payload) return null;
 		window.__TRANSITION_PROJECT__ = payload;
 		window.__BATCH_EDIT_PROJECT__ = payload;
+		if (timelineMode) {
+			window.__TIMELINE_PROJECT__ = payload;
+			return payload;
+		}
 		try { setStudioLayout("editor"); } catch (layoutError) { }
 		if (!videoProjects.length && typeof addVideoAccordion === "function") addVideoAccordion();
 		const project = videoProjects[0];
@@ -23366,22 +23545,28 @@ async function retryImagePromptFlow(n) {
 			try { setVaUploadEnabled(n, true); } catch (uploadError) { }
 			const status = document.getElementById("va-script-status-" + n);
 			if (status) status.textContent = "Project settings loaded from Quick Batch.";
-			persistPipelineManagementState("transition-project-applied");
+			if (!timelineMode) persistPipelineManagementState("transition-project-applied");
 		}
 		return payload;
 	}
 
-	initVideoStudio();
-	bindStudioShell();
-	restorePipelineManagementState();
-	applyTransitionProject();
-	bindLandingActions();
-	initAuth();
-	persistPipelineManagementState("startup");
-	window.addEventListener("storage", function (event) {
-		if (event && event.key === pipelineManagementStore.localStorageKey) restorePipelineManagementState();
-	});
-	window.addEventListener("beforeunload", function () { persistPipelineManagementState("beforeunload"); });
+	const timelinePage = timelineEditorRouteRequested();
+	if (timelinePage) {
+		/* The timeline is a standalone client layout: do not bind or restore the pipeline/video-studio shell. */
+		applyTransitionProject();
+	} else {
+		initVideoStudio();
+		bindStudioShell();
+		restorePipelineManagementState();
+		applyTransitionProject();
+		bindLandingActions();
+		initAuth();
+		persistPipelineManagementState("startup");
+		window.addEventListener("storage", function (event) {
+			if (event && event.key === pipelineManagementStore.localStorageKey) restorePipelineManagementState();
+		});
+		window.addEventListener("beforeunload", function () { persistPipelineManagementState("beforeunload"); });
+	}
 
 	async function generateMP4() {
 

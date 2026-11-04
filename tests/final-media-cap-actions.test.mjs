@@ -123,6 +123,11 @@ test("Edit opens a new page with transition-only basic settings and no AI enhanc
 		resolution: "720p",
 		orientation: "landscape"
 	});
+	row.images = Array.from({ length: 12 }, (_, index) => ({
+		index,
+		blob: { type: index === 3 ? "video/mp4" : "image/jpeg", stockFilename: "scene-" + (index + 1) },
+		stockFilename: "scene-" + (index + 1)
+	}));
 	const tr = w.document.querySelector('[data-batch-row="' + row.id + '"]');
 	assert.ok(tr, "the row is rendered");
 	assert.equal(tr.querySelector("[data-batch-generate]"), null, "AI enhancer button is gone");
@@ -131,7 +136,7 @@ test("Edit opens a new page with transition-only basic settings and no AI enhanc
 	assert.ok(actions, "one Actions cell replaces the Preview/Export cells");
 	assert.match(actions.textContent, /Preview Here/);
 	tr.querySelector('[data-batch-action="edit"]').click();
-	assert.match(opened, /layout=editor/);
+	assert.match(opened, /layout=timeline/);
 	assert.match(opened, /pipelinePage=/);
 	assert.match(opened, /projectEdit=/);
 	assert.doesNotMatch(opened, /projectJson=/, "the full project no longer rides in the URL");
@@ -139,8 +144,16 @@ test("Edit opens a new page with transition-only basic settings and no AI enhanc
 	assert.equal(w.__BATCH_EDIT_PROJECT__.transitionOnly, true);
 	assert.equal(w.__BATCH_EDIT_PROJECT__.source, "quick-batch-table-edit");
 	assert.ok(w.__BATCH_EDIT_PROJECT__.sourcePageId, "the source page id is recorded");
-	assert.ok(w.__BATCH_EDIT_PROJECT__.targetPageId, "the new tab receives a fresh page id");
+	assert.equal(w.__BATCH_EDIT_PROJECT__.targetPageId, "timeline-" + w.__PIPELINE_MANAGEMENT_STORE__.pageId + "-row-" + String(row.id), "the timing project id is stable per Quick Batch row");
 	assert.ok(w.__BATCH_EDIT_PROJECT__.basicSettings.vid, "the drafted row has a page-scoped vid");
+	assert.equal(w.__BATCH_EDIT_PROJECT__.timelineState.scenes.length, 12, "handoff includes one timing record per scene");
+	assert.deepEqual(Array.from(w.__BATCH_EDIT_PROJECT__.timelineState.tracks, (track) => track.kind), ["audio", "audio", "audio", "media", "visual"]);
+	assert.equal(w.__BATCH_EDIT_PROJECT__.timelineState.soundExpanded, false, "Soundtrack starts collapsed");
+	const mediaTrack = w.__BATCH_EDIT_PROJECT__.timelineState.tracks.find((track) => track.kind === "media");
+	assert.equal(mediaTrack.items.length, 12, "the 12 Quick Batch media slots are retained in the timeline");
+	assert.deepEqual(Array.from(mediaTrack.items, (item) => item.assetId), Array.from({ length: 12 }, (_, index) => "scene-" + (index + 1)));
+	assert.equal(mediaTrack.items[3].mediaType, "video", "MP4 scene metadata survives the handoff");
+	assert.equal(w.__BATCH_EDIT_PROJECT__.timelineState.scenes[0].durationSec, 15, "scene durations follow the requested three-minute draft");
 	assert.equal(w.__BATCH_EDIT_PROJECT__.basicSettings.script, row.script);
 	assert.equal(w.__BATCH_EDIT_PROJECT__.basicSettings.style, "Neon Night");
 	assert.equal(w.__BATCH_EDIT_PROJECT__.basicSettings.minutes, 3);

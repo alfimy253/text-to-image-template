@@ -21,6 +21,7 @@ import { APP_CSS } from "./client/styles";
 import { APP_JS } from "./client/app-js";
 import { API_ROTATION_JS } from "./client/api-rotation";
 import { TEMPLATE_COMPOSER_JS } from "./client/template-composer-js";
+import { TIMELINE_EDITOR_JS } from "./client/timeline-editor";
 
 let CACHED_HTML: string | null =
 	null;
@@ -48,6 +49,10 @@ export function createHTML(): string {
 			.replace(
 				"__TEMPLATE_COMPOSER_JS__",
 				() => TEMPLATE_COMPOSER_JS
+			)
+			.replace(
+				"__TIMELINE_EDITOR_JS__",
+				() => TIMELINE_EDITOR_JS
 			)
 			.replace(
 				"__PROMPTS_JSON__",
