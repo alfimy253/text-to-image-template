@@ -10,7 +10,7 @@ function pipeline() {
 	vm.runInContext(PROGRESSIVE_IMAGE_PIPELINE_JS, context);
 	return context.runProgressiveImagePipeline;
 }
-test("#275 the browser's scene target matches the Worker's word-count rule exactly", () => {
+test("the browser's scene target matches the Worker's fixed 12-scene rule exactly", () => {
 	const context = vm.createContext({});
 	vm.runInContext(PROGRESSIVE_IMAGE_PIPELINE_JS, context);
 	const script = (words) => Array.from({ length: words }, (_, i) => "word" + i).join(" ") + ".";
@@ -21,12 +21,12 @@ test("#275 the browser's scene target matches the Worker's word-count rule exact
 		assert.equal(context.imageSceneTarget(text, 3), sceneCountForScript(text), "3-minute parity for " + words);
 		assert.equal(context.imageSceneTarget(text, 6), sceneCountForScript(text), "6-minute parity for " + words);
 	}
-	/* The documented brackets: <=130 -> 6, <=240 -> 8, <=500 -> 10, longer -> 10. */
-	for (const [words, scenes] of [[130, 6], [131, 8], [240, 8], [241, 10], [500, 10], [501, 10]]) {
+	/* FINAL MEDIA CAP: no word-count brackets; every length plans 12 scenes. */
+	for (const [words, scenes] of [[130, 12], [131, 12], [240, 12], [241, 12], [500, 12], [501, 12]]) {
 		assert.equal(context.imageSceneTarget(script(words), 1), scenes, words + " words -> " + scenes + " scenes");
 	}
-	/* An empty script still plans the smallest bracket, and SRT cue numbers/timestamps never count. */
-	assert.equal(context.imageSceneTarget("", 1), 6);
+	/* An empty script still plans the fixed 12, and SRT cue numbers/timestamps never count. */
+	assert.equal(context.imageSceneTarget("", 1), 12);
 	assert.equal(context.imageScriptWordCount("1\n00:00:01,000 --> 00:00:03,000\nHello there friend\n\n2\n00:00:04,000 --> 00:00:06,000\nGood bye"), 5);
 });
 
@@ -38,7 +38,7 @@ function deferred() {
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const scenes = (batch) => Array.from({ length: batch.count }, (_, i) => `Scene ${batch.offset + i}`);
 
-for (const total of [10, 14, 20]) {
+for (const total of [12]) {
 	test(`browser pipeline covers ${total} scenes in chunks of at most three`, async () => {
 		const requests = [], rendered = [];
 		const result = await pipeline()({ total, isCancelled: () => false,
@@ -242,25 +242,25 @@ function req(batch, extra = {}) {
 		body: JSON.stringify({ topic: "forest", minutes: 1, style: "Documentary", batch, ...extra }) });
 }
 
-test("Worker batch is stateless, calls AI once, includes scene range and preserves style/frame guard", async () => {
+test("Worker batch is stateless, plans three of the fixed 12 stock scenes and preserves the frame guard", async () => {
 	const calls = [];
 	const env = { AI: { run: async (model, input) => {
 		calls.push({ model, input });
-		return { response: { prompts: ["A forest stream in morning light", "A hillside tree in mist"] } };
+		const slots = JSON.parse(input.prompt.match(/Requested slots of \d+ total: ([^\n]+)/)[1]);
+		return { response: { scenes: slots.map((slot) => ({ type: slot.type, keywords: "forest stream " + slot.scene })) } };
 	} } };
 	const response = await handleGenerateImagePrompts(req({ offset: 3, count: 3, previous: ["opening forest view"] },
 		{ resolution: 720, orientation: "portrait" }), env, "primary");
 	const data = await response.json();
 	assert.equal(response.status, 200);
-	assert.equal(calls.length, 1, "no server top-up even when response is short");
-	assert.equal(data.count, 2);
-	assert.equal(data.expectedCount, 10);
-	assert.deepEqual(data.batch, { offset: 3, requested: 3, nextOffset: 5 });
-	assert.match(calls[0].input.prompt, /scenes 4 through 6 of 10/);
+	assert.equal(calls.length, 1, "one stateless planner call for the requested chunk");
+	assert.equal(data.count, 3);
+	assert.equal(data.expectedCount, 12);
+	assert.deepEqual(data.batch, { offset: 3, requested: 3, nextOffset: 6 });
+	assert.match(calls[0].input.prompt, /Requested slots of 12 total/);
 	assert.match(calls[0].input.prompt, /opening forest view/);
-	assert.match(calls[0].input.prompt, /PORTRAIT/);
-	assert.equal(calls[0].input.max_tokens, 1800);
-	assert.ok(data.prompts.every((p) => p.length <= IMAGE_PROMPT_MAX_CHARS && p.includes("Visual style: Documentary")));
+	assert.equal(calls[0].input.max_tokens, 2048);
+	assert.ok(data.prompts.every((p) => p.startsWith("pixabay:") && p.length <= IMAGE_PROMPT_MAX_CHARS));
 });
 
 /*
@@ -329,7 +329,7 @@ test("#279 a cancellation is never retried by the worker ladder", async () => {
 test("Worker rejects malformed or unbounded batch inputs before any inference", async () => {
 	const env = { AI: { run: async () => assert.fail("must not call AI") } };
 	for (const batch of [null, [], {}, { count: 4, offset: 0 }, { count: 0, offset: 0 },
-		{ count: 3, offset: 9 }, { count: 1, offset: -1 }, { count: 1, offset: 10 },
+		{ count: 3, offset: 10 }, { count: 1, offset: -1 }, { count: 1, offset: 12 },
 		{ count: 3, offset: 0, attempt: 3 }, { count: "3", offset: 0 }]) {
 		assert.equal((await handleGenerateImagePrompts(req(batch), env, "primary")).status, 400);
 	}

@@ -9,7 +9,7 @@
 > templates are not removed by this decision. See the authoritative
 > [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md).
 
-## Governing media rule — whole-script Pixabay keywords + two clips (2026-10-29)
+## Governing media rule — whole-script Pixabay keywords + four clips (2026-10-29)
 
 This addendum supersedes the earlier deterministic-photo-only pipeline and manual editor
 Pixabay picker. **Text LLM planning is enabled for search keywords; AI image generation is
@@ -26,21 +26,15 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
   negative prompts are rejected by `cleanSceneKeywords()`. The instruction says "write search
   terms, NOT image prompts" and offers the script's own **long-tail + short SEO keywords** as
   candidate search vocabulary.
-- **Scene count comes from the script WORD COUNT** (Session #275), computed once by
-  `sceneCountForScript()` / `countScriptWords()` and mirrored by the browser's
-  `imageSceneTarget()`: **≤130 words → 6 scenes**, **>130 and ≤240 → 8 scenes**,
-  **>240 and ≤500 → 10 scenes**, **>500 words → 10 scenes** (the rule set ends at ten).
-  The older 10/14/20-by-duration tiers survive only as a legacy ceiling in
-  `imagePromptCountForMinutes()` and never raise the word-count total. Cue numbers, WEBVTT
-  markers and `-->` timestamps are not words. A caller may request a **smaller** validated
-  `sceneTotal` (the editor's free gallery room, minimum four) but never a larger one.
-- Every LLM instruction explicitly requires **exactly two Pixabay video scenes in the complete
-  video**. Reserved zero-based slots are `1` and `total - 2`; the server enforces types across
-  chunk boundaries/retries. All other slots are stock photos.
-- Totals are **6 / 8 / 10 scenes** = **4+2 / 6+2 / 8+2 photos+clips** for ≤130 / ≤240 / ≤500
-  script words (10 scenes beyond 500 words). Two clips are included in these totals, not added
-  on top. A space-constrained editor can request a smaller validated total (minimum four), still
-  with exactly two clip slots.
+- **Scene count is fixed at 12 for every script length and duration** (FINAL MEDIA CAP). Both
+  `sceneCountForScript()` in the Worker and `imageSceneTarget()` in the browser return 12; word
+  count and duration are diagnostic only. `sceneTotal` must be exactly 12. Cue numbers, WEBVTT
+  markers and `-->` timestamps are not words.
+- Every LLM instruction explicitly requires **exactly four Pixabay video scenes in the complete
+  video**. Reserved zero-based slots come from `videoScenePositions(total)`; the server enforces
+  types across chunk boundaries/retries. All other slots are stock photos.
+- Totals are **12 scenes** = **8 photos + 4 clips** for every script. Four clips are included
+  in these totals, not added on top. The editor requires room for eight photos and four clips.
 - **Scene-count reconciliation (Session #275).** The reply is aligned to the requested slots
   deterministically: explicit `.scene` ids, a whole-video plan of exactly `total`, a whole-video
   plan of **any other length** (proportional slot mapping with nearest same-type entries), a
@@ -55,11 +49,11 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
 
 ### Script and keyword debug (current implementation)
 
-- The editor writes an SEO script; Quick Batch accepts a typed or pasted script. Both pass the full narration to the stock planner. Browser and Worker count Unicode words with the same punctuation/emoji rules; editor renumbering keeps in-flight work tied to its project. See [script-image-debug-audit.md](script-image-debug-audit.md) for fixes, retry behavior, tests and remaining risks.
+- The editor writes an SEO script; Quick Batch accepts a typed or pasted script. Both pass the full narration to the stock planner. Browser and Worker count Unicode words with the same punctuation/emoji rules; editor renumbering keeps in-flight work tied to its project. Quick Batch table rows follow FINAL RULE: client JS retries each failed pipeline stage seven times after a 40 s backoff. See [script-image-debug-audit.md](script-image-debug-audit.md) and the FINAL RULE section for fixes, retry behavior, tests and remaining risks.
 
 ### Pixabay API, infrastructure and safety
 
-- Photo searches expose **at most two usable hits** on page 1; video searches expose up to three. Pixabay requires `per_page=3` upstream for both. Image API accepts `per_page=2` or legacy `3` (still returns two); video accepts `3`. Other sizes and pages return 400. One selected hit is imported per scene; these are not whole-video limits.
+- Photo searches expose **at most eight usable hits** on page 1; video searches expose up to four. Pixabay requires `per_page=12` upstream for both. Image API accepts `per_page=12` with eight photo results and four video results. Other sizes and pages return 400. One selected hit is imported per scene; these are not whole-video limits.
 - Scene tokens carry `{q,type,page,index,scene}`. The selected type chooses real Pixabay photos
   or MP4 clips. Empty/missing clips never fall back to stills or generated media.
 - `POST /api/image` binary and `/api/image-batch` NDJSON carry both image bytes and MP4 bytes
@@ -92,15 +86,15 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
 ### Quick Batch processing — mixed media
 
 1. Narration -> TTS MP3 -> Web Audio duration -> captions.
-2. Whole-script LLM planning -> up to three typed search selections/chunk -> Pixabay searches
-   on page 1 (upstream `per_page=3`, at most two returned photos) -> validated server downloads -> binary or legacy NDJSON delivery.
+2. Whole-script LLM planning -> up to four typed search selections/chunk -> Pixabay searches
+   on page 1 (upstream `per_page=12`, at most two returned photos) -> validated server downloads -> binary or legacy NDJSON delivery.
 3. Sort by global scene index; decode images and probe clips. MP4s become real `type:"mp4"`
    slides with `videoEl` and duration. A completed row requires **two distinct imported clips**.
 4. Fit all planned scenes into narration using integer 30-fps frame windows: bound clip windows
    by actual duration, distribute remaining frames across photos. Both clips remain in the
    finished timeline rather than the later clip being lost to audio truncation.
 5. Preview uses variable scene durations and video seeking/drawing. Export uses the existing
-   shared H.264/AAC WebCodecs/muxer engine; restore shared state afterward. Preview and Export
+   shared H.264/AAC WebCodecs/muxer engine; restore shared state afterward. Actions Preview and Process Export
    unlock together only for a complete row. Missing clips produce a visible unfinished error.
 6. Cleanup revokes Blob URLs and releases video decoders.
 
@@ -319,7 +313,7 @@ Full API/deployment details: [Pixabay implementation reference](pixabay-media-mi
     not the user count.
 - Password storage: PBKDF2-SHA-256, 100 000 iterations, 16-byte random salt, 256-bit output,
   hex encoded (`authHashPassword`).
-  - The iteration count is capped at 100 000 **because the Workers runtime rejects more**
+  - The iteration count is capped at 120 000 **because the Workers runtime rejects more**
     (comment in code) — do not raise it without re-checking the runtime limit.
   - Verification is a plain string compare of hex hashes (no constant-time compare).
 - Sessions: a 32-byte random token (hex) is the KV key `session:<token>`, value
@@ -495,7 +489,7 @@ Full API/deployment details: [Pixabay implementation reference](pixabay-media-mi
 
 The governing Pixabay addendum at the top of this file defines the current media contract.
 `runImageModel()` is now a compatibility wrapper around stock-photo retrieval, not inference.
-The active text LLM plans whole-script search keywords and assigns exactly two video scenes.
+The active text LLM plans whole-script search keywords and assigns exactly four video scenes and eight photo scenes for every script length.
 Both automated layout pipelines import mixed stock photos/clips; manual prompt controls are removed. No SDXL/Lightning/FLUX fallback
 or demo inference remains enabled. See the addendum for first-page Pixabay search limits, API routes, caps,
 authorization, server-side downloads, caching, the Durable Object budget and deployment gates.
@@ -1022,7 +1016,7 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
 | `2 images per submit · landscape 16:9 · 1024×576` (placeholder: `Describe the image (always landscape 16:9, 1024×576)`; success line: `Done — landscape 16:9 · 1024×576`) | video accordion, AI images section (`.va-note`, doubles as the status line) | two `GET /image/gen` requests of one image each, rendered by `runImageModel()` at `IMAGE_WIDTH = 1024` / `IMAGE_HEIGHT = 576` (the old `480px landscape` copy was wrong — `toberesolved.md` A2/A3) |
 | `Add a video (up to 10)` | `+ Add Video` button tooltip | `VIDEO_MAX_VIDEOS = 10` |
 | `Caption text (max 40 characters)` | caption row placeholder (accordion + main panel) | `CAPTION_MAX_CHARS = 40` |
-| `Each caption appears centred horizontally at 4/7 of the height from the bottom, in 17px Bookman … The last caption is capped at 10 seconds on screen.` | main panel caption note (`.audio-note`) | `CAPTION_FONT_SIZE = 17`, `CAPTION_MAX_VISIBLE_MS = 10 000`, overlay geometry (RULE 10) |
+| `Each caption appears centred horizontally at 4/7 of the height from the bottom, in 17px Bookman … The last caption is capped at 12 seconds on screen.` | main panel caption note (`.audio-note`) | `CAPTION_FONT_SIZE = 17`, `CAPTION_MAX_VISIBLE_MS = 10 000`, overlay geometry (RULE 10) |
 | `The slideshow repeats to cover the whole track.` | main panel audio note | slide timing: the asset list loops to cover the MP3 (RULE 9) |
 | `MeloTTS (Cloudflare AI) speaks the script as an English MP3 (one fixed voice). The MP3 can be uploaded as this video's audio track.` | voiceover modal note | `/api/voiceover` with the locked English select (RULE 8) |
 | `Speak the script to MP3 with MeloTTS (English) + apply it as subtitles` | **🎙 Generate Voiceover** tooltip | the two modal actions (voiceover + subtitles toggle) |
@@ -1034,7 +1028,7 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
 | `Compose a portrait or landscape MP4 (max 25 seconds) from a design template …` | `Add video from template` tooltip | the composer caps 1-25 s (RULE 13) |
 | `+ Front layer` / `- Back Layer` · `Layer N of M` | text/graphic inspector | one-step saved paint order; disabled at boundaries (RULE 13) |
 | `Rotate degrees` + live `N°` readout | text/graphic and ring inspectors | 0–360°, 1° steps; real canvas rotation (RULE 13) |
-| `Ring images · N / 7 (min 5)` / `Choose 5–7 images together …` | bottom ring-image accordion and inline upload status | 5–7 decodable images, atomic replacement, same cards in preview/export (RULE 13) |
+| `Ring images · N / 7 (min 5)` / `Choose 5–7 images together …` | bottom ring-image accordion and inline upload status | 5–7 decodable images, atomic replacement, same cards in Actions (RULE 13) |
 | `Tip: each template is a looping motion design … The clip is silent …` (motion editor) / `Scene text, stickers and animated backgrounds are rendered into the exported clip …` (Reel scene editor) | composer panel (`.tpl-tips`, changes with editor mode) | the active editor controls + the silent-clip rule (RULE 13) |
 | `Theme for the studio page — every visitor sees it. Aerial and Stellar follow the HTML5UP designs of the same name; Night Lab, Warm Paper, Swiss and Neo Brutalist are the studio's own skins.` | settings page, Appearance group (`.cfg-note`) | RULE 19 (seven skins, global setting) |
 | `Built-in dark studio (default)` · `Blue sky, mountains, white accents` · `Violet gradient, frosted panels` · `Charcoal lab, lime accent` · `Warm light paper, coral accent` · `Clean white, electric blue` · `Cream, hard black lines, lime` | theme cards (`.cfg-theme-sub`) | what each skin in `CONFIG_THEMES` looks like |
@@ -1437,7 +1431,7 @@ addresses and gives visitors without an account a small, IP-metered allowance.
     query/fragment/space/backslash forms and reserved app/API slugs are rejected. A duplicate
     slug returns `409`. A new ninth page returns `400`; updating an existing id at the cap works.
   - A page has title (≤120 chars, slug-derived fallback), `pageLink` (top menu or footer),
-    `createdAt`/`updatedAt`, and ≤100 blocks. Paragraphs are ≤20,000 chars; empty blocks drop.
+    `createdAt`/`updatedAt`, and ≤100 blocks. Paragraphs are ≤12,000 chars; empty blocks drop.
     Images are HTTP(S) URLs ≤1,000 chars only—no file upload, data URI or `javascript:` URL.
     Public text/title/navigation values are HTML-escaped; consecutive images render two per row.
   - The settings Add Page editor supports paragraph, single-image and two-image-row buttons,
@@ -1646,7 +1640,7 @@ Doc says: "session/login/signup cost a constant 1 read / 1 read + 1 write / 1 li
 credits table says signup is "3 writes + 3 reads".
 Code does: signup at a >200-key namespace is **2 gets + 1 list + 3 puts = 6 ops** (re-measured with
 the counting mock; RULE 2's own bullet states those six ops), and `GET /api/session` has been
-**3 reads** since the credits work (session + `user:` + `credits:`). At ≤200 keys signup adds one
+**3 reads** since the credits work (session + `user:` + `credits:`). At ≤120 keys signup adds one
 get per existing account.
 Fix: reuse the six-op sentence and the 3-read session figure in both documents.
 
@@ -1818,16 +1812,16 @@ cites `kv-scale-test.md` §8, the last section of that document.
 
 ### Register addendum — Bug Fix Session #275 (2026-10-29)
 
-> The scene-count rule moved from the requested **duration** (10/14/20) to the narration's
-> **word count** (6/8/10) and the planner stopped failing on replies whose length differed from
+> The scene-count rule moved from the requested **duration** (12) to the narration's
+> **word count** (12) and the planner stopped failing on replies whose length differed from
 > the request. Everything it invalidated is listed here.
 
 | # | Drift | Resolution |
 | --- | --- | --- |
-| 8.1 | The governing media rule, `pixabay-media-migration.md`, `README.md`, `userflow.md` and `quick-batch-table-system-requirements.md` all stated 10/14/20-by-duration totals. | All state the word-count brackets: **≤130 → 6, ≤240 → 8, ≤500 → 10, >500 → 10**, with 4+2 / 6+2 / 8+2 photos+clips. `new_requirements.md` keeps the old line with an explicit supersession note. |
+| 8.1 | The governing media rule, `pixabay-media-migration.md`, `README.md`, `userflow.md` and `quick-batch-table-system-requirements.md` stated duration- or variable totals. | All state the fixed plan: **12 scenes = 8 photos + 4 clips for every script length**. `new_requirements.md` keeps an old line with an explicit supersession note. |
 | 8.2 | The planner contract said "2–5 keywords … at most six words". | Now **1–5 word stock search terms** (≤100 chars) with `SCENE_KEYWORDS_MAX_WORDS = 5`; prose/image-prompt values are rejected and the SEO long-tail + shorts are offered as search vocabulary. |
 | 8.3 | No rule described how a model reply is matched to the requested chunk. | New reconciliation note in the media rule (§ "Scene-count reconciliation") and §3.2 of `bug-fix-session-275-scene-count-consistency.md`: priority-ordered candidates, server-controlled media types, valid-prefix batches. |
-| 8.4 | The editor note promised "10 for 1 minute, 14 for 2–3 minutes, 20 for 4–6 minutes". | Rewritten to the word-count rule and the two-video guarantee (`src/client/app-js.ts`). |
+| 8.4 | The editor note previously promised duration-dependent scene totals. | Rewritten to the fixed 12-scene rule and the four-video guarantee (`src/client/app-js.ts`). |
 
 ## RULE 24 — The Generate SEO Script walkthrough: two selectable keyword sets, an image style, then queued AI images
 
@@ -1886,7 +1880,7 @@ cites `kv-scale-test.md` §8, the last section of that document.
   `IMAGE_PROMPT_TIMEOUT_MS` (90 s) and a failure → `502 {success:false, error}`.
 - **Step 4 — one batch request renders every image.** The browser sends the usable prompts
   (capped by the video's remaining still slots) to **`POST /api/image-batch`** as
-  `{prompts: string[]}` (≤20). The worker reserves one image credit per prompt up front (account
+  `{prompts: string[]}` (≤12). The worker reserves one image credit per prompt up front (account
   allowance, or the `/free` IP allowance; anonymous → `401`, none left → `429`; a partial
   allowance renders only the granted images), then renders them **in parallel**
   (`IMAGE_BATCH_CONCURRENCY = 4`) with `@cf/stabilityai/stable-diffusion-xl-base-1.0` at
@@ -2118,7 +2112,7 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   yielding every 3 decoded slides). Both `#batch-generate-btn` and top-bar `#top-generate` trigger
   `generateBatchRows()` / `stopBatchRows()` when in `"table"` layout, `syncBatchRowsFromDom()`
   captures unfired inputs before running, and `resetClearedBatchRow()` resets a cleared finished
-  row back to `stage = "empty"` with pending Preview/Export text.
+  row back to `stage = "empty"` with pending Actions text.
 - **Three rows at a time + staggered pipeline execution (Session #248).** `generateBatchRows()`
   builds the pending queue (`batchRowPending(row)` = has a script **and** `!batchRowFinished(row)`
   **and** `!row.running`), starts up to `BATCH_RUN_CONCURRENCY = 3` rows simultaneously in the
@@ -2131,7 +2125,7 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   own controller/object URLs, and a finished row unlocks its buttons without waiting for the rest
   of the table.
 - **A finished row is never generated again.** Because the queue is built from
-  `batchRowPending()`, pressing ✦ Generate again skips every row whose Preview/Export buttons are
+  `batchRowPending()`, pressing ✦ Generate again skips every row whose Actions buttons are
   already live: its MP3, images and slides are in memory, so re-running it would re-bill the
   credits and throw the animation away. With no pending row left the table shows
   `showRequiredModal(["Every row with a script is already finished …"])` instead of starting a run.
@@ -2415,7 +2409,7 @@ resource implications, compatibility and rollout checks.
 
 - Both editor and Quick Batch use `runProgressiveImagePipeline`: request at most three prompts,
   render that chunk while requesting the next, drain both, repeat. One lookahead only; totals
-  follow the script word count (#275: 6 / 8 / 10), capped by free editor gallery slots.
+  follow the script word count (#275: 12), capped by free editor gallery slots.
 - `POST /api/image-prompts` accepts optional `batch:{offset,count,attempt,previous}`. Batch mode
   validates count 1–3 and the absolute range, makes **one** AI call with a **45 s** wait budget,
   and returns `batch:{offset,requested,nextOffset}`. Browser request + JSON timeout is **60 s**;
@@ -2616,7 +2610,7 @@ Canonical implementation, limits, verification and rollout: [bug-fix-session-261
 
 ## RULE 33 — API rotation across the registered backup Workers (2026-10-26)
 
-The settings page has always been able to store up to three backup Worker URLs
+The settings page has always been able to store up to four backup Worker URLs
 (`config:workers`); before Session #265 nothing ever contacted them. They are now a **live API
 pool** with the primary deployment. Full detail: `api-relay-rotation.md`.
 
@@ -2842,3 +2836,18 @@ all documentation … fix the entire system."
   **108/108**; `npm test` is 499/438/55 (pass/fail names are a strict subset of the
   487/424/57 pre-change baseline, so there are zero regressions). `tsc --noEmit` reports no
   errors in any edited module. **This requirement is implemented, not deferred.**
+
+---
+
+## FINAL RULE — QUICK BATCH TABLE LAYOUT (2026-11-04)
+
+This is the final, code-backed rule for the **Quick Batch table layout** and the **shared Editor media pipeline**. It supersedes every older Markdown/session note about one-request tables, Worker-owned media retries, variable scene totals, separate Preview/Export columns, or row script buttons.
+
+1. Client JavaScript owns retries for every failed **non-media** pipeline stage in this layout: voice, scene plan / prompts and animation. One initial attempt is followed by at most **7 retries** (8 total attempts); every retry waits **40 seconds** first. Only the failed stage is reset and repeated. Earlier successful stages are kept; there is no whole-row restart and no duplicate paid batch.
+2. **Image and video imports are the exception in BOTH layouts.** Only the individually failed photo or clip is retried from client JavaScript, using the same 7-retry / 40-second ladder per item. Successful media, object URLs and recorded filenames are preserved. There is no whole-stage, whole-batch or whole-row media restart, and a failed stage-level retry must not revoke a successful image.
+3. Every automatic video in **both** the Editor and Quick Batch table plans exactly **12 Pixabay scenes for every script length and duration**: **4 silent videos + 8 photos**. Scene planning and Pixabay searches always target those same 12 results (8 image results and 4 video results). Client JS records the filename of every selected scene and rejects duplicate filenames in one video; alternate Pixabay result indexes/pages are searched for the failed item so no similar image repeats in one video. A duplicate or missing scene is retried individually and must not strand the row.
+4. Retries are silent. The row keeps its script textarea, working stage label and `.va-spinner` continuously; no error, retry, attempt, warning or abort wording is painted in the table UI. After an exhausted ladder the row returns silently to `ready`.
+5. A missing scene plan must be retried by client JS, and the row must continue to the next pipeline once a plan arrives.
+6. In the **Editor layout**, the script textbox is pinned while script writing/retries run: no state paint, toggle or accordion renumber may hide it over time.
+7. The **last table column is `Actions`** with icons for **Preview** (same existing function), **Process Export** and **Edit**. Edit opens a new page with a **transition-only project JSON** payload carrying the row's basic settings from `batchProjectJson()`; `applyTransitionProject()` consumes it for the transition only. The rows have **no AI enhancer button**.
+8. `src/client/app-js.ts` is the source of truth. `AUTO_MEDIA_TOTAL = 12`, `AUTO_VIDEO_SCENES = 4`, `AUTO_IMAGE_SCENES = 8`, `MEDIA_ITEM_MAX_RETRIES = 7`, `MEDIA_ITEM_RETRY_BACKOFF_MS = 40000`, `retryFailedMediaOnly()`, `requestBatchImagesWithIndividualRetries()`, `runEditorMediaWithIndividualRetries()`, `batchActionCell()`, `batchProjectJson()` and `applyTransitionProject()` define the live contract. Worker capabilities advertise `mediaSceneCap: 12`, `mediaVideoScenes: 4`, `mediaImageScenes: 8`, `mediaItemRetryOwner: "browser"`, `mediaItemRetries: 7`, `mediaItemRetryBackoffMs: 40000`, `mediaFilenameDedupe: "per-video"` and `quickBatchActionsColumn: "preview-process-export-edit"`. `BATCH_PIPELINE_MAX_RETRIES = 7` and `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000` still govern the non-media stage ladder. Older Quick Batch table statements in this file are superseded wherever they conflict.

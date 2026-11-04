@@ -29,7 +29,12 @@ import {
 	renderAccountPageResponse,
 	renderUpgradePageResponse
 } from "./modules/user-pages";
-import { handleSeoScriptGeneration, handleSeoPlanGeneration } from "./modules/script-seo";
+import {
+	handleSeoScriptGeneration,
+	handleSeoPlanGeneration,
+	SCRIPT_BROWSER_RETRY_BACKOFF_MS,
+	SCRIPT_BROWSER_RETRY_LIMIT
+} from "./modules/script-seo";
 import { scriptEventLoop } from "./modules/script-event-loop";
 import {
 	handleScriptNoteWrite,
@@ -321,28 +326,48 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				scriptNoteQueueGraceMs: SCRIPT_NOTE_QUEUE_GRACE_MS,
 				scriptNoteDeadlineMs: SCRIPT_NOTE_DEADLINE_MS,
 				/*
-				 * RETRY OWNERSHIP: THE WORKER, EVERY STAGE (session 279).
-				 *
-				 * The page makes ONE request per stage and waits; the worker
-				 * runs the ladder inside it and reports what it spent in
-				 * `failure.attempts`. The per-stage numbers below are what the
-				 * page shows the user and what the worker must not exceed.
-				 *
-				 * `browserScriptRetries` is kept ONLY for compatibility: a
-				 * cached pre-279 page reads it, sends `browserRetries: true`
-				 * and keeps its own three-attempt loop against a
-				 * one-attempt-per-stage worker. This page sends no such flag,
-				 * so it gets the worker's ladder. See handleSeoScriptGeneration.
+				 * RETRY OWNERSHIP: the Worker keeps its in-request planner and
+				 * voice ladders. Browser JavaScript owns script writing and the
+				 * non-media failed Quick Batch pipeline stages. Image/video
+				 * imports are retried INDIVIDUALLY in both layouts: only the
+				 * failed asset is requested again; successful assets and their
+				 * recorded filenames are preserved.
 				 */
 				retryOwner: "worker",
-				scriptRetryOwner: "worker",
+				scriptRetryOwner: "browser",
 				workerScriptRetries: 3,
-				browserScriptRetries: 3,
+				browserScriptRetries: SCRIPT_BROWSER_RETRY_LIMIT,
+				scriptRetryBackoffMs: SCRIPT_BROWSER_RETRY_BACKOFF_MS,
+				quickBatchPipelineRetryOwner: "browser",
+				batchPipelineRetryOwner: "browser",
+				quickBatchPipelineRetries: 7,
+				batchPipelineRetries: 7,
+				quickBatchPipelineRetryBackoffMs: 40000,
+				batchPipelineRetryBackoffMs: 40000,
+				/* Fixed 12-scene media cap, per-item media retries and unique filenames. */
+				mediaSceneCap: 12,
+				mediaVideoScenes: 4,
+				mediaImageScenes: 8,
+				mediaItemRetryOwner: "browser",
+				mediaItemRetries: 7,
+				mediaItemRetryBackoffMs: 40000,
+				mediaFilenameDedupe: "per-video",
+				quickBatchActionsColumn: "preview-process-export-edit",
+				/* Session 331: per-tab pages, four cookie chunks, no TTL. */
+				pipelineManagementStorage: "client:localStorage+cookies",
+				pipelineManagementPageId: "sessionStorage:ytvs.pipeline-page.v1",
+				pipelineManagementLocalKeyPrefix: "ytvs.pipeline-management.v1.",
+				pipelineManagementCookiePrefix: "ytvs_pipeline_management_",
+				pipelineManagementCookieChunks: 4,
+				pipelineManagementScope: "quick-batch+editor",
+				pipelineManagementTtl: 0,
+				pipelineManagementConsistency: "updatedAt+digest",
+				pipelineManagementNewTabState: "empty",
+				pipelineManagementVideoIds: "page-id-scoped",
 				/*
-				 * The same ownership for every other stage, with the ceiling the
-				 * worker will spend inside ONE request. A page that reads these
-				 * knows a retry of its own would be a second ladder on top of the
-				 * first: it waits for the verdict instead of re-asking.
+				 * The same Worker ownership still applies to media and voice
+				 * ladders OUTSIDE the Quick Batch table pipeline. A page that
+				 * reads these waits for the verdict instead of re-asking.
 				 */
 				voiceRetryOwner: "worker",
 				serverVoiceChunks: VOICEOVER_SERVER_CHUNKS,
@@ -354,7 +379,7 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				imageRetryOwner: "worker",
 				workerImageAttempts: IMAGE_OVERLOAD_ATTEMPTS,
 				imageRetryBudgetMs: IMAGE_RETRY_BUDGET_MS,
-				mediaProvider: "pixabay", per_page: 2, video_per_page: 3 }), {
+				mediaProvider: "pixabay", per_page: 12, image_per_page: 8, video_per_page: 4 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});
 		}
@@ -5325,9 +5350,9 @@ function mediaBrowserConfigResponse(
 		assetHosts: ["cdn.pixabay.com"],
 		/* Browser Pixabay access necessarily uses the public provider key. */
 		key: enabled ? String(env.PIXABAY_API_KEY).trim() : "",
-		perPage: 3,
-		imageResults: 2,
-		videoResults: 3,
+		perPage: 12,
+		imageResults: 8,
+		videoResults: 4,
 		maxImageBytes: 8 * 1024 * 1024,
 		maxVideoBytes: 16 * 1024 * 1024,
 		claimPath: "/api/media/claim",

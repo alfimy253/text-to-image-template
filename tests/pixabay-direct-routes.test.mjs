@@ -58,9 +58,9 @@ test("media config hands the browser the provider key, origins and limits", asyn
 	assert.equal(config.key, "worker-key");
 	assert.equal(config.apiOrigin, "https://pixabay.com");
 	assert.deepEqual(config.assetHosts, ["cdn.pixabay.com"]);
-	assert.equal(config.perPage, 3);
-	assert.equal(config.imageResults, 2);
-	assert.equal(config.videoResults, 3);
+	assert.equal(config.perPage, 12);
+	assert.equal(config.imageResults, 8);
+	assert.equal(config.videoResults, 4);
 	assert.equal(config.claimPath, "/api/media/claim");
 	assert.equal(config.settlePath, "/api/media/settle");
 });

@@ -37,9 +37,9 @@ const configBody = (overrides = {}) => ({
 	apiOrigin: "https://pixabay.com",
 	assetHosts: ["cdn.pixabay.com"],
 	key: "browser-key",
-	perPage: 3,
-	imageResults: 2,
-	videoResults: 3,
+	perPage: 12,
+	imageResults: 8,
+	videoResults: 4,
 	maxImageBytes: 8 * 1024 * 1024,
 	maxVideoBytes: 16 * 1024 * 1024,
 	claimPath: "/api/media/claim",
@@ -120,13 +120,13 @@ test("browser search mirrors the Worker query contract and picks the scene index
 	assert.equal(await runtime.enabled(), true);
 	const result = await runtime.search({ q: "garden flowers & sun", type: "image", orientation: "portrait" }, {});
 	assert.equal(result.provider, "pixabay");
-	assert.equal(result.per_page, 2);
-	assert.deepEqual(Array.from(result.hits, (hit) => hit.id), [11, 12]);
+	assert.equal(result.per_page, 8);
+	assert.deepEqual(Array.from(result.hits, (hit) => hit.id), [11, 12, 13]);
 	const searchCall = calls.find((entry) => entry.url.pathname === "/api/");
 	assert.equal(searchCall.url.origin, "https://pixabay.com");
 	assert.equal(searchCall.url.searchParams.get("key"), "browser-key");
 	assert.equal(searchCall.url.searchParams.get("q"), "garden flowers & sun");
-	assert.equal(searchCall.url.searchParams.get("per_page"), "3");
+	assert.equal(searchCall.url.searchParams.get("per_page"), "12");
 	assert.equal(searchCall.url.searchParams.get("page"), "1");
 	assert.equal(searchCall.url.searchParams.get("safesearch"), "true");
 	assert.equal(searchCall.url.searchParams.get("image_type"), "photo");
@@ -134,11 +134,11 @@ test("browser search mirrors the Worker query contract and picks the scene index
 	assert.equal(searchCall.init.credentials, "omit");
 });
 
-test("videos send no image-only parameters and expose three clips", async () => {
+test("videos send no image-only parameters and expose the four clip slots", async () => {
 	const calls = [];
 	const { runtime } = directRuntime(routedFetch(calls));
 	const result = await runtime.search({ q: "garden", type: "video" }, {});
-	assert.equal(result.per_page, 3);
+	assert.equal(result.per_page, 4);
 	assert.deepEqual(Array.from(result.hits, (hit) => hit.id), [21, 22, 23]);
 	assert.equal(result.hits[0].duration, 12);
 	const search = calls.find((entry) => entry.url.pathname === "/api/videos/");

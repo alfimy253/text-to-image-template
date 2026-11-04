@@ -17,9 +17,9 @@
  * request budget. The fetch now starts in the page.
  *
  * Safety rules kept from `src/modules/pixabay.ts` (code is the source of truth):
- *   - upstream `per_page=3`, page 1 only, `safesearch=true`, photos are
+ *   - upstream `per_page=12`, pages 1-2, `safesearch=true`, photos are
  *     `image_type=photo` + orientation, videos send no orientation;
- *   - at most two photos / three videos are exposed;
+ *   - eight photo results and four video results are exposed per search;
  *   - media URLs must be HTTPS on `pixabay.com` or `cdn.pixabay.com`, with no
  *     credentials, port or `key` parameter;
  *   - JPEG/PNG/WebP photos (8 MiB) and MP4 clips <= 60 s (16 MiB) only, with
@@ -38,7 +38,7 @@ function createPixabayDirectRuntime(win) {
 	var CONFIG_PATH = "/api/media/config";
 	var DEFAULT_CLAIM_PATH = "/api/media/claim";
 	var DEFAULT_SETTLE_PATH = "/api/media/settle";
-	var PER_PAGE = 3, IMAGE_RESULTS = 2, VIDEO_RESULTS = 3;
+	var PER_PAGE = 12, IMAGE_RESULTS = 8, VIDEO_RESULTS = 4, MAX_PAGES = 2;
 	var MAX_IMAGE_BYTES = 8 * 1024 * 1024, MAX_VIDEO_BYTES = 16 * 1024 * 1024;
 	var CONFIG_TTL = 10 * 60 * 1000, CONFIG_DISABLED_TTL = 60 * 1000;
 	var ASSET_CORS_HOLD_MS = 5 * 60 * 1000;
@@ -105,9 +105,9 @@ function createPixabayDirectRuntime(win) {
 			apiOrigin: apiOrigin,
 			assetHosts: PROVIDER_HOSTS,
 			key: enabled ? String(data.key).trim() : "",
-			perPage: PER_PAGE,
-			imageResults: IMAGE_RESULTS,
-			videoResults: VIDEO_RESULTS,
+			perPage: size(data && data.perPage, PER_PAGE),
+			imageResults: size(data && data.imageResults, IMAGE_RESULTS),
+			videoResults: size(data && data.videoResults, VIDEO_RESULTS),
 			maxImageBytes: size(data && data.maxImageBytes, MAX_IMAGE_BYTES),
 			maxVideoBytes: size(data && data.maxVideoBytes, MAX_VIDEO_BYTES),
 			claimPath: String((data && data.claimPath) || DEFAULT_CLAIM_PATH),
@@ -263,7 +263,7 @@ function createPixabayDirectRuntime(win) {
 			(doc.head || doc.documentElement).appendChild(script);
 		});
 	}
-	function normalizeHits(payload, type, state) {
+	function normalizeHits(payload, type, state, input) {
 		if (!payload || !Array.isArray(payload.hits)) {
 			throw fail("Pixabay returned an invalid search response", { kind: "invalid", fallback: true });
 		}
@@ -290,7 +290,7 @@ function createPixabayDirectRuntime(win) {
 			if (type === "video") hits[hits.length - 1].duration = duration;
 			if (hits.length >= limit) break;
 		}
-		return { provider: "pixabay", per_page: limit, page: 1, totalHits: Number(payload.totalHits) || 0, hits: hits };
+		return { provider: "pixabay", per_page: limit, page: Number(input && input.page) || 1, totalHits: Number(payload.totalHits) || 0, hits: hits };
 	}
 	async function search(input, options) {
 		var state = await config();
@@ -298,9 +298,10 @@ function createPixabayDirectRuntime(win) {
 		var query = encodeQuery(input && input.q);
 		var type = input && input.type === "video" ? "video" : "image";
 		if (!query) throw fail("Enter Pixabay search terms", { status: 400, kind: "invalid", fallback: false });
+		var page = Math.max(1, Math.min(MAX_PAGES, Math.floor(Number(input && input.page) || 1)));
 		var params = "key=" + encodeURIComponent(state.key) +
 			"&q=" + encodeURIComponent(query) +
-			"&per_page=" + PER_PAGE + "&page=1&safesearch=true";
+			"&per_page=" + state.perPage + "&page=" + page + "&safesearch=true";
 		if (type === "image") params += "&image_type=photo&orientation=" + orientationValue(input && input.orientation);
 		/*
 		 * Session 279 (F1): videos live on their own provider endpoint. The
@@ -340,7 +341,7 @@ function createPixabayDirectRuntime(win) {
 			if (jsonp) payload = jsonp;
 			else throw fail("Pixabay search could not be read by the browser (" + textOf(transportError) + ")", { kind: "cors", fallback: true, detail: textOf(transportError) });
 		}
-		var result = normalizeHits(payload, type, state);
+		var result = normalizeHits(payload, type, state, input);
 		record("info", "search.completed", { type: type, hits: result.hits.length, totalHits: result.totalHits });
 		return result;
 	}
@@ -456,7 +457,9 @@ function createPixabayDirectRuntime(win) {
 		return { blob: blob, mime: mime, source: sourceFor(hit, type) };
 	}
 	function sourceFor(hit, type) {
+		var id = String((hit && hit.id) || "scene");
 		return { provider: "pixabay", id: hit && hit.id, pageURL: (hit && hit.pageURL) || "", user: (hit && hit.user) || "",
+			filename: "pixabay-" + id + (type === "video" ? ".mp4" : ".jpg"),
 			type: type, duration: type === "video" ? Number(hit && hit.duration) || 0 : 0 };
 	}
 
@@ -464,7 +467,7 @@ function createPixabayDirectRuntime(win) {
 
 	function parseToken(token, fallbackScene) {
 		var fallback = Math.max(0, Number(fallbackScene) || 0);
-		var parsed = { q: "", type: "image", index: fallback, scene: fallback };
+		var parsed = { q: "", type: "image", index: fallback, page: 1, scene: fallback };
 		if (typeof token === "string" && token.indexOf("pixabay:") === 0) {
 			try {
 				var value = JSON.parse(token.slice(8));
@@ -472,6 +475,7 @@ function createPixabayDirectRuntime(win) {
 					if (typeof value.q === "string") parsed.q = value.q.trim();
 					if (value.type === "video" || value.type === "image") parsed.type = value.type;
 					if (Number.isInteger(value.index) && value.index >= 0) parsed.index = value.index;
+					if (Number.isInteger(value.page) && value.page >= 1 && value.page <= MAX_PAGES) parsed.page = value.page;
 					if (Number.isInteger(value.scene) && value.scene >= 0) parsed.scene = value.scene;
 				}
 			} catch (_) { /* invalid structured tokens never become bogus queries */ }
@@ -484,11 +488,11 @@ function createPixabayDirectRuntime(win) {
 		counters.scenes += 1;
 		var parsed = parseToken(token, 0);
 		if (!parsed.q) throw fail("Missing Pixabay search terms", { status: 400, kind: "invalid", fallback: false });
-		var index = parsed.index;
-		if (parsed.type === "image") index = index % IMAGE_RESULTS;
+		var resultLimit = parsed.type === "video" ? VIDEO_RESULTS : IMAGE_RESULTS;
+		var index = parsed.index % resultLimit;
 		var portrait = Number(frame && frame.height) > Number(frame && frame.width);
 		try {
-			var result = await search({ q: parsed.q, type: parsed.type, orientation: portrait ? "portrait" : "landscape" }, options);
+			var result = await search({ q: parsed.q, type: parsed.type, page: parsed.page, orientation: portrait ? "portrait" : "landscape" }, options);
 			var hit = result.hits[index] || result.hits[0];
 			if (!hit) throw fail("No suitable Pixabay media for this scene. Try different search terms or upload media.", { status: 404, kind: "no-hit", fallback: true });
 			var media = await download(hit, options);

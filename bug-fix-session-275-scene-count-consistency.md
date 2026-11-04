@@ -1,6 +1,6 @@
 # Bug Fix Session #275 — "Scene keyword planner returned the wrong scene count"
 
-> **Media-source rule unchanged.** Pixabay photos/videos only, two video scenes per automatic
+> **Media-source rule unchanged.** Pixabay photos/videos only, four video scenes per automatic
 > video, no AI image generation. See [pixabay-media-migration.md](pixabay-media-migration.md).
 
 **Date:** 2026-10-29 · **Branch:** `arena/c8f2545b-text-to-image-template`
@@ -26,7 +26,7 @@ flow always retries three times (`batch.attempt` 0–2) before giving up.
 | Side | Function | Total for a 1-minute video |
 | --- | --- | --- |
 | Worker | `imagePromptCountForMinutes(minutes)` | 10 (14 for 2–3 min, 20 for 4–6 min) |
-| Browser | `imageSceneTarget(minutes)` (in `src/client/progressive-image-pipeline.ts`) | the same 10/14/20 |
+| Browser | `imageSceneTarget(minutes)` (in `src/client/progressive-image-pipeline.ts`) | the same 12 |
 | Editor | `Math.min(imageSceneTarget(minutes), availableImages + 2)` | 10 **or less**, sent as `sceneTotal` |
 | The model | whatever it decided while reading the script | frequently 6–12 |
 
@@ -65,14 +65,14 @@ no matter how good its search terms were. Two related dead ends:
 
 ### 2.3 The count rule itself
 
-The documents said 10/14/20 **per duration**, and every planner instruction said
+The documents said 12 **per duration**, and every planner instruction said
 `"EXACTLY 10"` for a 1-minute video. Nothing derived the count from the narration, so a short
 script (a 5-word test row, a 90-word quick-batch script) still asked for ten scenes, and the
 browser could clamp to a smaller `sceneTotal` that the model had never been told about.
 
 ## 3. Fixes
 
-### 3.1 One word-count rule, two implementations, zero drift
+### 3.1 One fixed 12-scene rule, two implementations, zero drift
 
 `src/modules/image-prompts.ts`:
 
@@ -92,8 +92,8 @@ literal, so the word test is built without inline `\p{...}`/`\u` escapes). Both 
 the same number for the same script — pinned by a parity test that evaluates the browser string
 in a `vm` context and compares it with the Worker functions for 14 script lengths × 3 durations.
 
-`imagePromptCountForMinutes()` (10/14/20) remains exported for legacy callers and acts only as a
-**ceiling**; it can never raise the word-count total.
+`imagePromptCountForMinutes()` (12) remains exported for legacy callers and acts only as a
+**ceiling**; it can never raise the fixed 12-scene total.
 
 ### 3.2 Deterministic reconciliation instead of an exact-length gate
 
@@ -151,7 +151,7 @@ real keyword plan during JSON recovery.
 
 `imageSceneTarget(row.script, row.minutes)` in Quick Batch (pipeline total + progress copy) and
 `imageSceneTarget(project.script || "", project._seoMinutes || 1)` in the editor, whose
-`sceneTotal` still clamps to the free gallery slots. The editor note now explains the word-count
+`sceneTotal` must equal 12. The editor note now explains the fixed
 rule instead of "10 for 1 minute, 14 for 2–3 minutes, 20 for 4–6 minutes".
 
 ## 4. Rules now documented
@@ -161,13 +161,13 @@ rule instead of "10 for 1 minute, 14 for 2–3 minutes, 20 for 4–6 minutes".
 | ≤ 130 | **6** | 4 + 2 |
 | > 130 and ≤ 240 | **8** | 6 + 2 |
 | > 240 and ≤ 500 | **10** | 8 + 2 |
-| > 500 | **10** (the rule set ends at ten) | 8 + 2 |
+| > 500 | **10** (the rule set is fixed at twelve) | 8 + 2 |
 
 * Words are counted from the narration text (cue numbers, `WEBVTT`, `-->` timestamps and
   punctuation-only tokens are ignored).
-* Two of the scenes are always Pixabay videos at zero-based `1` and `total - 2`; the rest are
+* Two of the scenes are always Pixabay videos at zero-based `videoScenePositions(total)`; the rest are
   photos. The clips are inside the total, not added on top.
-* A caller may ask for **fewer** scenes (editor gallery room, minimum four) but never more than
+* A caller may ask for **fewer** scenes (editor gallery room, twelve scenes) but never more than
   the script's rule allows; `sceneTotal` above the limit is a `400`.
 * Every `keywords` value is a **1–5 word search term**, not an image prompt.
 
@@ -179,18 +179,18 @@ Updated documents: `system-rules.md` (governing media rule + the batch/progressi
 
 ## 5. Verification
 
-* `node --import tsx bench/planner-count-audit.mjs` — **90/90 ok** across totals 6/8/10 and every
+* `node --import tsx bench/planner-count-audit.mjs` — **90/90 ok** across totals 12 and every
   chunk offset (pre-fix: 20 `wrong scene count` throws in the same matrix).
 * `npm run test:pixabay` — **60/60** (`pixabay-media` 46, `pixabay-studio-flow` 14,
   `session-264-editor-render` 10). New coverage:
   * scene-count brackets, SRT word counting and the `>` 500-word cap,
-  * route-level `expectedCount` / video-slot positions for 6 / 8 / 10, smaller total accepted,
+  * route-level `expectedCount` / video-slot positions for 12, smaller total accepted,
     larger total `400`,
-  * the whole-plan-off-by-N matrix (6/8/10 totals × every offset × every length), scene numbers
+  * the whole-plan-off-by-N matrix (12 totals × every offset × every length), scene numbers
     glued to the requested slots, unique search terms per slot,
   * renumbered chunk replies,
   * 1–5 word instruction text + SEO keyword pass-through + 6-word prose rejection,
-  * browser/Worker word-count parity (14 script lengths × 3 durations),
+  * browser/Worker fixed 12-scene parity (14 script lengths × 3 durations),
   * studio flows updated to the 6-scene rule, including the transient-failure retry path.
 * `npx tsc --noEmit` — only the 30 pre-existing `src/index.ts` router diagnostics.
 * Per-file comparison against the pre-change baseline shows **no new failures** anywhere in the
@@ -227,3 +227,18 @@ Updated documents: `system-rules.md` (governing media rule + the batch/progressi
 > · Normative rule: `system-rules.md` RULE 35 · Verification:
 > `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
 > document is superseded and void.
+
+---
+
+## FINAL RULE — QUICK BATCH TABLE LAYOUT (2026-11-04)
+
+This is the final, code-backed rule for the **Quick Batch table layout** and the **shared Editor media pipeline**. It supersedes every older Markdown/session note about one-request tables, Worker-owned media retries, variable scene totals, separate Preview/Export columns, or row script buttons.
+
+1. Client JavaScript owns retries for every failed **non-media** pipeline stage in this layout: voice, scene plan / prompts and animation. One initial attempt is followed by at most **7 retries** (8 total attempts); every retry waits **40 seconds** first. Only the failed stage is reset and repeated. Earlier successful stages are kept; there is no whole-row restart and no duplicate paid batch.
+2. **Image and video imports are the exception in BOTH layouts.** Only the individually failed photo or clip is retried from client JavaScript, using the same 7-retry / 40-second ladder per item. Successful media, object URLs and recorded filenames are preserved. There is no whole-stage, whole-batch or whole-row media restart, and a failed stage-level retry must not revoke a successful image.
+3. Every automatic video in **both** the Editor and Quick Batch table plans exactly **12 Pixabay scenes for every script length and duration**: **4 silent videos + 8 photos**. Scene planning and Pixabay searches always target those same 12 results (8 image results and 4 video results). Client JS records the filename of every selected scene and rejects duplicate filenames in one video; alternate Pixabay result indexes/pages are searched for the failed item so no similar image repeats in one video. A duplicate or missing scene is retried individually and must not strand the row.
+4. Retries are silent. The row keeps its script textarea, working stage label and `.va-spinner` continuously; no error, retry, attempt, warning or abort wording is painted in the table UI. After an exhausted ladder the row returns silently to `ready`.
+5. A missing scene plan must be retried by client JS, and the row must continue to the next pipeline once a plan arrives.
+6. In the **Editor layout**, the script textbox is pinned while script writing/retries run: no state paint, toggle or accordion renumber may hide it over time.
+7. The **last table column is `Actions`** with icons for **Preview** (same existing function), **Process Export** and **Edit**. Edit opens a new page with a **transition-only project JSON** payload carrying the row's basic settings from `batchProjectJson()`; `applyTransitionProject()` consumes it for the transition only. The rows have **no AI enhancer button**.
+8. `src/client/app-js.ts` is the source of truth. `AUTO_MEDIA_TOTAL = 12`, `AUTO_VIDEO_SCENES = 4`, `AUTO_IMAGE_SCENES = 8`, `MEDIA_ITEM_MAX_RETRIES = 7`, `MEDIA_ITEM_RETRY_BACKOFF_MS = 40000`, `retryFailedMediaOnly()`, `requestBatchImagesWithIndividualRetries()`, `runEditorMediaWithIndividualRetries()`, `batchActionCell()`, `batchProjectJson()` and `applyTransitionProject()` define the live contract. Worker capabilities advertise `mediaSceneCap: 12`, `mediaVideoScenes: 4`, `mediaImageScenes: 8`, `mediaItemRetryOwner: "browser"`, `mediaItemRetries: 7`, `mediaItemRetryBackoffMs: 40000`, `mediaFilenameDedupe: "per-video"` and `quickBatchActionsColumn: "preview-process-export-edit"`. `BATCH_PIPELINE_MAX_RETRIES = 7` and `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000` still govern the non-media stage ladder. Older Quick Batch table statements in this file are superseded wherever they conflict.

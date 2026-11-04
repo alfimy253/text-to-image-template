@@ -1,16 +1,16 @@
 /** Shared browser-only orchestration. No Worker timers, jobs, KV or video state. */
 export const PROGRESSIVE_IMAGE_PIPELINE_JS = `
 /*
- * #275 — scene count from the SCRIPT WORD COUNT, identical to
- * sceneCountForScript() in src/modules/image-prompts.ts:
- *   <=130 words -> 6 scenes, <=240 -> 8, <=500 -> 10, longer -> 10.
- * The duration tier (10/14/20) is only a legacy ceiling; it never raises the
- * word-count total. Keeping one rule on both sides is what stops the browser
- * and the planner from planning different scene counts.
+ * FINAL MEDIA CAP — every automatic video in either layout has exactly
+ * 12 Pixabay scenes: FOUR video clips and EIGHT distinct photo images.
+ * Script word count and duration never change this total. The browser-side
+ * target matches sceneCountForScript() in src/modules/image-prompts.ts.
  */
-var IMAGE_SCENE_WORD_BRACKETS = [[130, 6], [240, 8], [500, 10]];
-var IMAGE_SCENE_COUNT_MIN = 4;
-var IMAGE_SCENE_COUNT_MAX = 10;
+var IMAGE_SCENE_MEDIA_TOTAL = 12;
+var IMAGE_SCENE_VIDEO_COUNT = 4;
+var IMAGE_SCENE_IMAGE_COUNT = 8;
+var IMAGE_SCENE_COUNT_MIN = 12;
+var IMAGE_SCENE_COUNT_MAX = 12;
 /* Match the Worker's Unicode letter/number tokenization exactly, including
  * punctuation-separated words and ignoring emoji. Escapes survive the template. */
 var IMAGE_WORD_PATTERN = /[\\p{L}\\p{N}][\\p{L}\\p{N}'’_-]*/gu;
@@ -27,19 +27,13 @@ function imageScriptWordCount(script) {
 	return words ? words.length : 0;
 }
 function imageSceneTarget(script, minutes) {
-	var words = imageScriptWordCount(script);
-	var fromScript = IMAGE_SCENE_COUNT_MAX;
-	for (var i = 0; i < IMAGE_SCENE_WORD_BRACKETS.length; i++) {
-		if (words <= IMAGE_SCENE_WORD_BRACKETS[i][0]) { fromScript = IMAGE_SCENE_WORD_BRACKETS[i][1]; break; }
-	}
-	var m = Number(minutes);
-	var fromMinutes = !isFinite(m) || m <= 1 ? 10 : m <= 3 ? 14 : 20;
-	return Math.max(IMAGE_SCENE_COUNT_MIN, Math.min(fromScript, fromMinutes, IMAGE_SCENE_COUNT_MAX));
+	/* Fixed for every script length and every duration: 4 videos + 8 images. */
+	return IMAGE_SCENE_MEDIA_TOTAL;
 }
 async function runProgressiveImagePipeline(options) {
 	const prompts = [];
 	let renderFailure = null;
-	const total = Math.max(0, Math.min(20, options.total));
+	const total = Math.max(0, Math.min(IMAGE_SCENE_MEDIA_TOTAL, Number(options.total) || IMAGE_SCENE_MEDIA_TOTAL));
 	function check() {
 		if (renderFailure) throw renderFailure;
 		if (options.isCancelled()) {

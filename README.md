@@ -10,24 +10,24 @@
 > [Pixabay policy, current coded limits and implementation checklist](pixabay-media-migration.md),
 > and the source-derived [system flow](SYSTEM_FLOW.md) for architecture and end-to-end request paths.
 
-## Media direction: Pixabay keywords, photos and two clips
+## Media direction: Pixabay keywords, photos and four clips
 
 The text LLM reads the full narration and plans short Pixabay **search terms (1–5 words)** that
 portray the general idea of the entire script. It does **not** generate images. Each automatic
-video contains exactly **two Pixabay video scenes**, with remaining scenes using stock photos.
-The scene total follows the **script word count**: **≤130 words → 6 scenes**, **≤240 → 8**,
-**≤500 → 10** (10 beyond 500 words) — i.e. 4+2 / 6+2 / 8+2 photos+clips. The script's own
+video contains exactly **four Pixabay video scenes**, with remaining scenes using stock photos.
+The scene total is fixed for every script length: **every script → 12 scenes**, **every script → 12**,
+**every script → 12** (10 beyond 500 words) — i.e. 8 photos + 4 clips. The script's own
 long-tail and short SEO keywords are offered to the planner as search vocabulary.
 
 Both Quick Batch and editor automatically import and process the mixed media. The editor's
 manual image-prompt/search section has been removed; normal uploads and the media gallery
-remain. Narration remains the audio master, and scene timing keeps both clips in the export.
-Photo searches return up to **two usable images from page 1** per keyword; each scene imports one selected image. Video searches return up to three clips from page 1. Pixabay requires `per_page=3` upstream, so the server requests three and caps photo results locally. Every planned and searched keyword is logged in the Worker console; see [search debugging](pixabay-media-migration.md#search-debugging-and-latency).
+remain. Narration remains the audio master, and scene timing keeps all four clips in the export.
+Photo searches return up to **eight usable images from page 1** per keyword; each scene imports one selected image. Video searches return up to four clips from page 1. Pixabay requires `per_page=12` upstream, so the server requests twelve and exposes eight photo results locally. Every planned and searched keyword is logged in the Worker console; see [search debugging](pixabay-media-migration.md#search-debugging-and-latency).
 
 See [the implementation reference](pixabay-media-migration.md) for the whole-script planner,
 limits, APIs and deployment checks, and
 [bug-fix-session-275-scene-count-consistency.md](bug-fix-session-275-scene-count-consistency.md)
-for the word-count scene rule and the wrong-scene-count debug. See also [the script and image keyword deep-debug audit](script-image-debug-audit.md) for both layouts and the reproduced fixes. `npm run test:pixabay` exercises the flow with mocked
+for the fixed 12-scene rule and the wrong-scene-count debug. See also [the script and image keyword deep-debug audit](script-image-debug-audit.md) for both layouts and the reproduced fixes. `npm run test:pixabay` exercises the flow with mocked
 browser-media boundaries. Production deployment and live-account/real-device smoke checks
 remain outstanding. The inventory below describes pre-migration behavior where it discusses
 AI-generated images or the removed manual prompt panel.
@@ -72,8 +72,9 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   selected set, then the **browser-managed progressive pipeline** requests up to **three** scene
   prompts, starts rendering them, and requests the next prompt batch concurrently. One batch
   of lookahead bounds buffering; there is no job URL, polling, or server-side video management.
-  Totals are **6 / 8 / 10** scenes by script word count (≤130 / ≤240 / ≤500), capped by the
-  free editor gallery slots. Each prompt request makes one model
+  Every script plans **12** scenes (4 Pixabay clips + 8 distinct photos), capped only by the
+  free editor gallery slots. Client JS records selected filenames and retries failed media
+  individually. Each prompt request makes one model
   call (45 s budget); the browser retries transient prompt failures up to twice with a 60 s
   request/body timeout, waiting the server's `Retry-After`/`retryAfterMs` hint (bounded at 15 s)
   instead of a fixed 500 ms. Paid images are never automatically replayed. **Bug fix #263** retries
@@ -219,7 +220,7 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   The **3D Ring Video Template** has a **Ring images** accordion at the bottom of its controls:
   upload **5–7 images together** to replace the cards. Invalid counts, non-images or unreadable
   files keep the previous valid set; thumbnails allow removal down to five images. Both export
-  actions require a valid decoded set. The ring uses exactly those images for preview/export,
+  actions require a valid decoded set. The ring uses exactly those images for Actions,
   with visibility, rotation-speed, radius, card-size, 3D-tilt, 0–360° rotation, X/Y and reset
   controls. Reset keeps uploads; images remain in browser memory only. Bundled samples are
   preview-only until the user uploads their own images; no remote image service is required.
@@ -235,7 +236,7 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
 | Videos per session | 10 |
 | Assets per video | 25 images · 5 GIFs · 5 MP4s (60 s each) |
 | Slide timing | 9 s per image/GIF; MP4 clips play in full; the list repeats to cover the MP3 |
-| Captions | 10 rows, 40 characters each; last caption capped at 10 s on screen |
+| Captions | 10 rows, 40 characters each; last caption capped at 12 s on screen |
 | Script | 1-6 minutes, `super fast` / `fast` / `medium` / `slow`; plain narration text — no SRT, no timestamps needed |
 | SEO keywords | exactly 1 long-tail (no word/character length rule, said **at least once**) + exactly 4 short keywords (≤3 words, each said **at least twice**); **minimums only — extra uses are allowed and never rejected**; short/long-tail overlap allowed, shared uses count for both; one short in the AI title (≤70 chars), one in a heading |
 | Ring template images | 5–7 decoded uploads, required before Download MP4 or Add to Video; separate from the normal two background photos |
@@ -271,13 +272,13 @@ the strings that carry the rules (the full inventory, with the constant each one
 | Video accordion, **AI Images** | `2 images per submit · landscape 16:9 · 1024×576` (placeholder: *Describe the image (always landscape 16:9, 1024×576)*; also the status line for failures: `Done — landscape 16:9 · 1024×576` or `1 of 2 failed: <error>`) |
 | 🎙 **Generate Voiceover** | tooltip: *Speak the script to MP3 with MeloTTS (English) + apply it as subtitles*; modal note repeats that the voice is fixed English and the MP3 must be uploaded manually |
 | Video accordion header | **🗑 Delete Video** — tooltip: *Delete this video with its images, MP4s, audio and script* (replaces the removed ☁️ API button; deleting renumbers the stack) |
-| Main panel notes | slideshow repeats to cover the track · captions sit 4/7 up from the bottom, 17px Bookman, last one capped at 10 s |
+| Main panel notes | slideshow repeats to cover the track · captions sit 4/7 up from the bottom, 17px Bookman, last one capped at 12 s |
 | Onboarding | `Click ＋ Add Video above, then press Generate.` |
 | Bulk grid (batch table) / editor heads | `One row — one video` → `N rows · M with a script` (`#batch-note`) · `N of 10 videos` (`#concept-count`) · `idle` / `N in queue` / `table generating` (`#preview-state`) · empty state `No rows yet — press ＋ Add Row, paste a script, pick a style and press ✨ Generate.` (`#batch-empty`) |
 | Quick batch table columns | `Script` · `Video style` · `Min` · `Resolution` (`480px` / `540px` / `720px` / `1024px`, with a live `W×H` hint underneath) · `Orientation` (`Square 1:1` / `Landscape 16:9` / `Portrait 9:16`) · `Preview` · `Export` |
 | Quick batch table hint + tooltips | *… pick the video image style, the minimum minutes, the AI image resolution and the frame orientation … a row that is empty is skipped, and so is a row that is already finished … Three rows render at the same time.* · Generate tooltip: *Generate every row that has a script and is not finished yet … three rows at a time* · busy label `■ Stop generating` |
 | Settings page, Appearance | `Current theme: Night Lab.` · `Preview only — press Save theme to apply it for everyone.` · `Saved — reload the studio page to see the new theme.` |
-| Blocking alerts | only for hard failures and cap breaches (e.g. `You can add at most 25 images (jpg, png, jpeg).`); the AI script reports the actual number of attempts and the error in its status line (transient failures may receive up to two retries) so a retry can start immediately |
+| Blocking alerts | only for hard failures and cap breaches (e.g. `You can add at most 25 images (jpg, png, jpeg).`); script-writing errors are retried silently in the browser up to seven times with a 40-second backoff before each retry, while the script textbox and loading animation stay visible. In the Quick Batch table layout, client JS also retries every failed pipeline stage seven times after 40 s backoffs, silently and stage-by-stage (see FINAL RULE). |
 
 Status lines (`#va-status-N`, `#va-script-status-N`, `#va-ai-status-N`) are the normal progress
 channel; the script line ends with `Script ready — N lines (<speed> speech, <minutes> min) · SEO:
@@ -362,10 +363,10 @@ skin covers the whole site.
 | `GET /image/gen?prompt=&variant=` | Workers AI image for the studio; costs 1 image credit — session or `yvs_free` guest (10,000 images/day on every plan); `401` for a cold anonymous request when KV is bound, `429` at the limit, `503` + `Retry-After` when the image fleet is shedding load, `X-Credit-*` headers on success |
 | `POST /api/script` | SEO plan (title + headings + 1 long-tail + 4 shorts) + AI explainer script → validated **plain-text** script (`{script, format:"plain"}` — no `srt` key is returned) plus keyword counts; accepts a user-selected `keywordSet` from `/api/seo-plan`, which is re-validated and skips the planner. Negotiated `singleAttempt:true,attempt:0–2` performs one writer call; browser owns retries |
 | `POST /api/seo-plan` | Two different validated SEO keyword sets (title + headings + 1 long-tail + 4 shorts each) for a topic, for the walkthrough's Select step |
-| `POST /api/image-prompts` | Synchronous scene prompts: optional `batch:{offset,count:1–3,attempt:0–2,previous}` performs one model call; `200 {prompts,count,expectedCount,batch?,style,minutes}`. Browser manages the progressive 6/8/10 word-count totals and retries. Without `batch`, legacy all-prompts/top-up behavior remains; `400` invalid input, `502` model failure, `503` no AI binding. The old `GET`/`DELETE /api/image-prompts/:id` job URL answers `410` |
+| `POST /api/image-prompts` | Synchronous scene prompts: optional `batch:{offset,count:1–3,attempt:0–2,previous}` performs one model call; `200 {prompts,count,expectedCount,batch?,style,minutes}`. Browser manages the progressive 12 fixed 12-scene total and retries. Without `batch`, legacy all-prompts/top-up behavior remains; `400` invalid input, `502` model failure, `503` no AI binding. The old `GET`/`DELETE /api/image-prompts/:id` job URL answers `410` |
 | `GET /api/pipeline-capabilities` | No-store version 261 negotiation; missing/failed support falls back before paid work. No new binding or migration is required. |
 | `POST /api/image` | One prompt plus resolution/orientation → binary image, one KV credit reservation; no browser auto-replay, observable-failure refund. Quota checks are best-effort under concurrency (KV is not atomic). |
-| `POST /api/image-batch` | One request, every image: `{prompts: string[]}` (≤20) → `application/x-ndjson` with `start`/`tick`/`image`/`done` events. Renders in parallel at 1024×576, 1 image credit per prompt up front (account or `/free` guest allowance) refunded for failures; `401` anonymous, `429` no credits, `400` invalid prompts |
+| `POST /api/image-batch` | One request, every image: `{prompts: string[]}` (≤12) → `application/x-ndjson` with `start`/`tick`/`image`/`done` events. Renders in parallel at 1024×576, 1 image credit per prompt up front (account or `/free` guest allowance) refunded for failures; `401` anonymous, `429` no credits, `400` invalid prompts |
 | `POST /api/voiceover` · `GET /tts` | `chunk:true` returns one binary WAV/MP3 chunk (≤400 chars, allowlisted voiceIndex); browser schedules/joins. No flag retains full legacy narration. `/tts` is the fallback proxy. |
 | `GET /api/session` · `POST /api/signup` · `POST /api/login` · `POST /api/logout` | Accounts (session/signup/login include `usertype`, `plan` and `credits`) |
 | `GET /api/credits` | Today's plan, used counters, remaining allowances and `resetsAt` — for the signed-in user, or the IP-keyed guest plan after `/free` |
@@ -436,7 +437,7 @@ skin covers the whole site.
   route harness.
 - **`bug-fix-session-242.md`** — Bug Fix Session #242: plain-text scripts (SRT removed from the
   whole path), the three-paragraph prompt guard, script retry + stacking modals, the Quick Batch
-  table's Preview/Export unlock rule, and the new `render-app/`.
+  table's Actions unlock rule, and the new `render-app/`.
 - **`bug-fix-session-244.md`** — Bug Fix Session #244: silent in-row retries for the Quick batch
   table (the editor's script-section loading animation, no error UI), the fixed table layout and
   the abort/stalled-stream fixes that removed the "signal is aborted" rows, one shared CMS delete
@@ -519,3 +520,18 @@ The live QA preview server on port 8765 shows both playable MP4s and the verific
 > · Normative rule: `system-rules.md` RULE 35 · Verification:
 > `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
 > document is superseded and void.
+
+---
+
+## FINAL RULE — QUICK BATCH TABLE LAYOUT (2026-11-04)
+
+This is the final, code-backed rule for the **Quick Batch table layout** and the **shared Editor media pipeline**. It supersedes every older Markdown/session note about one-request tables, Worker-owned media retries, variable scene totals, separate Preview/Export columns, or row script buttons.
+
+1. Client JavaScript owns retries for every failed **non-media** pipeline stage in this layout: voice, scene plan / prompts and animation. One initial attempt is followed by at most **7 retries** (8 total attempts); every retry waits **40 seconds** first. Only the failed stage is reset and repeated. Earlier successful stages are kept; there is no whole-row restart and no duplicate paid batch.
+2. **Image and video imports are the exception in BOTH layouts.** Only the individually failed photo or clip is retried from client JavaScript, using the same 7-retry / 40-second ladder per item. Successful media, object URLs and recorded filenames are preserved. There is no whole-stage, whole-batch or whole-row media restart, and a failed stage-level retry must not revoke a successful image.
+3. Every automatic video in **both** the Editor and Quick Batch table plans exactly **12 Pixabay scenes for every script length and duration**: **4 silent videos + 8 photos**. Scene planning and Pixabay searches always target those same 12 results (8 image results and 4 video results). Client JS records the filename of every selected scene and rejects duplicate filenames in one video; alternate Pixabay result indexes/pages are searched for the failed item so no similar image repeats in one video. A duplicate or missing scene is retried individually and must not strand the row.
+4. Retries are silent. The row keeps its script textarea, working stage label and `.va-spinner` continuously; no error, retry, attempt, warning or abort wording is painted in the table UI. After an exhausted ladder the row returns silently to `ready`.
+5. A missing scene plan must be retried by client JS, and the row must continue to the next pipeline once a plan arrives.
+6. In the **Editor layout**, the script textbox is pinned while script writing/retries run: no state paint, toggle or accordion renumber may hide it over time.
+7. The **last table column is `Actions`** with icons for **Preview** (same existing function), **Process Export** and **Edit**. Edit opens a new page with a **transition-only project JSON** payload carrying the row's basic settings from `batchProjectJson()`; `applyTransitionProject()` consumes it for the transition only. The rows have **no AI enhancer button**.
+8. `src/client/app-js.ts` is the source of truth. `AUTO_MEDIA_TOTAL = 12`, `AUTO_VIDEO_SCENES = 4`, `AUTO_IMAGE_SCENES = 8`, `MEDIA_ITEM_MAX_RETRIES = 7`, `MEDIA_ITEM_RETRY_BACKOFF_MS = 40000`, `retryFailedMediaOnly()`, `requestBatchImagesWithIndividualRetries()`, `runEditorMediaWithIndividualRetries()`, `batchActionCell()`, `batchProjectJson()` and `applyTransitionProject()` define the live contract. Worker capabilities advertise `mediaSceneCap: 12`, `mediaVideoScenes: 4`, `mediaImageScenes: 8`, `mediaItemRetryOwner: "browser"`, `mediaItemRetries: 7`, `mediaItemRetryBackoffMs: 40000`, `mediaFilenameDedupe: "per-video"` and `quickBatchActionsColumn: "preview-process-export-edit"`. `BATCH_PIPELINE_MAX_RETRIES = 7` and `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000` still govern the non-media stage ladder. Older Quick Batch table statements in this file are superseded wherever they conflict.

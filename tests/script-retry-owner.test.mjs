@@ -23,14 +23,13 @@
  *      request is not a replay of attempt 1;
  *  W5  a configuration failure (no AI binding) is `retryable: false`, so no
  *      ladder - worker or browser - burns attempts on it;
- *  W6  the capabilities advertise `retryOwner`/`scriptRetryOwner: "worker"`
- *      plus `workerScriptRetries`, and keep `browserScriptRetries` ONLY so a
- *      cached page keeps working;
+ *  W6  the capabilities advertise the browser as the script retry owner,
+ *      with seven retries and a 40 s backoff, while media stays worker-owned;
  *  W7  the async note carries the same verdict back to the browser, and
  *  W8  a note run without the flag spends the worker's three planner attempts;
- *  B1  the page makes exactly ONE request - no loop, no `browserRetries`, no
- *      `previousFailure`, no resume set - and
- *  B2  it reports the attempts the WORKER spent, against the real APP_JS.
+ *  B1  the page makes one initial request plus seven silent retries and
+ *      sends `browserRetries` so the Worker does not nest its own ladder;
+ *  B2  no worker verdict, permanent or otherwise, becomes UI error text.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -239,7 +238,7 @@ test("a missing AI binding is reported as not retryable", async () => {
 /* W6: the capability the page reads to opt in                                */
 /* ------------------------------------------------------------------------- */
 
-test("capabilities advertise the worker as the retry owner, for every stage", async () => {
+test("capabilities advertise the browser as the script retry owner", async () => {
 	const workerModule = await import("../src/index.ts");
 	const worker = workerModule.default || workerModule;
 	const response = await worker.fetch(
@@ -249,15 +248,11 @@ test("capabilities advertise the worker as the retry owner, for every stage", as
 	);
 	assert.equal(response.status, 200);
 	const caps = await response.json();
-	assert.equal(caps.retryOwner, "worker");
-	assert.equal(caps.scriptRetryOwner, "worker");
+	assert.equal(caps.retryOwner, "worker", "all other stages stay worker-owned");
+	assert.equal(caps.scriptRetryOwner, "browser");
 	assert.equal(caps.workerScriptRetries, 3);
-	/*
-	 * Compatibility only: a cached pre-279 page reads this, sends
-	 * `browserRetries: true` and keeps its own three-attempt loop. It must
-	 * therefore still be advertised - and still mean "one attempt per stage".
-	 */
-	assert.equal(caps.browserScriptRetries, 3);
+	assert.equal(caps.browserScriptRetries, 7);
+	assert.equal(caps.scriptRetryBackoffMs, 40000);
 });
 
 /* ------------------------------------------------------------------------- */
@@ -317,6 +312,10 @@ async function walkthrough(w, scriptReplies) {
 	const requests = [];
 	const sent = scriptReplies.slice();
 	const original = w.fetch;
+	/* Production makes seven 40 s backoffs; this browser suite makes them instant. */
+	w.__SCRIPT_RETRY_TIMING.maxRetries = 7;
+	w.__SCRIPT_RETRY_TIMING.backoffMs = 0;
+	w.__SCRIPT_RETRY_TIMING.uiCheckMs = 0;
 	w.fetch = async (input, init = {}) => {
 		const url = String(input);
 		const body = init && init.body ? JSON.parse(init.body) : null;
@@ -348,7 +347,7 @@ async function walkthrough(w, scriptReplies) {
 	return requests;
 }
 
-test("the page makes exactly one request and never loops", async (t) => {
+test("the page makes one initial request plus seven silent retries", async (t) => {
 	const { w } = harness();
 	t.after(() => w.close());
 
@@ -365,16 +364,17 @@ test("the page makes exactly one request and never loops", async (t) => {
 	const requests = await walkthrough(w, [failure]);
 	await w.confirmSeoStyleAndGenerate(1);
 
-	assert.equal(requests.length, 1, "one request: the ladder belongs to the worker");
+	assert.equal(requests.length, 8, "one initial write plus seven browser retries");
 	const body = requests[0].body;
-	assert.equal(body.browserRetries, undefined, "no flag, so the worker keeps its ladder");
-	assert.equal(body.attempt, 0, "the page has no attempt counter to report");
-	assert.equal(body.previousFailure, "", "and no failure of its own to feed forward");
+	assert.equal(body.browserRetries, true, "the Worker spends one inference per browser attempt");
+	assert.equal(body.clientRetry, 0);
+	assert.equal(body.attempt, 0);
+	assert.equal(body.previousFailure, "");
 
 	const status = w.document.getElementById("va-script-status-1").textContent;
-	assert.match(status, /Script failed:/);
-	assert.match(status, /after 3 attempts/, "the user still learns it was retried: " + status);
-	assert.ok(!/retrying \(/.test(status), "the page never claims to be retrying");
+	assert.match(status, /Writing your SEO script/);
+	assert.doesNotMatch(status, /Script failed|after 3 attempts|retrying|retry|error/i);
+	assert.equal(w.document.getElementById("va-script-box-1").classList.contains("va-script-loading"), true);
 });
 
 test("the page still sends the keyword set the user picked", async (t) => {
@@ -407,7 +407,7 @@ test("the page still sends the keyword set the user picked", async (t) => {
 	assert.equal(w.__VIDEO_PROJECTS[0].script, sentences.join(" "), "the script landed on the project");
 });
 
-test("the page stops immediately when the worker says the failure is permanent", async (t) => {
+test("a permanent worker verdict is still retried silently by the browser", async (t) => {
 	const { w } = harness();
 	t.after(() => w.close());
 
@@ -423,8 +423,8 @@ test("the page stops immediately when the worker says the failure is permanent",
 	const requests = await walkthrough(w, [permanent]);
 	await w.confirmSeoStyleAndGenerate(1);
 
-	assert.equal(requests.length, 1, "a configuration failure is not retried by anybody");
-	assert.match(w.document.getElementById("va-script-status-1").textContent, /AI binding not configured/);
+	assert.equal(requests.length, 8, "any script-writing error spends the browser ladder");
+	assert.doesNotMatch(w.document.getElementById("va-script-status-1").textContent, /AI binding not configured|failed|error|retry/i);
 });
 
 /* ------------------------------------------------------------------------- */

@@ -1205,6 +1205,14 @@ export const SCRIPT_MIN_ATTEMPT_MS = 5000;
 /* Transport attempts per model (validation attempts are separate). */
 export const SEO_PLAN_TRANSPORT_ATTEMPTS = 2;
 
+/*
+ * The browser owns the script-writing retry ladder: one initial write plus
+ * seven 40-second-spaced retries. A singleAttempt request may therefore carry
+ * any attempt number in that range; the Worker performs one inference for it.
+ */
+export const SCRIPT_BROWSER_RETRY_LIMIT = 7;
+export const SCRIPT_BROWSER_RETRY_BACKOFF_MS = 40000;
+
 function plannerSleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1749,10 +1757,10 @@ export async function handleSeoScriptGeneration(
 			reason: "AI binding not configured"
 		});
 		/*
-		 * RETRYABLE: FALSE. This is the deployment missing its AI binding, so
-		 * a browser-owned retry cannot fix it: say so instead of letting the
-		 * page spend its three attempts (and the user's wait) on it. The old
-		 * bare 503 read as transient to every client.
+		 * RETRYABLE: FALSE for the legacy worker-owned ladder. The shipped
+		 * browser-owned script ladder still retries this verdict silently, so
+		 * this marker is a compatibility signal rather than a client stop
+		 * condition. The old bare 503 read as transient to every client.
 		 */
 		return scriptJson(
 			{
@@ -1821,24 +1829,18 @@ export async function handleSeoScriptGeneration(
 	}
 
 	/*
-	 * WHO OWNS THE RETRIES? THE WORKER (session 279).
+	 * WHO OWNS THE RETRIES? THE BROWSER, FOR SCRIPT WRITING.
 	 *
-	 * The history: this route always retried for the caller (up to 3 planner +
-	 * 3 writer attempts inside ONE request). Session 278 then made the BROWSER
-	 * the owner - the page sent `browserRetries: true`, the worker did one
-	 * attempt per stage, and the page looped three times. That was measured in
-	 * bench/pipeline-sim/results/baseline-scale1.json as 12 submissions and 934
-	 * note polls for nine scripts, because every page-level attempt is a fresh
-	 * POST /api/script?async=1, a fresh admission check against the 2-lane loop
-	 * and a FRESH 900 ms-quantised poll stream.
+	 * The shipped page sends `browserRetries: true` and owns one initial
+	 * write plus seven 40-second-spaced retries in
+	 * requestScriptWritingWithClientRetries(). This route therefore makes
+	 * exactly one planner and one writer inference for that request, rotates
+	 * its model using the browser's `attempt`, and returns a verdict for
+	 * that single attempt. Requests without the flag keep the legacy worker
+	 * ladder (three planner and three writer attempts), so old clients are
+	 * unaffected.
 	 *
-	 * So the ladder lives here again, and only here: the page makes one request
-	 * and waits. `browserRetries: true` is still honoured, because a cached
-	 * pre-279 page still sends it and must keep getting exactly one attempt per
-	 * stage - that page still owns its own ladder. A pre-279 page against this
-	 * worker is therefore unchanged, and this page against a pre-279 worker
-	 * simply runs that worker's legacy ladder (slower, never a hang).
-	 *
+
 	 * Hang safety (the price of holding the ladder): every attempt is bounded by
 	 * attemptSlot() - it refuses to start a call the run cannot finish - the
 	 * stage boundaries check `aborted()`, and `deadlineAtMs` caps the whole run.
@@ -1851,8 +1853,8 @@ export async function handleSeoScriptGeneration(
 	 * `browserRetries` request makes that the rule for every script. */
 	const writerAttemptLimit = browserRetries || singleAttempt ? 1 : 3;
 	if (singleAttempt && (!suppliedKeywordSet || (body.attempt !== undefined &&
-		(!Number.isInteger(body.attempt) || Number(body.attempt) < 0 || Number(body.attempt) > 2)))) {
-		return scriptJson({ error: "Single-attempt scripts require a valid keyword set and attempt 0-2" }, 400);
+		(!Number.isInteger(body.attempt) || Number(body.attempt) < 0 || Number(body.attempt) > SCRIPT_BROWSER_RETRY_LIMIT)))) {
+		return scriptJson({ error: "Single-attempt scripts require a valid keyword set and attempt 0-" + SCRIPT_BROWSER_RETRY_LIMIT }, 400);
 	}
 	const previousFailure = typeof body.previousFailure === "string" ? body.previousFailure.slice(0, 800) : "";
 	/*
@@ -1869,12 +1871,11 @@ export async function handleSeoScriptGeneration(
 	const writerModel = (singleAttempt || browserRetries) && browserAttempt
 		? alternateModel : scriptModel;
 	/*
-	 * SESSION 279: THE LADDER ROTATES ITS OWN MODEL.
-	 *
-	 * A retry on the same slug with the same prompt is a replay. The page used
-	 * to be the only thing that could change the slug (through `attempt`); now
-	 * that the worker owns the attempts, the worker owns the rotation - attempt
-	 * 1 keeps the negotiated slug, attempt 2+ alternates to the fallback.
+	 * A retry on the same slug with the same prompt is a replay. The shipped
+	 * page sends `attempt` for its seven browser-owned retries and rotates the
+	 * slug before calling this route through `browserAttempt`; `modelForAttempt`
+	 * preserves the legacy worker-owned ladder's own rotation for callers that
+	 * do not send `browserRetries`.
 	 */
 	const modelForAttempt = (base: string, attempt: number): string =>
 		attempt > 1 && alternateModel && alternateModel !== base ? alternateModel : base;
@@ -2325,18 +2326,17 @@ export async function handleSeoScriptGeneration(
 	/*
 	 * THE RETRY CONTRACT (browser-owned attempts).
 	 *
-	 * A failure is not just "500 + a sentence" any more: the browser has to know
-	 * WHICH stage failed, whether another attempt can help, and what it should
-	 * send back so the next attempt does not repeat work it already paid for.
-	 * `stage` and `retryable` come from the pipeline; `keywordSet` is the resume
-	 * point (the next request passes it straight back and the planner is
-	 * skipped, exactly like a warm note).
+	 * A failure is not just "500 + a sentence": the verdict says WHICH stage
+	 * failed and carries the validated `keywordSet` as the resume point. The
+	 * shipped browser sends that plan back with every one of its attempts and
+	 * deliberately ignores `retryable`, retrying all writing errors silently.
+	 * Those fields remain useful to legacy worker-owned clients and diagnostics.
 	 */
 	/*
-	 * A few failures are facts about the deployment, not about this attempt:
-	 * no amount of browser retries turns a missing AI binding into a script.
-	 * Reporting them as `retryable: false` is what stops the page burning its
-	 * three attempts (and the user's time) on them.
+	 * A few failures are facts about the deployment, not about this attempt.
+	 * The Worker still marks them `retryable: false` for old clients; the
+	 * shipped browser ladder deliberately retries ANY writing error, including
+	 * this verdict, without putting it on the UI.
 	 */
 	const permanentFailure = (reason: string): boolean =>
 		/AI binding not configured|invalid api key|unauthori[sz]ed|forbidden|quota|exceeded your current quota/i.test(
@@ -2350,10 +2350,9 @@ export async function handleSeoScriptGeneration(
 	): Record<string, unknown> => {
 		const retryable = !permanentFailure(reason);
 		/*
-		 * SESSION 279: the verdict names its owner. A cached pre-279 page sends
-		 * `browserRetries: true`, gets ONE attempt per request and runs the
-		 * ladder itself; this page sends no flag, so `attemptsUsed` is what the
-		 * worker's own ladder spent and re-asking would spend it again.
+		 * The verdict names its owner. The shipped page sends
+		 * `browserRetries: true` and gets ONE attempt per request; unflagged
+		 * legacy callers still receive the worker-owned ladder's attempt count.
 		 */
 		const retryOwner = browserRetries ? "browser" : "worker";
 		const payload: Record<string, unknown> = {
@@ -2459,8 +2458,9 @@ export async function handleSeoScriptGeneration(
 				}
 				heartbeat("planning");
 				const attemptT0 = Date.now();
-				/* Session 279: a ladder attempt is never a replay - attempt 2+
-				 * alternates the slug (the page no longer sends `attempt`). */
+				/* A legacy worker-ladder attempt is never a replay: attempt 2+
+				 * alternates the slug. Browser-owned attempts are rotated by
+				 * the `attempt` field before this loop. */
 				const plannerAttemptModel = modelForAttempt(plannerModel, attempt);
 				const plannerTemp = attempt === 1 ? 0.55 : 0.4;
 				const prompt =
@@ -2774,7 +2774,7 @@ export async function handleSeoScriptGeneration(
 			}
 			heartbeat("writing");
 			const attemptT0 = Date.now();
-			/* Session 279: same rotation rule as the planner. */
+			/* Same legacy ladder rotation rule as the planner. */
 			const writerAttemptModel = modelForAttempt(writerModel, attempt);
 			const writerTemp = attempt === 1 ? 0.65 : 0.4;
 			const prompt =

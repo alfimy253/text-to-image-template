@@ -29,6 +29,7 @@ function makeApp() {
 	w.URL.revokeObjectURL = () => { };
 	w.__PLAN_MODE = "freemium";
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	return { dom, w };
 }
 

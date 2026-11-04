@@ -119,6 +119,17 @@ export function harness({ presentFrames = true, blockPlay = false, clipDuration 
 	const warn = w.console.warn;
 	w.console.warn = function (...args) { warnings.push(args.map(String).join(" ")); return warn.apply(w.console, args); };
 
+	/*
+	 * The production browser waits 40 seconds before each script-write retry and
+	 * before each Quick Batch table pipeline-stage retry. jsdom tests exercise
+	 * those ladders many times, so compress exactly that production delay here;
+	 * the policies still advertise 40000 ms and the dedicated retry tests assert it.
+	 */
+	const rawSetTimeout = w.setTimeout.bind(w);
+	w.setTimeout = function (callback, delay, ...args) {
+		return rawSetTimeout(callback, Number(delay) === 40000 ? 0 : delay, ...args);
+	};
+
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
 
 	return { w, warnings, stats: () => ({ encoded, drawCalls: drawCalls.count, frameDurations }) };

@@ -75,7 +75,7 @@ Keyword set, title, headings and section structure existed only in one response 
 
 ### 2.3 ~~A validation failure re-generated the whole SRT~~ — **fixed**
 The only failure feedback was a sentence, so a one-word keyword deficit cost a complete 21 s regeneration
-(up to three). **Fix:** `repairKeywordShortfall()` patches valid cues in place, preserves timings, drops no
+(up to four). **Fix:** `repairKeywordShortfall()` patches valid cues in place, preserves timings, drops no
 words, and re-validates — 49.3 s → 28.2 s.
 
 ### 2.4 Timeouts rejected the promise but did not cancel the inference — **open**
@@ -492,28 +492,35 @@ coverage; `tsc` reports **no new errors** versus the base commit (diff of the so
 
 ---
 
-## 9. Retry ownership (session 278) — the browser retries, the worker attempts once
+## 9. Retry ownership — browser for script writing, worker for media/voice
 
-The pipeline used to retry **for** the page: 3 planner + 3 writer attempts inside one
-`/api/script` request, while the page retried that whole request 3 times. One click could
-cost **18 paid inferences** and the worker's 405 s ladder could not fit the 240 s the note
-layer promised. Retries now live where the attempt counter and the UI already live.
+The code in `src/client/app-js.ts` is authoritative for script writing. The
+browser makes one initial `POST /api/script` write and, on **any** writing
+error, retries it up to **seven** times. Every retry is preceded by a
+**40-second backoff** (`SCRIPT_WRITE_MAX_RETRIES = 7`,
+`SCRIPT_WRITE_RETRY_BACKOFF_MS = 40000`, `SCRIPT_WRITE_TOTAL_ATTEMPTS = 8`).
 
 | Retry | Owner **now** |
 | --- | --- |
-| `/api/script` planner / writer | **browser** — with `browserRetries: true` the worker makes exactly 1 attempt per stage and returns `{ retryable, failure: { stage, reason, attempts, retryable }, keywordSet }` |
-| Whole-request script retry (editor **and** quick-batch row) | **browser** — `scriptAttempts()` (from `browserScriptRetries`, default 3), 250 ms backoff or the worker's `retryAfterMs`, stops on `retryable === false` |
-| Resume after a writer failure | **browser** — re-sends the worker's `keywordSet`, so attempt 2 skips the planner entirely |
-| Voiceover chunk mode / Pixabay media / image prompt flow / note polling | **browser** (already was) |
-| Image generation (`IMAGE_BATCH_ATTEMPTS`, `IMAGE_OVERLOAD_ATTEMPTS`, 45 s budget) | worker — welded to credit refunds and one streaming response; the client has no per-slot replay path yet |
-| `api-relay` endpoint rotation, legacy voiceover ladder, `planOneSeoKeywordSet` | worker — provider-level / no browser caller |
+| Whole-request script writing (editor and quick-batch row) | **browser** — `requestScriptWritingWithClientRetries()` owns the ladder for both layouts and retries even a 4xx or `retryable: false` verdict |
+| `/api/script` planner / writer inside one request | **worker, one inference per stage** — the page sends `browserRetries: true`, `clientRetry`, `attempt` and `previousFailure`; `SCRIPT_BROWSER_RETRY_LIMIT = 7` permits attempt 0–7 |
+| Script-writing UI check | **browser** — a `MutationObserver` plus an interval detects any failure/retry wording and restores the normal writing state; the script textbox and `.va-spinner` DOM nodes are kept continuously |
+| Voiceover, image prompts, image generation and relay rotation | **worker outside Quick Batch table rows** — those ladders remain welded to their streams, budgets and credit refunds. **Quick Batch table exception:** client JS retries each failed pipeline stage with the final 7-retry / 40 s rule (see FINAL RULE). |
 
-Requests **without** `browserRetries` keep the legacy 3+3 ladder, so old clients and old
-workers are unaffected. `GET /api/pipeline-capabilities` advertises
-`scriptRetryOwner: "browser"` and `browserScriptRetries: 3`; a missing AI binding is now
-`503 { retryable: false }` instead of a bare 503 the page would have retried three times.
-Full details and measurements: `bug-fix-session-278-browser-retry-owner.md`.
+Nothing about a retry reaches either UI. The editor's `va-script-box` and the
+Quick Batch row's `batch-script-input` remain present, and the loading
+animation stays painted through the first attempt, all seven backoffs and the
+final retry. Failure details are available only in `window.__SCRIPT_RETRY_LOG`
+and console diagnostics; the status line and walkthrough error slot remain in
+writing mode. Deleting a video, removing a row or pressing Stop cancels a
+pending 40-second wait without starting another request.
 
+`GET /api/pipeline-capabilities` advertises `scriptRetryOwner: "browser"`,
+`browserScriptRetries: 7` and `scriptRetryBackoffMs: 40000`, while
+`retryOwner: "worker"` still describes every non-script ladder. Tests may
+shrink the production timing through `window.__SCRIPT_RETRY_TIMING` (also
+aliased as `__SCRIPT_RETRY_POLICY`, `__SCRIPT_RETRY` and the retry fields on
+`__SCRIPT_PIPELINE_TIMING`). See `tests/script-writing-client-retries.test.mjs`.
 
 ---
 
@@ -533,3 +540,18 @@ Full details and measurements: `bug-fix-session-278-browser-retry-owner.md`.
 > · Normative rule: `system-rules.md` RULE 35 · Verification:
 > `tests/script-note-client-only.test.mjs` (12/12). Any older KV-note statement in this
 > document is superseded and void.
+
+---
+
+## FINAL RULE — QUICK BATCH TABLE LAYOUT (2026-11-04)
+
+This is the final, code-backed rule for the **Quick Batch table layout** and the **shared Editor media pipeline**. It supersedes every older Markdown/session note about one-request tables, Worker-owned media retries, variable scene totals, separate Preview/Export columns, or row script buttons.
+
+1. Client JavaScript owns retries for every failed **non-media** pipeline stage in this layout: voice, scene plan / prompts and animation. One initial attempt is followed by at most **7 retries** (8 total attempts); every retry waits **40 seconds** first. Only the failed stage is reset and repeated. Earlier successful stages are kept; there is no whole-row restart and no duplicate paid batch.
+2. **Image and video imports are the exception in BOTH layouts.** Only the individually failed photo or clip is retried from client JavaScript, using the same 7-retry / 40-second ladder per item. Successful media, object URLs and recorded filenames are preserved. There is no whole-stage, whole-batch or whole-row media restart, and a failed stage-level retry must not revoke a successful image.
+3. Every automatic video in **both** the Editor and Quick Batch table plans exactly **12 Pixabay scenes for every script length and duration**: **4 silent videos + 8 photos**. Scene planning and Pixabay searches always target those same 12 results (8 image results and 4 video results). Client JS records the filename of every selected scene and rejects duplicate filenames in one video; alternate Pixabay result indexes/pages are searched for the failed item so no similar image repeats in one video. A duplicate or missing scene is retried individually and must not strand the row.
+4. Retries are silent. The row keeps its script textarea, working stage label and `.va-spinner` continuously; no error, retry, attempt, warning or abort wording is painted in the table UI. After an exhausted ladder the row returns silently to `ready`.
+5. A missing scene plan must be retried by client JS, and the row must continue to the next pipeline once a plan arrives.
+6. In the **Editor layout**, the script textbox is pinned while script writing/retries run: no state paint, toggle or accordion renumber may hide it over time.
+7. The **last table column is `Actions`** with icons for **Preview** (same existing function), **Process Export** and **Edit**. Edit opens a new page with a **transition-only project JSON** payload carrying the row's basic settings from `batchProjectJson()`; `applyTransitionProject()` consumes it for the transition only. The rows have **no AI enhancer button**.
+8. `src/client/app-js.ts` is the source of truth. `AUTO_MEDIA_TOTAL = 12`, `AUTO_VIDEO_SCENES = 4`, `AUTO_IMAGE_SCENES = 8`, `MEDIA_ITEM_MAX_RETRIES = 7`, `MEDIA_ITEM_RETRY_BACKOFF_MS = 40000`, `retryFailedMediaOnly()`, `requestBatchImagesWithIndividualRetries()`, `runEditorMediaWithIndividualRetries()`, `batchActionCell()`, `batchProjectJson()` and `applyTransitionProject()` define the live contract. Worker capabilities advertise `mediaSceneCap: 12`, `mediaVideoScenes: 4`, `mediaImageScenes: 8`, `mediaItemRetryOwner: "browser"`, `mediaItemRetries: 7`, `mediaItemRetryBackoffMs: 40000`, `mediaFilenameDedupe: "per-video"` and `quickBatchActionsColumn: "preview-process-export-edit"`. `BATCH_PIPELINE_MAX_RETRIES = 7` and `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000` still govern the non-media stage ladder. Older Quick Batch table statements in this file are superseded wherever they conflict.

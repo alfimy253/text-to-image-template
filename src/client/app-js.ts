@@ -18,6 +18,7 @@ import { BROWSER_OFFLOAD_JS } from "./browser-offload";
 import { BROWSER_USAGE_JS } from "./usage-ledger";
 import { PROGRESSIVE_IMAGE_PIPELINE_JS } from "./progressive-image-pipeline";
 import { SCRIPT_NOTES_CLIENT_JS } from "./script-notes-client";
+import { PIPELINE_MANAGEMENT_STORE_JS } from "./pipeline-management-store";
 
 export const APP_JS = `
 ${PIXABAY_DIRECT_JS}
@@ -25,12 +26,325 @@ ${BROWSER_OFFLOAD_JS}
 ${BROWSER_USAGE_JS}
 ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 ${SCRIPT_NOTES_CLIENT_JS}
+${PIPELINE_MANAGEMENT_STORE_JS}
 	/*
 	 * Browser-side note memory (localStorage → cookie → in-page map).
 	 * See src/client/script-notes-client.ts and current_code_latest.md.
 	 */
 	const scriptNoteMemory =
 		createScriptNoteMemory(window);
+
+	/*
+	 * Both layouts now manage their pipeline bookkeeping in the browser:
+	 * localStorage is the full management snapshot and the cookie is its
+	 * compact digest-verified mirror. Media bytes and object URLs stay in
+	 * memory only.
+	 */
+	/*
+	 * Bug Fix Session 331: every tab owns one localStorage page. Four cookie
+	 * chunks carry the full snapshot; no TTL, only timestamp+digest matching.
+	 */
+	let pipelineManagementSaving =
+		false;
+
+	let pipelineManagementRestoring =
+		false;
+
+	function pipelineManagementLayout() {
+		let name = "editor";
+		try {
+			if (studioLayout === "table" || studioLayout === "editor") name = studioLayout;
+		} catch (layoutError) { }
+		return name;
+	}
+
+	function pipelineManagementNumber(value, fallback) {
+		const n = Number(value);
+		return Number.isFinite(n) ? n : fallback;
+	}
+
+	function ensurePipelineVideoIds() {
+		const pageId = pipelineManagementStore.pageId;
+		try {
+			for (const row of batchRows) {
+				if (!row.vid) row.vid = pageId + "-row-" + String(row.id);
+			}
+		} catch (batchError) { }
+		try {
+			videoProjects.forEach(function (project, index) {
+				if (!project._pipelineVid) project._pipelineVid = pageId + "-editor-" + String(index + 1);
+			});
+		} catch (editorError) { }
+	}
+
+	function pipelineManagementSnapshot() {
+		ensurePipelineVideoIds();
+		let rows = [];
+		let projects = [];
+		let quickBatch = { runBusy: false, queued: [], finishedCount: 0, rows: rows };
+		try {
+			rows = batchRows.map(function (row) {
+				return {
+					id: String(row.id),
+					vid: String(row.vid || ""),
+					title: String(row.title || "").slice(0, 120),
+					topic: String(row.topic || "").slice(0, 160),
+					script: String(row.script || ""),
+					scriptLength: String(row.script || "").length,
+					style: String(row.style || ""),
+					minutes: pipelineManagementNumber(row.minutes, 1),
+					resolution: String(row.resolution || ""),
+					orientation: String(row.orientation || ""),
+					quality: String(row.quality || ""),
+					stage: String(row.stage || "ready"),
+					detail: String(row.detail || "").slice(0, 200),
+					attempt: pipelineManagementNumber(row.attempt, 0),
+					retrying: Boolean(row.retrying),
+					running: Boolean(row.running),
+					prompts: (row.prompts || []).length,
+					images: (row.images || []).length,
+					slides: (row.slides || []).length,
+					mediaFilenames: (row.mediaFilenames || []).length,
+					mp3: Boolean(row.mp3),
+					animated: Boolean(row.animated),
+					finished: Boolean(row.animated && (row.slides || []).length)
+				};
+			});
+			quickBatch = {
+				runBusy: Boolean(batchRunBusy),
+				queued: batchQueue.map(function (row) { return String(row.id); }),
+				finishedCount: pipelineManagementNumber(batchFinishedCount, 0),
+				rows: rows
+			};
+		} catch (batchError) { }
+		try {
+			projects = videoProjects.map(function (project, index) {
+				return {
+					n: index + 1,
+					vid: String(project._pipelineVid || ""),
+					name: String(project.name || "").slice(0, 120),
+					stage: project._scriptWriting ? "script" : project._imageFlowActive ? "media" : "ready",
+					script: String(project.script || ""),
+					scriptLength: String(project.script || "").length,
+					topic: String(project._seoTopic || "").slice(0, 160),
+					minutes: pipelineManagementNumber(project._seoMinutes, 1),
+					style: String(project.videoImageStyle || ""),
+					resolution: String(project.resolution || ""),
+					orientation: String(project.orientation || ""),
+					quality: String(project.quality || ""),
+					imageFlowActive: Boolean(project._imageFlowActive),
+					prompts: (project.imagePrompts || []).length,
+					images: (project.images || []).length,
+					slides: (project.slides || []).length,
+					mediaFilenames: (project.mediaFilenames || []).length
+				};
+			});
+		} catch (editorError) { }
+		return {
+			version: 1,
+			pageId: pipelineManagementStore.pageId,
+			updatedAt: Date.now(),
+			layout: pipelineManagementLayout(),
+			quickBatch: quickBatch,
+			editor: { projects: projects }
+		};
+	}
+
+	function pipelineStorageFailureText(saved, error) {
+		if (error) return String(error && error.message || error).slice(0, 180);
+		if (!saved) return "unknown storage failure";
+		if (saved.reason) return String(saved.reason).slice(0, 180);
+		if (saved.localStorage === false) return "localStorage write failed";
+		if (saved.cookieCount && saved.cookies !== saved.cookieCount) return "pipeline cookie chunks were rejected";
+		if (saved.timestampMatched === false) return "localStorage and cookie timestamps did not match";
+		return "storage verification failed";
+	}
+
+	function showPipelineStorageWarning(detail) {
+		const text = "Pipeline management storage could not be saved or verified (" + String(detail || "unknown error") +
+			"). Use Reset pipeline state to clear this tab's saved management data.";
+		window.__PIPELINE_MANAGEMENT_WARNING__ = { visible: true, detail: String(detail || "unknown error") };
+		const box = document.getElementById("pipeline-storage-alert");
+		const message = document.getElementById("pipeline-storage-message");
+		if (!box || !message) {
+			console.warn("[pipeline-storage]", text);
+			try { showRequiredModal([text]); } catch (modalError) { }
+			return;
+		}
+		message.textContent = text;
+		box.hidden = false;
+		box.setAttribute("data-state", "error");
+	}
+
+	function hidePipelineStorageWarning() {
+		window.__PIPELINE_MANAGEMENT_WARNING__ = { visible: false, detail: "" };
+		const box = document.getElementById("pipeline-storage-alert");
+		if (box) {
+			box.hidden = true;
+			box.removeAttribute("data-state");
+		}
+	}
+
+	function resetPipelineManagementState() {
+		const result = { cleared: false, saved: false, detail: "" };
+		try {
+			pipelineManagementStore.clear();
+			result.cleared = true;
+		} catch (clearError) {
+			result.detail = String(clearError && clearError.message || clearError);
+		}
+		window.__PIPELINE_MANAGEMENT_STATE__ = null;
+		window.__PIPELINE_MANAGEMENT_SAVE__ = null;
+		window.__PIPELINE_MANAGEMENT_LOAD__ = null;
+		pipelineManagementSaving = false;
+		pipelineManagementRestoring = false;
+		try {
+			batchRows.splice(0, batchRows.length);
+			batchTableSeeded = false;
+			batchQueue = [];
+			batchRunBusy = false;
+			batchFinishedCount = 0;
+			batchAttemptedRows.clear();
+			batchActivePromises.clear();
+		} catch (batchError) { }
+		try {
+			videoProjects.forEach(function (project, index) {
+				project._pipelineVid = pipelineManagementStore.pageId + "-editor-" + String(index + 1);
+				project._imageFlowActive = false;
+				project._imageFlowFinalizing = false;
+				project._scriptWriting = false;
+			});
+		} catch (editorError) { }
+		hidePipelineStorageWarning();
+		try { renderBatchTable(); } catch (renderError) { }
+		const saved = persistPipelineManagementState("storage-reset");
+		result.saved = Boolean(saved && saved.ok);
+		if (!result.saved && !result.detail) result.detail = "a fresh snapshot could not be written";
+		window.__PIPELINE_MANAGEMENT_RESET__ = result;
+		return result;
+	}
+	window.resetPipelineManagementState = resetPipelineManagementState;
+	window.__PIPELINE_MANAGEMENT_STORE__ = pipelineManagementStore;
+
+	function persistPipelineManagementState(reason) {
+		if (pipelineManagementSaving || pipelineManagementRestoring) return null;
+		pipelineManagementSaving = true;
+		try {
+			const saved = pipelineManagementStore.save(pipelineManagementSnapshot());
+			if (saved && saved.ok) {
+				hidePipelineStorageWarning();
+			} else {
+				const detail = pipelineStorageFailureText(saved, null);
+				showPipelineStorageWarning(detail);
+				console.warn("[pipeline-storage] save was not verified", saved);
+			}
+			saved.reason = String(reason || "state-change");
+			window.__PIPELINE_MANAGEMENT_SAVE__ = saved;
+			return saved;
+		} catch (saveError) {
+			const detail = pipelineStorageFailureText(null, saveError);
+			showPipelineStorageWarning(detail);
+			console.warn("[pipeline-storage] save threw", saveError);
+			window.__PIPELINE_MANAGEMENT_SAVE__ = { ok: false, reason: String(reason || "state-change"), error: detail };
+			return null;
+		} finally {
+			pipelineManagementSaving = false;
+		}
+	}
+
+	function restorePipelineManagementState() {
+		const loaded = pipelineManagementStore.load();
+		window.__PIPELINE_MANAGEMENT_LOAD__ = {
+			source: loaded.source,
+			repairedCookie: loaded.repairedCookie,
+			pageId: pipelineManagementStore.pageId,
+			debug: loaded.debug
+		};
+		if (!loaded.snapshot) return null;
+		const snapshot = loaded.snapshot;
+		window.__PIPELINE_MANAGEMENT_STATE__ = snapshot;
+		pipelineManagementRestoring = true;
+		try {
+			try { setStudioLayout(snapshot.layout === "table" ? "table" : "editor"); } catch (layoutError) { }
+			try {
+				batchRunBusy = false;
+				batchQueue = [];
+				batchFinishedCount = pipelineManagementNumber(snapshot.quickBatch && snapshot.quickBatch.finishedCount, 0);
+				batchAttemptedRows.clear();
+				batchActivePromises.clear();
+			} catch (queueError) { }
+			const storedRows = ((snapshot.quickBatch && snapshot.quickBatch.rows) || []).slice(0, 8);
+			for (const stored of storedRows) {
+				let row = null;
+				try {
+					row = batchRows.find(function (candidate) { return String(candidate.id) === String(stored.id); }) || null;
+				} catch (findError) { }
+				if (!row) {
+					try {
+						row = createBatchRow({
+							title: stored.title || "",
+							topic: stored.topic || "",
+							script: stored.script || "",
+							style: stored.style || "",
+							minutes: stored.minutes || 1,
+							resolution: stored.resolution || "",
+							orientation: stored.orientation || "",
+							quality: stored.quality || ""
+						});
+						if (stored.id && Number(stored.id) > 0) {
+							row.id = Number(stored.id);
+							batchRowSeq = Math.max(batchRowSeq, row.id);
+						}
+						batchRows.push(row);
+					} catch (createError) { continue; }
+				}
+				if (!row) continue;
+				row.vid = stored.vid || pipelineManagementStore.pageId + "-row-" + String(row.id);
+				row.title = stored.title || row.title || "";
+				row.topic = stored.topic || row.topic || "";
+				row.script = String(stored.script || "");
+				row.style = stored.style || row.style || "";
+				row.minutes = pipelineManagementNumber(stored.minutes, row.minutes || 1);
+				row.resolution = stored.resolution || row.resolution || "";
+				row.orientation = stored.orientation || row.orientation || "";
+				row.quality = stored.quality || row.quality || "";
+				row.stage = ["empty", "writing", "ready", "queued"].indexOf(stored.stage || "") >= 0 ? stored.stage : "ready";
+				row.detail = "";
+				row.error = "";
+				row.attempt = pipelineManagementNumber(stored.attempt, 0);
+				row.retrying = false;
+				row.running = false;
+				row.stopRequested = false;
+			}
+			const storedProjects = ((snapshot.editor && snapshot.editor.projects) || []).slice(0, 8);
+			for (const stored of storedProjects) {
+				const index = pipelineManagementNumber(stored.n, 1) - 1;
+				let project = null;
+				try { project = videoProjects[index] || null; } catch (projectError) { }
+				if (!project && typeof addVideoAccordion === "function") {
+					try { addVideoAccordion(); project = videoProjects[index] || null; } catch (addError) { }
+				}
+				if (!project) continue;
+				project._pipelineVid = stored.vid || pipelineManagementStore.pageId + "-editor-" + String(index + 1);
+				project.name = stored.name || project.name || "";
+				project.script = String(stored.script || "");
+				project.videoImageStyle = stored.style || project.videoImageStyle || "";
+				project._seoTopic = stored.topic || project._seoTopic || "my video";
+				project._seoMinutes = pipelineManagementNumber(stored.minutes, project._seoMinutes || 1);
+				project.resolution = stored.resolution || project.resolution || "";
+				project.orientation = stored.orientation || project.orientation || "";
+				project.quality = stored.quality || project.quality || "";
+				project._scriptWriting = false;
+				project._imageFlowActive = false;
+				project._imageFlowFinalizing = false;
+			}
+			try { renderBatchTable(); } catch (renderError) { }
+			return snapshot;
+		} finally {
+			pipelineManagementRestoring = false;
+		}
+	}
+
 	// =========================================================
 	// DATA
 	// =========================================================
@@ -82,6 +396,17 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 	const MAX_MP4_UPLOADS =
 		5;
+
+	/* FINAL MEDIA CAP: both layouts plan the same 12 automatic scenes. */
+	const AUTO_MEDIA_TOTAL = 12;
+	const AUTO_VIDEO_SCENES = 4;
+	const AUTO_IMAGE_SCENES = 8;
+	const MEDIA_ITEM_MAX_RETRIES = 7;
+	const MEDIA_ITEM_TOTAL_ATTEMPTS = MEDIA_ITEM_MAX_RETRIES + 1;
+	const MEDIA_ITEM_RETRY_BACKOFF_MS = 40000;
+	const MEDIA_ITEM_UI_CHECK_MS = 250;
+	const MEDIA_MAX_PIXABAY_PAGES = 2;
+	const MEDIA_TRANSITION_STORAGE_PREFIX = "ytvs.transition-project.v1.";
 
 
 	const MP4_MAX_DURATION_S =
@@ -6322,6 +6647,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			keywordsHTML: keywords ? keywords.innerHTML : "",
 			keywordsHidden: !keywords || keywords.style.display === "none",
 			scriptBoxOpen: !!box && box.style.display !== "none",
+			scriptBoxLoading: !!box && box.classList.contains("va-script-loading"),
+			scriptKeepWritingUi: !!project._scriptKeepWritingUi,
 			statusText: status ? status.textContent : "",
 			bodyOpen: !body || body.style.display !== "none"
 		};
@@ -6494,10 +6821,20 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				state.statusText;
 		}
 
-		setScriptBoxState(
-			n,
-			!!project.script && state.scriptBoxOpen
-		);
+			if (state.scriptKeepWritingUi || state.scriptBoxLoading) {
+				/* Renumbering must not remove the editor's writing textbox. */
+				setScriptLoading(n, true);
+				const restoredStatus = document.getElementById("va-script-status-" + n);
+				if (restoredStatus && (!state.statusText || scriptWriteUiLooksLikeError(state.statusText))) {
+					restoredStatus.textContent = SCRIPT_WRITE_UI_TEXT;
+				}
+			}
+			else {
+				setScriptBoxState(
+					n,
+					!!project.script && state.scriptBoxOpen
+				);
+			}
 
 		const body =
 			document.getElementById(
@@ -6619,6 +6956,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 		/* Cancel any in-flight or queued AI flows for this deleted project first. */
 		project._deleted = true;
+		cancelScriptWriteRetryWait(project);
 		project._imageFlowActive = false;
 		project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
 		cancelImageAutoRetry(project, { quiet: true });
@@ -6806,7 +7144,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				'<span class="va-note">Max 5 GIF \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
 				'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
-				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include two stock video clips.</span>' +
+				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include 4 stock video clips and 8 distinct photos.</span>' +
 				'<div class="va-seo-keywords" id="va-image-keywords-' + n + '" style="display:none"></div>' +
 				'<button type="button" class="upload-btn small" id="va-image-retry-' + n + '" onclick="retryImagePromptFlow(' + n + ')" style="display:none" title="Search Pixabay again using the keywords shown below and add the matching photos and clips to this gallery">Retry Pixabay search</button>' +
 				'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
@@ -7019,8 +7357,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	//   Editor     #view-editor - the Video N accordions beside
 	//              the preview canvas
 	//
-	// The choice lives in memory only: RULE 15 forbids client
-	// storage, so a reload always starts in the Editor.
+	// Pipeline management state is mirrored in localStorage + cookie.
+	// The live layout starts in the Editor unless that snapshot says table.
 	// =========================================================
 
 	let studioLayout =
@@ -7115,6 +7453,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 		}
 
+		persistPipelineManagementState("layout");
+
 	}
 
 	const SEO_IMAGE_STYLES = [
@@ -7146,10 +7486,9 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	//             (the LONG edge; passed to both image calls)
 	//   column 5  the frame orientation: square 1:1, landscape 16:9
 	//             or portrait 9:16 (passed to both image calls)
-	//   column 6  "Preview Here" while the row works, then a live
-	//             Preview button
-	//   column 7  "Export Video" while the row works, then a live
-	//             Export button
+	//   column 6  Actions: Preview, Process Export and Edit icons. Preview
+	//             and Process Export stay pending until the row finishes;
+	//             Edit opens a new page with transition-only project JSON.
 	//
 	// The \u2726 Generate button at the TOP RIGHT of the table runs every
 	// row that has a script and is NOT finished yet. A row without one
@@ -7198,11 +7537,10 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		3;
 
 	/*
-	 * Session #244: a step that fails is retried INSIDE its row, silently.
-	 * Nothing about a retry reaches the screen - the row keeps its normal
-	 * stage label and its spinner spinning (the same .va-spinner the
-	 * editor's script section shows), so a row that needed three attempts
-	 * looks exactly like a row that needed one.
+	 * FINAL RULE - QUICK BATCH TABLE LAYOUT: a failed stage is retried by
+	 * client JavaScript up to seven times, each after a 40-second backoff.
+	 * Nothing about a retry reaches the screen: the row keeps its normal
+	 * stage label, script textarea and spinner for all eight attempts.
 	 */
 	const BATCH_STEP_ATTEMPTS =
 		4;
@@ -7213,6 +7551,238 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 	const BATCH_RETRY_MAX_MS =
 		4000;
+
+	/*
+	 * FINAL RULE - QUICK BATCH TABLE LAYOUT (client-side pipeline retries).
+	 *
+	 * JavaScript in the browser owns every failed pipeline stage in this
+	 * layout. One initial attempt is followed by at most SEVEN retries, and
+	 * every retry waits 40 seconds first. Only the failed stage is reset and
+	 * repeated; successful earlier stages are kept. A missing scene plan,
+	 * a partial image set, a missing clip pair or a local animation failure
+	 * all remain silent: the same row cells, status spinner and script
+	 * textarea stay on screen and no error/retry wording is painted.
+	 */
+	const BATCH_PIPELINE_MAX_RETRIES = 7;
+	const BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000;
+	const BATCH_PIPELINE_UI_CHECK_MS = 250;
+	const BATCH_PIPELINE_TOTAL_ATTEMPTS = BATCH_PIPELINE_MAX_RETRIES + 1;
+
+	/* Exposed so tests / debugging can see (and shrink) the live budgets. */
+	if (typeof window !== "undefined") {
+		const suppliedPipelineTiming =
+			window.__BATCH_PIPELINE_RETRY_TIMING && typeof window.__BATCH_PIPELINE_RETRY_TIMING === "object"
+				? window.__BATCH_PIPELINE_RETRY_TIMING
+				: window.__BATCH_PIPELINE_RETRY_POLICY && typeof window.__BATCH_PIPELINE_RETRY_POLICY === "object"
+					? window.__BATCH_PIPELINE_RETRY_POLICY
+					: window.__QUICK_BATCH_RETRY_TIMING && typeof window.__QUICK_BATCH_RETRY_TIMING === "object"
+						? window.__QUICK_BATCH_RETRY_TIMING
+						: null;
+		const pipelineTiming = suppliedPipelineTiming || {};
+		const pipelineDefaults = {
+			maxRetries: BATCH_PIPELINE_MAX_RETRIES,
+			maxAttempts: BATCH_PIPELINE_TOTAL_ATTEMPTS,
+			backoffMs: BATCH_PIPELINE_RETRY_BACKOFF_MS,
+			retryBackoffMs: BATCH_PIPELINE_RETRY_BACKOFF_MS,
+			delayMs: BATCH_PIPELINE_RETRY_BACKOFF_MS,
+			pipelineRetryBackoffMs: BATCH_PIPELINE_RETRY_BACKOFF_MS,
+			uiCheckMs: BATCH_PIPELINE_UI_CHECK_MS,
+			owner: "browser",
+			layout: "quick-batch-table",
+			scope: "per-failed-stage"
+		};
+		for (const key in pipelineDefaults) {
+			if (!(key in pipelineTiming)) pipelineTiming[key] = pipelineDefaults[key];
+		}
+		window.__BATCH_PIPELINE_RETRY_TIMING = pipelineTiming;
+		window.__BATCH_PIPELINE_RETRY_POLICY = pipelineTiming;
+		window.__BATCH_PIPELINE_RETRY = pipelineTiming;
+		window.__QUICK_BATCH_RETRY_TIMING = pipelineTiming;
+		window.__BATCH_PIPELINE_RETRY_LOG = [];
+	}
+
+	function batchPipelineRetrySources() {
+		if (typeof window === "undefined") return [];
+		return [
+			window.__BATCH_PIPELINE_RETRY_TIMING,
+			window.__BATCH_PIPELINE_RETRY_POLICY,
+			window.__BATCH_PIPELINE_RETRY,
+			window.__QUICK_BATCH_RETRY_TIMING,
+			window.__SCRIPT_RETRY_TIMING,
+			window.__SCRIPT_RETRY_POLICY,
+			window.__BATCH_RETRY
+		];
+	}
+
+	/*
+	 * A non-default value in ANY exposed policy is an override. The legacy
+	 * __BATCH_RETRY object keeps its own defaults, so a test that sets only
+	 * attempts/baseMs/maxMs can still shorten every Quick Batch pipeline.
+	 */
+	function batchPipelineRetryPolicy() {
+		const retryKeys = ["maxRetries", "maxPipelineRetries", "retries", "retryLimit", "pipelineRetries", "clientRetries", "limit"];
+		const attemptKeys = ["maxAttempts", "maxPipelineAttempts", "attempts", "pipelineAttempts", "totalAttempts"];
+		const backoffKeys = ["backoffMs", "retryBackoffMs", "delayMs", "retryDelayMs", "retryMs", "backoff", "pipelineRetryBackoffMs", "baseMs", "maxMs"];
+		const uiKeys = ["uiCheckMs", "pipelineUiCheckMs", "tickMs"];
+		let retryOverride = null;
+		let attemptOverride = null;
+		let backoffOverride = null;
+		let uiOverride = null;
+		const legacy = typeof window !== "undefined" ? window.__BATCH_RETRY : null;
+		for (const source of batchPipelineRetrySources()) {
+			if (!source || typeof source !== "object") continue;
+			const isLegacy = source === legacy;
+			for (const key of retryKeys.concat(attemptKeys, backoffKeys, uiKeys)) {
+				const value = Number(source[key]);
+				if (!isFinite(value) || value < 0) continue;
+				let fallback;
+				if (retryKeys.indexOf(key) !== -1) fallback = isLegacy ? BATCH_STEP_ATTEMPTS : BATCH_PIPELINE_MAX_RETRIES;
+				else if (attemptKeys.indexOf(key) !== -1) fallback = isLegacy ? BATCH_STEP_ATTEMPTS : BATCH_PIPELINE_TOTAL_ATTEMPTS;
+				else if (backoffKeys.indexOf(key) !== -1) fallback = isLegacy ? (key === "maxMs" ? BATCH_RETRY_MAX_MS : BATCH_RETRY_BASE_MS) : BATCH_PIPELINE_RETRY_BACKOFF_MS;
+				else fallback = BATCH_PIPELINE_UI_CHECK_MS;
+				if (value === fallback) continue;
+				if (retryKeys.indexOf(key) !== -1 && retryOverride === null) retryOverride = value;
+				if (attemptKeys.indexOf(key) !== -1 && attemptOverride === null) attemptOverride = value;
+				if (backoffKeys.indexOf(key) !== -1 && backoffOverride === null) backoffOverride = value;
+				if (uiKeys.indexOf(key) !== -1 && uiOverride === null) uiOverride = value;
+			}
+		}
+		let maxRetries = BATCH_PIPELINE_MAX_RETRIES;
+		if (retryOverride !== null) maxRetries = retryOverride;
+		else if (attemptOverride !== null) maxRetries = Math.max(0, attemptOverride - 1);
+		return {
+			owner: "browser",
+			layout: "quick-batch-table",
+			scope: "per-failed-stage",
+			maxRetries: Math.max(0, Math.floor(maxRetries)),
+			maxAttempts: Math.max(1, Math.floor(maxRetries) + 1),
+			backoffMs: Math.max(0, Math.floor(backoffOverride !== null ? backoffOverride : BATCH_PIPELINE_RETRY_BACKOFF_MS)),
+			uiCheckMs: Math.max(0, Math.floor(uiOverride !== null ? uiOverride : BATCH_PIPELINE_UI_CHECK_MS))
+		};
+	}
+
+	function batchPipelineRetryLog(entry) {
+		if (typeof window === "undefined") return;
+		const log = Array.isArray(window.__BATCH_PIPELINE_RETRY_LOG) ? window.__BATCH_PIPELINE_RETRY_LOG : [];
+		log.push(Object.assign({ at: Date.now(), owner: "browser", layout: "quick-batch-table" }, entry || {}));
+		while (log.length > 80) log.shift();
+		window.__BATCH_PIPELINE_RETRY_LOG = log;
+	}
+
+	function batchPipelineUiLooksLikeError(text) {
+		return /failed|failure|error|retry|retrying|timed out|timeout|cancelled|canceled|stopped|unavailable|invalid|abort|missing|⚠/i.test(String(text || ""));
+	}
+
+	function cancelBatchPipelineRetryWait(target) {
+		const wait = target && target._batchPipelineRetryWait;
+		if (wait && typeof wait.cancel === "function") {
+			try { wait.cancel(); } catch (cancelError) { }
+		}
+		if (target) target._batchPipelineRetryWait = null;
+	}
+
+	/* Keep the row's working stage, spinner and script textarea continuously. */
+	function keepBatchPipelineStageUi(row, stage, detail, force) {
+		if (!row) return;
+		const activeStage = BATCH_ACTIVE_STAGES.indexOf(stage) !== -1 ? stage : "prompts";
+		const label = detail || BATCH_STAGE_LABELS[activeStage] || "Working";
+		row.error = "";
+		row.retrying = false;
+		row.stage = activeStage;
+		if (force || !row.detail || batchPipelineUiLooksLikeError(row.detail)) row.detail = label;
+		const scope = document.querySelector('[data-batch-row="' + row.id + '"]');
+		if (!scope || !scope.querySelector('[data-batch-field="script"]')) renderBatchTable();
+		const status = document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="status"]');
+		if (!status || status.getAttribute("data-stage") !== activeStage || !status.querySelector(".va-spinner") || batchPipelineUiLooksLikeError(status.textContent)) {
+			paintBatchRowStatus(row);
+		}
+	}
+
+	/* One cancellable 40-second timer per retry, with a quiet UI watchdog. */
+	function batchPipelineRetryDelay(ms, row, stage) {
+		return new Promise(function (resolve) {
+			const policy = batchPipelineRetryPolicy();
+			let settled = false;
+			let timer = null;
+			let uiTimer = null;
+			const handle = {
+				stage: stage,
+				delayMs: ms,
+				cancel: function () { finish(true); }
+			};
+			const cancelled = function () {
+				return Boolean(row && (row.stopRequested || !getBatchRow(row.id)));
+			};
+			const finish = function (wasCancelled) {
+				if (settled) return;
+				settled = true;
+				if (timer !== null) clearTimeout(timer);
+				if (uiTimer !== null) clearTimeout(uiTimer);
+				if (row && row._batchPipelineRetryWait === handle) row._batchPipelineRetryWait = null;
+				resolve(!wasCancelled);
+			};
+			if (row) row._batchPipelineRetryWait = handle;
+			if (cancelled()) { finish(true); return; }
+			const tick = function () {
+				if (settled) return;
+				if (cancelled()) { finish(true); return; }
+				keepBatchPipelineStageUi(row, stage, null, true);
+				uiTimer = setTimeout(tick, Math.max(1, policy.uiCheckMs));
+			};
+			if (policy.uiCheckMs > 0) uiTimer = setTimeout(tick, Math.max(1, policy.uiCheckMs));
+			timer = setTimeout(function () { finish(cancelled()); }, Math.max(0, ms));
+		});
+	}
+
+	/*
+	 * THE FINAL TABLE-LAYOUT RULE: retry only the failed stage, silently.
+	 * The snapshot records the successful work before the stage; reset throws
+	 * away only that stage's partial output before the next client attempt.
+	 */
+	async function batchRunPipelineStage(row, stage, detail, step, options) {
+		const policy = batchPipelineRetryPolicy();
+		const opts = options || {};
+		const label = detail || BATCH_STAGE_LABELS[stage] || "Working";
+		let lastError = null;
+		for (let retry = 0; retry <= policy.maxRetries; retry++) {
+			if (row.stopRequested || !getBatchRow(row.id)) throw batchError("The row was stopped", "AbortError");
+			keepBatchPipelineStageUi(row, stage, label, retry === 0);
+			const checkpoint = typeof opts.snapshot === "function" ? opts.snapshot() : null;
+			batchPipelineRetryLog({ event: "attempt", rowId: row.id, stage: stage, retry: retry, attempt: retry + 1, maxRetries: policy.maxRetries });
+			try {
+				const result = await step(retry);
+				batchPipelineRetryLog({ event: "success", rowId: row.id, stage: stage, retry: retry, attempt: retry + 1 });
+				return result;
+			} catch (error) {
+				if (row.stopRequested || batchIsStopError(error) || !getBatchRow(row.id)) {
+					batchPipelineRetryLog({ event: "cancelled", rowId: row.id, stage: stage, retry: retry });
+					throw error;
+				}
+				/* Media items own their own 7-retry ladder; never restart a whole stage for them. */
+				if (error && error.name === "MediaItemRetryExhausted") {
+					batchPipelineRetryLog({ event: "media-item-exhausted", rowId: row.id, stage: stage, retry: retry });
+					throw error;
+				}
+				lastError = error;
+				if (typeof opts.reset === "function") opts.reset(checkpoint, error);
+				keepBatchPipelineStageUi(row, stage, label, true);
+				batchPipelineRetryLog({
+					event: "attempt-failed", rowId: row.id, stage: stage, retry: retry, attempt: retry + 1,
+					reason: String(error && (error.message || error) || "unknown").slice(0, 160)
+				});
+				if (retry >= policy.maxRetries) {
+					try { error.clientRetries = retry; error.clientAttempts = retry + 1; } catch (decorateError) { }
+					batchPipelineRetryLog({ event: "budget-exhausted", rowId: row.id, stage: stage, attempts: retry + 1, maxRetries: policy.maxRetries });
+					throw error;
+				}
+				batchPipelineRetryLog({ event: "backoff", rowId: row.id, stage: stage, delayMs: policy.backoffMs, nextRetry: retry + 1 });
+				const proceed = await batchPipelineRetryDelay(policy.backoffMs, row, stage);
+				if (!proceed || row.stopRequested || !getBatchRow(row.id)) throw batchError("The row was stopped", "AbortError");
+			}
+		}
+		throw lastError || batchError("The Quick Batch pipeline stage did not finish", "BatchStepError");
+	}
+
 
 	/*
 	 * A batch stream that stops sending lines is as dead as one that
@@ -7975,6 +8545,10 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	let batchQueue =
 		[];
 
+	/* Prevent a row's synchronous stage hook from re-entering the initial wave. */
+	let batchStartingRows =
+		false;
+
 	const batchActivePromises =
 		new Set();
 
@@ -8033,6 +8607,10 @@ ${SCRIPT_NOTES_CLIENT_JS}
 					[],
 				images:
 					[],
+				mediaFilenames:
+					[],
+				_missingMediaScenes:
+					[],
 				objectUrls:
 					[],
 				slides:
@@ -8079,13 +8657,13 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	/* mp3 + Pixabay images + animation - the one definition of "finished". */
 	function batchRowFinished(row) {
 
-		return !!(
-			row &&
-			row.mp3 &&
-			row.images.length &&
-			row.animated &&
-			row.slides.length
-		);
+		if (!row || !row.mp3 || !row.animated) return false;
+		const images = Array.isArray(row.images) ? row.images : [];
+		const slides = Array.isArray(row.slides) ? row.slides : [];
+		if (images.length !== AUTO_MEDIA_TOTAL || slides.length !== AUTO_MEDIA_TOTAL) return false;
+		const clips = images.filter(function (media) { return media && media.blob && media.blob.type === "video/mp4"; });
+		const filenames = new Set(images.map(function (media) { return media && (media.stockFilename || (media.blob && media.blob.stockFilename)); }));
+		return clips.length === AUTO_VIDEO_SCENES && filenames.size === AUTO_MEDIA_TOTAL;
 
 	}
 
@@ -8157,6 +8735,10 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		if (index < 0) {
 			return;
 		}
+
+		cancelScriptWriteRetryWait(
+			batchRows[index]
+		);
 
 		revokeBatchRow(
 			batchRows[index]
@@ -8268,11 +8850,10 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	}
 
 	/*
-	 * Session #244: the stages that mean "this row is working right now".
-	 * They are the ONLY stages that paint the editor's script-section
-	 * animation (.va-spinner + the va-loading-pulse), and the animation is
-	 * painted for the whole step - first attempt and third retry alike -
-	 * so a silent retry changes nothing on screen.
+	 * FINAL RULE - QUICK BATCH TABLE LAYOUT: these working stages paint the
+	 * editor's script-section animation (.va-spinner + va-loading-pulse).
+	 * The animation stays for the whole stage, from the first attempt through
+	 * the seventh silent retry, so a retry changes nothing on screen.
 	 */
 	const BATCH_ACTIVE_STAGES = [
 		"writing",
@@ -8515,17 +9096,9 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	}
 
 	/*
-	 * Run ONE step with silent in-row retries.
-	 *
-	 *  - attempt 1 paints the step's normal label;
-	 *  - a failed attempt is retried after a short backoff and the row's
-	 *    label is NOT touched, so the user only ever sees the same
-	 *    working animation the editor's script section shows;
-	 *  - object URLs made by a failed attempt are revoked before the
-	 *    retry, so a retried image step cannot leak or double-count.
-	 *
-	 * The attempt number is the only place a retry is visible at all -
-	 * in the console.
+	 * FINAL RULE - QUICK BATCH TABLE LAYOUT: non-media failed stages use one
+	 * shared, silent client retry ladder. Image/video failures are retried
+	 * individually by the media pipeline, never as a whole stage.
 	 */
 	async function batchRunStep(
 		row,
@@ -8534,153 +9107,115 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		step
 	) {
 
-		const attempts =
-			Math.max(
-				1,
-				Math.round(batchRetrySetting("attempts", BATCH_STEP_ATTEMPTS))
-			);
-
-		let lastError =
-			null;
-
-		for (
-			let attempt = 1;
-			attempt <= attempts;
-			attempt++
-		) {
-
-			if (row.stopRequested) {
-
-				throw batchError("The row was stopped", "AbortError");
-
-			}
-
-			if (attempt === 1) {
-
-				setBatchStage(
-					row,
-					stage,
-					detail
-				);
-
-				/*
-				 * Session #248: when a row moves to the next step of processing
-				 * (ex. image generation), start unprocessed rows so later rows
-				 * do not wait for earlier rows to reach 'done'.
-				 */
-				if (stage === "images") {
-
-					startUnprocessedRows(row);
-
-				}
-
-			}
-			else {
-
-				/* Same stage, same label, same spinner: nothing moves. */
-				row.retrying =
-					true;
-
-				paintBatchRowStatus(row);
-
-			}
-
-			const urlsBefore =
-				(row.objectUrls || []).length;
-
+		return batchRunPipelineStage(row, stage, detail, async function (retry) {
+			if (retry === 0 && stage === "images") startUnprocessedRows(row);
+			const urlsBefore = (row.objectUrls || []).length;
 			try {
-
-				const result =
-					await step(attempt);
-
-				row.retrying =
-					false;
-
-				return result;
-
+				return await step(retry + 1);
+			} catch (error) {
+				revokeBatchUrlsSince(row, urlsBefore);
+				throw error;
 			}
-			catch (error) {
-
-				row.retrying =
-					false;
-
-				revokeBatchUrlsSince(
-					row,
-					urlsBefore
-				);
-
-				if (
-					row.stopRequested ||
-					batchIsStopError(error)
-				) {
-
-					/* A stop is not a failure - it is not retried. */
-
-					throw error;
-
-				}
-
-				lastError =
-					error;
-
-				console.warn(
-					"[batch-table] row " + row.id + " step " + stage + " attempt " + attempt + " of " + attempts + " did not finish - retrying quietly",
-					batchErrorBrief(error)
-				);
-
-				if (attempt < attempts) {
-
-					await batchDelay(
-						Math.min(
-							batchRetrySetting("maxMs", BATCH_RETRY_MAX_MS),
-							batchRetrySetting("baseMs", BATCH_RETRY_BASE_MS) * Math.pow(2, attempt - 1)
-						)
-					);
-
-				}
-
-			}
-
-		}
-
-		throw (
-			lastError ||
-			batchError("The step did not finish", "BatchStepError")
-		);
+		}, {
+			snapshot: function () { return (row.objectUrls || []).length; },
+			reset: function (keepCount) { revokeBatchUrlsSince(row, keepCount); }
+		});
 
 	}
 
+	function batchProjectJson(row) {
+		if (!row) return null;
+		const script = String(row.script || "");
+		const firstLine = script.split(/\\r?\\n/).find(function (line) { return line.trim(); }) || "";
+		return {
+			version: 1,
+			transitionOnly: true,
+			source: "quick-batch-table-edit",
+			createdAt: Date.now(),
+			basicSettings: {
+				id: row.id,
+				title: String(row.title || firstLine || "").slice(0, 70),
+				topic: String(row.topic || firstLine || "my video").slice(0, 160),
+				script: script,
+				style: row.style || "Cinematic Film",
+				minutes: Number(row.minutes) > 0 ? Number(row.minutes) : 1,
+				resolution: row.resolution || "",
+				orientation: row.orientation || "",
+				quality: row.quality || "balanced"
+			}
+		};
+	}
+
+	function openBatchEditPage(row) {
+		const payload = batchProjectJson(row);
+		if (!payload) return null;
+		const key = "edit-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
+		const targetPageId = pipelineManagementStore.freshPageId();
+		payload.sourcePageId = pipelineManagementStore.pageId;
+		payload.targetPageId = targetPageId;
+		payload.basicSettings.vid = row.vid || pipelineManagementStore.pageId + "-row-" + String(row.id);
+		try {
+			window.localStorage.setItem(MEDIA_TRANSITION_STORAGE_PREFIX + key, JSON.stringify(payload));
+			window.document.cookie = "ytvs_transition_project_" + key.replace(/[^a-zA-Z0-9_-]/g, "_") +
+				"=" + encodeURIComponent(JSON.stringify({
+					v: 1, key: key, createdAt: payload.createdAt,
+					sourcePageId: payload.sourcePageId, targetPageId: payload.targetPageId,
+					vid: payload.basicSettings.vid
+				})) + "; Path=/; SameSite=Lax" +
+				(window.location && window.location.protocol === "https:" ? "; Secure" : "");
+		} catch (storageError) { }
+		window.__BATCH_EDIT_PROJECT__ = payload;
+		window.__BATCH_EDIT_URL__ = "";
+		persistPipelineManagementState("quick-batch-edit-handoff");
+		/*
+		 * Session 331: the URL is short and carries only a page id + handoff key.
+		 * The full project lives in shared localStorage; no noopener child object
+		 * and no giant projectJson query are needed.
+		 */
+		let href = "";
+		try {
+			const url = new URL(window.location.href);
+			url.searchParams.delete("projectJson");
+			url.searchParams.set("layout", "editor");
+			url.searchParams.set("pipelinePage", targetPageId);
+			url.searchParams.set("projectEdit", key);
+			href = url.pathname + url.search + url.hash;
+		} catch (urlError) {
+			href = window.location.pathname + "?layout=editor&pipelinePage=" + encodeURIComponent(targetPageId) +
+				"&projectEdit=" + encodeURIComponent(key);
+		}
+		window.__BATCH_EDIT_URL__ = href;
+		try {
+			if (typeof window.open === "function") window.open(href, "_blank", "noopener");
+		} catch (openError) { }
+		return payload;
+	}
+
 	function batchActionCell(row, kind) {
-
+		const id = escapeHTML(row.id);
+		if (kind === "edit") {
+			return '<button type="button" class="upload-btn small batch-live batch-action-btn" data-batch-action="edit" data-batch-row="' +
+				id + '" title="Edit in a new page" aria-label="Edit">✎</button>';
+		}
 		if (!batchRowFinished(row)) {
-
-			/* Not finished: plain text, no button, nothing to press. */
-			return (
-				'<span class="batch-pending">' +
-				(kind === "preview"
-					? "Preview Here"
-					: "Export Video") +
-				"</span>"
-			);
-
+			return kind === "preview"
+				? '<span class="batch-pending">' + "Preview Here" + " · " + "Export Video" + "</span>"
+				: "";
 		}
-
 		if (kind === "preview") {
-
-			return (
-				'<button type="button" class="upload-btn small batch-live" data-batch-action="preview" data-batch-row="' +
-				row.id +
-				'">\u25b6 Preview</button>'
-			);
-
+			return '<button type="button" class="upload-btn small batch-live batch-action-btn" data-batch-action="preview" data-batch-row="' +
+				id + '" title="Preview" aria-label="Preview">▶</button>';
 		}
+		return '<button type="button" class="upload-btn small batch-live batch-action-btn" data-batch-action="export" data-batch-row="' +
+			id + '" title="Process export" aria-label="Process export">⚙</button>';
+	}
 
-		return (
-			'<button type="button" class="upload-btn small batch-live" data-batch-action="export" data-batch-row="' +
-			row.id +
-			'">\u2b07 Export Video</button>'
-		);
-
+	function batchActionsHTML(row) {
+		return '<div class="batch-action-icons">' +
+			batchActionCell(row, "preview") +
+			batchActionCell(row, "export") +
+			batchActionCell(row, "edit") +
+			'</div>';
 	}
 
 	function batchRowHTML(row, index) {
@@ -8702,7 +9237,6 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				'<td class="batch-cell batch-cell-script">' +
 					'<div class="batch-row-head">' +
 						'<span class="batch-row-no">' + String(index).padStart(2, "0") + "</span>" +
-						'<button type="button" class="batch-row-ai" data-batch-generate="' + row.id + '" title="Write this row\u2019s narration with the note pipeline (uses the first line of the script cell as the topic)">\u2728</button>' +
 						'<button type="button" class="batch-row-del" data-batch-action="remove" data-batch-row="' + row.id + '" title="Remove this row">\u2715</button>' +
 					"</div>" +
 					'<textarea class="batch-script-input" data-batch-field="script" rows="5" spellcheck="false" aria-label="Script for row ' + index + '" placeholder="Paste or type the narration script for this row\u2026">' + script + "</textarea>" +
@@ -8730,11 +9264,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 					"</select>" +
 					'<div class="batch-row-sub">frame</div>' +
 					"</td>" +
-				'<td class="batch-cell batch-cell-action" data-batch-slot="preview">' +
-					batchActionCell(row, "preview") +
-				"</td>" +
-				'<td class="batch-cell batch-cell-action" data-batch-slot="export">' +
-					batchActionCell(row, "export") +
+				'<td class="batch-cell batch-cell-action" data-batch-slot="actions">' +
+					batchActionsHTML(row) +
 				"</td>" +
 			"</tr>"
 		);
@@ -8775,19 +9306,14 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 			}
 
-			for (const kind of ["preview", "export"]) {
+			const actions =
+				document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="actions"]');
 
-				const cell =
-					document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="' + kind + '"]');
+			if (actions) {
 
-				if (cell) {
-
-					/* Both cells are rewritten from the same flag, so they
-					 * can only ever change - and enable - together. */
-					cell.innerHTML =
-						batchActionCell(row, kind);
-
-				}
+				/* Preview and Process Export share the same finished flag; Edit is always live. */
+				actions.innerHTML =
+					batchActionsHTML(row);
 
 			}
 
@@ -8914,6 +9440,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 		}
 
+		persistPipelineManagementState("render-batch-table");
+
 	}
 
 	function setBatchStage(
@@ -8937,6 +9465,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 		/* Spinner + label for the working stages, plain text otherwise. */
 		paintBatchRowStatus(row);
+		persistPipelineManagementState("batch-stage");
 
 		console.info("[batch-table] row " + row.id, {
 			stage: row.stage,
@@ -9131,35 +9660,21 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	}
 
 	/*
-	 * SESSION 279: THE VOICE STEP RUNS ONCE.
-	 *
-	 * \`batchRunStep\`'s four silent attempts are for LOCAL device work (drawing
-	 * slides, decoding an image) - a voiceover request is a provider ladder the
-	 * worker now owns end to end, so wrapping it here would put a second retry
-	 * owner back in the page. The label is painted, the step runs, and the
-	 * verdict the worker returned is what the row shows.
+	 * FINAL RULE - QUICK BATCH TABLE LAYOUT: the voice stage is also owned
+	 * by client JavaScript. A failed voice pipeline is reset and retried
+	 * silently up to seven times, each retry after a 40-second backoff.
 	 */
-	async function batchRunVoiceStep(row, stage, detail, step) {
-		if (row.stopRequested) throw batchError("The row was stopped", "AbortError");
-		setBatchStage(row, stage, detail);
-		refreshBatchRowCells();
-		return step();
+	async function batchRunVoiceStep(row, stage, detail, step, options) {
+		return batchRunPipelineStage(row, stage, detail, async function (retry) {
+			if (row.stopRequested) throw batchError("The row was stopped", "AbortError");
+			/* Start the other lanes as soon as this row claims a voice slot. */
+			if (retry === 0 && typeof startUnprocessedRows === "function") startUnprocessedRows(row);
+			setBatchStage(row, stage, detail);
+			refreshBatchRowCells();
+			return step(retry + 1);
+		}, options);
 	}
 
-	/*
-	 * Step 1: the script becomes the voiceover audio.
-	 *
-	 * SESSION 279: ONE FULL-TEXT REQUEST. The worker splits the script into
-	 * <=400 char chunks, synthesises them through a bounded pool
-	 * (VOICEOVER_SERVER_CHUNKS lanes), retries each chunk up to three times on
-	 * the primary model before falling back to the English Workers AI voices and
-	 * the validated external TTS, joins one homogeneous container and answers
-	 * with the bytes - all inside a 90 s budget it owns.
-	 *
-	 * What is left here is not a retry ladder: the scheduler slot, the request
-	 * timeout, cancellation, and reporting the attempts the worker spent
-	 * (\`X-Voiceover-Attempts\` / \`failure.attempts\`).
-	 */
 	async function requestBatchVoiceover(row) {
 		const response = await studioOffload.mediaResponse(
 			"/api/voiceover",
@@ -9175,6 +9690,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 					})
 			},
 			{
+				/* Three Quick Batch rows may speak at once on a capable device. */
+				slots: BATCH_RUN_CONCURRENCY,
 				isCancelled: function () { return Boolean(row.stopRequested); },
 				setController: function (controller) { row.controller = controller; },
 				clearController: function (controller) { if (row.controller === controller) row.controller = null; }
@@ -9191,7 +9708,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			throw error;
 		}
 
-		console.info("[voiceover] worker-owned ladder", {
+		console.info("[voiceover] worker in-request ladder; browser stage ladder owns failures", {
 			rowId: row.id,
 			requests: 1,
 			attempts: Number(response.headers && response.headers.get ? response.headers.get("X-Voiceover-Attempts") : 0) || 0
@@ -9282,7 +9799,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			const response = await studioOffload.jsonRequest("/api/image-prompts", {
 				method: "POST", headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ topic: batchRowTopic(row), minutes: row.minutes, style: row.style, batch: batch,
-					resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value, script: String(row.script || "") })
+					sceneTotal: AUTO_MEDIA_TOTAL, resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value, script: String(row.script || "") })
 			}, 60000, {
 				isCancelled: function () { return Boolean(row.stopRequested); },
 				setController: function (controller) { owner.controller = controller; },
@@ -9317,6 +9834,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				body:
 					JSON.stringify({
 						batch: batch,
+						sceneTotal: AUTO_MEDIA_TOTAL,
 						topic:
 							batchRowTopic(row),
 						minutes:
@@ -9448,6 +9966,226 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	 * cancellation checks, the scene-index mapping for onImage/onError, and
 	 * reporting a hole left by a cancelled pass as a failure - never as success.
 	 */
+	/*
+	 * FINAL MEDIA RULE — individual retries, unique filenames and a fixed
+	 * 12-scene plan. These helpers are shared by the Quick Batch table and the
+	 * Editor. A failed image or video is requested again by client JS; a
+	 * successful asset is never reset, revoked or re-requested.
+	 */
+	function mediaItemRetryPolicy() {
+		var policy = {
+			maxRetries: MEDIA_ITEM_MAX_RETRIES,
+			backoffMs: MEDIA_ITEM_RETRY_BACKOFF_MS,
+			uiCheckMs: MEDIA_ITEM_UI_CHECK_MS
+		};
+		var overrides = [
+			window.__MEDIA_ITEM_RETRY_TIMING,
+			window.__MEDIA_ITEM_RETRY_POLICY,
+			window.__MEDIA_ITEM_RETRY,
+			window.__MEDIA_RETRY_TIMING,
+			window.__QUICK_BATCH_MEDIA_RETRY_TIMING,
+			window.__BATCH_PIPELINE_RETRY_TIMING,
+			window.__SCRIPT_RETRY_TIMING,
+			window.__BATCH_RETRY
+		];
+		for (var i = 0; i < overrides.length; i++) {
+			var value = overrides[i];
+			if (!value || typeof value !== "object") continue;
+			if (Number.isFinite(Number(value.maxRetries))) policy.maxRetries = Math.max(0, Math.floor(Number(value.maxRetries)));
+			if (Number.isFinite(Number(value.retries))) policy.maxRetries = Math.max(0, Math.floor(Number(value.retries)));
+			if (Number.isFinite(Number(value.backoffMs))) policy.backoffMs = Math.max(0, Math.floor(Number(value.backoffMs)));
+			if (Number.isFinite(Number(value.retryBackoffMs))) policy.backoffMs = Math.max(0, Math.floor(Number(value.retryBackoffMs)));
+			if (Number.isFinite(Number(value.uiCheckMs))) policy.uiCheckMs = Math.max(0, Math.floor(Number(value.uiCheckMs)));
+		}
+		policy.totalAttempts = policy.maxRetries + 1;
+		return policy;
+	}
+
+	function mediaItemRetryLog(entry) {
+		if (!Array.isArray(window.__MEDIA_ITEM_RETRY_LOG)) window.__MEDIA_ITEM_RETRY_LOG = [];
+		window.__MEDIA_ITEM_RETRY_LOG.push(Object.assign({ at: Date.now() }, entry || {}));
+		if (window.__MEDIA_ITEM_RETRY_LOG.length > 300) window.__MEDIA_ITEM_RETRY_LOG.shift();
+	}
+
+	function recordedMediaFilenames(owner) {
+		if (!owner) return [];
+		if (!Array.isArray(owner.mediaFilenames)) owner.mediaFilenames = [];
+		return owner.mediaFilenames;
+	}
+
+	function mediaFilenameFromBlob(blob, scene) {
+		var source = (blob && blob.stockSource) || {};
+		var raw = String(source.filename || source.id || source.pageURL || source.url || source.assetId || "");
+		var mime = String((blob && blob.type) || "");
+		var ext = mime === "video/mp4" ? ".mp4"
+			: mime === "image/png" ? ".png"
+			: mime === "image/webp" ? ".webp"
+			: mime === "image/gif" ? ".gif"
+			: ".jpg";
+		if (!raw) return "local-scene-" + scene + "-" + String((blob && blob.size) || 0) + ext;
+		var safe = raw.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+		if (!safe) return "local-scene-" + scene + "-" + String((blob && blob.size) || 0) + ext;
+		if (safe.slice(-ext.length).toLowerCase() === ext) return safe;
+		return "pixabay-" + safe + ext;
+	}
+
+	function reserveMediaFilename(owner, filename) {
+		var names = recordedMediaFilenames(owner);
+		if (!filename || names.indexOf(filename) !== -1) return false;
+		names.push(filename);
+		if (!Array.isArray(window.__MEDIA_FILENAME_LOG)) window.__MEDIA_FILENAME_LOG = [];
+		window.__MEDIA_FILENAME_LOG.push({
+			at: Date.now(),
+			ownerId: owner && owner.id ? owner.id : "",
+			filename: filename,
+			count: names.length
+		});
+		return true;
+	}
+
+	function acceptMediaBlob(owner, blob, scene) {
+		if (!blob) return false;
+		var filename = mediaFilenameFromBlob(blob, scene);
+		if (!reserveMediaFilename(owner, filename)) {
+			mediaItemRetryLog({ event: "duplicate-filename", stage: "media", scene: scene, filename: filename });
+			return false;
+		}
+		blob.stockFilename = filename;
+		if (!blob.stockSource || typeof blob.stockSource !== "object") blob.stockSource = {};
+		blob.stockSource.filename = filename;
+		return true;
+	}
+
+	function alternateMediaPrompt(prompt, attempt, scene) {
+		if (typeof prompt !== "string" || prompt.indexOf("pixabay:") !== 0) return prompt;
+		var token = null;
+		try { token = JSON.parse(prompt.slice(8)); } catch (error) { return prompt; }
+		if (!token || typeof token !== "object") return prompt;
+		var type = token.type === "video" ? "video" : "image";
+		var limit = type === "video" ? AUTO_VIDEO_SCENES : AUTO_IMAGE_SCENES;
+		var base = Number.isInteger(token.index) ? token.index : (Number(token.scene) || scene) % limit;
+		var step = Math.max(0, Number(attempt) || 0);
+		var ordinal = (base + step) % limit;
+		var page = 1 + (Math.floor((base + step) / limit) % MEDIA_MAX_PIXABAY_PAGES);
+		var next = Object.assign({}, token, {
+			type: type,
+			index: ordinal,
+			page: page,
+			scene: scene,
+			retry: step,
+			uniqueFilename: "required"
+		});
+		return "pixabay:" + JSON.stringify(next);
+	}
+
+	function mediaItemCancelled(owner) {
+		if (!owner) return false;
+		if (owner.stopRequested || owner._deleted || owner._imageFlowActive === false) return true;
+		/* Only Quick Batch row objects have an id that maps into batchRows. */
+		if (owner.id && typeof getBatchRow === "function" &&
+			(Array.isArray(owner.objectUrls) || typeof owner.stage === "string")) {
+			var live = getBatchRow(owner.id);
+			if (!live || live.stopRequested) return true;
+		}
+		return false;
+	}
+
+	function keepMediaItemUi(owner, stage) {
+		if (!owner || typeof keepBatchPipelineStageUi !== "function") return;
+		try { keepBatchPipelineStageUi(owner, stage || "images"); } catch (error) { }
+	}
+
+	function mediaItemRetryDelay(ms, owner, stage) {
+		var policy = mediaItemRetryPolicy();
+		return new Promise(function (resolve) {
+			var settled = false;
+			var uiTimer = null;
+			function finish(proceed) {
+				if (settled) return;
+				settled = true;
+				if (uiTimer) clearTimeout(uiTimer);
+				resolve(Boolean(proceed));
+			}
+			function tick() {
+				if (!settled && mediaItemCancelled(owner)) return finish(false);
+				keepMediaItemUi(owner, stage);
+				if (policy.uiCheckMs > 0) uiTimer = window.setTimeout(tick, policy.uiCheckMs);
+			}
+			if (policy.uiCheckMs > 0) window.setTimeout(tick, 0);
+			else keepMediaItemUi(owner, stage);
+			window.setTimeout(function () {
+				finish(!mediaItemCancelled(owner));
+			}, ms);
+		});
+	}
+
+	async function retryFailedMediaOnly(owner, prompts, sceneIndexes, fetchOnce, stage) {
+		var policy = mediaItemRetryPolicy();
+		var indexes = Array.isArray(sceneIndexes) && sceneIndexes.length === prompts.length
+			? sceneIndexes.slice()
+			: prompts.map(function (_, index) { return index; });
+		var pending = prompts.map(function (prompt, index) {
+			return { prompt: prompt, scene: indexes[index], attempt: 0 };
+		});
+		var collected = [];
+		var exhausted = [];
+		var round = 0;
+		while (pending.length && round < policy.totalAttempts && !mediaItemCancelled(owner)) {
+			if (round > 0) {
+				mediaItemRetryLog({
+					event: "backoff",
+					stage: stage || "media",
+					retry: round,
+					backoffMs: policy.backoffMs,
+					failed: pending.map(function (item) { return item.scene; })
+				});
+				var proceed = await mediaItemRetryDelay(policy.backoffMs, owner, stage);
+				if (!proceed) break;
+			}
+			var pendingPrompts = [];
+			var pendingScenes = [];
+			for (var i = 0; i < pending.length; i++) {
+				pendingPrompts.push(alternateMediaPrompt(pending[i].prompt, pending[i].attempt, pending[i].scene));
+				pendingScenes.push(pending[i].scene);
+			}
+			var result = null;
+			try {
+				result = await fetchOnce(pendingPrompts, pendingScenes, round);
+			} catch (error) {
+				if (mediaItemCancelled(owner)) throw error;
+				result = { failed: pendingScenes.slice(), images: [] };
+			}
+			if (result && Array.isArray(result.images)) collected.push.apply(collected, result.images);
+			var failedSet = new Set((result && result.failed) || []);
+			var next = [];
+			for (var j = 0; j < pending.length; j++) {
+				var item = pending[j];
+				if (!failedSet.has(item.scene)) continue;
+				if (item.attempt < policy.maxRetries) {
+					next.push({ prompt: item.prompt, scene: item.scene, attempt: item.attempt + 1 });
+				}
+				else {
+					exhausted.push(item.scene);
+				}
+			}
+			mediaItemRetryLog({
+				event: "round",
+				stage: stage || "media",
+				attempt: round + 1,
+				requested: pendingScenes,
+				failed: Array.from(failedSet),
+				delivered: pendingScenes.filter(function (scene) { return !failedSet.has(scene); })
+			});
+			pending = next;
+			round++;
+		}
+		return {
+			images: collected,
+			failed: pending.map(function (item) { return item.scene; }).concat(exhausted),
+			attempts: round
+		};
+	}
+
 	async function requestImageChunk(prompts, frame, options) {
 		const owner = options || {};
 		const results = new Array(prompts.length);
@@ -9535,8 +10273,16 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	/* Step 3: one bounded image chunk through the shared browser stream queue. */
 	async function requestBatchImages(
 		row,
-		prompts
+		prompts,
+		sceneIndexes
 	) {
+		const sceneMap = Array.isArray(sceneIndexes) && sceneIndexes.length === prompts.length
+			? sceneIndexes.slice()
+			: prompts.map(function (_, index) { return index; });
+		const sceneForIndex = function (index) {
+			const local = Number(index);
+			return Number.isInteger(local) && local >= 0 && local < sceneMap.length ? Number(sceneMap[local]) : local;
+		};
 		if ((await studioOffload.capabilities()).binaryImages) {
 			const images = [];
 			const results = await requestImageChunk(prompts, {
@@ -9551,8 +10297,15 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				clearController: function (controller) { if (row.controller === controller) row.controller = null; },
 				onImage: function (blob, index) {
 					if (row.stopRequested) return;
+					const scene = sceneForIndex(index);
+					if (!acceptMediaBlob(row, blob, scene)) {
+						throw new Error("Duplicate Pixabay filename rejected for scene " + scene + "; an individual retry will search a different result");
+					}
 					const url = createStudioObjectUrl(blob); row.objectUrls.push(url);
-					images.push({ blob: blob, url: url, index: index, stockSource: blob.stockSource || null });
+					images.push({ blob: blob, url: url, index: scene, stockFilename: blob.stockFilename, stockSource: blob.stockSource || null });
+				},
+				onError: function (error, index) {
+					if (!row.stopRequested) mediaItemRetryLog({ event: "item-failed", stage: "quick-batch-media", scene: sceneForIndex(index), message: String(error && error.message || error).slice(0, 160) });
 				}
 			});
 			refreshCredits();
@@ -9560,7 +10313,6 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			if (!images.length) throw new Error("No image came out of the binary batch");
 			const failedImages = results.filter(function (r) { return !r.ok; }).length;
 			if (failedImages) recordStudioUsage("images", "error", failedImages);
-			if (failedImages) console.warn("[batch-table] partial binary image batch; no automatic replay");
 			return images;
 		}
 		return appImageStreamQueue.enqueue(
@@ -9586,6 +10338,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 							body:
 								JSON.stringify({
 									prompts: prompts,
+									sceneIndexes: sceneMap,
 									/* The same frame the prompts were written for. */
 									resolution:
 										batchResolution(row.resolution),
@@ -9723,6 +10476,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 						 */
 						const parsedIndex =
 							Number(event.index);
+						const sceneIndex = sceneForIndex(parsedIndex);
 
 						const decodeTask =
 							decodeBase64ImageOffThread(event.data, event.mime);
@@ -9737,6 +10491,11 @@ ${SCRIPT_NOTES_CLIENT_JS}
 										return;
 									}
 
+									if (!acceptMediaBlob(row, blob, sceneIndex)) {
+										failed++;
+										return;
+									}
+
 									const url =
 										createStudioObjectUrl(blob);
 
@@ -9745,9 +10504,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 									images.push({
 										blob: blob,
 										url: url,
-										index: Number.isFinite(parsedIndex)
-											? parsedIndex
-											: images.length
+										index: sceneIndex,
+										stockFilename: blob.stockFilename
 									});
 
 									setBatchStage(
@@ -9773,6 +10531,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 					if (event.type === "image" && !event.ok) {
 
 						failed++;
+						mediaItemRetryLog({ event: "item-failed", stage: "quick-batch-media", scene: sceneForIndex(event.index), message: String(event.error || "Pixabay media failed").slice(0, 160) });
 
 					}
 
@@ -9885,7 +10644,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				if (!streamDone && !streamFailure) streamFailure = new Error("Image stream ended before completion");
 				if (streamFailure) {
 					if (!images.length) throw streamFailure;
-					row._imagePipelineWarning = "Image stream was interrupted; delivered images were kept.";
+					row._imagePipelineWarning = "Image stream was interrupted; delivered media and filenames are kept for individual retries.";
 				}
 				if (!images.length) {
 
@@ -9902,7 +10661,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 				if (failed) {
 
-					console.warn("[batch-table] row " + row.id + " skipped " + failed + " failed image(s)");
+					mediaItemRetryLog({ event: "partial-batch", stage: "quick-batch-media", rowId: row.id, failed: failed, delivered: images.length });
 
 				}
 
@@ -9919,6 +10678,60 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			}
 		);
 
+	}
+
+	/*
+	 * Quick Batch table: media retries are INDIVIDUAL. Only the missing
+	 * Pixabay photo or video is requested again; delivered rows, object URLs
+	 * and recorded filenames are never reset. The same 7-retry / 40 s ladder
+	 * applies editor and table media, but the table's non-media stage ladder
+	 * is not allowed to restart a whole image batch.
+	 */
+	async function requestBatchImagesWithIndividualRetries(row, prompts, sceneIndexes) {
+		const indexes = Array.isArray(sceneIndexes) && sceneIndexes.length === prompts.length
+			? sceneIndexes.slice()
+			: prompts.map(function (_, index) { return index; });
+		const alreadyDelivered = new Set((row.images || []).map(function (image) { return Number(image.index); }));
+		const pending = [];
+		const pendingScenes = [];
+		for (let i = 0; i < prompts.length; i++) {
+			if (alreadyDelivered.has(Number(indexes[i]))) continue;
+			pending.push(prompts[i]);
+			pendingScenes.push(Number(indexes[i]));
+		}
+		if (!pending.length) return [];
+		setBatchStage(row, "images", "Selecting " + AUTO_MEDIA_TOTAL + " distinct Pixabay scenes");
+		if (typeof startUnprocessedRows === "function" && !(row.images || []).length) startUnprocessedRows(row);
+		const result = await retryFailedMediaOnly(row, pending, pendingScenes, async function (pendingPrompts, pendingScenes) {
+			try {
+				const delivered = await requestBatchImages(row, pendingPrompts, pendingScenes);
+				const deliveredScenes = new Set(delivered.map(function (image) { return Number(image.index); }));
+				return {
+					images: delivered,
+					failed: pendingScenes.filter(function (scene) { return !deliveredScenes.has(Number(scene)); })
+				};
+			} catch (error) {
+				if (mediaItemCancelled(row)) throw error;
+				mediaItemRetryLog({ event: "batch-item-error", stage: "quick-batch-media", rowId: row.id, message: String(error && error.message || error).slice(0, 200) });
+				return { images: [], failed: pendingScenes.slice() };
+			}
+		}, "quick-batch-media");
+		row.images.push.apply(row.images, result.images);
+		row.images.sort(function (a, b) { return Number(a.index) - Number(b.index); });
+		row._missingMediaScenes = Array.from(new Set((row._missingMediaScenes || []).concat(result.failed)));
+		row._imagePipelineWarning = "";
+		if (result.images.length) recordStudioUsage("images", "ok", result.images.length);
+		mediaItemRetryLog({
+			event: "quick-batch-media-complete",
+			stage: "quick-batch-media",
+			rowId: row.id,
+			attempts: result.attempts,
+			delivered: result.images.length,
+			missing: result.failed,
+			recordedFilenames: recordedMediaFilenames(row).slice()
+		});
+		setBatchStage(row, "images", result.images.length + " of " + AUTO_MEDIA_TOTAL + " scenes selected");
+		return result.images;
 	}
 
 	/* play() is allowed to reject (autoplay policy) - the canvas keeps going. */
@@ -10086,6 +10899,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		revokeBatchRow(row);
 
 		row.stopRequested = false;
+		cancelBatchPipelineRetryWait(row);
 		row._imagePipelineWarning = "";
 		row.retrying = false;
 		row.mp3 = null;
@@ -10093,6 +10907,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		row.audio = null;
 		row.prompts = [];
 		row.images = [];
+		row.mediaFilenames = [];
+		row._missingMediaScenes = [];
 		row.slides = [];
 		row.subtitles = [];
 		row.animated = false;
@@ -10102,11 +10918,10 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		try {
 
 			/*
-			 * Session #244: every step runs through batchRunStep, which
-			 * retries a failed step inside this row - silently. The row
-			 * never leaves its working animation and never prints an
-			 * error, so the table looks the same whether a step needed
-			 * one attempt or four.
+			 * FINAL RULE - QUICK BATCH TABLE LAYOUT: every failed
+			 * pipeline stage runs through the browser's silent 7-retry
+			 * ladder. The row never leaves its working animation and never
+			 * prints an error, whether a stage needed one or eight attempts.
 			 */
 			const spanMs =
 				await batchRunVoiceStep(
@@ -10146,6 +10961,24 @@ ${SCRIPT_NOTES_CLIENT_JS}
 							Math.round(row.minutes * 60 * 1000)
 						);
 
+					},
+					{
+						snapshot: function () {
+							return {
+								urls: (row.objectUrls || []).length,
+								mp3: row.mp3,
+								mp3Url: row.mp3Url,
+								audio: row.audio,
+								subtitles: row.subtitles
+							};
+						},
+						reset: function (saved) {
+							revokeBatchUrlsSince(row, saved ? saved.urls : 0);
+							row.mp3 = saved ? saved.mp3 : null;
+							row.mp3Url = saved ? saved.mp3Url : "";
+							row.audio = saved ? saved.audio : null;
+							row.subtitles = saved ? saved.subtitles : [];
+						}
 					}
 				);
 
@@ -10156,70 +10989,109 @@ ${SCRIPT_NOTES_CLIENT_JS}
 					spanMs
 				);
 
-			row.prompts = [];
-			row.images = [];
-			const expectedImageCount = imageSceneTarget(row.script, row.minutes);
-			setBatchStage(row, "prompts", "Preparing the first three Pixabay selections");
 			/*
-			 * Two chunks in flight when the Worker advertises it (bug fix:
-			 * image generation felt serial). Each chunk is three images, so
-			 * a ten-scene row keeps up to six requests busy instead of
-			 * waiting for its slowest image four separate times. Ordering is
-			 * preserved by sorting on the scene index below, which is what
-			 * the row's slides and the finished gallery are built from.
+			 * FINAL RULE - QUICK BATCH TABLE LAYOUT: prompt planning keeps the
+			 * browser's silent stage ladder. Inside each render chunk, failed
+			 * photos/clips are retried INDIVIDUALLY; a stage retry never resets
+			 * media that already arrived.
 			 */
-			const rowImageCaps = await studioOffload.capabilities();
-			try {
-				await runProgressiveImagePipeline({
-					total: expectedImageCount,
-					isCancelled: function () { return Boolean(row.stopRequested); },
-					parallelRenders: Math.max(1, Math.min(4, Number(rowImageCaps.imageChunks) || 1)),
-					request: function (batch) { return requestBatchPrompts(row, batch); },
-					onPrompts: function (prompts) { row.prompts = prompts; },
-					cancelPrompts: function () {
+			await batchRunPipelineStage(
+				row,
+				"prompts",
+				"Planning and selecting 12 distinct Pixabay scenes for every script length",
+				async function (retry) {
+					row.prompts = [];
+					row.slides = [];
+					row.error = "";
+					row.retrying = false;
+					row._imagePipelineWarning = "";
+					row._missingMediaScenes = [];
+					row._promptOwner = null;
+					row.controller = null;
+					const expectedImageCount = AUTO_MEDIA_TOTAL;
+					const rowImageCaps = await studioOffload.capabilities();
+					try {
+						await runProgressiveImagePipeline({
+							total: expectedImageCount,
+							isCancelled: function () { return Boolean(row.stopRequested); },
+							parallelRenders: Math.max(1, Math.min(4, Number(rowImageCaps.imageChunks) || 1)),
+							/* The client stage ladder owns every failed prompt batch. */
+							promptContinuations: 0,
+							request: function (batch) {
+								/* The client stage ladder owns retries; the worker sees one attempt. */
+								batch.attempt = 0;
+								return requestBatchPrompts(row, batch);
+							},
+							onPrompts: function (prompts) { row.prompts = prompts; },
+							cancelPrompts: function () {
+								if (row._promptOwner && row._promptOwner.controller) row._promptOwner.controller.abort();
+							},
+							render: async function (prompts, offset) {
+								if (offset === 0 && retry === 0) startUnprocessedRows(row);
+								await requestBatchImagesWithIndividualRetries(
+									row,
+									prompts,
+									prompts.map(function (_, index) { return offset + index; })
+								);
+							}
+						});
+					} catch (pipelineError) {
+						if (row.stopRequested) throw pipelineError;
+						batchPipelineRetryLog({ event: "scene-plan-failed", rowId: row.id, retry: retry, reason: batchErrorBrief(pipelineError) });
+						throw pipelineError;
+					} finally {
 						if (row._promptOwner && row._promptOwner.controller) row._promptOwner.controller.abort();
-					},
-					render: async function (prompts, offset) {
-						setBatchStage(row, "images", row.images.length + " of " + imageSceneTarget(row.script, row.minutes));
-						if (offset === 0) startUnprocessedRows(row);
-						// Never retry a consumed image batch: it could charge for or duplicate delivered images.
-						const images = await requestBatchImages(row, prompts);
-						images.forEach(function (image) { image.index += offset; });
-						row.images.push.apply(row.images, images);
-						row.images.sort(function (a, b) { return a.index - b.index; });
-						/* #261: local, best-effort record of usable images. */
-						if (images.length) recordStudioUsage("images", "ok", images.length);
-						if (row._imagePipelineWarning) throw new Error(row._imagePipelineWarning);
+						row._promptOwner = null;
 					}
-				});
-			} catch (pipelineError) {
-				// Keep usable earlier batches on a later prompt failure; Stop still stops the row.
-				if (row.stopRequested || !row.images.length) throw pipelineError;
-				console.warn("[batch-table] using partial image pipeline", batchErrorBrief(pipelineError));
-			} finally {
-				if (row._promptOwner && row._promptOwner.controller) row._promptOwner.controller.abort();
-				row._promptOwner = null;
-			}
-
-			/* A partial requestImageChunk result is useful progress, not a
-			 * finished Quick Batch row. Otherwise the clip check below could
-			 * accept two clips plus an incomplete set of photos and enable
-			 * Preview/Export as if every planned scene had arrived. */
-			const deliveredSceneIndexes = new Set(row.images.map(function (image) { return Number(image.index); })
-				.filter(function (index) { return Number.isInteger(index) && index >= 0 && index < expectedImageCount; }));
-			if (deliveredSceneIndexes.size !== expectedImageCount) {
-				const missing = [];
-				for (let scene = 0; scene < expectedImageCount; scene++) {
-					if (!deliveredSceneIndexes.has(scene)) missing.push(scene + 1);
+					if (!Array.isArray(row.prompts) || row.prompts.length !== expectedImageCount) {
+						throw new Error("The fixed 12-scene plan is incomplete; client JS will retry the scene plan.");
+					}
+					const deliveredSceneIndexes = new Set(row.images.map(function (image) { return Number(image.index); })
+						.filter(function (index) { return Number.isInteger(index) && index >= 0 && index < AUTO_MEDIA_TOTAL; }));
+					const mediaError = function (message) {
+						const error = new Error(message);
+						error.name = "MediaItemRetryExhausted";
+						return error;
+					};
+					if (deliveredSceneIndexes.size !== expectedImageCount) {
+						throw mediaError("The fixed 12-scene plan did not receive every distinct Pixabay scene after individual retries.");
+					}
+					const clips = row.images.filter(function (media) { return media.blob && media.blob.type === "video/mp4"; });
+					const uniqueFilenames = new Set(row.images.map(function (media) {
+						return media.stockFilename || (media.blob && media.blob.stockFilename);
+					}));
+					if (clips.length !== AUTO_VIDEO_SCENES || uniqueFilenames.size !== AUTO_MEDIA_TOTAL) {
+						throw mediaError("The fixed plan requires four clips and eight photos, each with a unique filename.");
+					}
+					return row.prompts;
+				},
+				{
+					snapshot: function () {
+						return {
+							prompts: (row.prompts || []).slice(),
+							slides: (row.slides || []).slice(),
+							subtitles: (row.subtitles || []).slice(),
+							mp3: row.mp3,
+							mp3Url: row.mp3Url,
+							audio: row.audio
+						};
+					},
+					reset: function (saved) {
+						/* Only the failed plan is reset. Delivered media and filenames stay put. */
+						row.prompts = saved ? saved.prompts.slice() : [];
+						row.slides = saved ? saved.slides.slice() : [];
+						row.subtitles = saved ? saved.subtitles.slice() : [];
+						row.mp3 = saved ? saved.mp3 : row.mp3;
+						row.mp3Url = saved ? saved.mp3Url : row.mp3Url;
+						row.audio = saved ? saved.audio : row.audio;
+						row._imagePipelineWarning = "";
+						row._promptOwner = null;
+						row.controller = null;
+						row.error = "";
+						row.retrying = false;
+					}
 				}
-				throw new Error("Pixabay image pipeline incomplete: " + missing.length + " of " + expectedImageCount +
-					" planned scenes did not return usable media (scene " + missing.join(", ") + "). Press Generate to retry this row.");
-			}
-
-			const clips = row.images.filter(function (media) { return media.blob.type === "video/mp4"; });
-			if (clips.length !== 2 || new Set(clips.map(function (media) { return (media.stockSource || media.blob.stockSource || {}).id; })).size !== 2) {
-				throw new Error("The scene plan requires two distinct Pixabay video clips; retry with different scene keywords.");
-			}
+			);
 
 			row.slides =
 				await batchRunStep(
@@ -10259,21 +11131,15 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		catch (rowError) {
 
 			/*
-			 * Session #244: nothing here is shown to the user. The row goes
+			 * FINAL RULE - QUICK BATCH TABLE LAYOUT: after the client stage
+			 * ladder is exhausted, nothing is shown to the user. The row goes
 			 * back to looking like a row that has not started yet - no error
-			 * text, no abort wording (a stop or an abort is not a failure at
-			 * all), no warning colour. The next Generate press retries it.
+			 * text, no abort wording, no warning colour. Generate can retry it.
 			 */
-			const stopped =
-				!!row.stopRequested || batchIsStopError(rowError);
-
-			console.warn(
-				"[batch-table] row " + row.id + (stopped ? " stopped" : " could not finish after its quiet attempts") + " - no error is shown in the table",
-				batchErrorBrief(rowError)
-			);
-
-			row.error = stopped ? "" : batchErrorBrief(rowError);
-			setBatchStage(row, stopped ? "ready" : "error", row.error);
+				console.warn("[batch-table] row " + row.id + " client ladder exhausted - no error is shown in the table", batchErrorBrief(rowError));
+				/* FINAL RULE: even an exhausted client ladder paints no failure. */
+				row.error = "";
+				setBatchStage(row, "ready", "");
 
 		}
 
@@ -10283,15 +11149,29 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 	}
 
-	/* Rows that still need work: a script, and no live Preview/Export yet. */
-	function batchRowPending(row) {
+	/* Generate only starts rows that are prepared and idle. Staged rows never enter the queue. */
+	const BATCH_GENERATABLE_STAGES = [
+		"ready",
+		"queued"
+	];
+
+	function batchRowReadyForGeneration(row) {
 
 		return !!(
+			row &&
 			batchRowHasScript(row) &&
 			!batchRowFinished(row) &&
-			!row.running
+			!row.running &&
+			!row.retrying &&
+			!row.stopRequested &&
+			!batchRowBusy(row) &&
+			BATCH_GENERATABLE_STAGES.indexOf(row.stage) !== -1
 		);
 
+	}
+
+	function batchRowPending(row) {
+		return batchRowReadyForGeneration(row);
 	}
 
 	function syncBatchRowsFromDom() {
@@ -10398,13 +11278,23 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		 * would only re-bill the credits and throw the animation away.
 		 */
 		const targets =
-			batchRows.filter(batchRowPending);
+			batchRows.filter(batchRowReadyForGeneration);
 
 		if (!targets.length) {
 
-			showRequiredModal([
-				"Every row with a script is already finished - its Preview and Export buttons are live. Add a row, or clear a finished row's script, to generate again."
-			]);
+			const unfinished =
+				scripted.filter(function (row) { return !batchRowFinished(row); });
+
+			if (!unfinished.length) {
+				showRequiredModal([
+					"Every row with a script is already finished - its Preview and Export buttons are live. Add a row, or clear a finished row's script, to generate again."
+				]);
+			} else {
+				showRequiredModal([
+					"Generate starts only rows marked Ready. Staged, running, retrying, stopped or unfinished rows are left unchanged.",
+					"Wait for staged rows to settle or reset their stage before generating."
+				]);
+			}
 
 			return;
 
@@ -10477,6 +11367,30 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	 * pipeline (images + animate).
 	 */
 	function startUnprocessedRows(activeRow) {
+
+		if (batchStartingRows) {
+
+			return;
+
+		}
+
+		batchStartingRows =
+			true;
+
+		try {
+
+			return startUnprocessedRowsBody(activeRow);
+
+		} finally {
+
+			batchStartingRows =
+				false;
+
+		}
+
+	}
+
+	function startUnprocessedRowsBody(activeRow) {
 
 		if (!batchRunBusy) {
 
@@ -10605,6 +11519,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			 */
 			row.stopRequested =
 				true;
+
+			cancelScriptWriteRetryWait(row);
 
 			row.retrying =
 				false;
@@ -11635,6 +12551,16 @@ ${SCRIPT_NOTES_CLIENT_JS}
 							row.id
 						);
 
+						return;
+
+					}
+
+					if (action === "edit") {
+
+						openBatchEditPage(row);
+
+						return;
+
 					}
 
 				}
@@ -11707,43 +12633,6 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 		}
 
-		/*
-		 * The table layout's script button. A separate attribute from
-		 * data-batch-action on purpose: the table contract is "one action
-		 * button per row" and the remove cell must stay the only one.
-		 */
-		body.addEventListener(
-			"click",
-			function (event) {
-
-				const target =
-					event.target && event.target.closest
-						? event.target.closest("[data-batch-generate]")
-						: null;
-
-				if (!target) {
-					return;
-				}
-
-				const id =
-					target.getAttribute(
-						"data-batch-generate"
-					);
-
-				if (!id) {
-					return;
-				}
-
-				event.preventDefault();
-
-				generateBatchRowScript(id).catch(
-					function (error) {
-						console.error("[batch-table] script generation failed", String(error && error.message || error).slice(0, 200));
-					}
-				);
-
-			}
-		);
 
 	}
 
@@ -11768,13 +12657,30 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		window.startUnprocessedBatchRows =
 			startUnprocessedBatchRows;
 
+		window.mediaItemRetryPolicy = mediaItemRetryPolicy;
+		window.retryFailedMediaOnly = retryFailedMediaOnly;
+		window.alternateMediaPrompt = alternateMediaPrompt;
+		window.acceptMediaBlob = acceptMediaBlob;
+		window.mediaFilenameFromBlob = mediaFilenameFromBlob;
+		window.recordedMediaFilenames = recordedMediaFilenames;
+		window.runEditorMediaWithIndividualRetries = runEditorMediaWithIndividualRetries;
+		window.requestBatchImagesWithIndividualRetries = requestBatchImagesWithIndividualRetries;
+		window.batchProjectJson = batchProjectJson;
+		window.openBatchEditPage = openBatchEditPage;
+		window.applyTransitionProject = applyTransitionProject;
+		window.__MEDIA_ITEM_RETRY_LOG = window.__MEDIA_ITEM_RETRY_LOG || [];
+		window.__MEDIA_FILENAME_LOG = window.__MEDIA_FILENAME_LOG || [];
+
 	}
 
 	/* The toolbar mirrors the rows: how many can be generated, and busy? */
 	function updateBatchToolbar() {
 
-		const runnable =
+		const scripted =
 			batchRows.filter(batchRowHasScript).length;
+
+		const runnable =
+			batchRows.filter(batchRowReadyForGeneration).length;
 
 		const generate =
 			document.getElementById(
@@ -11808,8 +12714,10 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				" row" +
 				(batchRows.length === 1 ? "" : "s") +
 				" \u00b7 " +
+				scripted +
+				" with a script \u00b7 " +
 				runnable +
-				" with a script";
+				" ready";
 
 		}
 
@@ -11823,7 +12731,9 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			if (topGen) {
 
 				topGen.disabled =
-					false;
+					batchRunBusy
+						? false
+						: runnable === 0;
 
 				topGen.textContent =
 					batchRunBusy
@@ -11834,7 +12744,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				topGen.title =
 					batchRunBusy
 						? "Stop generating active batch rows"
-						: "Generate every unfinished row that has a script (three rows at a time)";
+						: "Generate ready batch rows only (up to three at a time)";
 
 			}
 
@@ -12009,6 +12919,20 @@ ${SCRIPT_NOTES_CLIENT_JS}
 							"data-layout"
 						)
 					)
+			);
+
+		}
+
+		const storageReset =
+			document.getElementById(
+				"pipeline-storage-reset"
+			);
+
+		if (storageReset) {
+
+			storageReset.addEventListener(
+				"click",
+				resetPipelineManagementState
 			);
 
 		}
@@ -13048,8 +13972,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 		if (project._requiresStockClips) {
 			const clips = project.assets.filter(function (a) { return a.imagePromptFlowId && a.kind === "mp4"; });
-			if (clips.length !== 2 || new Set(clips.map(function (a) { return a.stockSource && a.stockSource.id; })).size !== 2) {
-				throw new Error("This planned video requires two distinct Pixabay clips. Retry the scene flow before export.");
+			if (clips.length !== AUTO_VIDEO_SCENES || new Set(clips.map(function (a) { return a.stockSource && a.stockSource.id; })).size !== AUTO_VIDEO_SCENES) {
+				throw new Error("This planned video requires four distinct Pixabay clips. Retry only the missing scenes before export.");
 			}
 		}
 
@@ -13207,7 +14131,7 @@ ${SCRIPT_NOTES_CLIENT_JS}
 
 		}
 
-		if (project.assets.filter(function (asset) { return asset.imagePromptFlowId && asset.kind === "mp4"; }).length === 2) {
+		if (project.assets.filter(function (asset) { return asset.imagePromptFlowId && asset.kind === "mp4"; }).length === AUTO_VIDEO_SCENES) {
 			fitStockSceneTimeline(slides, project.audio && project.audio.duration);
 		}
 		return slides;
@@ -17195,6 +18119,18 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	// renders one either.
 	// =========================================================
 
+	/*
+	 * The editor's script textbox is pinned while a browser-owned write is
+	 * in flight (and while its silent retry ladder is still waiting). No later
+	 * state paint, toggle or accordion renumber may hide it over time.
+	 */
+	function scriptBoxLockedVisible(project, box) {
+		return Boolean(
+			(project && (project._scriptWriting || project._scriptKeepWritingUi)) ||
+			(box && box.classList.contains("va-script-loading"))
+		);
+	}
+
 	function setScriptBoxState(
 		n,
 		open
@@ -17216,17 +18152,20 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				"va-script-toggle-" + n
 			);
 
+		const keepVisible =
+			scriptBoxLockedVisible(project, box);
 		const showBox =
-			hasScript && !!open;
+			keepVisible || (hasScript && !!open);
 
 		if (box) {
 			box.style.display =
 				showBox ? "" : "none";
+			if (keepVisible && !box.classList.contains("va-script-loading")) setScriptLoading(n, true);
 		}
 
 		if (toggle) {
 			toggle.style.display =
-				hasScript ? "" : "none";
+				hasScript || keepVisible ? "" : "none";
 
 			toggle.textContent =
 				(showBox
@@ -17496,9 +18435,10 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	//      video image style. With both chosen the walkthrough
 	//      moves to its "writing" panel, the script section shows
 	//      a loading animation and POST /api/script writes the
-	//      plain narration script from the selected set (two
-	//      automatic retries on failure before the accordion
-	//      reports the error — see runSeoScriptRequest).
+	//      plain narration script from the selected set. The
+	//      browser retries any writing error seven times, waits
+	//      40 seconds before each retry, and keeps the textbox,
+	//      spinner and writing state continuously visible.
 	//   3. The browser requests at most THREE scene prompts, starts their
 	//      image stream, and requests the next prompt batch concurrently.
 	//      One lookahead batch bounds memory; retries apply only to prompts.
@@ -17709,6 +18649,19 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		}
 
 		if (on) {
+			/* Pin the textbox for the whole browser-owned retry ladder. */
+			if (project) project._scriptKeepWritingUi = true;
+
+
+			/*
+			 * The script box is the user's textbox. A silent retry must not
+			 * rebuild (or hide) it: when it is already painting the spinner,
+			 * leave exactly the same DOM nodes in place.
+			 */
+			const alreadyLoading =
+				box.classList.contains("va-script-loading") &&
+				box.style.display !== "none" &&
+				!!box.querySelector(".va-spinner");
 
 			box.classList.add(
 				"va-script-loading"
@@ -17717,11 +18670,19 @@ ${SCRIPT_NOTES_CLIENT_JS}
 			box.style.display =
 				"";
 
-			box.innerHTML =
-				'<span class="va-spinner" aria-hidden="true"></span><span>Writing your SEO script\\u2026</span>';
+			if (!alreadyLoading) {
+
+				box.innerHTML =
+					'<span class="va-spinner" aria-hidden="true"></span><span>Writing your SEO script\\u2026</span>';
+
+			}
 
 		}
 		else {
+
+			const keepVisible =
+				Boolean(project && project._scriptKeepWritingUi) ||
+				box.classList.contains("va-script-loading");
 
 			box.classList.remove(
 				"va-script-loading"
@@ -17731,12 +18692,26 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				!(project && project.script)
 			) {
 
-				box.style.display =
-					"none";
+				if (keepVisible) {
+					/* A later state paint must not make the textbox disappear. */
+					box.classList.add("va-script-loading");
+					box.style.display = "";
+					if (!box.querySelector(".va-spinner")) {
+						box.innerHTML =
+							'<span class="va-spinner" aria-hidden="true"></span><span>Writing your SEO script\\u2026</span>';
+					}
+				}
+				else {
+					box.style.display =
+						"none";
 
-				box.textContent =
-					"";
+					box.textContent =
+						"";
+				}
 
+			}
+			else if (project) {
+				project._scriptKeepWritingUi = false;
 			}
 
 		}
@@ -18997,6 +19972,61 @@ ${SCRIPT_NOTES_CLIENT_JS}
 	 * destroy: the batch stream is both the progress and the completion
 	 * signal, so there is nothing to clean up afterwards.
 	 */
+	/*
+	 * Editor layout: retry ONLY the missing scene. A successful photo/clip,
+	 * its object URL and its recorded filename stay in the gallery. Each
+	 * retry varies the Pixabay result index/page so a duplicate filename is
+	 * replaced with a different asset instead of ending the whole flow.
+	 */
+	async function editorSceneDelivered(project, flowId, scene) {
+		return Boolean(project && Array.isArray(project.assets) && project.assets.some(function (asset) {
+			return asset && asset.imagePromptFlowId === flowId && Number(asset.sceneIndex) === Number(scene);
+		}));
+	}
+
+	async function runEditorMediaWithIndividualRetries(n, prompts, flowId, project, seq, sceneOffset) {
+		const baseOffset = Number(sceneOffset) || 0;
+		const scenes = prompts.map(function (_, index) { return baseOffset + index; });
+		let lastMediaFailure = "";
+		const result = await retryFailedMediaOnly(project, prompts, scenes, async function (pendingPrompts, pendingScenes) {
+			const failed = [];
+			for (let i = 0; i < pendingPrompts.length; i++) {
+				const scene = pendingScenes[i];
+				if (await editorSceneDelivered(project, flowId, scene)) continue;
+				if (project._deleted || !project._imageFlowActive || project._imageFlowSeq !== seq) {
+					failed.push(scene);
+					continue;
+				}
+				project._lastMediaError = "";
+				project._imageFlowStopReason = "";
+				project._imageFlowRetry = null;
+				if (Array.isArray(project.imagePrompts)) project.imagePrompts[scene] = pendingPrompts[i];
+				setImagePromptState(project, scene, "searching", "");
+				try {
+					await runImageBatch(n, [pendingPrompts[i]], flowId, project, seq, scene);
+				} catch (error) {
+					lastMediaFailure = String(error && error.message || error);
+					mediaItemRetryLog({ event: "item-error", stage: "editor-media", scene: scene, message: lastMediaFailure.slice(0, 200) });
+				}
+				if (project._imageFlowStopReason) lastMediaFailure = project._imageFlowStopReason;
+				if (!(await editorSceneDelivered(project, flowId, scene))) failed.push(scene);
+			}
+			return { images: [], failed: failed };
+		}, "editor-media");
+		project._imageFlowStopReason = result.failed.length
+			? (lastMediaFailure || "The fixed 12-scene plan needs four distinct Pixabay clips and eight distinct photos.")
+			: "";
+		project._missingMediaScenes = result.failed.slice();
+		mediaItemRetryLog({
+			event: "editor-media-complete",
+			stage: "editor-media",
+			attempts: result.attempts,
+			missing: result.failed,
+			recordedFilenames: recordedMediaFilenames(project).slice()
+		});
+		return result;
+	}
+
 	async function startImagePromptFlow(
 		n
 	) {
@@ -19012,6 +20042,11 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		// Replace only prior automatic scenes on rerun; preserve manual uploads.
 		project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
 		project._requiresStockClips = true;
+		/* Lock this accordion's own script/upload controls while its flow renders. */
+		setVaUploadEnabled(n, false);
+		const ownScriptButton = document.getElementById("va-script-btn-" + n);
+		if (ownScriptButton) ownScriptButton.disabled = true;
+		persistPipelineManagementState("editor-flow-start");
 		for (const asset of project.assets.filter(function (a) { return a.imagePromptFlowId; })) {
 			if (asset.videoEl) { try { asset.videoEl.pause(); asset.videoEl.removeAttribute("src"); asset.videoEl.load(); } catch (_) {} }
 			if (asset.card && asset.card.parentNode) asset.card.parentNode.removeChild(asset.card);
@@ -19054,6 +20089,9 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		project.aiImagesDone = 0;
 		project._aiImageFailures = 0;
 		project._aiImageSkipped = 0;
+		project.mediaFilenames = [];
+		project._missingMediaScenes = [];
+		project._lastMediaError = "";
 		project._imageFlowStopReason = "";
 		project._imageFlowStartedAt = Date.now();
 		/* A fresh run starts a fresh retry budget. */
@@ -19061,10 +20099,10 @@ ${SCRIPT_NOTES_CLIENT_JS}
 		project._imageAutoRetries = 0;
 		project._imageFlowRetry = null;
 
-		if (availableImages < 2 || videoCounts(project).clips > MAX_MP4_UPLOADS - 2) {
+		if (availableImages < AUTO_IMAGE_SCENES || videoCounts(project).clips > MAX_MP4_UPLOADS - AUTO_VIDEO_SCENES) {
 			await finalizeImagePromptFlow(
 				n,
-				"Make room for at least two photos and two Pixabay video clips in this gallery."
+				"Make room for eight distinct Pixabay photos and four Pixabay video clips in this gallery."
 			);
 			return;
 		}
@@ -19074,7 +20112,8 @@ ${SCRIPT_NOTES_CLIENT_JS}
 				"Planning Pixabay scene keywords from the full script…";
 		}
 
-		const target = Math.min(imageSceneTarget(project.script || "", project._seoMinutes || 1), availableImages + 2);
+		/* Fixed for every script length: 4 Pixabay clips + 8 distinct photos. */
+		const target = AUTO_MEDIA_TOTAL;
 \t\tproject.imagePrompts = [];
 \t\tproject.imagePromptTarget = target;
 /* Hide last time's search terms and retry button until this flow plans new ones. */
@@ -19090,6 +20129,8 @@ if (flowRetry) flowRetry.style.display = "none";
 			await runProgressiveImagePipeline({
 				total: target,
 				isCancelled: isCancelled,
+				/* The scheduled client flow owns prompt-load retries, not the in-request pipeline. */
+				promptContinuations: 0,
 				onPrompts: function (prompts) {
 					project.imagePrompts = prompts;
 					prompts.forEach(function (_, index) {
@@ -19136,8 +20177,9 @@ if (flowRetry) flowRetry.style.display = "none";
 				render: async function (prompts, offset) {
 					const liveN = videoProjects.indexOf(project) + 1;
 					if (liveN <= 0 || isCancelled()) return;
-					await runImageBatch(liveN, prompts, project.imagePromptFlowId, project, myFlowSeq, offset);
-					if (project._imageFlowStopReason) throw new Error(project._imageFlowStopReason);
+					await runEditorMediaWithIndividualRetries(
+						liveN, prompts, project.imagePromptFlowId, project, myFlowSeq, offset
+					);
 				}
 			});
 		} catch (error) {
@@ -19162,8 +20204,13 @@ if (flowRetry) flowRetry.style.display = "none";
 		const project = videoProjects[n - 1];
 		if (!project || stale()) return false;
 		if (project.assets.some(function (a) { return a.imagePromptFlowId === flowId && a.sceneIndex === sceneIndex; })) return true;
-		const file = new File([blob], "pixabay-scene-" + sceneIndex + (blob.type === "video/mp4" ? ".mp4" : ".jpg"), { type: blob.type });
+		if (!acceptMediaBlob(project, blob, sceneIndex)) {
+			project._lastMediaError = "Duplicate Pixabay filename rejected for scene " + sceneIndex + "; searching a different result.";
+			return false;
+		}
+		const file = new File([blob], blob.stockFilename || mediaFilenameFromBlob(blob, sceneIndex), { type: blob.type });
 		file.stockSource = blob.stockSource || null;
+		file.stockFilename = blob.stockFilename;
 		if (blob.type !== "video/mp4") {
 			const inserted = addAiToVideo(n, file, blob, flowId, true);
 			if (inserted) project.assets[project.assets.length - 1].sceneIndex = sceneIndex;
@@ -19175,8 +20222,8 @@ if (flowRetry) flowRetry.style.display = "none";
 			const duration = await probeMp4DurationWithRetry(url, 2, video);
 			if (stale() || project._deleted || videoCounts(project).clips >= MAX_MP4_UPLOADS) { releaseStudioObjectUrl(url); video.removeAttribute("src"); video.load(); return false; }
 			if (!Number.isFinite(duration) || duration <= 0 || duration > MP4_MAX_DURATION_S) throw new Error("Unsupported Pixabay clip duration");
-			const asset = { kind: "mp4", file: file, stockSource: blob.stockSource, videoEl: video, duration: duration,
-				url: url, card: null, imagePromptFlowId: flowId, sceneIndex: sceneIndex };
+			const asset = { kind: "mp4", file: file, stockSource: blob.stockSource, stockFilename: blob.stockFilename,
+				videoEl: video, duration: duration, url: url, card: null, imagePromptFlowId: flowId, sceneIndex: sceneIndex };
 			project.assets.push(asset);
 			const liveN = videoProjects.indexOf(project) + 1;
 			buildVaCard(liveN, asset); updateVideoStatus(liveN);
@@ -19201,7 +20248,7 @@ if (flowRetry) flowRetry.style.display = "none";
 					const liveN = videoProjects.indexOf(project) + 1;
 					if (liveN <= 0) return;
 					const scene = (Number(sceneOffset) || 0) + index;
-					if (!await insertStockScene(liveN, blob, flowId, scene, stale)) throw new Error("The media gallery is full or the flow was cancelled");
+					if (!await insertStockScene(liveN, blob, flowId, scene, stale)) throw new Error(project._lastMediaError || "The media gallery is full or the flow was cancelled");
 					project.aiImagesDone = (project.aiImagesDone || 0) + 1;
 					recordStudioUsage("images", "ok", 1);
 					setImagePromptState(project, scene, "imported", blob.type === "video/mp4" ? "clip added to gallery" : "photo added to gallery");
@@ -19211,7 +20258,10 @@ if (flowRetry) flowRetry.style.display = "none";
 				onError: function (error, index) {
 					if (stale()) return;
 					const scene = (Number(sceneOffset) || 0) + index;
-					setImagePromptState(project, scene, "failed", error && error.message ? error.message : String(error || "Pixabay import failed"));
+					const message = error && error.message ? error.message : String(error || "Pixabay import failed");
+					project._lastMediaError = message;
+					project._imageFlowStopReason = message;
+					setImagePromptState(project, scene, "failed", message);
 				}
 			});
 						if (!stale()) {
@@ -19248,8 +20298,12 @@ if (flowRetry) flowRetry.style.display = "none";
 				}
 			}
 		} catch (error) {
-			console.error("[seo-image-flow] binary batch failed", { videoIndex: n, flowId: flowId, sceneOffset: Number(sceneOffset) || 0, error: String(error && error.message || error).slice(0, 500) });
-			if (!stale()) project._imageFlowStopReason = "Image generation was interrupted; delivered images were kept.";
+			const message = String(error && error.message || error);
+			console.error("[seo-image-flow] binary batch failed", { videoIndex: n, flowId: flowId, sceneOffset: Number(sceneOffset) || 0, error: message.slice(0, 500) });
+			if (!stale()) {
+				project._lastMediaError = message;
+				project._imageFlowStopReason = "Image generation was interrupted; delivered images were kept.";
+			}
 		} finally { refreshCredits(); }
 	}
 
@@ -19386,7 +20440,7 @@ if (flowRetry) flowRetry.style.display = "none";
 									}
 									else {
 										skipped++;
-										setImagePromptState(project, eventIndex, "failed", "gallery limit reached or scene skipped");
+										setImagePromptState(project, eventIndex, "failed", project._lastMediaError || "gallery limit reached or scene skipped");
 										project._imageFlowStopReason =
 											"The video gallery reached its " + MAX_IMAGE_UPLOADS + "-image limit.";
 										if (controller) {
@@ -19515,6 +20569,7 @@ if (flowRetry) flowRetry.style.display = "none";
 						"The image batch was interrupted after " + added + " of " + total + " images.";
 				}
 				else if (!aborted) {
+					project._lastMediaError = message;
 					project._imageFlowStopReason =
 						"Image generation failed: " + message;
 				}
@@ -19559,6 +20614,7 @@ if (flowRetry) flowRetry.style.display = "none";
 
 		project._imageFlowFinalizing = true;
 		project._imageFlowActive = false;
+		persistPipelineManagementState("editor-flow-finalize");
 
 		if (project._imageBatchController) {
 			try { project._imageBatchController.abort(); } catch (abortError) { }
@@ -19579,9 +20635,16 @@ if (flowRetry) flowRetry.style.display = "none";
 		let orderedIndex = 0;
 		project.assets = project.assets.map(function (a) { return a.imagePromptFlowId === flowId ? plannedAssets[orderedIndex++] : a; });
 		if (gallery) project.assets.forEach(function (a) { if (a.card) gallery.appendChild(a.card); });
+		/* A strict fixed-plan summary must never hide a concrete provider error. */
+		if (finalReason && /fixed 12-scene plan/.test(finalReason) && project._lastMediaError) {
+			finalReason = project._lastMediaError;
+		}
 		const requiredClips = plannedAssets.filter(function (a) { return a.kind === "mp4"; });
-		if (!finalReason && (requiredClips.length !== 2 || new Set(requiredClips.map(function (a) { return a.stockSource && a.stockSource.id; })).size !== 2)) {
-			finalReason = "Both required Pixabay video clips could not be imported. Retry the scene flow; delivered media was kept.";
+		const requiredPhotoCount = plannedAssets.filter(function (a) { return a.kind !== "mp4"; }).length;
+		const uniqueClipIds = new Set(requiredClips.map(function (a) { return a.stockSource && a.stockSource.id; }));
+		if (!finalReason && (requiredClips.length !== AUTO_VIDEO_SCENES || uniqueClipIds.size !== AUTO_VIDEO_SCENES || requiredPhotoCount !== AUTO_IMAGE_SCENES)) {
+			finalReason = project._lastMediaError ||
+				"The fixed 12-scene plan needs four distinct Pixabay clips and eight distinct photos. Delivered media was kept.";
 		}
 		const actualCount =
 			project.assets.filter(function (asset) {
@@ -19746,6 +20809,8 @@ async function retryImagePromptFlow(n) {
 	project.aiImagesDone = project.assets.filter(function (asset) { return asset.imagePromptFlowId === flowId; }).length;
 	if (btn) { btn.disabled = true; btn.style.display = ""; btn.textContent = "Searching Pixabay…"; }
 	// Keep successful paid imports and retry only scenes that are absent from the gallery.
+	const stillVisibleFilenames = new Set(project.assets.map(function (asset) { return asset && asset.stockFilename; }).filter(Boolean));
+	project.mediaFilenames = recordedMediaFilenames(project).filter(function (filename) { return stillVisibleFilenames.has(filename); });
 	for (let i = 0; i < project.imagePrompts.length; i++) {
 		const alreadyImported = project.assets.some(function (asset) { return asset.imagePromptFlowId === flowId && Number(asset.sceneIndex) === i; });
 		setImagePromptState(project, i, alreadyImported ? "imported" : "planned", alreadyImported ? "already in gallery" : "");
@@ -19874,7 +20939,7 @@ async function retryImagePromptFlow(n) {
 					searchUrl.searchParams.set("q", selection.q);
 					searchUrl.searchParams.set("type", selection.type);
 					searchUrl.searchParams.set("page", "1");
-					searchUrl.searchParams.set("per_page", selection.type === "video" ? "3" : "2");
+					searchUrl.searchParams.set("per_page", String(AUTO_MEDIA_TOTAL));
 					searchUrl.searchParams.set("orientation", "landscape");
 					const searchResponse = await fetch(searchUrl.pathname + searchUrl.search, controller ? { signal: controller.signal } : undefined);
 					const searchData = await searchResponse.json().catch(function () { return null; });
@@ -19901,7 +20966,7 @@ async function retryImagePromptFlow(n) {
 					assetUrl.searchParams.set("q", selection.q);
 					assetUrl.searchParams.set("type", selection.type);
 					assetUrl.searchParams.set("page", "1");
-					assetUrl.searchParams.set("per_page", selection.type === "video" ? "3" : "2");
+					assetUrl.searchParams.set("per_page", String(AUTO_MEDIA_TOTAL));
 					assetUrl.searchParams.set("orientation", "landscape");
 					const assetResponse = await fetch(assetUrl.pathname + assetUrl.search, controller ? { signal: controller.signal } : undefined);
 					if (!assetResponse.ok) {
@@ -20020,23 +21085,17 @@ async function retryImagePromptFlow(n) {
 }
 
 /*
-	 * SESSION 279 — ONE RETRY OWNER PER STAGE, AND IT IS NOT THE BROWSER.
-	 *
-	 * The page used to loop a failed /api/script THREE times (session 278),
-	 * each loop a fresh POST /api/script?async=1 plus a fresh 900 ms-quantised
-	 * note poll stream plus loop re-admission. Measured on nine videos
-	 * (bench/pipeline-sim/results/baseline-scale1.json): 12 submissions and
-	 * 934 note polls for nine scripts, inside a 183.3 s pipeline makespan.
-	 *
-	 * So the loop is gone. One request per script; the worker runs the ladder
-	 * inside it (planner 3 attempts, writer 3 attempts, each clamped to the
-	 * run's remaining budget by attemptSlot(), each rotating the model slug).
-	 * What the page keeps is NOT a retry ladder:
-	 *   - cancellation (Stop / a deleted project / a removed row);
-	 *   - the per-request timeouts below;
-	 *   - the note poll and its hang guards (stall, failed polls, ceiling);
-	 *   - reporting the worker's own attempt count (failure.attempts).
-	 */
+ * CLIENT-OWNED SCRIPT RETRIES.
+ *
+ * Script writing is deliberately owned by the browser. A failed write
+ * is retried up to seven times, with a 40-second backoff before every
+ * retry. The shared requester keeps the initial textbox and loading
+ * animation alive for the entire ladder and a UI checker removes any
+ * failure or retry wording before it can reach either layout. The
+ * Worker performs one inference per request so the browser remains the
+ * only retry owner for this stage. Outside the Quick Batch table pipeline,
+ * media and voiceover keep their worker-owned in-request ladders.
+ */
 
 	/*
 	 * RULE 35 (2026-11-03) — SCRIPT NOTES ARE CLIENT-SIDE ONLY.
@@ -20091,16 +21150,320 @@ async function retryImagePromptFlow(n) {
 	const SCRIPT_LEGACY_TIMEOUT_MS =
 		105000;
 
-	/* Exposed so tests / debugging can see the live script budgets. */
+	/*
+	 * CLIENT-OWNED, SILENT SCRIPT-WRITING RETRIES.
+	 *
+	 * A script-writing error is handled here, in the browser, before either
+	 * layout can paint a failure. The initial write is followed by at most
+	 * SEVEN retries; every retry waits 40 seconds first. Throughout the whole
+	 * ladder the UI checker keeps the script textbox and its spinner on screen
+	 * and replaces any accidental failure/retry wording with the normal
+	 * "Writing your SEO script..." state. Console/global diagnostics never
+	 * become UI text.
+	 */
+	const SCRIPT_WRITE_MAX_RETRIES = 7;
+	const SCRIPT_WRITE_RETRY_BACKOFF_MS = 40000;
+	const SCRIPT_WRITE_UI_TEXT = "Writing your SEO script...";
+	const SCRIPT_WRITE_UI_CHECK_MS = 250;
+	const SCRIPT_WRITE_TOTAL_ATTEMPTS = SCRIPT_WRITE_MAX_RETRIES + 1;
+
+	/* Exposed so tests / debugging can see (and shrink) the live budgets. */
 	if (typeof window !== "undefined") {
-		window.__SCRIPT_PIPELINE_TIMING = {
+		const existingPipelineTiming =
+			window.__SCRIPT_PIPELINE_TIMING && typeof window.__SCRIPT_PIPELINE_TIMING === "object"
+				? window.__SCRIPT_PIPELINE_TIMING
+				: null;
+		const suppliedRetryTiming =
+			window.__SCRIPT_RETRY_TIMING && typeof window.__SCRIPT_RETRY_TIMING === "object"
+				? window.__SCRIPT_RETRY_TIMING
+				: window.__SCRIPT_RETRY_POLICY && typeof window.__SCRIPT_RETRY_POLICY === "object"
+					? window.__SCRIPT_RETRY_POLICY
+					: window.__SCRIPT_RETRY && typeof window.__SCRIPT_RETRY === "object"
+						? window.__SCRIPT_RETRY
+						: null;
+		const retryTiming = suppliedRetryTiming || {};
+		const retryDefaults = {
+			maxRetries: SCRIPT_WRITE_MAX_RETRIES,
+			maxAttempts: SCRIPT_WRITE_TOTAL_ATTEMPTS,
+			backoffMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
+			retryBackoffMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
+			delayMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
+			scriptRetryBackoffMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
+			uiCheckMs: SCRIPT_WRITE_UI_CHECK_MS,
+			owner: "browser"
+		};
+		for (const key in existingPipelineTiming) {
+			if (!(key in retryTiming)) retryTiming[key] = existingPipelineTiming[key];
+		}
+		for (const key in retryDefaults) {
+			if (!(key in retryTiming)) retryTiming[key] = retryDefaults[key];
+		}
+		window.__SCRIPT_RETRY_TIMING = retryTiming;
+		window.__SCRIPT_RETRY_POLICY = retryTiming;
+		window.__SCRIPT_RETRY = retryTiming;
+		window.__SCRIPT_PIPELINE_TIMING = Object.assign({}, existingPipelineTiming || {}, {
 			requestTimeoutMs: SCRIPT_REQUEST_TIMEOUT_MS,
 			legacyTimeoutMs: SCRIPT_LEGACY_TIMEOUT_MS,
 			notePollMs: SCRIPT_NOTE_POLL_MS,
 			noteWaitMs: SCRIPT_NOTE_MAX_WAIT_MS,
 			noteStallMs: SCRIPT_NOTE_STALL_MS,
-			notePollAttempts: SCRIPT_NOTE_POLL_ATTEMPTS
+			notePollAttempts: SCRIPT_NOTE_POLL_ATTEMPTS,
+			maxRetries: SCRIPT_WRITE_MAX_RETRIES,
+			maxAttempts: SCRIPT_WRITE_TOTAL_ATTEMPTS,
+			backoffMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
+			retryBackoffMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
+			delayMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
+			scriptRetryBackoffMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
+			uiCheckMs: SCRIPT_WRITE_UI_CHECK_MS
+		});
+		window.__SCRIPT_RETRY_LOG = [];
+	}
+
+	function scriptWriteRetrySources() {
+		if (typeof window === "undefined") return [];
+		return [
+			window.__SCRIPT_RETRY_TIMING,
+			window.__SCRIPT_RETRY_POLICY,
+			window.__SCRIPT_RETRY,
+			window.__SCRIPT_PIPELINE_TIMING,
+			window.__SEO_FLOW_TIMING
+		];
+	}
+
+	/*
+	 * A non-default value in ANY exposed timing object is an override. This
+	 * keeps one mutable object for normal use while still honouring a test
+	 * that replaces just one alias before or after the page script runs.
+	 */
+	function scriptWriteRetryPolicy() {
+		const retryKeys = ["maxRetries", "maxScriptRetries", "retries", "retryLimit", "scriptRetries", "scriptWriteRetries", "clientRetries", "limit"];
+		const attemptKeys = ["maxAttempts", "maxScriptAttempts", "attempts", "scriptAttempts", "totalAttempts"];
+		const backoffKeys = ["backoffMs", "retryBackoffMs", "delayMs", "retryDelayMs", "retryMs", "backoff", "scriptRetryBackoffMs", "scriptWriteBackoffMs"];
+		const uiKeys = ["uiCheckMs", "scriptUiCheckMs", "tickMs"];
+		let retryOverride = null;
+		let attemptOverride = null;
+		let backoffOverride = null;
+		let uiOverride = null;
+		for (const source of scriptWriteRetrySources()) {
+			if (!source || typeof source !== "object") continue;
+			for (const key of retryKeys.concat(attemptKeys, backoffKeys, uiKeys)) {
+				const value = Number(source[key]);
+				if (!isFinite(value) || value < 0) continue;
+				if (retryKeys.indexOf(key) !== -1 && value !== SCRIPT_WRITE_MAX_RETRIES && retryOverride === null) retryOverride = value;
+				if (attemptKeys.indexOf(key) !== -1 && value !== SCRIPT_WRITE_TOTAL_ATTEMPTS && attemptOverride === null) attemptOverride = value;
+				if (backoffKeys.indexOf(key) !== -1 && value !== SCRIPT_WRITE_RETRY_BACKOFF_MS && backoffOverride === null) backoffOverride = value;
+				if (uiKeys.indexOf(key) !== -1 && value !== SCRIPT_WRITE_UI_CHECK_MS && uiOverride === null) uiOverride = value;
+			}
+		}
+		let maxRetries = SCRIPT_WRITE_MAX_RETRIES;
+		if (retryOverride !== null) maxRetries = retryOverride;
+		else if (attemptOverride !== null) maxRetries = Math.max(0, attemptOverride - 1);
+		const backoffMs = backoffOverride !== null ? backoffOverride : SCRIPT_WRITE_RETRY_BACKOFF_MS;
+		const uiCheckMs = uiOverride !== null ? uiOverride : SCRIPT_WRITE_UI_CHECK_MS;
+		return {
+			maxRetries: Math.max(0, Math.floor(maxRetries)),
+			backoffMs: Math.max(0, Math.floor(backoffMs)),
+			uiCheckMs: Math.max(0, Math.floor(uiCheckMs))
 		};
+	}
+
+	function scriptWriteRetryLog(entry) {
+		if (typeof window === "undefined") return;
+		const log = Array.isArray(window.__SCRIPT_RETRY_LOG) ? window.__SCRIPT_RETRY_LOG : [];
+		log.push(Object.assign({ at: Date.now() }, entry || {}));
+		while (log.length > 40) log.shift();
+		window.__SCRIPT_RETRY_LOG = log;
+	}
+
+	function scriptWriteUiLooksLikeError(text) {
+		return /failed|failure|error|retry|retrying|timed out|timeout|cancelled|canceled|stopped|unavailable|invalid|abort|⚠/i.test(String(text || ""));
+	}
+
+	function keepScriptWriteUi(context, force) {
+		if (context && typeof context.keepWritingUi === "function") {
+			context.keepWritingUi(Boolean(force));
+		}
+	}
+
+	function scriptWriteUiHasError(context) {
+		if (!context) return false;
+		if (typeof context.uiHasError === "function") return Boolean(context.uiHasError());
+		const nodes = typeof context.uiNodes === "function" ? context.uiNodes() : [];
+		for (const node of nodes || []) {
+			if (node && scriptWriteUiLooksLikeError(node.textContent)) return true;
+		}
+		return false;
+	}
+
+	function cancelScriptWriteRetryWait(target) {
+		const wait = target && target._scriptRetryWait;
+		if (wait && typeof wait.cancel === "function") {
+			try { wait.cancel(); } catch (cancelError) { }
+		}
+		if (target) target._scriptRetryWait = null;
+		cancelBatchPipelineRetryWait(target);
+	}
+
+	/*
+	 * One full 40-second timer per retry. A deletion / Stop can cancel the
+	 * pending wait immediately instead of leaving a timer behind.
+	 */
+	function scriptWriteRetryDelay(ms, context) {
+		return new Promise(function (resolve) {
+			let timer = null;
+			let settled = false;
+			const finish = function (cancelled) {
+				if (settled) return;
+				settled = true;
+				if (timer !== null) clearTimeout(timer);
+				if (context && typeof context.clearRetryWait === "function") context.clearRetryWait();
+				resolve(!cancelled);
+			};
+			const handle = {
+				delayMs: ms,
+				cancel: function () { finish(true); }
+			};
+			if (context && typeof context.setRetryWait === "function") context.setRetryWait(handle);
+			if (context && typeof context.isCancelled === "function" && context.isCancelled()) {
+				finish(true);
+				return;
+			}
+			timer = setTimeout(function () {
+				finish(Boolean(context && typeof context.isCancelled === "function" && context.isCancelled()));
+			}, ms);
+		});
+	}
+
+	/* A DOM watcher: any error text that appears is put back into writing mode. */
+	function startScriptWriteUiCheck(context, policy) {
+		let observer = null;
+		let ticker = null;
+		const observed = [];
+		if (typeof window !== "undefined" && typeof window.MutationObserver === "function" && context && typeof context.uiNodes === "function") {
+			observer = new window.MutationObserver(function () {
+				if (observer && typeof context.uiNodes === "function") {
+					for (const node of context.uiNodes() || []) {
+						if (node && observed.indexOf(node) === -1) {
+							observed.push(node);
+							try { observer.observe(node, { childList: true, subtree: true, characterData: true, attributes: true }); } catch (observeError) { }
+						}
+					}
+				}
+				if (scriptWriteUiHasError(context)) keepScriptWriteUi(context, true);
+			});
+			for (const node of context.uiNodes() || []) {
+				if (node && observed.indexOf(node) === -1) {
+					observed.push(node);
+					try { observer.observe(node, { childList: true, subtree: true, characterData: true, attributes: true }); } catch (observeError) { }
+				}
+			}
+			if (document.body) {
+				try { observer.observe(document.body, { childList: true, subtree: true }); } catch (observeError) { }
+			}
+		}
+		let stopped = false;
+		if (typeof window !== "undefined" && typeof window.setTimeout === "function" && policy.uiCheckMs > 0) {
+			const tick = function () {
+				if (stopped) return;
+				if (scriptWriteUiHasError(context)) keepScriptWriteUi(context, true);
+				ticker = window.setTimeout(tick, policy.uiCheckMs);
+			};
+			ticker = window.setTimeout(tick, policy.uiCheckMs);
+		}
+		return {
+			stop: function () {
+				stopped = true;
+				if (observer) { try { observer.disconnect(); } catch (disconnectError) { } }
+				if (ticker !== null && typeof window !== "undefined" && typeof window.clearTimeout === "function") {
+					try { window.clearTimeout(ticker); } catch (clearError) { }
+				}
+			}
+		};
+	}
+
+	/*
+	 * ONE requester for both layouts. Every error - including a 4xx or a
+	 * worker verdict marked non-retryable - is a script-writing error here and
+	 * is retried silently. Only an explicit cancellation stops the ladder.
+	 */
+	async function requestScriptWritingWithClientRetries(context, options) {
+		const policy = scriptWriteRetryPolicy();
+		const isCancelled = context && typeof context.isCancelled === "function"
+			? context.isCancelled
+			: function () { return false; };
+		let lastError = null;
+		keepScriptWriteUi(context, false);
+		const uiCheck = startScriptWriteUiCheck(context, policy);
+		try {
+			for (let retry = 0; retry <= policy.maxRetries; retry++) {
+				if (isCancelled()) {
+					const cancelled = new Error("Script generation was cancelled");
+					cancelled.name = "AbortError";
+					cancelled.code = "SCRIPT_CANCELLED";
+					throw cancelled;
+				}
+				keepScriptWriteUi(context, false);
+				scriptWriteRetryLog({ event: "attempt", retry: retry, attempt: retry + 1, maxRetries: policy.maxRetries });
+				try {
+					const attemptOptions = Object.assign({}, options || {}, {
+						clientRetry: retry,
+						previousFailure: lastError ? String(lastError.message || lastError).slice(0, 800) : ""
+					});
+					const data = await requestScriptWithNotes(context, attemptOptions);
+					const script = String(data && data.script || "").trim();
+					if (!script) {
+						const empty = new Error("The script came back empty");
+						empty.code = "SCRIPT_EMPTY";
+						throw empty;
+					}
+					scriptWriteRetryLog({ event: "success", retry: retry, attempt: retry + 1 });
+					return Object.assign({}, data, { script: script });
+				} catch (error) {
+					lastError = error;
+					const cancelled = isCancelled() || Boolean(error && error.code === "SCRIPT_CANCELLED");
+					if (cancelled) {
+						scriptWriteRetryLog({ event: "cancelled", retry: retry, attempt: retry + 1 });
+						throw error;
+					}
+					scriptWriteRetryLog({
+						event: "attempt-failed",
+						retry: retry,
+						attempt: retry + 1,
+						reason: String(error && (error.message || error) || "unknown").slice(0, 160)
+					});
+					keepScriptWriteUi(context, true);
+					if (retry >= policy.maxRetries) {
+						if (error) {
+							try {
+								error.clientRetries = retry;
+								error.clientAttempts = retry + 1;
+							} catch (decorateError) { }
+						}
+						scriptWriteRetryLog({ event: "budget-exhausted", attempts: retry + 1, maxRetries: policy.maxRetries });
+						throw error;
+					}
+					scriptWriteRetryLog({
+						event: "backoff",
+						delayMs: policy.backoffMs,
+						nextRetry: retry + 1,
+						maxRetries: policy.maxRetries
+					});
+					const proceed = await scriptWriteRetryDelay(policy.backoffMs, context);
+					if (!proceed || isCancelled()) {
+						const cancelledDuringBackoff = new Error("Script generation was cancelled");
+						cancelledDuringBackoff.name = "AbortError";
+						cancelledDuringBackoff.code = "SCRIPT_CANCELLED";
+						throw cancelledDuringBackoff;
+					}
+				}
+			}
+		} finally {
+			uiCheck.stop();
+			if (context && typeof context.clearRetryWait === "function") context.clearRetryWait();
+		}
+		const exhausted = new Error("Script writing retry budget exhausted");
+		exhausted.code = "SCRIPT_RETRY_BUDGET_EXHAUSTED";
+		throw exhausted;
 	}
 
 	function fetchWithTimeout(
@@ -20463,11 +21826,9 @@ async function retryImagePromptFlow(n) {
 	}
 
 	/*
-	 * The verdict text for a script the worker could not deliver.
-	 *
-	 * The worker reports how many attempts ITS ladder spent, so the user still
-	 * sees "this was tried three times" - the page just no longer has to be the
-	 * thing doing the trying.
+	 * Legacy verdict formatter. Script-writing failures no longer use it in
+	 * either UI: the browser's silent ladder is the source of truth and keeps
+	 * the writing state on screen.
 	 */
 	function scriptFailureText(error) {
 		const message = (error && error.message) || "Script generation failed";
@@ -20525,15 +21886,14 @@ async function retryImagePromptFlow(n) {
 		const single = Boolean(caps.singleAttemptScript && project && project.selectedSeoSet);
 		const notesEnabled = Boolean(caps.scriptNotes);
 		/*
-		 * WHO OWNS THE RETRIES: THE WORKER (session 279).
+		 * WHO OWNS SCRIPT RETRIES: THIS PAGE.
 		 *
-		 * This page sends no \`browserRetries\` flag, so the worker keeps its
-		 * own ladder (planner 3 attempts + writer 3 attempts) inside the one
-		 * request it is already serving, and reports how many it spent in
-		 * \`failure.attempts\`. A cached pre-279 page still sends the flag and
-		 * still gets one attempt per stage - the field is still advertised as
-		 * \`browserScriptRetries\` for exactly that reason. Against a pre-279
-		 * worker this page simply runs its legacy ladder: slower, never a hang.
+		 * requestScriptWritingWithClientRetries owns the seven silent retries.
+		 * browserRetries tells the Worker to spend exactly one inference per
+		 * stage for each request, so a browser retry is a real new script write
+		 * rather than a second ladder nested inside the Worker's own ladder.
+		 * The attempt number rotates the model and previousFailure coaches the
+		 * next write; neither is ever printed in the UI.
 		 */
 		/* RULE 35: a Worker that keeps notes in the browser must NEVER be
 		 * polled - there is no server-side note to poll. Old deployments that
@@ -20574,9 +21934,9 @@ async function retryImagePromptFlow(n) {
 
 		/*
 		 * The keyword set the user picked in the walkthrough (or the one this
-		 * project already holds). It is a FIRST-ATTEMPT input, not a resume
-		 * point: the worker's ladder keeps the validated plan in scope for its
-		 * own attempts, so the page never has to send one back.
+		 * project already holds). Every browser-owned attempt carries the same
+		 * validated plan, so the Worker performs one writer inference per
+		 * request and never runs a nested retry ladder.
 		 */
 		const keywordSet =
 			context && context.keywordSet !== undefined && context.keywordSet !== null
@@ -20591,15 +21951,20 @@ async function retryImagePromptFlow(n) {
 					? project.scriptSourceUrl
 					: "";
 
+		const clientRetry =
+			Math.max(0, Math.floor(Number(options && options.clientRetry) || 0));
+
 		const requestBody = {
+			browserRetries: true,
+			clientRetry: clientRetry,
 			singleAttempt: Boolean(single),
 			/*
-			 * Always attempt 0 and no \`previousFailure\`: there is no page-level
-			 * ladder left to report. The worker still honours both fields for a
-			 * cached pre-279 page (and its own ladder coaches itself internally).
+			 * The browser ladder is the source of truth for attempt count.
+			 * The Worker uses these fields to rotate its model and coach the
+			 * next write; the UI never shows either field.
 			 */
-			attempt: 0,
-			previousFailure: "",
+			attempt: clientRetry,
+			previousFailure: String((options && options.previousFailure) || "").slice(0, 800),
 			topic: topic,
 			minutes: minutes,
 			speed: speed,
@@ -20731,10 +22096,24 @@ async function retryImagePromptFlow(n) {
 
 	/* The editor layout: the video project owns everything. */
 	function scriptContextForProject(project) {
+		const liveIndex = function () {
+			return project ? videoProjects.indexOf(project) + 1 : 0;
+		};
+		const uiNodes = function () {
+			const live = liveIndex();
+			if (live <= 0) return [];
+			return [
+				document.getElementById("va-script-status-" + live),
+				document.getElementById("va-script-box-" + live),
+				seoWtEl(live, "seo-wt-script-status"),
+				seoWtEl(live, "seo-wt-error")
+			];
+		};
 		return {
+			layout: "editor",
 			project: project,
 			isCancelled: function () {
-				return Boolean(!project || project._deleted || videoProjects.indexOf(project) < 0);
+				return Boolean(!project || project._deleted || liveIndex() <= 0);
 			},
 			setController: function (controller) {
 				if (project) project._seoScriptController = controller;
@@ -20742,10 +22121,49 @@ async function retryImagePromptFlow(n) {
 			clearController: function (controller) {
 				if (project && project._seoScriptController === controller) project._seoScriptController = null;
 			},
+			setRetryWait: function (handle) {
+				if (project) project._scriptRetryWait = handle;
+			},
+			clearRetryWait: function () {
+				if (project) project._scriptRetryWait = null;
+			},
+			uiNodes: uiNodes,
+			uiHasError: function () {
+				const nodes = uiNodes();
+				for (const node of nodes) {
+					if (node && scriptWriteUiLooksLikeError(node.textContent)) return true;
+				}
+				const live = liveIndex();
+				const box = live > 0 ? document.getElementById("va-script-box-" + live) : null;
+				return Boolean(box && (box.style.display === "none" || !box.classList.contains("va-script-loading") || !box.querySelector(".va-spinner")));
+			},
+			keepWritingUi: function (force) {
+				const live = liveIndex();
+				if (live <= 0 || project._deleted) return;
+				project._scriptKeepWritingUi = true;
+				const box = document.getElementById("va-script-box-" + live);
+				if (!box || box.style.display === "none" || !box.classList.contains("va-script-loading") || !box.querySelector(".va-spinner")) {
+					setScriptLoading(live, true);
+				}
+				else {
+					box.classList.add("va-script-loading");
+					box.style.display = "";
+				}
+				const statusEl = document.getElementById("va-script-status-" + live);
+				if (statusEl && (force || !statusEl.textContent || scriptWriteUiLooksLikeError(statusEl.textContent))) {
+					statusEl.textContent = SCRIPT_WRITE_UI_TEXT;
+				}
+				const wtStatus = seoWtEl(live, "seo-wt-script-status");
+				if (wtStatus && (force || scriptWriteUiLooksLikeError(wtStatus.textContent))) {
+					wtStatus.textContent = SCRIPT_WRITE_UI_TEXT;
+				}
+				const wtError = seoWtEl(live, "seo-wt-error");
+				if (wtError) wtError.textContent = "";
+			},
 			onStatus: function (text) {
-				const liveIndex = project ? videoProjects.indexOf(project) + 1 : 0;
-				if (liveIndex <= 0) return;
-				const statusEl = document.getElementById("va-script-status-" + liveIndex);
+				const live = liveIndex();
+				if (live <= 0 || !text || scriptWriteUiLooksLikeError(text)) return;
+				const statusEl = document.getElementById("va-script-status-" + live);
 				if (statusEl) statusEl.textContent = text;
 			}
 		};
@@ -20761,8 +22179,17 @@ async function retryImagePromptFlow(n) {
 	 * script cell is the topic; the finished narration replaces it.
 	 */
 	function batchRowScriptContext(row) {
+		const uiNodes = function () {
+			const scope = document.querySelector('[data-batch-row="' + row.id + '"]');
+			return scope ? [
+				scope.querySelector('[data-batch-slot="status"]'),
+				scope.querySelector('[data-batch-field="script"]')
+			] : [];
+		};
 		return {
+			layout: "row",
 			project: null,
+			row: row,
 			keywordSet: null,
 			sourceUrl: String(row.sourceUrl || ""),
 			isCancelled: function () {
@@ -20774,10 +22201,44 @@ async function retryImagePromptFlow(n) {
 			clearController: function (controller) {
 				if (row.controller === controller) row.controller = null;
 			},
+			setRetryWait: function (handle) {
+				row._scriptRetryWait = handle;
+			},
+			clearRetryWait: function () {
+				row._scriptRetryWait = null;
+			},
+			uiNodes: uiNodes,
+			uiHasError: function () {
+				if (row.stage !== "writing" || row.error || scriptWriteUiLooksLikeError(row.detail)) return true;
+				const nodes = uiNodes();
+				const status = nodes[0];
+				const textarea = nodes[1];
+				if (!textarea) return true;
+				if (!status || status.getAttribute("data-stage") !== "writing" || !status.querySelector(".va-spinner")) return true;
+				return scriptWriteUiLooksLikeError(status.textContent);
+			},
+			keepWritingUi: function (force) {
+				row.error = "";
+				row.stage = "writing";
+				if (force || !row.detail || scriptWriteUiLooksLikeError(row.detail)) row.detail = SCRIPT_WRITE_UI_TEXT;
+				const nodes = uiNodes();
+				const status = nodes[0];
+				const textarea = nodes[1];
+				if (!textarea) renderBatchTable();
+				/*
+				 * Do not rebuild a healthy spinner on every failed attempt:
+				 * the same textarea and spinner stay on screen continuously.
+				 */
+				if (!status || status.getAttribute("data-stage") !== "writing" || !status.querySelector(".va-spinner") || scriptWriteUiLooksLikeError(status.textContent)) {
+					paintBatchRowStatus(row);
+				}
+			},
 			onStatus: function (text) {
-				if (!text) return;
-				setBatchStage(row, "writing", text);
-				refreshBatchRowCells();
+				if (!text || scriptWriteUiLooksLikeError(text)) return;
+				row.stage = "writing";
+				row.error = "";
+				row.detail = String(text);
+				paintBatchRowStatus(row);
 			}
 		};
 	}
@@ -20802,50 +22263,43 @@ async function retryImagePromptFlow(n) {
 		const minutes = Math.min(6, Math.max(1, Number(row.minutes) || BATCH_MIN_MINUTES));
 		const topic = batchRowTopic(row) || "my video";
 
-		row._scriptWriting = true;
-		setBatchStage(row, "writing", "Writing the script from the note\u2026");
-		refreshBatchRowCells();
+			row._scriptWriting = true;
+			setBatchStage(row, "writing", SCRIPT_WRITE_UI_TEXT);
+			refreshBatchRowCells();
 
-		try {
-			/*
-			 * SESSION 279: ONE REQUEST, NO TABLE-ROW LADDER.
-			 *
-			 * The three attempts this row used to make were three submissions,
-			 * three poll streams and three queue re-admissions for one script.
-			 * The worker owns the ladder now (inside this single request), so
-			 * the row only decides whether to wait, to be cancelled, or to
-			 * report the verdict the worker returned - including how many
-			 * attempts the worker itself spent (failure.attempts).
-			 */
-			if (row.stopRequested || !getBatchRow(rowId)) {
-				const cancelled = new Error("Script generation was cancelled");
-				cancelled.name = "AbortError";
-				throw cancelled;
-			}
-			const data = await requestScriptWithNotes(batchRowScriptContext(row), {
-				topic: topic,
-				minutes: minutes,
-				speed: "medium"
-			});
-			console.info("[script-notes] table row script", { rowId: rowId, request: 1 });
-			const script = String((data && data.script) || "").trim();
-			if (!script) throw new Error("The script came back empty");
-			const live = getBatchRow(rowId);
-			if (!live) return false;
-			live.script = script;
-			const cell = document.querySelector('[data-batch-row="' + rowId + '"] [data-batch-field="script"]');
-			if (cell) cell.value = script;
-			setBatchStage(live, "empty", "Script ready \u2014 review it, then press \u2726 Generate");
-			refreshBatchRowCells();
-			updateBatchToolbar();
-			return true;
-		} catch (error) {
-			const live = getBatchRow(rowId);
-			if (!live) return false;
-			const cancelled = error && error.name === "AbortError";
-			setBatchStage(live, "error", cancelled ? "Script generation was cancelled" : scriptFailureText(error));
-			refreshBatchRowCells();
-			return false;
+			try {
+				/*
+				 * The shared browser ladder owns every script-writing error.
+				 * The row never paints a retry or a failure: its textarea and
+				 * spinner remain in their normal writing state.
+				 */
+				if (row.stopRequested || !getBatchRow(rowId)) {
+					const cancelled = new Error("Script generation was cancelled");
+					cancelled.name = "AbortError";
+					throw cancelled;
+				}
+				const data = await requestScriptWritingWithClientRetries(batchRowScriptContext(row), {
+					topic: topic,
+					minutes: minutes,
+					speed: "medium"
+				});
+				const script = String((data && data.script) || "").trim();
+				if (!script) throw new Error("The script came back empty");
+				const live = getBatchRow(rowId);
+				if (!live) return false;
+				live.script = script;
+				const cell = document.querySelector('[data-batch-row="' + rowId + '"] [data-batch-field="script"]');
+				if (cell) cell.value = script;
+				setBatchStage(live, "empty", "Script ready \u2014 review it, then press \u2726 Generate");
+				refreshBatchRowCells();
+				updateBatchToolbar();
+				return true;
+			} catch (error) {
+				const live = getBatchRow(rowId);
+				if (!live) return false;
+				/* No verdict, no warning colour and no retry wording on the row. */
+				batchRowScriptContext(live).keepWritingUi(true);
+				return false;
 		} finally {
 			const live = getBatchRow(rowId);
 			if (live) live._scriptWriting = false;
@@ -20863,7 +22317,7 @@ async function retryImagePromptFlow(n) {
 		const project =
 			videoProjects[n - 1];
 
-		return requestScriptWithNotes(
+		return requestScriptWritingWithClientRetries(
 			scriptContextForProject(project),
 			{
 				topic: topic,
@@ -21078,17 +22532,17 @@ async function retryImagePromptFlow(n) {
 				"va-script-btn-" + n
 			);
 
-		const statusEl =
-			document.getElementById(
-				"va-script-status-" + n
-			);
-
 		if (!btn) {
 			return false;
 		}
 
+		const context =
+			scriptContextForProject(project);
+
 		let scriptSucceeded =
 			false;
+
+			project._scriptWriting = true;
 
 		let lastError =
 			null;
@@ -21100,10 +22554,7 @@ async function retryImagePromptFlow(n) {
 			true
 		);
 
-		if (statusEl) {
-			statusEl.textContent =
-				"Writing your script from the selected SEO keyword set (AI model)...";
-		}
+		context.keepWritingUi(true);
 
 		const scriptStartedAt = Date.now();
 
@@ -21112,24 +22563,15 @@ async function retryImagePromptFlow(n) {
 			topic: topic,
 			minutes: minutes,
 			speed: speed,
-			/* Session 279: one request from this page, ladder owned by the worker. */
-			requests: 1,
-			retryOwner: "worker"
+			/* Seven silent browser retries, each preceded by 40 seconds. */
+			maxRetries: SCRIPT_WRITE_MAX_RETRIES,
+			maxRequests: SCRIPT_WRITE_TOTAL_ATTEMPTS,
+			retryBackoffMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
+			retryOwner: "browser"
 		});
 
 		try {
 
-			/*
-			 * ONE REQUEST FROM THIS PAGE (session 279).
-			 *
-			 * The worker runs the ladder inside this request - planner up to 3
-			 * attempts, writer up to 3, every attempt clamped to the run's
-			 * remaining budget by attemptSlot() and served by a rotated model
-			 * slug - so a retry no longer costs a round trip, a queue
-			 * re-admission and a second 900 ms poll stream. What stays here is
-			 * cancellation, the request timeout, the note poll with its hang
-			 * guards, and the verdict.
-			 */
 			try {
 				if (project._deleted || videoProjects.indexOf(project) < 0) return false;
 
@@ -21164,13 +22606,11 @@ async function retryImagePromptFlow(n) {
 				lastError =
 					err;
 
-				console.warn("[script-seo] request failed", {
+				/* Diagnostics stay in the console; the UI remains in writing mode. */
+				console.info("[script-seo] client ladder finished without text", {
 					videoIndex: n,
 					ms: Date.now() - scriptStartedAt,
-					stage: (err && err.stage) || "",
-					workerAttempts: Number(err && err.attempts) || 0,
-					retryable: err ? err.retryable !== false : false,
-					error: (err && err.message) || String(err)
+					clientAttempts: Number(err && err.clientAttempts) || SCRIPT_WRITE_TOTAL_ATTEMPTS
 				});
 
 				if (project._deleted) return false;
@@ -21179,34 +22619,26 @@ async function retryImagePromptFlow(n) {
 
 			if (lastError) {
 
-				/* The worker's ladder is exhausted: now the UI may show the error. */
-				const failureLine =
-					"Script failed: " + scriptFailureText(lastError);
-
-				const liveStatus = document.getElementById("va-script-status-" + (videoProjects.indexOf(project) + 1));
-				if (liveStatus) liveStatus.textContent = failureLine;
-
-				setSeoWalkthroughError(
-					videoProjects.indexOf(project) + 1,
-					failureLine
-				);
-
+				/* No failure line, no retry line and no red walkthrough slot. */
+				context.keepWritingUi(true);
 				recordStudioUsage("scripts", "error", 1);
-
-				console.error("[script-seo] failed", {
-					videoIndex: n,
-					ms: Date.now() - scriptStartedAt,
-					workerAttempts: Number(lastError && lastError.attempts) || 0,
-					error: (lastError && lastError.message) || String(lastError)
-				});
 
 			}
 
 		}
 		finally {
+			project._scriptWriting = false;
 
 			const liveN = videoProjects.indexOf(project) + 1;
-			if (!project._deleted && liveN > 0) setScriptLoading(liveN, false);
+			if (!project._deleted && liveN > 0) {
+				if (scriptSucceeded) {
+					setScriptLoading(liveN, false);
+				}
+				else {
+					/* Keep both the script textbox and its spinner continuously. */
+					context.keepWritingUi(true);
+				}
+			}
 
 			if (!project._deleted && liveN > 0 && !project._imageFlowActive) {
 				const liveBtn = document.getElementById("va-script-btn-" + liveN);
@@ -21524,7 +22956,7 @@ async function retryImagePromptFlow(n) {
 	 * a Web Worker - or, on the legacy branch, a bare \`fetch\` with NO timeout
 	 * and no cancellation. Both are gone. One request through the offload
 	 * scheduler keeps the timeout (165 s), the abort plumbing and the queue slot,
-	 * and the worker's ladder does the rest.
+	 * and the worker's in-request ladder does the rest. Quick Batch table rows add the final client-side pipeline ladder.
 	 */
 	async function requestEditorVoiceover(project, text, lang) {
 		return studioOffload.mediaResponse(
@@ -21869,10 +23301,87 @@ async function retryImagePromptFlow(n) {
 
 	}
 
+
+	function readTransitionProjectPayload() {
+		let params = null;
+		try { params = new URLSearchParams(window.location.search || ""); } catch (error) { return null; }
+		const key = params.get("projectEdit");
+		if (!key) return null;
+		const cookieName = "ytvs_transition_project_" + key.replace(/[^a-zA-Z0-9_-]/g, "_");
+		let mirror = null;
+		try {
+			for (const part of String(window.document.cookie || "").split(";")) {
+				const entry = part.trim();
+				const equal = entry.indexOf("=");
+				if (equal < 0 || entry.slice(0, equal) !== cookieName) continue;
+				mirror = JSON.parse(decodeURIComponent(entry.slice(equal + 1)));
+				break;
+			}
+		} catch (cookieError) { }
+		let payload = null;
+		try {
+			payload = JSON.parse(window.localStorage.getItem(MEDIA_TRANSITION_STORAGE_PREFIX + key) || "null");
+		} catch (storageError) { }
+		/* No TTL: the localStorage payload and cookie mirror must share createdAt. */
+		const matched = Boolean(payload && mirror && mirror.v === 1 && mirror.key === key &&
+			Number(mirror.createdAt) === Number(payload.createdAt));
+		try { window.localStorage.removeItem(MEDIA_TRANSITION_STORAGE_PREFIX + key); } catch (removeError) { }
+		try {
+			window.document.cookie = cookieName + "=; Max-Age=0; Path=/; SameSite=Lax";
+		} catch (removeCookieError) { }
+		return matched && payload.transitionOnly === true ? payload : null;
+	}
+
+	function applyTransitionProject() {
+		const payload = readTransitionProjectPayload();
+		if (!payload) return null;
+		window.__TRANSITION_PROJECT__ = payload;
+		window.__BATCH_EDIT_PROJECT__ = payload;
+		try { setStudioLayout("editor"); } catch (layoutError) { }
+		if (!videoProjects.length && typeof addVideoAccordion === "function") addVideoAccordion();
+		const project = videoProjects[0];
+		if (project) {
+			const settings = payload.basicSettings || {};
+			project.script = String(settings.script || "");
+			project.name = String(settings.title || project.name || "");
+			project.videoImageStyle = settings.style || project.videoImageStyle || DEFAULT_SEO_IMAGE_STYLE;
+			project._seoTopic = String(settings.topic || settings.title || "my video");
+			project._seoMinutes = Number(settings.minutes) > 0 ? Number(settings.minutes) : 1;
+			project.resolution = settings.resolution || project.resolution || "";
+			project.orientation = settings.orientation || project.orientation || "";
+			project.mediaFilenames = [];
+			project._pipelineVid = settings.vid || payload.targetPageId + "-editor-1";
+			const n = videoProjects.indexOf(project) + 1;
+			const setField = function (id, value) {
+				const el = document.getElementById(id + n);
+				if (el && "value" in el) el.value = String(value || "");
+			};
+			setField("va-title-", settings.title || project.name || "");
+			setField("va-script-topic-", settings.topic || settings.title || "");
+			setField("va-script-minutes-", project._seoMinutes);
+			setField("va-quality-", settings.quality || "balanced");
+			try { setScriptLoading(n, false); } catch (loadingError) { }
+			try { setScriptBoxState(n, true); } catch (boxError) { }
+			try { syncVoiceoverButton(n); } catch (voiceError) { }
+			try { setVaUploadEnabled(n, true); } catch (uploadError) { }
+			const status = document.getElementById("va-script-status-" + n);
+			if (status) status.textContent = "Project settings loaded from Quick Batch.";
+			persistPipelineManagementState("transition-project-applied");
+		}
+		return payload;
+	}
+
 	initVideoStudio();
 	bindStudioShell();
+	restorePipelineManagementState();
+	applyTransitionProject();
 	bindLandingActions();
 	initAuth();
+	persistPipelineManagementState("startup");
+	window.addEventListener("storage", function (event) {
+		if (event && event.key === pipelineManagementStore.localStorageKey) restorePipelineManagementState();
+	});
+	window.addEventListener("beforeunload", function () { persistPipelineManagementState("beforeunload"); });
 
 	async function generateMP4() {
 

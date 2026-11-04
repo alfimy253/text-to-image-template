@@ -23,6 +23,20 @@ import { APP_JS } from "../src/client/app-js.ts";
 const script = "Morning yoga opens the shoulders. Long tails follow the breath.";
 const pngBase64 = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64");
 
+function mediaBatchEvents(body) {
+	const scenes = Array.isArray(body.sceneIndexes) ? body.sceneIndexes.map(Number) : body.prompts.map((_, i) => i);
+	const clipSlots = [1, 4, 7, 10];
+	const events = [{ type: "start", count: body.prompts.length, width: 1024, height: 576 }];
+	body.prompts.forEach((_, index) => {
+		const scene = Number.isInteger(scenes[index]) ? scenes[index] : index;
+		const clip = clipSlots.indexOf(scene) !== -1;
+		events.push({ type: "image", index, ok: true, mime: clip ? "video/mp4" : "image/png", data: pngBase64,
+			source: { id: "media-" + scene, type: clip ? "video" : "image" } });
+	});
+	events.push({ type: "done", generated: body.prompts.length, failed: 0 });
+	return events;
+}
+
 function makeApp() {
 	const dom = new JSDOM(createHTML(), { runScripts: "outside-only", url: "https://studio.test/free" });
 	const w = dom.window;
@@ -33,7 +47,28 @@ function makeApp() {
 	w.URL.createObjectURL = () => "blob:session-248-" + (++objectUrlId);
 	w.URL.revokeObjectURL = () => { };
 	w.__PLAN_MODE = "freemium";
+	/* JSDOM is hidden/2-core by default; the concurrency tests model a visible 8-core tab. */
+	Object.defineProperty(w.document, "hidden", { configurable: true, get: () => false });
+	Object.defineProperty(w.navigator, "hardwareConcurrency", { configurable: true, get: () => 8 });
+	Object.defineProperty(w.navigator, "deviceMemory", { configurable: true, get: () => 8 });
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* The fixed plan includes four mock MP4s; make their metadata probe succeed. */
+	w.__CLIP_PROBE_TIMING = { timeoutMs: 1 };
+	Object.defineProperty(w.HTMLMediaElement.prototype, "src", {
+		configurable: true,
+		get: function () { return this.getAttribute("src") || ""; },
+		set: function (value) {
+			this.setAttribute("src", value);
+			w.setTimeout(() => this.dispatchEvent(new w.Event("loadedmetadata")), 0);
+		}
+	});
+	w.HTMLMediaElement.prototype.load = function () { w.setTimeout(() => this.dispatchEvent(new w.Event("loadedmetadata")), 0); };
+	w.HTMLMediaElement.prototype.pause = function () { };
+	Object.defineProperty(w.HTMLMediaElement.prototype, "duration", { configurable: true, get: () => 1 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "readyState", { configurable: true, get: () => 2 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "videoWidth", { configurable: true, get: () => 1024 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "videoHeight", { configurable: true, get: () => 576 });
 	w.__BATCH_RETRY.attempts = 2;
 	w.__BATCH_RETRY.baseMs = 1;
 	w.__BATCH_RETRY.maxMs = 2;
@@ -99,14 +134,12 @@ function mockRoutes(w, calls, state = {}, options = {}) {
 		}
 
 		if (path === "/api/image-prompts" && method === "POST") {
+			const batch = JSON.parse(opts.body).batch || { count: 3, offset: 0 };
+			const count = Math.min(batch.count, 3);
 			return jsonResponse({
 				success: true,
-				prompts: [
-					"Lead paragraph scene 1.\n\nMiddle paragraph scene 1.\n\nClose scene 1."
-				],
-				count: 1,
-				expectedCount: 1,
-				style: "Neon Night"
+				prompts: Array.from({ length: count }, (_, i) => "Scene " + (batch.offset + i + 1) + " lead.\n\nMiddle.\n\nClose."),
+				count, expectedCount: 12, style: "Neon Night"
 			});
 		}
 
@@ -115,9 +148,7 @@ function mockRoutes(w, calls, state = {}, options = {}) {
 				await delay(options.imageDelay);
 			}
 			const body = JSON.parse(opts.body);
-			const events = [{ type: "start", count: body.prompts.length, width: 1024, height: 576 }];
-			body.prompts.forEach((_, index) => events.push({ type: "image", index, ok: true, mime: "image/png", data: pngBase64 }));
-			events.push({ type: "done", generated: body.prompts.length, failed: 0 });
+			const events = mediaBatchEvents(body);
 			return {
 				ok: true,
 				status: 200,
@@ -288,12 +319,6 @@ test("single row in batch table runs to done and unlocks both preview and export
 	const { dom, w } = makeApp();
 	test.after(() => dom.window.close());
 
-	// Simulate image decode that warns/rejects to verify slides are kept
-	w.Image = class {
-		constructor() { this.src = ""; }
-		async decode() { throw new Error("Simulated browser decode warning"); }
-	};
-
 	mockRoutes(w, calls, state);
 	blankTable(w);
 
@@ -308,12 +333,13 @@ test("single row in batch table runs to done and unlocks both preview and export
 	const finished = w.getBatchRow(row.id);
 	assert.equal(finished.stage, "done");
 	assert.ok(finished.mp3, "row has MP3");
-	assert.equal(finished.slides.length, 1, "slide kept despite decode warning");
+	assert.equal(finished.slides.length, 12, "slides kept despite decode warning");
 	assert.ok(w.batchRowFinished(finished));
 
 	const rowEl = w.document.querySelector('[data-batch-row="' + row.id + '"]');
-	assert.equal(rowEl.querySelectorAll('[data-batch-slot="preview"] button').length, 1);
-	assert.equal(rowEl.querySelectorAll('[data-batch-slot="export"] button').length, 1);
+	assert.equal(rowEl.querySelectorAll('[data-batch-action="preview"]').length, 1);
+	assert.equal(rowEl.querySelectorAll('[data-batch-action="export"]').length, 1);
+	assert.equal(rowEl.querySelectorAll('[data-batch-action="edit"]').length, 1);
 });
 
 /* ------------------------------------------------------------------ */

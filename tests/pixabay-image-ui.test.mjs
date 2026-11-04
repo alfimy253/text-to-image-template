@@ -92,6 +92,7 @@ test('Pixabay search keywords planned from the script are shown in the video acc
   const { w, calls, failNextSearch } = studioWindow();
   t.after(() => { domClose(w); });
   w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
   await new Promise((r) => setTimeout(r, 40));
   /* Session 279: the page's only retry owner is the scheduled flow-level
    * retry, so shrink its wait instead of sitting out the 15 s default. */
@@ -176,6 +177,7 @@ test('the keywords box and retry button are hidden before a flow runs', async t 
   const { w, calls } = studioWindow();
   t.after(() => { domClose(w); });
   w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
+	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
   await new Promise((r) => setTimeout(r, 40));
   w.addVideoAccordion();
 

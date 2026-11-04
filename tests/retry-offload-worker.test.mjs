@@ -86,8 +86,8 @@ test("#279 capabilities name the worker as the retry owner of every stage", asyn
 	assert.equal(response.status, 200);
 	const caps = await response.json();
 
-	assert.equal(caps.retryOwner, "worker");
-	assert.equal(caps.scriptRetryOwner, "worker");
+	assert.equal(caps.retryOwner, "worker", "media and voiceover ladders stay worker-owned");
+	assert.equal(caps.scriptRetryOwner, "browser", "script writing is browser-owned");
 	assert.equal(caps.voiceRetryOwner, "worker");
 	assert.equal(caps.promptRetryOwner, "worker");
 	assert.equal(caps.imageRetryOwner, "worker");
@@ -104,7 +104,8 @@ test("#279 capabilities name the worker as the retry owner of every stage", asyn
 
 	/* Compatibility, not ownership: a cached pre-279 page still gets its routes. */
 	assert.equal(caps.chunkVoiceover, true, "the browser chunk endpoint stays for cached pages");
-	assert.equal(caps.browserScriptRetries, 3, "and so does the legacy script contract");
+	assert.equal(caps.browserScriptRetries, 7, "seven client-owned script retries");
+	assert.equal(caps.scriptRetryBackoffMs, 40000, "40 seconds before each retry");
 });
 
 /* ------------------------------------------------------- splitting/joining -- */
