@@ -364,12 +364,13 @@ export const PAGE_MARKUP = `
 	     QUICK BATCH TABLE (view 1)
 	     An editable table: one row is one video. Column 1 is the
 	     script, column 2 the video image style (the same ten
-	     options as the script modal), column 3 the minimum length
-	     in minutes, column 4 the stock image resolution (480 / 540 /
-	     720 / 1024 px long edge), column 5 the frame orientation
-	     (square / landscape / portrait), columns 6-7 Preview +
-	     Export. Rows are independent of the "Video N" accordions
-	     below.
+	     options as the script modal), column 3 the stock image
+	     resolution (480 / 540 / 720 / 1024 px long edge), column 4
+	     the frame orientation (square / landscape / portrait),
+	     column 5 Actions (Preview + Export + Edit). The old "Min"
+	     column is gone: a row's length is driven by its finished
+	     narration, not by a typed minute count. Rows are
+	     independent of the "Video N" accordions below.
 	     ====================================================== -->
 
 	<section id="view-table" class="view">
@@ -387,7 +388,7 @@ export const PAGE_MARKUP = `
 
 			<p class="va-note batch-hint">
 				Type or paste a script in the first box, pick the video image
-				style, the minimum minutes, the stock image resolution and the frame
+				style, the stock image resolution and the frame
 				orientation, then press
 				<strong>\u2726 Generate</strong> at the top right of the table.
 				Every row that has a script is spoken (MP3), illustrated with
@@ -409,7 +410,6 @@ export const PAGE_MARKUP = `
 						<tr>
 							<th class="batch-col-script">Script</th>
 							<th class="batch-col-style">Video style</th>
-							<th class="batch-col-min">Min</th>
 							<th class="batch-col-resolution">Resolution</th>
 							<th class="batch-col-orientation">Orientation</th>
 					<th class="batch-col-actions">Actions</th>
@@ -861,7 +861,7 @@ export const PAGE_MARKUP = `
 								<button type="button" id="timeline-delete-element" class="tm-scene-delete" data-timeline-action="delete" hidden disabled>Delete</button>
 							</div>
 						</div>
-						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it.</p>
+						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it. The Pixabay background is the bottom layer; text and graphics always paint above it.</p>
 						<div id="timeline-element-selector" class="tm-scene-objects" aria-label="Scene elements"></div>
 						<div id="timeline-inspector" class="tm-scene-inspector"></div>
 						<div id="timeline-inspector-empty" class="te-inspector-empty">Choose a track or element to see its controls.</div>
@@ -880,7 +880,7 @@ export const PAGE_MARKUP = `
 				<div class="te-timeline-scroll" id="timeline-scroll">
 					<div class="te-track-grid" id="timeline-track-grid"></div>
 				</div>
-				<div class="te-dock-footer"><span>Soundtrack starts collapsed. One background-media lane and one shared text and graphics lane are visible; add up to four visual lanes.</span><span id="timeline-status" role="status" aria-live="polite"></span></div>
+				<div class="te-dock-footer"><span>Text and graphics lanes stack above the pinned background layer, where every Pixabay image, GIF and upload lives. Soundtrack starts collapsed; add up to four visual lanes.</span><span id="timeline-status" role="status" aria-live="polite"></span></div>
 			</section>
 			<input type="file" id="timeline-media-upload" accept="image/*,image/gif,video/mp4,.mp4,.gif" multiple hidden>
 			<input type="file" id="timeline-audio-upload" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg" hidden>

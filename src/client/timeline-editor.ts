@@ -16,6 +16,15 @@ export const TIMELINE_EDITOR_JS = `
 		var MIN_CLIP_SEC = 0.25;
 		var MAX_VISUAL_TRACKS = 4;
 		var MAX_MEDIA_FILES = 100;
+		/*
+		 * The Pixabay stocks (and any local upload) always live in ONE track. That
+		 * track IS the background layer of the composition: the canvas paints it
+		 * first and every text/graphic clip is drawn above it. Nothing else can be
+		 * placed below it, so the media track never needs a z-order of its own.
+		 */
+		var MEDIA_TRACK_ID = "background-media";
+		var MEDIA_TRACK_LABEL = "Pixabay & uploaded media · background";
+		var MEDIA_TRACK_NAME = "BACKGROUND";
 
 		function openAssetDb() {
 			return new Promise(function (resolve, reject) {
@@ -197,10 +206,10 @@ export const TIMELINE_EDITOR_JS = `
 					{ id: "voiceover", kind: "audio", label: "Voiceover", expanded: true, items: [] },
 					{ id: "sound-fx", kind: "audio", label: "Sound effects", expanded: true, items: [] },
 					{ id: "background-music", kind: "audio", label: "Background music", expanded: true, items: [] },
-					{ id: "background-media", kind: "media", label: "Pixabay & uploaded media", expanded: true, items: mediaItems },
+					{ id: MEDIA_TRACK_ID, kind: "media", label: MEDIA_TRACK_LABEL, expanded: true, items: mediaItems, layer: 0 },
 					{ id: "visual-1", kind: "visual", label: "Text & graphics 1", expanded: true, items: [] }
 				],
-				selectedTrackId: "background-media",
+				selectedTrackId: MEDIA_TRACK_ID,
 				selectedItemId: "media-1"
 			};
 		}
@@ -248,16 +257,36 @@ export const TIMELINE_EDITOR_JS = `
 				{ id: "voiceover", kind: "audio", label: "Voiceover" },
 				{ id: "sound-fx", kind: "audio", label: "Sound effects" },
 				{ id: "background-music", kind: "audio", label: "Background music" },
-				{ id: "background-media", kind: "media", label: "Pixabay & uploaded media" }
+				{ id: MEDIA_TRACK_ID, kind: "media", label: MEDIA_TRACK_LABEL, layer: 0 }
 			];
+			/*
+			 * A saved project may still carry extra media lanes from an older model
+			 * (a second Pixabay lane, an "overlay" lane, an imported-clip lane). Every
+			 * media item is folded into the single background layer so a saved project
+			 * can never paint two competing backgrounds.
+			 */
+			var strayMediaTracks = originalTracks.filter(function (track) {
+				return track && track.kind === "media" && String(track.id) !== MEDIA_TRACK_ID;
+			});
 			var tracks = fixed.map(function (spec) {
 				var old = byId[spec.id] || {};
 				return {
-					id: spec.id, kind: spec.kind, label: String(old.label || spec.label),
+					id: spec.id, kind: spec.kind, label: spec.kind === "media" ? String(spec.label) : String(old.label || spec.label),
 					expanded: old.expanded !== false,
 					items: (Array.isArray(old.items) ? old.items : []).map(function (item) { return normalizeItem(item, spec); })
 				};
 			});
+			var backgroundTrack = tracks.filter(function (track) { return track.kind === "media"; })[0] || null;
+			if (backgroundTrack) {
+				backgroundTrack.layer = 0;
+				strayMediaTracks.forEach(function (stray) {
+					(Array.isArray(stray.items) ? stray.items : []).forEach(function (item) {
+						var migrated = normalizeItem(item, { kind: "media" });
+						if (backgroundTrack.items.some(function (existing) { return String(existing.id) === String(migrated.id); })) return;
+						backgroundTrack.items.push(migrated);
+					});
+				});
+			}
 			var visualLayers = legacyVisualTracks.map(function (old, index) {
 				var layerNumber = index + 1;
 				var id = String(old.id || "visual-" + layerNumber);
@@ -317,7 +346,7 @@ export const TIMELINE_EDITOR_JS = `
 				zoom: clamp(base.zoom, 0.5, 2),
 				scenes: scenes,
 				tracks: tracks,
-				selectedTrackId: String(base.selectedTrackId || "background-media"),
+				selectedTrackId: String(base.selectedTrackId || MEDIA_TRACK_ID),
 				selectedItemId: String(base.selectedItemId || "")
 			};
 			if (!tracks.some(function (track) { return String(track.id) === result.selectedTrackId; }) && result.selectedTrackId.indexOf("text-") === 0) {
@@ -342,7 +371,12 @@ export const TIMELINE_EDITOR_JS = `
 		function sceneById(id) {
 			return state && state.scenes.find(function (scene) { return String(scene.id) === String(id); }) || null;
 		}
-		function mediaTrack() { return findTrack("background-media"); }
+		/*
+		 * One accessor for the background layer. Timing, uploads, preview drawing
+		 * and the scene ripple all resolve the media lane through this function, so
+		 * "which lane are the Pixabay images in?" has exactly one answer.
+		 */
+		function mediaTrack() { return findTrack(MEDIA_TRACK_ID); }
 		function visualTracks() { return state.tracks.filter(function (track) { return track.kind === "visual"; }); }
 		function sceneElementTracks() { return visualTracks(); }
 		function sceneElementEntries(sceneId) {
@@ -473,14 +507,15 @@ export const TIMELINE_EDITOR_JS = `
 				html += '<span class="te-ruler-tick" style="left:' + (tick * pps).toFixed(1) + 'px"><i></i>' + esc(formatTime(tick)) + '</span>';
 			}
 			html += '<span class="te-playhead" data-playhead style="left:' + (state.playheadSec * pps).toFixed(1) + 'px"></span></div>';
-			html += '<div class="te-group-title"><span class="te-group-label">BACKGROUND MEDIA <small>one layer · Pixabay, GIF, image or MP4</small></span><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button></div><div class="te-group-fill"></div>';
-			var backgroundTrack = mediaTrack();
-			html += '<div class="te-track-label' + (String(state.selectedTrackId) === "background-media" ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="background-media">' + esc(backgroundTrack && backgroundTrack.label || "Background media") + '<small>' + (backgroundTrack ? backgroundTrack.items.length + " scenes" : "empty") + '</small></button></div>';
-			html += '<div class="te-lane te-media-lane" data-lane-track="background-media" style="width:' + width + 'px">';
-			if (backgroundTrack) backgroundTrack.items.forEach(function (item) { html += htmlTrackItem(backgroundTrack, item, pps); });
-			html += '<span class="te-playhead" data-playhead style="left:' + (state.playheadSec * pps).toFixed(1) + 'px"></span></div>';
+			/*
+			 * The dock mirrors the paint stack top-down: text and graphics lanes come
+			 * first, and the single background layer sits pinned UNDER them. The dock is
+			 * flipped visually (column-reverse in CSS below the first child) - the lane
+			 * order here is the reading order, the background lane is always last in the
+			 * DOM and always the lowest layer on the canvas.
+			 */
 			var visuals = visualTracks();
-			html += '<div class="te-group-title"><span class="te-group-label">TEXT &amp; GRAPHICS <small>' + visuals.length + ' / ' + MAX_VISUAL_TRACKS + ' lanes</small></span></div>';
+			html += '<div class="te-group-title te-group-visuals"><span class="te-group-label">TEXT &amp; GRAPHICS <small>' + visuals.length + ' / ' + MAX_VISUAL_TRACKS + ' lanes · above the background</small></span></div>';
 			html += '<div class="te-group-fill te-visual-actions"><button type="button" class="te-add-inline" data-timeline-action="add-text">＋ Text</button><button type="button" class="te-add-inline" data-timeline-action="add-graphic">＋ Graphic</button></div>';
 			visuals.forEach(function (track) {
 				html += '<div class="te-track-label' + (String(state.selectedTrackId) === String(track.id) ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(track.id) + '">' + esc(track.label) + '<small>' + (track.items.length ? track.items.length + (track.items.length === 1 ? " clip" : " clips") : "empty") + '</small></button></div>';
@@ -489,6 +524,12 @@ export const TIMELINE_EDITOR_JS = `
 				track.items.forEach(function (item) { html += htmlTrackItem(track, item, pps); });
 				html += '<span class="te-playhead" data-playhead style="left:' + (state.playheadSec * pps).toFixed(1) + 'px"></span></div>';
 			});
+			html += '<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER <small>pinned lowest · Pixabay, GIF, image or MP4</small></span><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button></div><div class="te-group-fill te-group-fill-background"></div>';
+			var backgroundTrack = mediaTrack();
+			html += '<div class="te-track-label te-track-background' + (String(state.selectedTrackId) === MEDIA_TRACK_ID ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(MEDIA_TRACK_ID) + '">' + esc(backgroundTrack && backgroundTrack.label || MEDIA_TRACK_LABEL) + '<small><span class="te-track-badge">BG</span> ' + (backgroundTrack ? backgroundTrack.items.length + " scenes" : "empty") + '</small></button></div>';
+			html += '<div class="te-lane te-media-lane te-background-lane" data-lane-track="' + esc(MEDIA_TRACK_ID) + '" style="width:' + width + 'px">';
+			if (backgroundTrack) backgroundTrack.items.forEach(function (item) { html += htmlTrackItem(backgroundTrack, item, pps); });
+			html += '<span class="te-playhead" data-playhead style="left:' + (state.playheadSec * pps).toFixed(1) + 'px"></span></div>';
 			html += '<div class="te-group-title"><button type="button" class="te-group-toggle" data-timeline-action="toggle-sound" aria-expanded="' + (state.soundExpanded ? "true" : "false") + '"><span class="te-chevron">' + (state.soundExpanded ? "▾" : "▸") + '</span> Soundtrack <small>3 tracks</small></button></div><div class="te-group-fill"></div>';
 			var soundTracks = state.tracks.filter(function (track) { return track.kind === "audio"; });
 			if (state.soundExpanded) {
@@ -652,7 +693,7 @@ export const TIMELINE_EDITOR_JS = `
 				inspector.appendChild(mediaActions);
 				var note = document.createElement("div");
 				note.className = "te-inspector-note";
-				note.textContent = "Pixabay scenes and your uploads share this one background-media layer.";
+				note.textContent = "Pixabay scenes and your uploads share the one background layer. It is pinned below every text and graphic clip.";
 				inspector.appendChild(note);
 				return;
 			}
@@ -696,7 +737,7 @@ export const TIMELINE_EDITOR_JS = `
 				addSectionTitle(inspector, "Background media");
 				var info = document.createElement("div");
 				info.className = "te-inspector-note";
-				info.textContent = item.assetId ? (item.label + (item.mediaSource ? " · " + item.mediaSource : "")) : "No media file is attached to this scene yet. Add a local image, GIF or MP4 to the single background-media layer.";
+				info.textContent = item.assetId ? (item.label + (item.mediaSource ? " · " + item.mediaSource : "") + " · background layer") : "No media file is attached to this scene yet. Add a local image, GIF or MP4 to the single background layer.";
 				inspector.appendChild(info);
 				addSelect(inspector, "Fit", [["Fill frame", "cover"], ["Fit inside", "contain"]], item.fit || "cover", function (value) { item.fit = value; drawPreview(); scheduleSave(); });
 				addRange(inspector, "Trim in (seconds)", item.trimStartSec || 0, 0, 600, 0.25, function (value) { item.trimStartSec = value; drawPreview(); scheduleSave(); }, "s");
@@ -957,7 +998,7 @@ export const TIMELINE_EDITOR_JS = `
 			}
 			ensureTimelineEnd(nextStart);
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
-			setStatus(valid.length + (valid.length === 1 ? " media file added" : " media files added") + " to the single background-media layer.", false);
+			setStatus(valid.length + (valid.length === 1 ? " media file added" : " media files added") + " to the background layer.", false);
 		}
 		async function addAudioFile(trackId, file) {
 			if (!file || !fileIsAudio(file)) { setStatus("Choose an audio file such as MP3, WAV or M4A.", true); return; }
@@ -998,6 +1039,8 @@ export const TIMELINE_EDITOR_JS = `
 			context.fillText(scene ? scene.name : "Timeline preview", width / 2, height * 0.47, width * 0.82);
 			context.font = Math.max(10, Math.round(width * 0.022)) + "px system-ui, sans-serif";
 			context.fillText(scene && scene.mediaSource === "pending" ? "Upload or attach a background scene" : "Preview frame", width / 2, height * 0.54, width * 0.82);
+			context.font = Math.max(9, Math.round(width * 0.018)) + "px system-ui, sans-serif";
+			context.fillText("Background layer · text and graphics paint above it", width / 2, height * 0.6, width * 0.82);
 		}
 		function drawImageCover(context, image, width, height, fit) {
 			if (!image) return false;
@@ -1079,6 +1122,7 @@ export const TIMELINE_EDITOR_JS = `
 			var asset = active && active.assetId ? assetMap[active.assetId] : null;
 			context.fillStyle = "#08090c"; context.fillRect(0, 0, width, height);
 			var drawn = false;
+			/* Layer 0 — the background layer. Pixabay stock and uploads land here. */
 			if (active && active.visible !== false && asset) {
 				if (asset.video) {
 					syncVideoPreview(active, asset, state.playheadSec);
@@ -1087,6 +1131,7 @@ export const TIMELINE_EDITOR_JS = `
 				else if (asset.image && asset.image.complete) drawn = drawImageCover(context, asset.image, width, height, active.fit || "cover");
 			}
 			if (!drawn) drawPlaceholder(context, width, height, scene);
+			/* Layers 1..4 — every text and graphic clip paints above the background. */
 			visualTracks().forEach(function (track) {
 				track.items.forEach(function (item) {
 					var live = state.playheadSec >= item.startSec && state.playheadSec < item.startSec + item.durationSec;
@@ -1098,7 +1143,7 @@ export const TIMELINE_EDITOR_JS = `
 			var placeholder = document.getElementById("timeline-preview-placeholder");
 			if (placeholder) placeholder.hidden = drawn;
 			var note = document.getElementById("timeline-preview-note");
-			if (note) note.textContent = asset ? (asset.name || "Local media preview") + " · timing edits are saved in this browser" : "No media file is attached to the selected scene yet. Use + Add media to upload an image, GIF or MP4.";
+			if (note) note.textContent = asset ? (asset.name || "Local media preview") + " · background layer · timing edits are saved in this browser" : "No media file is attached to the selected scene yet. Use + Add media to upload an image, GIF or MP4 to the background layer.";
 			syncAudioPlayback();
 			updateReadout();
 			if (isPlaying || shouldAnimatePreview()) schedulePreviewFrame();

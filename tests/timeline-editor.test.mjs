@@ -149,7 +149,7 @@ test("Quick Batch timeline route is isolated, starts with one media lane and one
 	assert.equal(state.soundExpanded, false, "Soundtrack starts collapsed");
 	assert.equal(w.document.querySelector('[data-timeline-action="toggle-sound"]').textContent.includes("Soundtrack"), true);
 	assert.equal(w.document.querySelectorAll('[data-lane-track="voiceover"]').length, 0, "collapsed Soundtrack hides its audio lanes");
-	assert.deepEqual(Array.from(w.document.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track")), ["background-media", "visual-1"], "only media and the shared text/graphics lane are initially visible");
+	assert.deepEqual(Array.from(w.document.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track")), ["visual-1", "background-media"], "text/graphics lanes stack above the pinned background layer, which is the last lane in the dock");
 	assert.equal(state.tracks.find((track) => track.id === "visual-1").items[0].id, "caption-1", "caption and graphic clips share the visual lane");
 	assert.equal(w.document.querySelectorAll(".te-lane").length, 2, "Soundtrack is collapsed and there is no separate overlay lane");
 	assert.ok(Array.from(w.document.querySelectorAll(".te-group-title .te-group-label")).some((label) => /TEXT & GRAPHICS/i.test(label.textContent)));
@@ -193,7 +193,7 @@ test("legacy text and overlay tracks migrate into one shared visual lane without
 	assert.equal(state.selectedTrackId, visuals[0].id, "a previously selected text track resolves to the shared lane");
 	assert.equal(state.selectedItemId, "caption-2");
 	assert.equal(state.soundExpanded, false);
-	assert.deepEqual(Array.from(w.document.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track")), ["background-media", visuals[0].id]);
+	assert.deepEqual(Array.from(w.document.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track")), [visuals[0].id, "background-media"], "the shared text/graphics lane still sits above the background layer");
 });
 
 test("text and graphics continue rendering across background scene boundaries for their full seconds-based range", (t) => {
@@ -299,4 +299,51 @@ test("timeline styling allocates roughly 30 percent to preview and 70 percent to
 	assert.match(APP_CSS, /\.te-group-fill\.te-visual-actions/);
 	assert.match(TIMELINE_EDITOR_JS, /IndexedDB/);
 	assert.match(TIMELINE_EDITOR_JS, /STATE_PREFIX = "ytvs\.timeline-editor\.v1\."/);
+});
+
+test("Pixabay media is the one pinned background layer and every stray media lane is folded into it", (t) => {
+	const legacy = makeTimelineState();
+	legacy.projectId = "timeline-p_source_test-row-7";
+	legacy.tracks = legacy.tracks
+		.filter((track) => track.kind !== "media")
+		.concat([
+			{ id: "background-media", kind: "media", label: "Background", expanded: true, items: legacy.tracks.find((track) => track.kind === "media").items.slice(0, 6) },
+			{ id: "overlay-media", kind: "media", label: "Overlay media", expanded: true, items: legacy.tracks.find((track) => track.kind === "media").items.slice(6) }
+		]);
+	const { dom, w } = openTimeline(legacy);
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const mediaTracks = state.tracks.filter((track) => track.kind === "media");
+	assert.equal(mediaTracks.length, 1, "a saved project cannot keep a second media lane");
+	assert.equal(mediaTracks[0].id, "background-media");
+	assert.equal(mediaTracks[0].layer, 0, "the background layer is layer zero");
+	assert.equal(mediaTracks[0].items.length, 12, "the stray lane's clips move into the background layer instead of being dropped");
+	assert.equal(state.tracks.indexOf(mediaTracks[0]), state.tracks.length - 2, "the background layer is the last visual lane in state order");
+
+	const lanes = Array.from(w.document.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track"));
+	assert.equal(lanes[lanes.length - 1], "background-media", "the background lane is painted last in the dock");
+	assert.equal(w.document.querySelectorAll(".te-background-lane").length, 1);
+	assert.equal(w.document.querySelector('[data-lane-track="background-media"]').classList.contains("te-background-lane"), true);
+	const heading = Array.from(w.document.querySelectorAll(".te-group-background .te-group-label")).map((node) => node.textContent).join(" ");
+	assert.match(heading, /BACKGROUND/i);
+	assert.match(heading, /pinned lowest/i);
+	assert.equal(w.document.querySelectorAll(".te-track-badge").length, 1, "the background lane carries a BG badge");
+});
+
+test("the preview canvas paints the background layer before text and graphics", (t) => {
+	/*
+	 * JSDOM never decodes a blob image, so the paint order is asserted against the
+	 * generated client source: inside drawPreview the background draw must come
+	 * before the visual-lane loop, and the visual loop must not draw media clips.
+	 */
+	const drawPreview = TIMELINE_EDITOR_JS.slice(TIMELINE_EDITOR_JS.indexOf("function drawPreview()"));
+	const body = drawPreview.slice(0, drawPreview.indexOf("function previewTick"));
+	const backgroundAt = body.indexOf("Layer 0");
+	const overlayAt = body.indexOf("Layers 1..4");
+	assert.ok(backgroundAt !== -1 && overlayAt !== -1, "the two paint layers are labelled in drawPreview");
+	assert.ok(backgroundAt < overlayAt, "the background layer is painted before the text/graphics layers");
+	assert.ok(body.indexOf("drawImageCover(") < overlayAt, "the Pixabay/upload frame is drawn first");
+	assert.ok(body.slice(overlayAt).includes("visualTracks().forEach("), "every visual lane is drawn afterwards");
+	assert.match(TIMELINE_EDITOR_JS, /MEDIA_TRACK_ID = "background-media"/);
+	assert.match(TIMELINE_EDITOR_JS, /function mediaTrack\(\) \{ return findTrack\(MEDIA_TRACK_ID\); \}/);
 });

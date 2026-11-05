@@ -306,10 +306,14 @@ test("the batch table keeps a fixed layout and wraps its status line", () => {
 	assert.match(APP_CSS, /\.batch-table-edit\s*\{[\s\S]{0,900}table-layout:\s*fixed/);
 	assert.match(APP_CSS, /\.batch-table-edit\s*\{[\s\S]{0,900}min-width:\s*\d+px/);
 	assert.match(APP_CSS, /\.batch-row-status\s*\{[\s\S]{0,400}overflow-wrap:\s*anywhere/);
-	/* six columns: the final one is Actions with Preview/Process Export/Edit icons. */
-	for (const column of ["script", "style", "min", "resolution", "orientation", "actions"]) {
+	/*
+	 * Session 331 follow-up: the typed Min column is gone, so five columns remain -
+	 * the final one is Actions with Preview/Process Export/Edit icons.
+	 */
+	for (const column of ["script", "style", "resolution", "orientation", "actions"]) {
 		assert.match(APP_CSS, new RegExp("\\.batch-col-" + column + "\\b"));
 	}
+	assert.doesNotMatch(APP_CSS, /\.batch-col-min\b/, "the removed Min column keeps no styling");
 	assert.equal(
 		(APP_CSS.match(/\.batch-col-[a-z]+\s*\{\s*width:/g) || []).length >= 5,
 		true,
