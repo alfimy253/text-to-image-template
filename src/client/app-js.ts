@@ -9168,7 +9168,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const images = Array.isArray(row && row.images) ? row.images : [];
 		const slides = Array.isArray(row && row.slides) ? row.slides : [];
 		const prompts = Array.isArray(row && row.prompts) ? row.prompts : [];
-		const cues = Array.isArray(row && row.subtitles) ? row.subtitles : [];
+		/*
+		 * Session 331 (latest request): subtitle cues are NOT timeline clips any
+		 * more. The timeline's text lane opens with one dummy text at 0:00
+		 * instead of mirroring the caption cues, so row.subtitles is no longer
+		 * read here. Subtitles still ship inside the exported video through the
+		 * normal render path.
+		 */
 		const requestedMinutes = Number(row && row.minutes) > 0 ? Number(row.minutes) : 1;
 		const slideSpan = slides.reduce(function (sum, slide) {
 			return sum + slideDurationSec(slide);
@@ -9222,36 +9228,39 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				visible: true
 			});
 
-			for (let cueIndex = 0; cueIndex < cues.length; cueIndex++) {
-				const cue = cues[cueIndex] || {};
-				const cueStart = Math.max(0, Number(cue.startMs) || 0) / 1000;
-				const cueEndMs = Number(cue.endMs);
-				const cueEnd = Number.isFinite(cueEndMs) && cueEndMs > 0 ? cueEndMs / 1000 : cueStart + 0.25;
-				const visibleStart = Math.max(startSec, cueStart);
-				const visibleEnd = Math.min(endSec, cueEnd);
-				if (visibleEnd <= visibleStart) continue;
-				const element = {
-					id: sceneId + "-caption-" + (cueIndex + 1),
-					kind: "text",
-					type: "text",
-					name: "Caption " + (cueIndex + 1),
-					text: String(cue.text || ""),
-					sceneId: sceneId,
-					startSec: visibleStart,
-					durationSec: Math.max(0.25, visibleEnd - visibleStart),
-					x: 50,
-					y: 78,
-					fontSize: 28,
-					color: "#ffffff",
-					font: "sans",
-					align: "center",
-					visible: true
-				};
-				scene.elements.push(Object.assign({}, element));
-				visualItems.push(element);
-			}
 			scenes.push(scene);
 			cursor = endSec;
+		}
+
+		/*
+		 * Dummy text on 0:00. Every video opened on the timeline page that has no
+		 * text or graphic of its own gets exactly this one text clip, so the text
+		 * lane is populated and immediately editable instead of empty. If the row
+		 * ever carries its own text/graphic elements, the dummy is skipped.
+		 */
+		if (!visualItems.some(function (item) { return item.kind === "text" || item.kind === "graphic"; })) {
+			const firstScene = scenes[0] || null;
+			const dummyText = {
+				id: "dummy-text-1",
+				kind: "text",
+				type: "text",
+				name: "Text",
+				label: "Text",
+				text: "Your text here",
+				sceneId: firstScene ? firstScene.id : "",
+				startSec: 0,
+				durationSec: Math.min(6, Math.max(0.25, Number(firstScene && firstScene.durationSec) || 6)),
+				x: 50,
+				y: 78,
+				fontSize: 28,
+				color: "#ffffff",
+				font: "sans",
+				align: "center",
+				visible: true,
+				dummy: true
+			};
+			if (firstScene) firstScene.elements.push(Object.assign({}, dummyText));
+			visualItems.push(dummyText);
 		}
 
 		durationSec = Math.max(durationSec, cursor);

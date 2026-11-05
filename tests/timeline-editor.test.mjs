@@ -150,10 +150,11 @@ test("Quick Batch timeline route is isolated, starts with one media lane and one
 	assert.equal(w.document.querySelector('[data-timeline-action="toggle-sound"]').textContent.includes("Soundtrack"), true);
 	assert.equal(w.document.querySelectorAll('[data-lane-track="voiceover"]').length, 0, "collapsed Soundtrack hides its audio lanes");
 	assert.deepEqual(Array.from(w.document.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track")), ["visual-1", "background-media"], "text/graphics lanes stack above the pinned background layer, which is the last lane in the dock");
-	assert.equal(state.tracks.find((track) => track.id === "visual-1").items[0].id, "caption-1", "caption and graphic clips share the visual lane");
+	assert.equal(state.tracks.find((track) => track.id === "visual-1").items[0].id, "dummy-text-1", "the saved caption clip is dropped and the dummy text takes its place");
 	assert.equal(w.document.querySelectorAll(".te-lane").length, 2, "Soundtrack is collapsed and there is no separate overlay lane");
 	assert.ok(Array.from(w.document.querySelectorAll(".te-group-title .te-group-label")).some((label) => /TEXT & GRAPHICS/i.test(label.textContent)));
-	assert.equal(w.document.querySelectorAll(".te-clip").length, 13, "12 scene clips plus one timed caption are rendered");
+	assert.equal(w.document.querySelectorAll(".te-clip").length, 13, "12 scene clips plus the dummy text clip are rendered");
+	assert.ok(!w.document.body.textContent.includes("A quiet morning"), "subtitle cues are not drawn as timeline clips");
 	assert.ok(w.localStorage.getItem("ytvs.timeline-editor.v1." + payload.targetPageId), "the timeline state is stored under its stable row project id");
 
 	w.document.querySelector('[data-timeline-action="toggle-sound"]').click();
@@ -189,9 +190,9 @@ test("legacy text and overlay tracks migrate into one shared visual lane without
 	assert.equal(visuals.length, 1, "the three formerly fixed text tracks merge into the initial shared lane");
 	assert.equal(state.tracks.some((track) => track.kind === "text" || track.kind === "overlay"), false);
 	assert.equal(visuals[0].label, "Text & graphics 1");
-	assert.deepEqual(new Set(visuals[0].items.map((item) => item.id)), new Set(["caption-1", "caption-2", "caption-3", "legacy-text-graphic", "legacy-overlay-graphic"]));
+	assert.deepEqual(new Set(visuals[0].items.map((item) => item.id)), new Set(["legacy-text-graphic", "legacy-overlay-graphic"]), "caption clips are dropped from the migrated lane and the surviving graphics are kept");
 	assert.equal(state.selectedTrackId, visuals[0].id, "a previously selected text track resolves to the shared lane");
-	assert.equal(state.selectedItemId, "caption-2");
+	assert.ok(visuals[0].items.some((item) => item.id === state.selectedItemId), "a stale caption selection resolves to a clip that still exists");
 	assert.equal(state.soundExpanded, false);
 	assert.deepEqual(Array.from(w.document.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track")), [visuals[0].id, "background-media"], "the shared text/graphics lane still sits above the background layer");
 });
@@ -206,12 +207,12 @@ test("text and graphics continue rendering across background scene boundaries fo
 	state.playheadSec = 5.25;
 	previewContext.drawnTexts.length = 0;
 	previewContext.fills = 0;
-	api.setItemTiming("caption-1", 1, 8);
+	api.setItemTiming("dummy-text-1", 1, 8);
 	const media = state.tracks.find((track) => track.kind === "media");
 	assert.ok(media.items.some((item) => item.sceneId === "scene-2" && item.startSec <= state.playheadSec && state.playheadSec < item.startSec + item.durationSec), "the playhead is now in the next background scene");
-	assert.ok(previewContext.drawnTexts.includes("A quiet morning"), "text remains visible after crossing the original scene boundary");
+	assert.ok(previewContext.drawnTexts.includes("Your text here"), "text remains visible after crossing the original scene boundary");
 	assert.ok(previewContext.fills > 0, "a graphic clip also renders at a time in the next scene");
-	assert.equal(state.tracks.find((track) => track.kind === "visual").items.find((item) => item.id === "caption-1").durationSec, 8);
+	assert.equal(state.tracks.find((track) => track.kind === "visual").items.find((item) => item.id === "dummy-text-1").durationSec, 8);
 	assert.equal(state.tracks.find((track) => track.kind === "visual").items.find((item) => item.id === graphic.id).durationSec, 8);
 });
 
@@ -259,7 +260,7 @@ test("scene and element timing changes persist; shared text/graphics lanes cap a
 	assert.equal(saved.scenes[1].startSec, 8, "extending a scene ripples the following scene timing");
 	const elements = saved.scenes[0].elements;
 	assert.equal(elements.length, 2, "existing and newly-added elements are stored on their scene");
-	assert.equal(elements.find((item) => item.id === "caption-1").startSec, 3, "moving a scene carries its timed elements");
+	assert.equal(elements.find((item) => item.id === "dummy-text-1").startSec, 2, "moving a scene carries its timed elements");
 	const savedCaption = elements.find((item) => item.id === added.id);
 	assert.equal(savedCaption.text, "A new caption");
 	assert.equal(savedCaption.startSec, 4);
@@ -291,14 +292,80 @@ test("reopening the same Quick Batch row restores its saved scene and text timin
 	assert.equal(savedCaption.text, "Saved across reopen");
 });
 
-test("timeline styling allocates roughly 30 percent to preview and 70 percent to inspector", () => {
-	assert.match(APP_CSS, /grid-template-columns:\s*minmax\(270px, 30%\) minmax\(0, 70%\)/);
-	assert.match(APP_CSS, /grid-template-columns:\s*31% minmax\(0, 69%\)/, "the narrow viewport layout keeps the preview/inspector split within the screen");
-	assert.match(APP_CSS, /\.te-dock\s*\{/);
+test("the served timeline markup orders preview, then selected elements, then the dock", () => {
+	const html = createHTML();
+	const previewAt = html.indexOf('class="te-preview-panel"');
+	const workspaceAt = html.indexOf('class="te-workspace"');
+	const inspectorAt = html.indexOf('class="te-inspector-panel"');
+	const dockAt = html.indexOf('class="te-dock"');
+	assert.ok(previewAt !== -1 && workspaceAt !== -1 && inspectorAt !== -1 && dockAt !== -1, "all three regions are in the served markup");
+	assert.ok(previewAt < inspectorAt, "the preview comes before the selected-element panel");
+	assert.ok(workspaceAt < inspectorAt && inspectorAt < dockAt, "the selected-element panel comes before the timeline dock");
+	assert.ok(previewAt < workspaceAt, "the preview is not inside the selected-element workspace, so it can pin against the page");
+	assert.ok(html.indexOf('class="te-dock-tail"') > dockAt, "the dock ends with the tail that keeps the preview pinned");
+});
+
+test("timeline styling stacks the full-width sticky preview, the element panel, then the dock", () => {
+	assert.match(APP_CSS, /\.te-workspace\s*\{[^}]*flex-direction:\s*column/, "the workspace stacks vertically");
+	assert.match(APP_CSS, /\.te-preview-panel\s*\{[^}]*position:\s*sticky/, "the preview stays pinned while the page scrolls");
+	assert.match(APP_CSS, /\.te-preview-stage\s*\{[^}]*min-height:\s*400px/, "the preview canvas never gets shorter than 400 px");
+	assert.match(APP_CSS, /\.te-preview-panel\s*\{[^}]*width:\s*100%/, "the preview spans the whole page width");
+	assert.match(APP_CSS, /\.te-inspector-panel\s*\{[^}]*position:\s*static/, "the selected-element panel follows the preview in flow");
+	assert.match(APP_CSS, /\.te-inspector-panel\s*\{[^}]*width:\s*100%/);
+	assert.match(APP_CSS, /\.te-dock\s*\{[^}]*flex:\s*0 0 auto/, "the dock is not given a viewport percentage");
+	assert.match(APP_CSS, /\.te-dock-tail\s*\{/, "the dock keeps a tail so the sticky preview is not unpinned early");
+	assert.doesNotMatch(APP_CSS, /\.te-timeline-scroll\s*\{[^}]*max-height:\s*46/, "the track scroller grows with its lanes");
+	assert.doesNotMatch(APP_CSS, /grid-template-columns:\s*minmax\(270px, 30%\) minmax\(0, 70%\)/, "the old 30/70 side-by-side split is gone");
+	assert.doesNotMatch(APP_CSS, /grid-template-columns:\s*31% minmax\(0, 69%\)/);
 	assert.match(APP_CSS, /\.te-timeline-scroll\s*\{/);
 	assert.match(APP_CSS, /\.te-group-fill\.te-visual-actions/);
 	assert.match(TIMELINE_EDITOR_JS, /IndexedDB/);
 	assert.match(TIMELINE_EDITOR_JS, /STATE_PREFIX = "ytvs\.timeline-editor\.v1\."/);
+});
+
+test("timelines without text or graphics open with one dummy text clip at 0:00 and no caption clips", (t) => {
+	const { dom, w, payload } = openTimeline();
+	t.after(() => dom.window.close());
+	const api = w.__TIMELINE_EDITOR__;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const visual = state.tracks.find((track) => track.kind === "visual");
+	const dummy = visual.items.find((item) => item.id === "dummy-text-1");
+	assert.ok(dummy, "the dummy text clip exists in the shared text/graphics lane");
+	assert.equal(dummy.startSec, 0, "the dummy text sits at 0:00");
+	assert.equal(dummy.kind, "text");
+	assert.equal(dummy.text, "Your text here");
+	assert.equal(visual.items.some((item) => /-caption-\d+$/.test(item.id)), false, "caption clips never reach the timeline lane");
+
+	/* a project saved with an empty text lane gains the dummy on open */
+	const empty = makeTimelineState();
+	empty.projectId = "timeline-p_source_test-row-7";
+	empty.tracks = empty.tracks.map((track) => track.kind === "visual" ? { ...track, items: [] } : track);
+	empty.scenes = empty.scenes.map((scene) => ({ ...scene, elements: [] }));
+	const reopened = openTimeline(empty);
+	t.after(() => reopened.dom.window.close());
+	const reopenedVisual = reopened.w.__TIMELINE_EDITOR_STATE__.tracks.find((track) => track.kind === "visual");
+	assert.equal(reopenedVisual.items.length, 1, "an empty saved text lane is seeded with exactly one clip");
+	assert.equal(reopenedVisual.items[0].id, "dummy-text-1");
+	assert.equal(reopenedVisual.items[0].startSec, 0);
+
+	/* a project that already has a graphic never gets a second dummy */
+	const graphicProject = makeTimelineState();
+	graphicProject.projectId = "timeline-p_source_test-row-7";
+	graphicProject.tracks = graphicProject.tracks.map((track) => track.kind === "visual"
+		? { ...track, items: [{ id: "graphic-1", kind: "graphic", graphic: "star", label: "Star", sceneId: "scene-1", startSec: 2, durationSec: 3, x: 50, y: 50, size: 60, color: "#7aac2b", visible: true }] }
+		: track);
+	const withGraphic = openTimeline(graphicProject);
+	t.after(() => withGraphic.dom.window.close());
+	const graphicItems = withGraphic.w.__TIMELINE_EDITOR_STATE__.tracks.find((track) => track.kind === "visual").items;
+	assert.equal(graphicItems.length, 1, "a project with its own graphic is left alone");
+	assert.equal(graphicItems[0].id, "graphic-1");
+
+	/* the dummy is an ordinary clip: moving it persists */
+	api.setItemTiming("dummy-text-1", 0.5, 3);
+	assert.equal(api.save(), true);
+	const saved = JSON.parse(w.localStorage.getItem("ytvs.timeline-editor.v1." + payload.targetPageId));
+	assert.equal(saved.tracks.find((track) => track.kind === "visual").items[0].id, "dummy-text-1");
+	assert.equal(saved.tracks.find((track) => track.kind === "visual").items[0].startSec, 0.5);
 });
 
 test("Pixabay media is the one pinned background layer and every stray media lane is folded into it", (t) => {

@@ -822,6 +822,13 @@ export const PAGE_MARKUP = `
 	     TIMELINE EDITOR (opened from a Quick Batch row)
 	     Browser-only visual timing editor. It does not run the
 	     video-generation pipeline or call a server route.
+
+	     Reading order (Session 331, latest request):
+	     1. sticky preview canvas: full page width, 400 px floor;
+	     2. selected-element panel: full width, follows the preview;
+	     3. timeline dock: full width, follows the element panel.
+	     The dock is in normal flow, so a tall screen leaves empty
+	     space under the tracks instead of stretching them.
 	     ====================================================== -->
 	<section id="view-timeline" class="view" aria-label="Timeline editor">
 		<div class="timeline-editor-shell" id="timeline-editor">
@@ -835,8 +842,8 @@ export const PAGE_MARKUP = `
 				<button type="button" class="te-play te-primary" data-timeline-action="play">\u25b6 Play</button>
 			</div>
 
-			<div class="te-workspace">
-				<section class="te-preview-panel" aria-label="Video preview">
+			<!-- 1/3 — the full-width sticky preview canvas (400 px floor) -->
+			<section class="te-preview-panel" aria-label="Video preview">
 					<div class="te-panel-heading"><strong>Preview</strong><span id="timeline-current-scene">Scene 1</span></div>
 					<div class="te-preview-stage">
 						<canvas id="timeline-preview-canvas" width="720" height="1280" aria-label="Timeline preview canvas"></canvas>
@@ -849,8 +856,10 @@ export const PAGE_MARKUP = `
 						<output id="timeline-time-readout">0:00 / 1:00</output>
 					</div>
 					<p class="te-preview-note" id="timeline-preview-note">Preview and timing changes stay in this browser.</p>
-				</section>
+			</section>
 
+			<!-- 2/3 — the selected-element section always follows the preview -->
+			<div class="te-workspace">
 				<aside class="te-inspector-panel" aria-label="Selected element controls">
 					<div class="tm-scene-panel">
 						<div class="tm-scene-panel-head">
@@ -861,7 +870,7 @@ export const PAGE_MARKUP = `
 								<button type="button" id="timeline-delete-element" class="tm-scene-delete" data-timeline-action="delete" hidden disabled>Delete</button>
 							</div>
 						</div>
-						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it. The Pixabay background is the bottom layer; text and graphics always paint above it.</p>
+						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it. The Pixabay background is the bottom layer; text and graphics always paint above it. Every video opens with one dummy text clip at 0:00 when it has no text or graphic yet.</p>
 						<div id="timeline-element-selector" class="tm-scene-objects" aria-label="Scene elements"></div>
 						<div id="timeline-inspector" class="tm-scene-inspector"></div>
 						<div id="timeline-inspector-empty" class="te-inspector-empty">Choose a track or element to see its controls.</div>
@@ -869,6 +878,7 @@ export const PAGE_MARKUP = `
 				</aside>
 			</div>
 
+			<!-- 3/3 — the timeline dock always follows the selected-element section -->
 			<section class="te-dock" aria-label="Timeline tracks">
 				<div class="te-dock-toolbar">
 					<div><strong>Timeline</strong><span id="timeline-duration-label">1:00</span></div>
@@ -880,7 +890,9 @@ export const PAGE_MARKUP = `
 				<div class="te-timeline-scroll" id="timeline-scroll">
 					<div class="te-track-grid" id="timeline-track-grid"></div>
 				</div>
-				<div class="te-dock-footer"><span>Text and graphics lanes stack above the pinned background layer, where every Pixabay image, GIF and upload lives. Soundtrack starts collapsed; add up to four visual lanes.</span><span id="timeline-status" role="status" aria-live="polite"></span></div>
+				<div class="te-dock-footer"><span>Text and graphics lanes stack above the pinned background layer, where every Pixabay image, GIF and upload lives. Subtitle cues are not timeline clips; Soundtrack starts collapsed and you can add up to four visual lanes.</span><span id="timeline-status" role="status" aria-live="polite"></span></div>
+				<!-- Short tail: keeps the sticky preview pinned until the dock itself ends. -->
+				<div class="te-dock-tail" aria-hidden="true"></div>
 			</section>
 			<input type="file" id="timeline-media-upload" accept="image/*,image/gif,video/mp4,.mp4,.gif" multiple hidden>
 			<input type="file" id="timeline-audio-upload" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg" hidden>

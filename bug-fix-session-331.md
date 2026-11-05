@@ -865,3 +865,135 @@ Still open:
 - Branch: `arena/16e873bd-text-to-image-template` (the only branch this section was written on).
 - The documented source of truth is the current code in this workspace; this file now matches it.
 - No commit, push, merge or pull request was made as part of writing this section.
+
+## 11. Full-width stacked timeline layout + dummy text instead of caption clips (active request)
+
+This section records the newest request on branch `arena/3008d8cb-text-to-image-template`. It supersedes Section 9.3 (30/70 workspace split) and Section 10.2 (dock order is unchanged, but the dock is no longer a percentage of the viewport). **The current code in this workspace is the source of truth.**
+
+The request, verbatim:
+
+> Study the code and #331 md file and make the timeline editor on the right to move to the bottom with 100% width and the left preview video canvas let it take 100 percent of the width at the top with min 400 px height sticky on top then the bottom of it the selected elements section.....which has selected elements must always follow it and the timeline editor at the bottom must always follow on elements on the top of it meaning there might be some space at the bottom of page depending on the height of screen.... then remove the caption layer at the timeline tracks at the bottom but add a dummy text (at 0:00 time ) on all video that will open on that page which doesnt have text or graphics
+
+### 11.1 Code study that drove the three changes
+
+Read from code, not from prose:
+
+| Question | Answer found in code (before this section) | Consequence |
+|---|---|---|
+| Where was the selected-element panel? | `src/client/markup.ts` put `.te-preview-panel` and `.te-inspector-panel` inside `.te-workspace`; `styles.ts` gave it `display: grid; grid-template-columns: minmax(270px, 30%) minmax(0, 70%)`. | The inspector was a **right column**, not a section under the preview. |
+| How tall was the page? | `body.timeline-editor-page { overflow: hidden }`, `#studio-app.timeline-mode { height: 100dvh }`, `.timeline-editor-shell { height: 100dvh; overflow: hidden }`, `.te-dock { flex: 0 0 36%; max-height: 48% }`. | Everything was squeezed into one viewport; nothing could scroll and no empty space could exist under the dock. |
+| Where did caption clips come from? | `batchTimelineState()` in `src/client/app-js.ts` looped over `row.subtitles` (subtitle cues) and pushed one `kind: "text"` clip per cue per scene with id `<sceneId>-caption-<n>` and name `Caption <n>`. | The timeline's first text/graphics lane was **only** subtitle cues, so a row without cues had an empty text lane. |
+| Did the timeline lane hold anything else? | No. `visualItems` only ever received caption cues; graphics/text only appeared after the user pressed `＋ Text` / `＋ Graphic`. | "A video with no text or graphics" opened with an empty lane. |
+
+### 11.2 Change 1 - vertical stack: full-width sticky preview, then selected elements, then the dock
+
+The three regions are now siblings in the shell, in this exact order:
+
+```text
+.timeline-editor-shell   (flex column, min-height 100dvh, height auto)
+├── .te-topbar           sticky top:0        — Back / title / Play
+├── .te-preview-panel    sticky top:58px     — full width, stage floor 400px
+├── .te-workspace        static              — selected-element section
+│   └── .te-inspector-panel  position:static, width:100%
+└── .te-dock             static              — timeline tracks + .te-dock-tail
+```
+
+`src/client/markup.ts`
+
+- `.te-preview-panel` was moved **out** of `.te-workspace` so it is no longer trapped by a wrapper that ends right below it. It is now the second child of `.timeline-editor-shell`, `.te-workspace` holds only the selected-element section, and the dock follows.
+- The section is annotated `1/3`, `2/3`, `3/3`, and a `.te-dock-tail` element (with an explanatory comment) closes the dock.
+
+`src/client/styles.ts`
+
+- The page is no longer locked to the viewport. `body.timeline-editor-page` keeps `overflow-x: hidden` but allows `overflow-y: auto`; `#studio-app.timeline-mode` and `.timeline-editor-shell` use `min-height: 100vh/100dvh; height: auto; overflow: visible`.
+- `.te-workspace` is now `display: flex; flex-direction: column; width: 100%` instead of a two-column grid, and it is **not** sticky. The old `minmax(270px, 30%) minmax(0, 70%)` and `31% minmax(0, 69%)` rules are deleted, in the base block and in both media queries.
+- `.te-preview-panel` is `position: sticky; top: 58px; width: 100%; flex: 0 0 auto`, so the preview takes the full page width at the top and stays pinned while the selected-element section and the dock scroll. `.te-topbar` is sticky at `top: 0` (z-index 40) so Play / Back stay reachable; the preview pins directly under it (58 px, 52 px below 560 px wide).
+- Why the panel was moved: a sticky box only travels inside its **containing block**. While the preview lived in `.te-workspace` (which ends immediately below the preview), it had roughly zero travel and would have scrolled away with the element panel. As a direct child of the shell, its travel is the shell's content box, i.e. the element section plus the whole dock.
+- `.te-preview-stage` is `min-height: 400px; height: clamp(400px, 52vh, 720px)`, so it never drops under 400 px and grows with a tall screen. `canvas#timeline-preview-canvas` keeps its 9:16 buffer while scaling up to fill that stage.
+- `.te-inspector-panel` is `position: static; width: 100%; flex: 0 0 auto; overflow: visible` — the selected-element section always follows the preview and is never a side column.
+- `.te-dock` is `flex: 0 0 auto; width: 100%; min-height: 320px; max-height: none`. It follows the element panel in normal flow. Because nothing is stretched to 100dvh, a tall screen simply shows empty space below the tracks.
+- `.te-timeline-scroll` is `min-height: 220px` with **no** `max-height` any more: every lane (four text/graphics lanes plus three audio lanes) is reachable by scrolling the rows, and the dock grows instead of hiding rows behind a fixed 46dvh box. `overscroll-behavior` changed from `contain` to `auto` so a wheel gesture that reaches the end of the tracks continues to scroll the page (with `contain` the dock would trap the scroll).
+- The `.te-dock-tail` (260 px, faintly striped to read as empty track space) provides the travel the pinned preview needs at the very end of the page. It also guarantees that when the page's last visible row is the playhead row, the sticky preview is still released *inside* the dock region, so the dock — never the preview — is the last thing on screen.
+
+### 11.3 Change 2 - caption clips are gone from the tracks
+
+`src/client/app-js.ts`
+
+- `batchTimelineState()` no longer reads `row.subtitles`. The cue loop that produced `<sceneId>-caption-<n>` clips is deleted, so the Edit handoff can never create a caption clip. Subtitles are untouched for export: they still live on `row.subtitles` and are painted by the render path.
+
+`src/client/timeline-editor.ts`
+
+- New `isCaptionItem(item)`: true for ids ending in `-caption-<n>` or names starting with `Caption`. `normalizeState()` filters every migrated visual lane with it, so a project saved before this change (or an old handoff, or a legacy `text-*` track) loses its caption clips on open and keeps its text/graphic clips.
+
+### 11.4 Change 3 - one dummy text at 0:00 for videos with no text or graphics
+
+`src/client/app-js.ts` (`batchTimelineState()`)
+
+- If the built visual lane has no `text`/`graphic` clip, one dummy is added: `id: "dummy-text-1"`, `kind: "text"`, `text: "Your text here"`, `startSec: 0`, `durationSec: min(6, scene 1 duration)`, `x: 50`, `y: 78`, `fontSize: 28`, `dummy: true`. It is pushed both onto `visual-1.items` and onto `scenes[0].elements`.
+
+`src/client/timeline-editor.ts`
+
+- Constants `DUMMY_TEXT = "Your text here"` and `DUMMY_TEXT_MAX_SEC = 6`.
+- `dummyTextItem(scenes)` builds the same clip for the editor's own default state.
+- `defaultTimeline()` ships it, and `normalizeState()` adds it when a saved project, an old handoff or a `layout=timeline` page opened without a handoff has **no** text/graphic clip at all. A project that already has text or graphics is never given a second dummy, and moving, restyling or deleting the dummy behaves exactly like any other text clip (nothing re-creates it inside a live session).
+
+`src/client/markup.ts`
+
+- The inspector hint and the dock footer explain both facts: the dummy text at 0:00, and that subtitle cues are not timeline clips.
+
+### 11.5 What deliberately did not change
+
+- The paint stack: background media is still layer 0 and pinned last in the dock; text/graphics lanes are still above it. Only the *page* order changed, not the *canvas* order.
+- The 12-scene handoff, the stable per-row timeline project id (`timeline-<sourcePageId>-row-<rowId>`), the IndexedDB Blob bridge, the localStorage schema `ytvs.timeline-editor.v1.<projectId>`, the four-lane visual cap and the collapsed Soundtrack group.
+- No server route, Worker module, KV key or cookie was added or changed. Timeline editing remains client-only.
+- Subtitles still render into exported MP4s; only their representation as timeline clips is removed.
+
+### 11.6 Tests updated for the three changes
+
+| Test file | Change |
+|---|---|
+| `tests/timeline-editor.test.mjs` | The route test now expects the dummy text clip (`dummy-text-1`) in `visual-1` instead of the seeded caption, and asserts the caption text never reaches the page. The legacy-migration test asserts caption clips are dropped and the two graphic clips survive. The cross-scene test drives `dummy-text-1`. The ripple test expects `dummy-text-1` to move with scene 1. The layout test was replaced: it asserts the column stack, `position: sticky` on the preview, `min-height: 400px` on the stage, `width: 100%` on preview/inspector, `flex: 0 0 auto` on the dock, the `.te-dock-tail`, the absence of a `max-height` on the track scroller and the **absence** of the old 30/70 grid. New test *"the served timeline markup orders preview, then selected elements, then the dock"* proves the DOM order and that the preview is a sibling (not a child) of `.te-workspace`. New test *"timelines without text or graphics open with one dummy text clip at 0:00 and no caption clips"* covers an empty saved project, a graphic-only project that must not gain a dummy, the persisted move of the dummy and the absence of caption ids. |
+| `tests/final-media-cap-actions.test.mjs` | New test *"a Quick Batch row hands off one dummy text at 0:00 instead of caption clips"* drives the real Edit button on a row that carries subtitle cues and asserts one `dummy-text-1` clip at 0:00, `dummy: true`, on the lane and on scene 1, with no `-caption-` ids anywhere. |
+
+### 11.7 Validation
+
+```text
+node --import tsx --test tests/timeline-editor.test.mjs            10/10 pass
+node --import tsx --test tests/final-media-cap-actions.test.mjs     10/10 pass
+node --import tsx --test tests/quick-batch-table.test.mjs           all pass
+node --import tsx --test tests/session-244.test.mjs                 8/10 pass, same 2 failures as HEAD (verified via git stash)
+npx tsc --noEmit --pretty false                                     31 diagnostics, all in src/index.ts (unchanged)
+```
+
+Honesty notes:
+
+- The pre-existing failures are not caused by this section: the two `session-244` failures (`a failing step is retried inside the row, and the row finishes`, `a timed-out request is retried quietly, unlike a stop`) fail identically on the unmodified tree.
+- No real browser was available in this sandbox, so the sticky behaviour, the 400 px floor and the empty space under the dock are verified from the emitted CSS and by source assertions, not by a screenshot.
+- One scroll interaction was found while reasoning about the new flow and fixed: with `overscroll-behavior: contain` on `.te-timeline-scroll`, a wheel over the tracks would never hand the scroll back to the page, so the page could not move once the pointer entered the dock. It is now `auto`.
+
+### 11.8 Still open
+
+1. **Real-browser eyeball.** Nothing here was rendered in Chrome/Safari at 100% and 125% zoom. The sticky offset (`top: 58px`, `52px` under 560 px) is tied to the topbar's `min-height`; if the topbar wraps to two lines the preview would pin slightly too high until the offset is re-derived from `getBoundingClientRect()`.
+2. **`position: sticky` on a flex child needs a scrolling ancestor with room.** Any future change that puts `.te-preview-panel` back inside an `overflow: hidden` wrapper silently turns the pin off; the CSS comment records this.
+3. **Sticky preview vs. a very short dock.** The pin is released when the shell's content box ends. The `.te-dock-tail` provides 260 px of that box; if the tail is ever removed, a document that ends exactly at the dock footer would unpin the preview one screen early and the dock would no longer be the last element in view.
+4. **The dummy text is only added when the lane is empty.** A row that already has a graphic but no text gets no dummy. That is the requested behaviour ("doesn't have text or graphics"), but it means a graphics-only video has no placeholder text.
+5. **`row.subtitles` is still alive for export.** Deleting the cue→clip mapping removed the only place the timeline reflected subtitles. If subtitle-aware timeline editing is wanted later it must come back as an explicit, user-toggled track rather than implicit caption clips.
+6. **The suite is still not green** (Section 8.6 / 10.8). This section added no new failures.
+
+### 11.9 Files touched in this section
+
+| File | Change |
+|---|---|
+| `src/client/styles.ts` | Page-height rules unlocked, column-stacked layout, sticky full-width preview with a `clamp(400px, 52vh, 720px)` stage, static full-width selected-element panel, flow-positioned dock, uncapped track scroller, `.te-dock-tail`, `overscroll-behavior` fix, responsive overrides updated. |
+| `src/client/markup.ts` | The preview panel is lifted out of `.te-workspace` to become a sibling (`1/3`, `2/3`, `3/3`), `.te-dock-tail` added, timeline comment block, inspector hint and dock footer describe the new order and the dummy text. |
+| `src/client/app-js.ts` | `batchTimelineState()` drops caption clips and adds the 0:00 dummy text when the lane has no text or graphics. |
+| `src/client/timeline-editor.ts` | `isCaptionItem()`, `DUMMY_TEXT*` constants, `dummyTextItem()`, caption filtering and dummy seeding in `normalizeState()`, dummy in `defaultTimeline()`. |
+| `tests/timeline-editor.test.mjs` | Dummy-text expectations, caption-drop expectations, rewritten layout test, new dummy-text test. |
+| `tests/final-media-cap-actions.test.mjs` | New handoff test for the dummy text / absent caption clips. |
+| `bug-fix-session-331.md` | This section. |
+
+### 11.10 Status
+
+- Branch: `arena/3008d8cb-text-to-image-template` (the only branch this section was written on).
+- The documented source of truth is the current code in this workspace; this file now matches it.
+- No commit, push, merge or pull request was made as part of writing this section.

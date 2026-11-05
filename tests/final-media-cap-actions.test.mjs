@@ -166,6 +166,39 @@ test("Edit opens a new page with transition-only basic settings and no AI enhanc
 	assert.match(w.document.cookie, /ytvs_transition_project_/, "the short cookie mirror is present");
 });
 
+test("a Quick Batch row hands off one dummy text at 0:00 instead of caption clips", () => {
+	let opened = "";
+	const { dom, w } = makeApp("https://studio.test/free", (win) => {
+		win.open = (href) => { opened = String(href); return null; };
+	});
+	test.after(() => dom.window.close());
+	const row = w.addBatchRow({ script: "Quiet rooftop gardens in the morning.", style: "Neon Night", minutes: 1 });
+	/* the row carries subtitle cues, but cues are no longer timeline clips */
+	row.subtitles = [
+		{ startMs: 0, endMs: 2000, text: "Quiet rooftop gardens" },
+		{ startMs: 2000, endMs: 4000, text: "in the morning" }
+	];
+	w.renderBatchTable();
+	w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="edit"]').click();
+	assert.match(opened, /layout=timeline/);
+	const state = w.__BATCH_EDIT_PROJECT__.timelineState;
+	const visual = state.tracks.find((track) => track.kind === "visual");
+	assert.equal(visual.items.length, 1, "the text lane holds exactly one clip");
+	assert.equal(visual.items[0].id, "dummy-text-1");
+	assert.equal(visual.items[0].kind, "text");
+	assert.equal(visual.items[0].startSec, 0, "the dummy text sits at 0:00");
+	assert.equal(visual.items[0].text, "Your text here");
+	assert.equal(visual.items[0].dummy, true);
+	const captionIds = state.scenes.flatMap((scene) => (scene.elements || []).map((element) => element.id))
+		.filter((id) => /-caption-\d+$/.test(String(id)));
+	assert.equal(captionIds.length, 0, "subtitle cues never become timeline clips");
+	assert.deepEqual(
+		Array.from(state.scenes[0].elements, (element) => element.id),
+		["dummy-text-1"],
+		"the dummy text is also listed on the first scene"
+	);
+});
+
 test("the new page consumes project JSON for the transition only and restores basic settings", async () => {
 	const payload = {
 		version: 1,
