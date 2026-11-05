@@ -278,9 +278,14 @@ test("the table is an editable quick-batch grid with a Generate at its top right
 	assert.match(html, /<section id="view-table"[\s\S]*?<\/section>/);
 	const table = html.match(/<section id="view-table"[\s\S]*?<\/section>/)[0];
 
-	for (const column of ["Script", "Video style", "Min", "Actions"]) {
+	for (const column of ["Script", "Video style", "Resolution", "Orientation", "Actions"]) {
 		assert.ok(table.includes(">" + column + "<"), column + " is a table column");
 	}
+
+	/* Session 331 follow-up: the typed minute column is gone from the table. */
+	assert.equal(table.includes(">Min<"), false, "the Min column header is removed");
+	assert.equal(table.includes("batch-col-min"), false, "its header class is removed");
+	assert.equal(table.includes("batch-minutes-input"), false, "its input is not rendered in the markup");
 
 	/* the Generate button belongs to the table header, not the page */
 	assert.ok(table.includes('id="batch-generate"'));

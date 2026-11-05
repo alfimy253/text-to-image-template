@@ -327,3 +327,32 @@ test("Generate refuses unprepared staged rows and starts only ready rows", async
 	assert.equal(staged.running, true, "the staged row was left unchanged");
 	assert.equal(staged.stage, "voice", "the staged row was not requeued");
 });
+
+test("duplicate row media indices still reach the background layer as distinct scene keys", async () => {
+	/*
+	 * Session 331 follow-up: the timeline keeps ONE background layer keyed by
+	 * scene id. Two row images that report the same index would collapse onto the
+	 * same key, so the handoff must move the duplicate to the next free slot.
+	 */
+	const transfers = [];
+	const { dom, w } = makeApp("https://studio.test/free", (win) => {
+		win.open = () => null;
+		win.__TIMELINE_EDITOR__ = {
+			storeProjectAssets: (id, transfer) => { transfers.push({ id, transfer }); return Promise.resolve({ ok: true }); }
+		};
+	});
+	test.after(() => dom.window.close());
+	const row = w.addBatchRow({ script: "Two clips share an index.", minutes: 1 });
+	row.images = [
+		{ index: 0, blob: new w.Blob(["a"], { type: "image/jpeg" }), stockFilename: "first.jpg" },
+		{ index: 0, blob: new w.Blob(["b"], { type: "image/jpeg" }), stockFilename: "second.jpg" }
+	];
+	w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="edit"]').click();
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	assert.equal(transfers.length, 1, "the Edit handoff wrote one IndexedDB transfer");
+	const keys = transfers[0].transfer.assets.map((asset) => asset.id);
+	assert.equal(keys.length, 2, "both Blobs are transferred - neither is dropped");
+	assert.equal(new Set(keys).size, 2, "the duplicate index got its own background scene key");
+	assert.deepEqual(keys, ["scene-1", "scene-2"]);
+	assert.equal(transfers[0].id, w.__BATCH_EDIT_PROJECT__.targetPageId, "the transfer is keyed by the stable row project id");
+});

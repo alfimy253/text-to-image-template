@@ -7517,14 +7517,19 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	//   column 1  the script (plain narration text, typed or pasted)
 	//   column 2  the video image style - the SAME ten options the
 	//             script modal offers, in the same order
-	//   column 3  the minimum length in minutes
-	//   column 4  the Pixabay image resolution: 480, 540, 720 or 1024 px
+	//   column 3  the Pixabay image resolution: 480, 540, 720 or 1024 px
 	//             (the LONG edge; passed to both image calls)
-	//   column 5  the frame orientation: square 1:1, landscape 16:9
+	//   column 4  the frame orientation: square 1:1, landscape 16:9
 	//             or portrait 9:16 (passed to both image calls)
-	//   column 6  Actions: Preview, Process Export and Edit icons. Preview
+	//   column 5  Actions: Preview, Process Export and Edit icons. Preview
 	//             and Process Export stay pending until the row finishes;
 	//             Edit opens the client-only Timeline Editor with row timing.
+	//
+	// The old "Min" column (column 3, 1-6 typed minutes) is removed. The
+	// row's length is the measured narration: the voiceover pass decodes
+	// the MP3 and that duration drives the slides and the timeline
+	// handoff. row.minutes is still stored (default 1) as the silent
+	// fallback used when a decode reports nothing.
 	//
 	// The \u2726 Generate button at the TOP RIGHT of the table runs every
 	// row that has a script and is NOT finished yet. A row without one
@@ -9306,12 +9311,22 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		payload.basicSettings.vid = row.vid || pipelineManagementStore.pageId + "-row-" + String(row.id);
 		/* Large media blobs travel browser-to-browser through IndexedDB, never through localStorage or a URL. */
 		try {
+			/*
+			 * Session 331 follow-up: the timeline keeps ONE background layer keyed by
+			 * scene id. Two row images that report the same index would otherwise
+			 * collapse onto the same background key and one of them would be lost, so
+			 * the second and later duplicates move to the next free scene slot.
+			 */
+			const usedBackgroundKeys = new Set();
 			const assetTransfer = {
 				voiceover: row.mp3 || null,
 				assets: (Array.isArray(row.images) ? row.images : []).map(function (media) {
 					const sceneIndex = Number(media && media.index);
+					let slot = Number.isInteger(sceneIndex) && sceneIndex >= 0 ? sceneIndex + 1 : 1;
+					while (usedBackgroundKeys.has(slot)) slot += 1;
+					usedBackgroundKeys.add(slot);
 					return {
-						id: "scene-" + (Number.isInteger(sceneIndex) && sceneIndex >= 0 ? sceneIndex + 1 : 1),
+						id: "scene-" + slot,
 						blob: media && media.blob || null,
 						name: String(media && (media.stockFilename || media.blob && media.blob.stockFilename) || ""),
 						type: String(media && media.blob && media.blob.type || ""),
@@ -9393,10 +9408,12 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	function batchRowHTML(row, index) {
 
-		const minutes =
-			Number(row.minutes) > 0
-				? Number(row.minutes)
-				: BATCH_MIN_MINUTES;
+		/*
+		 * The Min column is gone from the table (Session 331 follow-up): a row's
+		 * length now comes from the finished narration, not from a typed minute
+		 * count. The row.minutes value survives as a silent fallback so older saved rows and
+		 * the voiceover/length guards keep working; it is never rendered.
+		 */
 
 		const script =
 			String(row.script || "").replace(/</g, "&lt;");
@@ -9421,10 +9438,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					"</select>" +
 					'<div class="batch-row-sub">render treatment; stock appearance varies</div>' +
 				"</td>" +
-				'<td class="batch-cell batch-cell-min">' +
-					'<input type="number" class="batch-minutes-input" data-batch-field="minutes" min="' + BATCH_MIN_MINUTES + '" max="' + BATCH_MAX_MINUTES + '" step="1" value="' + minutes + '" aria-label="Minimum length in minutes for row ' + index + '">' +
-					'<div class="batch-row-sub">min</div>' +
-					"</td>" +
 				'<td class="batch-cell batch-cell-resolution">' +
 					'<select class="batch-resolution-select" data-batch-field="resolution" aria-label="Output frame resolution for row ' + index + '" title="Output frame long edge. Pixabay source dimensions vary.">' +
 					batchResolutionOptionsHTML(row.resolution) +
@@ -11390,6 +11403,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 			}
 
+			/*
+			 * Session 331 follow-up: the Min column is not rendered, so this lookup
+			 * normally finds nothing. It is kept so a page that still has an older
+			 * table markup (a cached client bundle) cannot lose a typed value.
+			 */
 			const minutesEl =
 				tr.querySelector('[data-batch-field="minutes"]');
 

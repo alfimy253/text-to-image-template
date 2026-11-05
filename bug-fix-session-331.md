@@ -598,7 +598,7 @@ The Quick Batch row's Edit action opens a new browser page/layout with:
 
 - a preview on the left at about 30% of the page width and selected-element controls on the right;
 - a Canva-like timeline dock along the bottom, focused on changing/extending scene and element durations;
-- the visible arrangement starts with one background/media lane and one shared text/graphics lane; there is no separate overlay lane;
+- the visible arrangement starts with one shared text/graphics lane stacked above the pinned background/media lane; there is no separate overlay lane;
 - Soundtrack is collapsed initially and contains three audio lanes (voiceover, sound effects and background music) when expanded. Users can add text/graphics lanes up to four total; text and graphics share each lane;
 - client-side JavaScript/CSS only for timeline behavior: no server computation and no pipeline-management UI/state in the timeline;
 - browser localStorage timing data per scene and per element;
@@ -615,7 +615,7 @@ The Quick Batch row's Edit action opens a new browser page/layout with:
 ### 9.3 Layout and track behavior
 
 - `#view-timeline` is a separate view in `src/client/markup.ts`; `src/client/styles.ts` gives the preview/inspector workspace an approximately 30/70 split and places the horizontally scrollable track dock at the bottom.
-- At boot, `normalizeState()` creates five state tracks: three audio lanes, one background-media lane and one shared text/graphics lane. The visible dock order is background media, text/graphics, then the collapsed Soundtrack group; expanding Soundtrack reveals its three audio lanes. Users can add visual lanes up to four total.
+- At boot, `normalizeState()` creates five state tracks: three audio lanes, one background-media lane and one shared text/graphics lane. The visible dock order is background media, text/graphics, then the collapsed Soundtrack group; expanding Soundtrack reveals its three audio lanes. Users can add visual lanes up to four total. **Superseded by Section 10.2:** the dock order is now text/graphics lanes first and the background-media lane pinned last (it is the lowest canvas layer, and the Pixabay images always live in it).
 - Text and graphic clips share the same visual lane type. A migration folds legacy dedicated text tracks into the first shared lane and keeps their clips; existing visual/overlay-lane clips are retained as visual clips, not presented as a separate overlay lane.
 - Media uploads fill empty scene placeholders first and append only after those are used. Media timing remains scene-based: extending or shortening a background scene ripples following scene starts and moves elements associated with that scene. Audio and visual-clip start/duration values remain independently editable in seconds.
 - Text and graphic clips use absolute timeline seconds and may span multiple background-media scenes. The canvas renders active visual clips by their timeline ranges rather than gating them to the current scene, so text/graphics stay visible as the playhead crosses media boundaries. Existing template scene inspector controls remain available for editing their appearance.
@@ -661,3 +661,207 @@ git diff --check                               clean
 ```
 
 The full suite remains non-green. Its failure/cancellation totals match the Section 8.7 baseline; exact failure identities were not compared. All 29 focused Quick Batch/timeline tests pass, including legacy-track migration, four-lane cap, text and graphic preview across media-scene boundaries, IndexedDB Blob transfer, and row reopen persistence. The reopen test seeds `ytvs.timeline-editor.v1.<targetPageId>` after the transition-project localStorage entry. JSDOM plus an in-memory IndexedDB test validates Blob handoff and storage separation; the local route check is not a real-browser media-decoding test. No server-side timeline computation was added.
+
+## 10. Background-layer timeline and Min-column removal (active request)
+
+This section records the newest request on branch `arena/16e873bd-text-to-image-template`. It supersedes Section 9.3 for lane order and layer ownership, and it supersedes Section 9.1 / the Quick Batch column list wherever a "Min" column is still described. **The current code in this workspace is the source of truth**; older prose is only history.
+
+The request, verbatim:
+
+> Study code and the #331 md file make the code the source of truth and adjust the timeline layout.... the pixabay images must be in the background layer......edit doc #331 md file about this.......then remove minute column in the rows of table layout then document this request in 331 md then fix whats left to fix. In 331 md file
+
+### 10.1 Code study that drove the two changes
+
+Read from code, not from prose:
+
+| Question | Answer found in code (before this section) |
+|---|---|
+| Where do Pixabay images live? | `batchTimelineState()` in `src/client/app-js.ts` builds one `background-media` track (`kind: "media"`) with 12 items, one per scene, `assetId: "scene-<n>"`. |
+| Is that track really the bottom layer? | The canvas drew media first, but nothing in the model or the dock *said* so. `drawPreview()` had no layer vocabulary, any saved `kind: "media"` lane was rendered as another lane, and the dock listed the media lane **above** the text/graphics lanes - reading top-down, that looks like media sits on top. |
+| What did `normalizeState()` do with a stray media lane? | Nothing. A saved project with `background-media` **and** a second `kind: "media"` track rendered both, in arbitrary order. |
+| Where did row length come from? | `batchRunVoiceStep()` measures the decoded MP3 (`decodeBatchAudio`) and that value drives the slides; `row.minutes` was only the fallback (`measuredMs \|\| row.minutes * 60 * 1000`). |
+| What was the `Min` column? | `src/client/markup.ts` `<th class="batch-col-min">Min</th>` plus a `batch-cell-min` `<td>` with `input.batch-minutes-input[data-batch-field="minutes"]` in `batchRowHTML()`, styled by 6% of the fixed table layout. |
+
+So the two requests are consistent with the code: the Pixabay lane already **was** the paint background, it just was not modelled, labelled or ordered as one; and the typed `Min` column was a redundant input because the narration already sets the real length.
+
+### 10.2 Change 1 - Pixabay images are the background layer
+
+`src/client/timeline-editor.ts`
+
+- New module constants: `MEDIA_TRACK_ID = "background-media"`, `MEDIA_TRACK_LABEL = "Pixabay & uploaded media · background"`, `MEDIA_TRACK_NAME = "BACKGROUND"`. Every media lookup (default state, normalisation, `mediaTrack()`, dock rendering, selection) now resolves through them, so "which lane are the Pixabay images in?" has exactly one answer.
+- The background track is stamped `layer: 0` in `defaultTimeline()` and in `normalizeState()`.
+- `normalizeState()` now collects every **stray** `kind: "media"` track (an older second Pixabay lane, an imported-clip lane, an overlay media lane) and folds its clips into the single background lane by id. Nothing is dropped and two competing backgrounds are impossible.
+- Dock order changed to match the paint stack. The dock now reads top-down as the canvas stacks top-down:
+  1. `TEXT & GRAPHICS` group title, `＋ Text` / `＋ Graphic`, then every visual lane (up to four);
+  2. `BACKGROUND LAYER` group title (`pinned lowest · Pixabay, GIF, image or MP4`, `＋ Add media`), then the single background-media lane. Its label carries a `BG` badge and its `<small>` count.
+  The background lane is last in the DOM, always `data-lane-track="background-media"`, and carries `te-background-lane`.
+- `drawPreview()` is now explicitly layered: `/* Layer 0 — the background layer … */` draws the Pixabay image/GIF/MP4 (or the placeholder), then `/* Layers 1..4 — every text and graphic clip … */` runs `visualTracks().forEach(...)`. No media clip can be drawn by the visual loop, so text/graphics can never be hidden under a photo by accident.
+- The placeholder frame prints a second line: `Background layer · text and graphics paint above it`.
+- Inspector and status copy now name the layer ("…share the one background layer. It is pinned below every text and graphic clip.", "…to the background layer.").
+
+`src/client/app-js.ts` (handoff hardening, same request - "fix what's left to fix")
+
+- `openBatchEditPage()` now allocates the IndexedDB asset key with a `usedBackgroundKeys` set instead of `"scene-" + (index + 1)` blindly. The timeline has exactly one background layer keyed by scene id, so a duplicate row index previously overwrote an earlier Blob. Both Blobs now transfer.
+
+`src/client/styles.ts`
+
+- `.te-group-background` / `.te-group-fill-background` use a green-tinted panel, `.te-track-label.te-track-background` a tinted label, `.te-lane.te-background-lane` a tinted lane grid and `.te-track-badge` the small `BG` chip. The tint is the visual promise that the lane cannot be reordered above a text lane.
+
+`src/client/markup.ts`
+
+- The inspector hint and the dock footer now state the layer contract: text and graphics stack above the pinned background layer that holds every Pixabay image, GIF and upload.
+
+### 10.3 Change 2 - the `Min` column is removed from the table
+
+`src/client/markup.ts`
+
+- `<th class="batch-col-min">Min</th>` is deleted. The header is now `Script · Video style · Resolution · Orientation · Actions`.
+- The Quick Batch hint no longer says "the minimum minutes", and the comment block above `#view-table` documents the five remaining columns and records that `Min` is gone.
+
+`src/client/app-js.ts`
+
+- `batchRowHTML()` no longer renders `<td class="batch-cell batch-cell-min">` or the `input.batch-minutes-input`.
+- `row.minutes` **is still part of the row model** (default `BATCH_MIN_MINUTES = 1`, clamped 1-6) because it is the silent fallback used when `decodeBatchAudio()` reports no duration. It is never rendered, and `syncBatchRowsFromDom()` keeps a defensive lookup so a cached older markup cannot lose a typed value.
+- The module-1c column comment now lists four input columns plus Actions and explains that the measured narration, not a typed minute count, sets the row length.
+
+`src/client/styles.ts`
+
+- `.batch-col-min`, the `.batch-minutes-input` width rule and the `.batch-minutes-input` entry in the shared input rule are deleted.
+- Widths rebalanced for five columns: script `40%` (was 34%), style `15%`, resolution `10%`, orientation `12%`, actions `23%` - 100%. Table `min-width` drops from `880px` to `820px`.
+
+### 10.4 Behaviour that deliberately did not change
+
+- `AUTO_MEDIA_TOTAL = 12`, 8 photos + 4 clips, `[1,4,7,10]` video positions and the two-call resolution/orientation contract are untouched.
+- The 12-scene timing handoff, the stable per-row timeline project id, IndexedDB Blob transfer, the localStorage timing schema (`ytvs.timeline-editor.v1.<projectId>`) and the four-lane visual cap are untouched.
+- No server route, Worker module, KV key or cookie schema was added or changed. Timeline editing remains client-only.
+- A finished row still uses the measured voiceover length; a row that fails to decode still falls back to 1 minute (previously the user could raise that to 6 - the field is now gone, so the fallback is always `BATCH_MIN_MINUTES`).
+
+### 10.5 Tests updated for the two changes
+
+| Test file | Change |
+|---|---|
+| `tests/timeline-editor.test.mjs` | Lane order assertions flipped: the shared text/graphics lane now comes **before** `background-media`, which must be the last visible lane. New test *"Pixabay media is the one pinned background layer and every stray media lane is folded into it"* seeds a project with `background-media` + `overlay-media`, then asserts one media track, `layer === 0`, 12 clips preserved, `te-background-lane`, the `BACKGROUND … pinned lowest` heading and one `BG` badge. New test *"the preview canvas paints the background layer before text and graphics"* asserts the `Layer 0` / `Layers 1..4` order inside `drawPreview()` and that `mediaTrack()` resolves through `MEDIA_TRACK_ID`. |
+| `tests/quick-batch-table.test.mjs` | Column list is now `Script · Video style · Resolution · Orientation · Actions`, and the file asserts `>Min<`, `batch-col-min` and `batch-minutes-input` are **absent** from the served markup. |
+| `tests/session-244.test.mjs` | Fixed-layout test checks the five surviving `batch-col-*` classes and asserts `.batch-col-min` has no styling left. |
+| `tests/final-media-cap-actions.test.mjs` | New test *"duplicate row media indices still reach the background layer as distinct scene keys"* drives the real Edit button and asserts two Blobs transfer as two distinct background keys. |
+| `tests/final-media-cap-actions.test.mjs` | New test *"duplicate row media indices still reach the background layer as distinct scene keys"*: two row images with `index: 0` must transfer as `scene-1` + `scene-2`, neither dropped. |
+
+### 10.6 Short simulation and debug
+
+Static parse of the two generated client bundles:
+
+```text
+APP_JS              parses OK 628458 chars
+TIMELINE_EDITOR_JS  parses OK 76663 chars
+APP_CSS             487637 chars
+```
+
+Logic walk-through of the new layer model (no browser needed):
+
+```text
+mount layout=timeline (row 7)
+  normalizeState(saved)
+    fixed tracks        voiceover, sound-fx, background-music, background-media(layer 0)
+    stray media lanes   overlay-media -> folded into background-media by item id
+    visual lanes        visual-1 .. visual-4 (max 4)
+  dock (DOM order)      TEXT & GRAPHICS group, visual-1..4, BACKGROUND LAYER group, background-media
+  canvas paint order    Layer 0 background-media  ->  Layers 1..4 visual clips
+  upload a photo        addMediaFiles() fills an empty placeholder first, else appends
+                        -> still background-media, still layer 0
+```
+
+JSDOM walk-through of a seeded handoff (two normal media items plus one stray `overlay-media` lane and one caption), printed from the rendered dock:
+
+```text
+media tracks: [ 'background-media (layer 0, 3 clips)' ]
+--- dock, in DOM order ---
+GROUP: TEXT & GRAPHICS 1 / 4 lanes · above the background
+  LABEL: Text & graphics 1 1 clip | te-track-label
+  LANE : visual-1 | te-lane te-visual-lane | clips: 1
+GROUP: BACKGROUND LAYER pinned lowest · Pixabay, GIF, image or MP4 + Add media
+  LABEL: Pixabay & uploaded media · background BG 3 scenes | te-track-label te-track-background selected
+  LANE : background-media | te-lane te-media-lane te-background-lane | clips: 3
+GROUP: > Soundtrack 3 tracks
+--- background lane clips ---
+  garden.jpg · 0:00 · 0:20
+  river.mp4 · 0:20 · 0:20
+  stray.mp4 · 0:30 · 0:05
+```
+
+Served Quick Batch table, same JSDOM boot:
+
+```text
+header: Script | batch-col-script
+        Video style | batch-col-style
+        Resolution | batch-col-resolution
+        Orientation | batch-col-orientation
+        Actions | batch-col-actions
+cells : batch-cell-script, batch-cell-style, batch-cell-resolution,
+        batch-cell-orientation, batch-cell-action
+minutes inputs in row: 0
+row.minutes in model : 1
+column count th/td   : 5 / 5
+```
+
+What those two dumps prove: the stray `overlay-media` lane is gone (one media track only), its clip arrived as the third background clip, the background lane is the **last** lane in the dock and the only one wearing `te-background-lane`, and the served table row has five cells with no minutes input while the model still carries `minutes: 1`.
+
+### 10.7 Validation
+
+```text
+tests/timeline-editor.test.mjs          9/9 pass    (7 before, +2 new layer tests)
+tests/quick-batch-table.test.mjs       14/14 pass
+tests/session-244.test.mjs              8/10 pass   (2 failures identical at HEAD)
+tests/final-media-cap-actions.test.mjs  9/9 pass    (8 before, +1 duplicate-index test)
+focused total (those four files)       42 total / 40 pass / 2 fail
+full npm test                          524 total / 478 pass / 40 fail / 6 cancelled
+HEAD baseline (stashed tree, same run)  521 total / 475 pass / 40 fail / 6 cancelled
+failure-identity diff vs HEAD           identical set - no new failures, 3 new passes
+npx tsc --noEmit --pretty false        30 diagnostics, all src/index.ts (identical to HEAD)
+npx wrangler deploy --dry-run          exit 0
+bundle parse check (new Function)      APP_JS + TIMELINE_EDITOR_JS parse OK
+served route (worker.fetch, no network) HTTP 200 on layout=timeline and layout=table
+git diff --check                       clean
+```
+
+Notes on honesty of that table:
+
+- The suite is **not green** and was never green at HEAD. The 40 failures / 6 cancellations are the pre-existing Pixabay, relay, image-batch and e2e groups already listed in Section 8.6. The comparison is by failure identity against a stashed copy of the HEAD tree, not a claim that every test passes.
+- `npx wrangler dev` could not boot in this sandbox: it needs a remote proxy session and a `CLOUDFLARE_API_TOKEN`, which is not available here (the failure is `Failed to start the remote proxy session`). The route check was therefore done by importing the Worker default export and calling `worker.fetch()` directly for `/free?layout=timeline&…` and `/free?layout=table`. Both answer **200**, serve exactly five `batch-col-*` classes, contain no `>Min<` header and no `batch-minutes-input`, and contain the `BACKGROUND LAYER … pinned lowest` copy. That validates the served HTML, not a browser render.
+- The layer behaviour is validated by JSDOM plus a source-order assertion inside `drawPreview()`. No real-browser canvas, IndexedDB decode, or screenshot of the new dock tint was captured.
+
+### 10.8 What else was fixed, and what is still left to fix
+
+Fixed while doing "fix what's left to fix":
+
+1. **Duplicate media indices overwrote a background clip.** `openBatchEditPage()` mapped every row image to `"scene-" + (index + 1)`, so two images reporting the same `media.index` collapsed onto one background key and the second Blob overwrote the first in IndexedDB. The handoff now walks a `usedBackgroundKeys` set and moves a duplicate to the next free slot. Guarded by *"duplicate row media indices still reach the background layer as distinct scene keys"* in `tests/final-media-cap-actions.test.mjs` (two `index: 0` images arrive as `scene-1` + `scene-2`).
+2. **A stray media lane could compete with the background.** Covered in 10.2: `normalizeState()` folds any extra `kind: "media"` track into the single background lane instead of rendering both.
+3. **The two client bundles were re-checked for syntax** after the edits (APP_JS 628,458 chars, TIMELINE_EDITOR_JS 76,663 chars, both parse).
+
+Still open:
+
+1. **No visual confirmation in a real browser.** The dock tint, the `BG` badge and the "background layer" placeholder line are styled and asserted statically; they were not eyeballed in Chrome/Safari at 100% and 125% zoom, and `wrangler dev` cannot boot in this sandbox (no `CLOUDFLARE_API_TOKEN`), so the route check is `worker.fetch()` rather than a served preview.
+2. **The removed minute field leaves no way to lengthen a silent row.** If `decodeBatchAudio()` returns nothing, a row falls back to `BATCH_MIN_MINUTES = 1` and the UI can no longer raise it. Options if that matters: derive it from the script word count, or expose the value in the timeline inspector instead of the table.
+3. **`row.minutes` is now non-editable UI state.** It is still in the pipeline-management snapshot, the Edit handoff (`basicSettings.minutes`) and the prompt request body, so it survives reloads at `1` (or an older saved value) and can drift from the measured narration. It is consistent, just not user-editable.
+4. **Legacy markup tolerance.** `syncBatchRowsFromDom()` keeps a `[data-batch-field="minutes"]` lookup purely for a cached older client bundle. Delete it once no cached bundle can be in the wild.
+5. **`layer: 0` is metadata, not a reorder control.** The background track stores `layer: 0` and is always rendered last, but there is no drag-to-reorder in the dock at all, so no other lane can be dragged under it. If lane reordering is ever added, it must keep the media lane pinned.
+6. **The suite is still not green.** 40 failures / 6 cancellations are pre-existing (Section 8.6: no outer retry deadline, non-transactional persistence, dormant `/api/render*` code, `IMAGE_PROMPT_MAX_TOKENS` mismatch with `max_tokens: 2048`, stale legacy mocks; and Section 9.6: no real-browser media decode test). This section added no new failures.
+
+### 10.9 Files touched in this section
+
+| File | Change |
+|---|---|
+| `src/client/timeline-editor.ts` | Background-layer constants, `layer: 0`, stray-media folding, dock reorder (visuals above, background pinned last), explicit `Layer 0` / `Layers 1..4` painting, `BG` badge, layer copy in the inspector and placeholder. |
+| `src/client/styles.ts` | Background-lane tint, group/label/lane/badge classes; `Min` column width and `.batch-minutes-input` rules removed; five-column widths; table `min-width` 880 → 820 px. |
+| `src/client/markup.ts` | `Min` header removed, Quick Batch hint and comment block rewritten for five columns, timeline hint and dock footer describe the background layer. |
+| `src/client/app-js.ts` | `batch-cell-min` cell and its minutes input removed from `batchRowHTML()`, defensive DOM sync kept, module-1c column comment rewritten; `openBatchEditPage()` allocates duplicate-safe background keys through `usedBackgroundKeys`. |
+| `tests/timeline-editor.test.mjs` | Lane-order expectations flipped, two new background-layer tests. |
+| `tests/quick-batch-table.test.mjs` | Five-column expectation plus explicit absence checks for `Min`. |
+| `tests/session-244.test.mjs` | Fixed-layout test updated for five columns. |
+| `tests/final-media-cap-actions.test.mjs` | New duplicate-index handoff test (Edit button driven, two Blobs, two distinct background keys). |
+| `bug-fix-session-331.md` | This section. |
+
+### 10.10 Status
+
+- Branch: `arena/16e873bd-text-to-image-template` (the only branch this section was written on).
+- The documented source of truth is the current code in this workspace; this file now matches it.
+- No commit, push, merge or pull request was made as part of writing this section.

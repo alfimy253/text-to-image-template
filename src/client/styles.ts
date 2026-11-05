@@ -7738,7 +7738,7 @@ export const APP_CSS = `
 		#studio-app .batch-table-edit {
 			white-space: normal;
 			/*
-			 * Session #244: the seven columns are declared in percentages,
+			 * Session #244: the columns are declared in percentages,
 			 * but the browser's default auto layout re-measures a column
 			 * from its content - so one long status line ("Rendering the
 			 * AI images, 11 of 12 done") or a wide select used to shove
@@ -7747,19 +7747,20 @@ export const APP_CSS = `
 			 * and the scroll wrapper takes any overflow.
 			 */
 			table-layout: fixed;
-			min-width: 880px;
+			min-width: 820px;
 		}
 
+		/*
+		 * Session #331 follow-up: the Min column is removed, so five columns
+		 * remain and the freed 6% goes to the script cell. Script 40% + style 15%
+		 * + resolution 10% + orientation 12% + actions 23% = 100%.
+		 */
 		#studio-app .batch-table-edit .batch-col-script {
-			width: 34%;
+			width: 40%;
 		}
 
 		#studio-app .batch-table-edit .batch-col-style {
 			width: 15%;
-		}
-
-		#studio-app .batch-table-edit .batch-col-min {
-			width: 6%;
 		}
 
 		/* Session #211: the two AI-frame columns (resolution + orientation). */
@@ -7846,8 +7847,7 @@ export const APP_CSS = `
 		#studio-app .batch-script-input,
 		#studio-app .batch-style-select,
 		#studio-app .batch-resolution-select,
-		#studio-app .batch-orientation-select,
-		#studio-app .batch-minutes-input {
+		#studio-app .batch-orientation-select {
 			box-sizing: border-box;
 			width: 100%;
 			border: 1px solid var(--t-line, #2e3440);
@@ -7863,11 +7863,6 @@ export const APP_CSS = `
 			min-height: 96px;
 			resize: vertical;
 			line-height: 1.5;
-		}
-
-		#studio-app .batch-minutes-input {
-			max-width: 74px;
-			text-align: center;
 		}
 
 		#studio-app .batch-row-sub {
@@ -9767,6 +9762,44 @@ export const APP_CSS = `
 			justify-content: flex-start;
 			gap: 6px;
 			padding: 3px 8px;
+		}
+
+		/*
+		 * The Pixabay/upload lane is the background layer: it is the last lane in the
+		 * dock and the lowest layer on the canvas. The tint and the "background" badge
+		 * make that order visible in the dock, and the lane cannot be reordered.
+		 */
+		.te-group-background,
+		.te-group-fill-background {
+			background: #191d15;
+		}
+
+		.te-group-background {
+			border-top: 1px solid #3a4430;
+		}
+
+		.te-group-background .te-group-label {
+			color: #bcd79a;
+		}
+
+		.te-track-label.te-track-background {
+			background: #1b2116;
+		}
+
+		.te-lane.te-background-lane {
+			background: repeating-linear-gradient(90deg, #161a12 0, #161a12 80px, #1d2417 81px, #1d2417 82px);
+			border-bottom: 1px solid #2e3526;
+		}
+
+		.te-track-badge {
+			margin-left: 4px;
+			padding: 1px 4px;
+			border-radius: 4px;
+			background: #2c3a22;
+			color: #bbdf86;
+			font-size: 0.5rem;
+			font-weight: 800;
+			letter-spacing: .06em;
 		}
 
 		.te-group-toggle {
