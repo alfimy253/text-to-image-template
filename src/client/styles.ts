@@ -9052,9 +9052,18 @@ export const APP_CSS = `
 		/* =====================================================
 		 * Quick Batch Timeline Editor — isolated client layout
 		 * ===================================================== */
+		/*
+		 * Session 331 (latest request) — the timeline page is a vertical stack,
+		 * not a fixed 100vh shell: the sticky preview canvas takes the full
+		 * width at the top (min 400px tall), the selected-element panel sits
+		 * directly under it, and the timeline dock closes the stack. The page
+		 * itself scrolls, so the dock can leave empty space below it on a tall
+		 * screen instead of being squeezed into the viewport.
+		 */
 		body.timeline-editor-page {
 			padding: 0 !important;
-			overflow: hidden;
+			overflow-x: hidden;
+			overflow-y: auto;
 			background: #101116;
 		}
 
@@ -9067,12 +9076,11 @@ export const APP_CSS = `
 
 		#studio-app.timeline-mode {
 			width: 100%;
-			height: 100vh;
-			height: 100dvh;
-			min-height: 0;
-			max-height: 100vh;
-			max-height: 100dvh;
-			overflow: hidden;
+			min-height: 100vh;
+			min-height: 100dvh;
+			height: auto;
+			max-height: none;
+			overflow: visible;
 			background: #101116;
 			color: #f3f4f6;
 		}
@@ -9080,18 +9088,18 @@ export const APP_CSS = `
 		#studio-app.timeline-mode .app-main {
 			width: 100%;
 			max-width: none;
-			height: 100%;
+			height: auto;
 			min-height: 0;
 			margin: 0;
 			padding: 0;
 			display: block;
-			overflow: hidden;
+			overflow: visible;
 		}
 
 		#studio-app.timeline-mode #view-timeline {
 			display: block;
 			width: 100%;
-			height: 100%;
+			height: auto;
 			min-height: 0;
 		}
 
@@ -9104,12 +9112,11 @@ export const APP_CSS = `
 			--te-accent: #a6d85b;
 			--te-accent-ink: #151a0d;
 			width: 100%;
-			height: 100vh;
-			height: 100dvh;
-			min-height: 0;
+			min-height: 100vh;
+			min-height: 100dvh;
 			display: flex;
 			flex-direction: column;
-			overflow: hidden;
+			overflow: visible;
 			background: #101116;
 			color: #f3f4f6;
 			font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -9122,6 +9129,9 @@ export const APP_CSS = `
 		}
 
 		.te-topbar {
+			position: sticky;
+			top: 0;
+			z-index: 40;
 			flex: 0 0 auto;
 			min-height: 58px;
 			display: flex;
@@ -9130,6 +9140,7 @@ export const APP_CSS = `
 			padding: 9px 16px;
 			border-bottom: 1px solid var(--te-border);
 			background: #17191f;
+			box-shadow: 0 6px 16px rgba(0, 0, 0, .3);
 		}
 
 		.te-back,
@@ -9204,17 +9215,24 @@ export const APP_CSS = `
 			cursor: not-allowed;
 		}
 
+		/*
+		 * The workspace is the selected-element section and nothing else. It
+		 * follows the preview in the page flow and is not sticky, so the preview
+		 * can stay pinned while this section and the dock below it scroll.
+		 */
 		.te-workspace {
-			flex: 1 1 auto;
-			min-height: 180px;
-			display: grid;
-			grid-template-columns: minmax(270px, 30%) minmax(0, 70%);
+			flex: 0 0 auto;
+			min-height: 0;
+			display: flex;
+			flex-direction: column;
+			width: 100%;
 			border-bottom: 1px solid var(--te-border);
-			overflow: hidden;
+			overflow: visible;
 		}
 
 		.te-preview-panel,
 		.te-inspector-panel {
+			width: 100%;
 			min-width: 0;
 			min-height: 0;
 			display: flex;
@@ -9222,10 +9240,24 @@ export const APP_CSS = `
 			padding: 12px 14px;
 		}
 
+		/*
+		 * Sticky only pins while the shell still has content below the preview;
+		 * the padded dock provides that room. When the document ends, the shell
+		 * releases the pin and the preview leaves the screen - so the dock is
+		 * always the last thing on the page.
+		 */
 		.te-preview-panel {
+			position: sticky;
+			top: 58px;
+			z-index: 20;
+			flex: 0 0 auto;
+			width: 100%;
 			gap: 8px;
-			border-right: 1px solid var(--te-border);
+			min-height: 0;
+			border-right: 0;
+			border-bottom: 1px solid var(--te-border);
 			background: #14161c;
+			box-shadow: 0 14px 28px rgba(0, 0, 0, .38);
 		}
 
 		.te-panel-heading {
@@ -9246,10 +9278,16 @@ export const APP_CSS = `
 			font-size: 0.7rem;
 		}
 
+		/*
+		 * The canvas area keeps a 400 px floor at every viewport and grows with a
+		 * tall screen (up to 720 px) so the full-width preview is as large as the
+		 * available height allows.
+		 */
 		.te-preview-stage {
 			position: relative;
 			flex: 1 1 auto;
-			min-height: 0;
+			min-height: 400px;
+			height: clamp(400px, 52vh, 720px);
 			display: flex;
 			align-items: center;
 			justify-content: center;
@@ -9259,6 +9297,11 @@ export const APP_CSS = `
 			background: #08090c;
 		}
 
+		/*
+		 * The canvas keeps its 9:16 drawing buffer and scales up to fill the
+		 * full-width stage, so the preview reads as a real video frame instead of
+		 * a small phone-sized thumbnail.
+		 */
 		.te-preview-stage canvas#timeline-preview-canvas {
 			display: block;
 			width: auto;
@@ -9320,8 +9363,15 @@ export const APP_CSS = `
 			line-height: 1.35;
 		}
 
+		/*
+		 * The selected-element panel is NOT sticky: it follows the preview and
+		 * the dock follows it, in reading order.
+		 */
 		.te-inspector-panel {
-			overflow: auto;
+			position: static;
+			flex: 0 0 auto;
+			border-right: 0;
+			overflow: visible;
 			background: #101116;
 		}
 
@@ -9588,10 +9638,16 @@ export const APP_CSS = `
 			font-size: 0.75rem;
 		}
 
+		/*
+		 * The dock follows the selected-element panel in normal document flow.
+		 * It keeps a usable minimum height and never claims a percentage of the
+		 * viewport, so a tall screen simply shows empty space under the tracks.
+		 */
 		.te-dock {
-			flex: 0 0 36%;
-			min-height: 235px;
-			max-height: 48%;
+			flex: 0 0 auto;
+			width: 100%;
+			min-height: 320px;
+			max-height: none;
 			display: flex;
 			flex-direction: column;
 			background: #14161c;
@@ -9659,9 +9715,10 @@ export const APP_CSS = `
 
 		.te-timeline-scroll {
 			flex: 1 1 auto;
-			min-height: 0;
+			min-height: 220px;
 			overflow: auto;
-			overscroll-behavior: contain;
+			/* not 'contain': the wheel must be able to continue to the page */
+			overscroll-behavior: auto;
 			scrollbar-color: #454955 #17191f;
 			scrollbar-width: thin;
 		}
@@ -10031,6 +10088,19 @@ export const APP_CSS = `
 			pointer-events: none;
 		}
 
+		/*
+		 * A short tail below the tracks gives the sticky preview room to keep
+		 * its own height while the playhead row is scrolled past. Without it a
+		 * short last row would end the page and unpin the preview early.
+		 */
+		.te-dock-tail {
+			flex: 0 0 auto;
+			height: 260px;
+			border-top: 1px solid #24272f;
+			background: repeating-linear-gradient(180deg, #14161c 0, #14161c 38px, #16181f 39px, #16181f 40px);
+			background-color: #14161c;
+		}
+
 		.te-dock-footer {
 			flex: 0 0 auto;
 			min-height: 27px;
@@ -10050,16 +10120,12 @@ export const APP_CSS = `
 		}
 
 		@media (max-width: 760px) {
-			.te-workspace {
-				grid-template-columns: minmax(200px, 31%) minmax(0, 69%);
-			}
 			.te-preview-panel,
 			.te-inspector-panel {
 				padding: 9px;
 			}
 			.te-dock {
-				flex-basis: 40%;
-				min-height: 210px;
+				min-height: 280px;
 			}
 			.te-dock-footer > span:first-child {
 				display: none;
@@ -10071,6 +10137,9 @@ export const APP_CSS = `
 				min-height: 52px;
 				gap: 7px;
 				padding: 7px;
+			}
+			.te-preview-panel {
+				top: 52px;
 			}
 			.te-back {
 				padding: 7px;
@@ -10088,12 +10157,12 @@ export const APP_CSS = `
 				padding: 7px 9px;
 				font-size: 0.68rem;
 			}
-			.te-workspace {
-				grid-template-columns: 31% minmax(0, 69%);
-			}
 			.te-preview-panel,
 			.te-inspector-panel {
 				padding: 7px 6px;
+			}
+			.te-preview-stage {
+				min-height: 400px;
 			}
 			.te-preview-note {
 				display: none;

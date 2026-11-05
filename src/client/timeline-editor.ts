@@ -25,6 +25,15 @@ export const TIMELINE_EDITOR_JS = `
 		var MEDIA_TRACK_ID = "background-media";
 		var MEDIA_TRACK_LABEL = "Pixabay & uploaded media · background";
 		var MEDIA_TRACK_NAME = "BACKGROUND";
+		/*
+		 * Every timeline that has no text and no graphic of its own starts with
+		 * one dummy text clip at 0:00 so the text lane is never an empty promise.
+		 * The clip is a normal editable text clip: typing over it, moving it or
+		 * deleting it is allowed, and it is never re-created once the project
+		 * already has any text/graphic clip.
+		 */
+		var DUMMY_TEXT = "Your text here";
+		var DUMMY_TEXT_MAX_SEC = 6;
 
 		function openAssetDb() {
 			return new Promise(function (resolve, reject) {
@@ -182,6 +191,35 @@ export const TIMELINE_EDITOR_JS = `
 			return clamp(value, min, max) || fallback;
 		}
 
+		/*
+		 * The dummy text clip lives in the first text/graphics lane at exactly
+		 * 0:00. Its duration is short on purpose: a sentence long enough to read
+		 * is the user's job, an empty lane is not.
+		 */
+		function dummyTextItem(scenes) {
+			var firstScene = scenes && scenes[0] ? scenes[0] : null;
+			var duration = Math.min(DUMMY_TEXT_MAX_SEC, Math.max(MIN_CLIP_SEC, number(firstScene && firstScene.durationSec, DUMMY_TEXT_MAX_SEC)));
+			return {
+				id: "dummy-text-1",
+				kind: "text",
+				type: "text",
+				name: "Text",
+				label: "Text",
+				text: DUMMY_TEXT,
+				sceneId: firstScene ? String(firstScene.id || "") : "",
+				startSec: 0,
+				durationSec: duration,
+				x: 50,
+				y: 78,
+				fontSize: 28,
+				color: "#ffffff",
+				font: "sans",
+				align: "center",
+				visible: true,
+				dummy: true
+			};
+		}
+
 		function defaultTimeline() {
 			var duration = number(transition && transition.timelineState && transition.timelineState.durationSec, 60);
 			var scenes = [];
@@ -207,11 +245,18 @@ export const TIMELINE_EDITOR_JS = `
 					{ id: "sound-fx", kind: "audio", label: "Sound effects", expanded: true, items: [] },
 					{ id: "background-music", kind: "audio", label: "Background music", expanded: true, items: [] },
 					{ id: MEDIA_TRACK_ID, kind: "media", label: MEDIA_TRACK_LABEL, expanded: true, items: mediaItems, layer: 0 },
-					{ id: "visual-1", kind: "visual", label: "Text & graphics 1", expanded: true, items: [] }
+					{ id: "visual-1", kind: "visual", label: "Text & graphics 1", expanded: true, items: [dummyTextItem(scenes)] }
 				],
 				selectedTrackId: MEDIA_TRACK_ID,
 				selectedItemId: "media-1"
 			};
+		}
+
+		function isCaptionItem(item) {
+			if (!item) return false;
+			var id = String(item.id || "");
+			var name = String(item.name || item.label || "");
+			return /-caption-\\d+$/.test(id) || /^Caption\\b/.test(name);
 		}
 
 		function normalizeItem(item, track) {
@@ -318,6 +363,15 @@ export const TIMELINE_EDITOR_JS = `
 				items.forEach(function (item) { target.items.push(normalizeItem(item, { kind: "visual" })); });
 			});
 			if (!visualLayers.length) visualLayers.push({ id: "visual-1", kind: "visual", label: "Text & graphics 1", expanded: true, items: [] });
+			/*
+			 * Captions are no longer timeline clips. Subtitle cues that were
+			 * carried in by an older handoff (id "<scene>-caption-<n>" or a
+			 * "Caption <n>" label) are dropped here so the text lane only ever
+			 * holds text and graphics the user asked for.
+			 */
+			visualLayers.forEach(function (layer) {
+				layer.items = layer.items.filter(function (item) { return !isCaptionItem(item); });
+			});
 			tracks = tracks.concat(visualLayers);
 			var sceneSource = Array.isArray(base.scenes) ? base.scenes : [];
 			var scenes = sceneSource.slice(0, 100).map(function (scene, index) {
@@ -333,6 +387,17 @@ export const TIMELINE_EDITOR_JS = `
 				return copy;
 			});
 			if (!scenes.length) scenes = defaultTimeline().scenes;
+			/*
+			 * A timeline with no text and no graphic of its own opens with the
+			 * dummy text at 0:00 in the first text/graphics lane.
+			 */
+			var hasVisualClip = visualLayers.some(function (layer) {
+				return (layer.items || []).some(function (item) { return item.kind === "text" || item.kind === "graphic"; });
+			});
+			if (!hasVisualClip) {
+				var firstVisualLayer = visualLayers[0];
+				if (firstVisualLayer) firstVisualLayer.items.push(dummyTextItem(scenes));
+			}
 			var duration = clamp(base.durationSec, 1, MAX_DURATION_SEC);
 			var result = {
 				version: 3,
