@@ -1336,6 +1336,6 @@ Honesty notes:
 
 ### 15.10 Status
 
-- Branch: `arena/4d1103b2-text-to-image-template` (the only branch this section was written on).
+- Branch: `arena/4d1103b2-text-to-image-template` (the only branch this section was written on); committed and pushed as `5e74958` *"Section 15: row video style into the project detail, template-modal double gradient and neon+VHS on every scene"*.
 - The documented source of truth is the current code in this workspace; this file now matches it.
-- Focused suites 80/80 green; no new full-suite failures relative to the pre-existing set.
+- Focused suites 80/80 green; full-suite failure identity identical to a HEAD worktree (one pre-existing load-sensitive voiceover test excepted, see 15.7); `wrangler deploy --dry-run` compiles (2960.25 KiB / 1350.96 KiB gzip); `tsc --noEmit` unchanged at the 30 pre-existing `src/index.ts` diagnostics.
