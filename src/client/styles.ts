@@ -9064,7 +9064,7 @@ export const APP_CSS = `
 			padding: 0 !important;
 			overflow-x: hidden;
 			overflow-y: auto;
-			background: #101116;
+			background: var(--bg);
 		}
 
 		body.timeline-editor-page #landing-page,
@@ -9107,7 +9107,7 @@ export const APP_CSS = `
 			--te-panel: var(--card);
 			--te-panel-raised: var(--card);
 			--te-lane: var(--bg);
-			--te-border: #30333d;
+			--te-border: var(--t-line, #30333d);
 			--te-muted: var(--text);
 			--te-accent: var(--accent);
 			--te-accent-ink: var(--t-on-accent, #10140d);
@@ -9155,8 +9155,8 @@ export const APP_CSS = `
 		.te-group-toggle {
 			border: 1px solid var(--te-border);
 			border-radius: 8px;
-			background: #22252d;
-			color: #e7e9ef;
+			background: var(--t-btn2-bg, #22252d);
+			color: var(--t-btn2-ink, #e7e9ef);
 			cursor: pointer;
 		}
 
@@ -9193,7 +9193,7 @@ export const APP_CSS = `
 
 		.te-save-status[data-state="error"],
 		#timeline-status[data-state="error"] {
-			color: #fca5a5;
+			color: #ef4444;
 		}
 
 		.te-play {
@@ -9303,7 +9303,7 @@ export const APP_CSS = `
 			align-items: center;
 			justify-content: center;
 			overflow: hidden;
-			border: 1px solid #30323a;
+			border: 1px solid var(--t-line, #30323a);
 			border-radius: 12px;
 			background: #08090c;
 		}
@@ -9347,7 +9347,7 @@ export const APP_CSS = `
 			height: 6px;
 			overflow: hidden;
 			border-radius: 999px;
-			background: rgba(255, 255, 255, .12);
+			background: var(--t-track, rgba(255, 255, 255, .12));
 		}
 
 		.te-export-progress[hidden] {
@@ -9391,7 +9391,7 @@ export const APP_CSS = `
 		}
 		.te-preview-controls output {
 			margin-left: auto;
-			color: #d4d7df;
+			color: var(--t-ink, #d4d7df);
 			font-variant-numeric: tabular-nums;
 			font-size: 0.72rem;
 		}
@@ -9415,7 +9415,7 @@ export const APP_CSS = `
 			flex: 0 0 auto;
 			border-right: 0;
 			overflow: visible;
-			background: #101116;
+			background: var(--card);
 		}
 
 		.te-inspector-panel .tm-scene-panel {
@@ -9424,7 +9424,7 @@ export const APP_CSS = `
 			border: 0;
 			border-radius: 0;
 			background: transparent;
-			color: #f3f4f6;
+			color: var(--t-ink, #f3f4f6);
 		}
 
 		.te-inspector-panel .tm-scene-panel-head {
@@ -9437,7 +9437,7 @@ export const APP_CSS = `
 
 		.te-inspector-panel .tm-scene-kicker {
 			margin: 0 0 4px;
-			color: #a6d85b;
+			color: var(--t-accent-ink, #a6d85b);
 			font-size: 0.61rem;
 			font-weight: 900;
 			letter-spacing: .14em;
@@ -9445,7 +9445,7 @@ export const APP_CSS = `
 
 		.te-inspector-panel .tm-sec-title {
 			margin: 0;
-			color: #f3f4f6;
+			color: var(--t-ink, #f3f4f6);
 			font-size: 1rem;
 			font-weight: 800;
 			letter-spacing: -.01em;
@@ -9465,10 +9465,10 @@ export const APP_CSS = `
 		.te-inspector-panel .tm-scene-upload {
 			min-height: 32px;
 			padding: 6px 9px;
-			border: 1px solid #3a3d46;
+			border: 1px solid var(--t-line, #3a3d46);
 			border-radius: 8px;
-			background: #22252d;
-			color: #f3f4f6;
+			background: var(--t-btn2-bg, #22252d);
+			color: var(--t-ink, #f3f4f6);
 			font-size: 0.72rem;
 			font-weight: 750;
 			cursor: pointer;
@@ -9483,7 +9483,7 @@ export const APP_CSS = `
 		.te-inspector-panel .tm-scene-hint,
 		.te-inspector-panel .te-inspector-note {
 			margin: 5px 0 10px;
-			color: #a1a5b0;
+			color: var(--t-muted, #a1a5b0);
 			font-size: 0.69rem;
 			line-height: 1.45;
 		}
@@ -9497,7 +9497,7 @@ export const APP_CSS = `
 
 		.te-inspector-panel .tm-scene-inspector-title {
 			flex: 1 0 100%;
-			color: #e5e7eb;
+			color: var(--t-ink, #e5e7eb);
 			font-size: 0.72rem;
 			font-weight: 750;
 		}
@@ -9508,18 +9508,18 @@ export const APP_CSS = `
 			text-overflow: ellipsis;
 			white-space: nowrap;
 			padding: 5px 8px;
-			border: 1px solid #373a43;
+			border: 1px solid var(--t-line, #373a43);
 			border-radius: 999px;
-			background: #1c1f26;
-			color: #d8dbe2;
+			background: var(--t-panel-2, #1c1f26);
+			color: var(--t-ink, #d8dbe2);
 			font-size: 0.67rem;
 			cursor: pointer;
 		}
 
 		.te-inspector-panel .tm-scene-object.selected {
-			border-color: #a6d85b;
+			border-color: var(--t-accent-ink, #a6d85b);
 			background: rgba(166,216,91,.12);
-			color: #dff3bf;
+			color: var(--t-ink, #dff3bf);
 		}
 
 		.te-inspector-panel .tm-scene-inspector {
@@ -9533,8 +9533,8 @@ export const APP_CSS = `
 			grid-column: 1 / -1;
 			margin: 6px 0 0;
 			padding-top: 9px;
-			border-top: 1px solid #2d3039;
-			color: #c7cbd4;
+			border-top: 1px solid var(--t-line-2, #2d3039);
+			color: var(--t-ink, #c7cbd4);
 			font-size: 0.66rem;
 			font-weight: 850;
 			letter-spacing: .1em;
@@ -9546,12 +9546,12 @@ export const APP_CSS = `
 			display: flex;
 			flex-direction: column;
 			gap: 5px;
-			color: #d5d7de;
+			color: var(--t-ink, #d5d7de);
 			font-size: 0.68rem;
 		}
 
 		.te-inspector-panel .tm-scene-field-label {
-			color: #aeb2bd;
+			color: var(--t-muted, #aeb2bd);
 			font-size: 0.65rem;
 			font-weight: 700;
 		}
@@ -9562,17 +9562,17 @@ export const APP_CSS = `
 			min-width: 0;
 			min-height: 34px;
 			padding: 5px 8px;
-			border: 1px solid #3a3d46;
+			border: 1px solid var(--t-line, #3a3d46);
 			border-radius: 7px;
-			background: #1d2027;
-			color: #f3f4f6;
+			background: var(--t-input, #1d2027);
+			color: var(--t-ink, #f3f4f6);
 			outline: none;
 		}
 
 		.te-inspector-panel .tm-scene-field input[type="range"] {
 			width: 100%;
 			min-width: 0;
-			accent-color: #a6d85b;
+			accent-color: var(--t-accent-ink, #a6d85b);
 			cursor: pointer;
 		}
 
@@ -9584,7 +9584,7 @@ export const APP_CSS = `
 
 		.te-inspector-panel .tm-scene-range-value {
 			min-width: 48px;
-			color: #d4d7df;
+			color: var(--t-ink, #d4d7df);
 			font-size: 0.66rem;
 			text-align: right;
 			font-variant-numeric: tabular-nums;
@@ -9592,7 +9592,7 @@ export const APP_CSS = `
 
 		.te-inspector-panel .tm-scene-field input[type="checkbox"] {
 			align-self: flex-start;
-			accent-color: #a6d85b;
+			accent-color: var(--t-accent-ink, #a6d85b);
 		}
 
 		.te-inspector-panel .tm-scene-color-field {
@@ -9602,7 +9602,7 @@ export const APP_CSS = `
 		.te-inspector-panel .tm-scene-color-current {
 			width: 100%;
 			height: 34px;
-			border: 1px solid #454852;
+			border: 1px solid var(--t-line, #454852);
 			border-radius: 7px;
 			cursor: pointer;
 		}
@@ -9614,16 +9614,16 @@ export const APP_CSS = `
 			left: 0;
 			width: min(280px, 85vw);
 			padding: 10px;
-			border: 1px solid #454852;
+			border: 1px solid var(--t-line, #454852);
 			border-radius: 10px;
-			background: #20232b;
+			background: var(--card, #20232b);
 			box-shadow: 0 14px 40px rgba(0,0,0,.45);
 		}
 
 		.te-inspector-panel .tm-scene-color-title {
 			display: block;
 			margin: 5px 0;
-			color: #c6cad3;
+			color: var(--t-ink, #c6cad3);
 			font-size: 0.63rem;
 			font-weight: 800;
 		}
@@ -9640,7 +9640,7 @@ export const APP_CSS = `
 			width: 23px;
 			height: 23px;
 			padding: 0;
-			border: 1px solid rgba(255,255,255,.28);
+			border: 1px solid var(--t-line-2, rgba(255,255,255,.28));
 			border-radius: 5px;
 			cursor: pointer;
 		}
@@ -9664,7 +9664,7 @@ export const APP_CSS = `
 			justify-content: center;
 			overflow: hidden;
 			white-space: nowrap;
-			background: #22252d;
+			background: var(--t-btn2-bg, #22252d);
 		}
 
 		.te-inspector-panel .tm-scene-upload input[type="file"] {
@@ -9732,7 +9732,7 @@ export const APP_CSS = `
 		}
 
 		.te-secondary span {
-			color: #bbdf86;
+			color: var(--t-accent-ink, #bbdf86);
 			font-variant-numeric: tabular-nums;
 		}
 
@@ -9740,19 +9740,19 @@ export const APP_CSS = `
 			display: flex;
 			align-items: center;
 			gap: 6px;
-			color: #bdc1ca;
+			color: var(--t-muted, #bdc1ca);
 			font-size: 0.65rem;
 			white-space: nowrap;
 		}
 
 		.te-zoom input {
 			width: 90px;
-			accent-color: #a6d85b;
+			accent-color: var(--t-accent-ink, #a6d85b);
 		}
 
 		.te-zoom output {
 			min-width: 25px;
-			color: #e5e7eb;
+			color: var(--t-ink, #e5e7eb);
 			font-variant-numeric: tabular-nums;
 		}
 
@@ -9767,7 +9767,7 @@ export const APP_CSS = `
 			overflow: auto;
 			/* not 'contain': the wheel must be able to continue to the page */
 			overscroll-behavior: auto;
-			scrollbar-color: #454955 #17191f;
+			scrollbar-color: var(--t-line-2, #454955) var(--t-panel-3, #17191f);
 			scrollbar-width: thin;
 		}
 
@@ -9787,8 +9787,8 @@ export const APP_CSS = `
 			top: 0;
 			z-index: 8;
 			height: 32px;
-			border-bottom: 1px solid #363944;
-			background: #1b1e25;
+			border-bottom: 1px solid var(--t-line, #363944);
+			background: var(--t-panel-2, #1b1e25);
 		}
 
 		.te-grid-corner {
@@ -9797,8 +9797,8 @@ export const APP_CSS = `
 			display: flex;
 			align-items: center;
 			padding: 0 12px;
-			border-right: 1px solid #30333d;
-			color: #9ea3af;
+			border-right: 1px solid var(--t-line, #30333d);
+			color: var(--t-muted, #9ea3af);
 			font-size: 0.59rem;
 			font-weight: 850;
 			letter-spacing: .12em;
@@ -9863,8 +9863,8 @@ export const APP_CSS = `
 			top: 0;
 			bottom: 0;
 			padding: 8px 0 0 4px;
-			border-left: 1px solid #454853;
-			color: #aeb2bd;
+			border-left: 1px solid var(--t-line, #454853);
+			color: var(--t-muted, #aeb2bd);
 			font-size: 0.6rem;
 			font-variant-numeric: tabular-nums;
 			white-space: nowrap;
@@ -9876,7 +9876,7 @@ export const APP_CSS = `
 			bottom: -4px;
 			width: 1px;
 			height: 5px;
-			background: #747986;
+			background: var(--t-muted, #747986);
 		}
 
 		.te-group-title,
@@ -9890,24 +9890,24 @@ export const APP_CSS = `
 			align-items: center;
 			gap: 4px;
 			padding: 5px 7px 5px 10px;
-			border-right: 1px solid #30333d;
-			border-bottom: 1px solid #282b33;
-			background: #191b22;
+			border-right: 1px solid var(--t-line, #30333d);
+			border-bottom: 1px solid var(--t-line-2, #282b33);
+			background: var(--t-panel-2, #191b22);
 		}
 
 		.te-group-title {
 			min-height: 31px;
 			padding-top: 4px;
 			padding-bottom: 4px;
-			background: #20232a;
+			background: var(--t-panel, #20232a);
 		}
 
 		.te-group-fill {
 			position: relative;
 			overflow: hidden;
 			min-height: 31px;
-			border-bottom: 1px solid #282b33;
-			background: repeating-linear-gradient(90deg, #191b22 0, #191b22 80px, #20222a 81px, #20222a 82px);
+			border-bottom: 1px solid var(--t-line-2, #282b33);
+			background: repeating-linear-gradient(90deg, var(--t-panel-2, #191b22) 0, var(--t-panel-2, #191b22) 80px, var(--t-panel, #20222a) 81px, var(--t-panel, #20222a) 82px);
 		}
 
 		.te-group-fill.te-visual-actions {
@@ -9925,32 +9925,32 @@ export const APP_CSS = `
 		 */
 		.te-group-background,
 		.te-group-fill-background {
-			background: #191d15;
+			background: var(--t-panel-2, #191d15);
 		}
 
 		.te-group-background {
-			border-top: 1px solid #3a4430;
+			border-top: 1px solid var(--t-line, #3a4430);
 		}
 
 		.te-group-background .te-group-label {
-			color: #bcd79a;
+			color: var(--t-accent-ink, #bcd79a);
 		}
 
 		.te-track-label.te-track-background {
-			background: #1b2116;
+			background: var(--t-panel-2, #1b2116);
 		}
 
 		.te-lane.te-background-lane {
-			background: repeating-linear-gradient(90deg, #161a12 0, #161a12 80px, #1d2417 81px, #1d2417 82px);
-			border-bottom: 1px solid #2e3526;
+			background: repeating-linear-gradient(90deg, var(--t-panel-2, #161a12) 0, var(--t-panel-2, #161a12) 80px, var(--t-panel, #1d2417) 81px, var(--t-panel, #1d2417) 82px);
+			border-bottom: 1px solid var(--t-line, #2e3526);
 		}
 
 		.te-track-badge {
 			margin-left: 4px;
 			padding: 1px 4px;
 			border-radius: 4px;
-			background: #2c3a22;
-			color: #bbdf86;
+			background: var(--t-panel-3, #2c3a22);
+			color: var(--t-accent-ink, #bbdf86);
 			font-size: 0.5rem;
 			font-weight: 800;
 			letter-spacing: .06em;
@@ -9972,7 +9972,7 @@ export const APP_CSS = `
 		.te-group-toggle small,
 		.te-group-label small {
 			margin-left: auto;
-			color: #9398a5;
+			color: var(--t-muted, #9398a5);
 			font-size: 0.56rem;
 			font-weight: 500;
 			white-space: nowrap;
@@ -9980,7 +9980,7 @@ export const APP_CSS = `
 
 		.te-chevron {
 			width: 11px;
-			color: #a6d85b;
+			color: var(--t-accent-ink, #a6d85b);
 			font-size: 0.85rem;
 		}
 
@@ -9989,7 +9989,7 @@ export const APP_CSS = `
 			display: flex;
 			align-items: center;
 			gap: 6px;
-			color: #cdd1da;
+			color: var(--t-ink, #cdd1da);
 			font-size: 0.56rem;
 			font-weight: 900;
 			letter-spacing: .08em;
@@ -9998,9 +9998,9 @@ export const APP_CSS = `
 		.te-add-inline {
 			flex: 0 0 auto;
 			padding: 4px 6px;
-			border-color: #41454f;
-			background: #292c34;
-			color: #dce6cf;
+			border-color: var(--t-line, #41454f);
+			background: var(--t-btn2-bg, #292c34);
+			color: var(--t-btn2-ink, #dce6cf);
 			font-size: 0.58rem;
 			white-space: nowrap;
 		}
@@ -10011,7 +10011,7 @@ export const APP_CSS = `
 		}
 
 		.te-track-label.selected {
-			background: #20251c;
+			background: var(--t-panel-3, #20251c);
 		}
 
 		.te-track-select {
@@ -10030,7 +10030,7 @@ export const APP_CSS = `
 		}
 
 		.te-track-select small {
-			color: #9297a2;
+			color: var(--t-muted, #9297a2);
 			font-size: 0.56rem;
 			font-weight: 450;
 		}
@@ -10042,22 +10042,22 @@ export const APP_CSS = `
 			padding: 0;
 			border: 0;
 			background: transparent;
-			color: #b9bec8;
+			color: var(--t-ink, #b9bec8);
 		}
 
 		.te-lane {
 			position: relative;
 			min-height: 48px;
 			overflow: hidden;
-			border-bottom: 1px solid #282b33;
+			border-bottom: 1px solid var(--t-line-2, #282b33);
 			background-color: var(--te-lane);
-			background-image: repeating-linear-gradient(90deg, transparent 0, transparent 80px, rgba(255,255,255,.035) 81px, rgba(255,255,255,.035) 82px);
+			background-image: repeating-linear-gradient(90deg, transparent 0, transparent 80px, var(--t-line, rgba(255,255,255,.035)) 81px, var(--t-line, rgba(255,255,255,.035)) 82px);
 		}
 
 		.te-lane.collapsed {
 			min-height: 12px;
 			height: 12px;
-			background: #101116;
+			background: var(--t-panel-3, #101116);
 		}
 
 		.te-lane-empty,
@@ -10067,10 +10067,10 @@ export const APP_CSS = `
 			left: 8px;
 			transform: translateY(-50%);
 			padding: 4px 8px;
-			border: 1px dashed #41444e;
+			border: 1px dashed var(--t-line-2, #41444e);
 			border-radius: 6px;
-			background: rgba(32, 35, 43, .75);
-			color: #a9aebb;
+			background: var(--t-panel-2, rgba(32, 35, 43, .75));
+			color: var(--t-muted, #a9aebb);
 			font-size: 0.6rem;
 			white-space: nowrap;
 		}
@@ -10125,9 +10125,9 @@ export const APP_CSS = `
 
 		.te-clip.placeholder {
 			border-style: dashed;
-			border-color: #535761;
-			background: linear-gradient(105deg, #333741, #252830);
-			color: #c0c3cb;
+			border-color: var(--t-line-2, #535761);
+			background: linear-gradient(105deg, var(--t-panel, #333741), var(--t-panel-2, #252830));
+			color: var(--t-ink, #c0c3cb);
 		}
 
 		.te-clip.selected {
@@ -10187,6 +10187,19 @@ export const APP_CSS = `
 		}
 
 		/*
+		 * Subtitle layer: the cue rows exist inside the tracks DOM so the
+		 * timeline visibly owns them, but every row is hidden on every theme.
+		 * Subtitles follow the music (voiceover timing), so they are never
+		 * editable from the dock — the preview canvas burns them in instead.
+		 */
+		.te-subtitle-group,
+		.te-subtitle-fill,
+		.te-subtitle-label,
+		.te-subtitle-lane {
+			display: none !important;
+		}
+
+		/*
 		 * A short tail below the tracks gives the sticky preview room to keep
 		 * its own height while the playhead row is scrolled past. Without it a
 		 * short last row would end the page and unpin the preview early.
@@ -10194,9 +10207,9 @@ export const APP_CSS = `
 		.te-dock-tail {
 			flex: 0 0 auto;
 			height: 260px;
-			border-top: 1px solid #24272f;
-			background: repeating-linear-gradient(180deg, #14161c 0, #14161c 38px, #16181f 39px, #16181f 40px);
-			background-color: #14161c;
+			border-top: 1px solid var(--t-line-2, #24272f);
+			background: repeating-linear-gradient(180deg, var(--t-panel-3, #14161c) 0, var(--t-panel-3, #14161c) 38px, var(--t-panel-2, #16181f) 39px, var(--t-panel-2, #16181f) 40px);
+			background-color: var(--t-panel-3, #14161c);
 		}
 
 		.te-dock-footer {
@@ -10208,12 +10221,12 @@ export const APP_CSS = `
 			gap: 10px;
 			padding: 5px 12px;
 			border-top: 1px solid var(--te-border);
-			color: #9297a2;
+			color: var(--t-muted, #9297a2);
 			font-size: 0.59rem;
 		}
 
 		#timeline-status {
-			color: #c5cbd4;
+			color: var(--t-ink, #c5cbd4);
 			text-align: right;
 		}
 

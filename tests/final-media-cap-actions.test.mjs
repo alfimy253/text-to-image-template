@@ -193,6 +193,14 @@ test("a Quick Batch row hands off one dummy text at 0:00 instead of caption clip
 		.filter((id) => /-caption-\d+$/.test(String(id)));
 	assert.equal(captionIds.length, 0, "subtitle cues never become timeline clips");
 	assert.deepEqual(
+		Array.from(state.subtitles, (cue) => ({ startMs: cue.startMs, endMs: cue.endMs, text: cue.text })),
+		[
+			{ startMs: 0, endMs: 2000, text: "Quiet rooftop gardens" },
+			{ startMs: 2000, endMs: 4000, text: "in the morning" }
+		],
+		"the row's subtitle cues ride along as data so the timeline preview can paint them"
+	);
+	assert.deepEqual(
 		Array.from(state.scenes[0].elements, (element) => element.id),
 		["dummy-text-1"],
 		"the dummy text is also listed on the first scene"

@@ -9174,12 +9174,25 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const slides = Array.isArray(row && row.slides) ? row.slides : [];
 		const prompts = Array.isArray(row && row.prompts) ? row.prompts : [];
 		/*
-		 * Session 331 (latest request): subtitle cues are NOT timeline clips any
-		 * more. The timeline's text lane opens with one dummy text at 0:00
-		 * instead of mirroring the caption cues, so row.subtitles is no longer
-		 * read here. Subtitles still ship inside the exported video through the
-		 * normal render path.
+		 * Subtitles are cue DATA, never timeline clips. The cues ride along in
+		 * timelineState.subtitles so the timeline preview can burn them onto
+		 * the canvas exactly where the voiceover says them, while the dock keeps
+		 * them on a hidden, read-only layer (they follow the music, so they are
+		 * not editable). The text lane still opens with one dummy text at 0:00
+		 * instead of mirroring the caption cues, so no caption clip is ever
+		 * created here.
 		 */
+		const subtitles = (Array.isArray(row && row.subtitles) ? row.subtitles : [])
+			.map(function (cue) {
+				if (!cue) return null;
+				return {
+					startMs: Math.max(0, Number(cue.startMs) || 0),
+					endMs: Math.max(0, Number(cue.endMs) || 0),
+					text: String(cue.text || "")
+				};
+			})
+			.filter(function (cue) { return Boolean(cue && cue.text && cue.endMs > cue.startMs); })
+			.slice(0, 400);
 		const requestedMinutes = Number(row && row.minutes) > 0 ? Number(row.minutes) : 1;
 		const slideSpan = slides.reduce(function (sum, slide) {
 			return sum + slideDurationSec(slide);
@@ -9273,6 +9286,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			version: 3,
 			frame: batchRowDimensions(row),
 			videoStyle: row.style || "Cinematic Film",
+			subtitles: subtitles,
 			durationSec: Math.min(3600, durationSec),
 			playheadSec: 0,
 			soundExpanded: false,
