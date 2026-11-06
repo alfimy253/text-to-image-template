@@ -42,6 +42,36 @@ export const TIMELINE_EDITOR_JS = `
 		 */
 		var SUBTITLE_FONT_SIZE = 22;
 		var SUBTITLE_FONT_STACK = "'Bookman Old Style', 'Bookman', 'URW Bookman L', Georgia, serif";
+		/*
+		 * Template-modal image effects for the Quick Batch row style that the
+		 * Edit handoff passes in as project data.
+		 *
+		 * The "Add video from template" modal paints these on the canvas
+		 * (template-scene-editor.ts reelDrawBackground), so the timeline copies
+		 * those painter blocks instead of inventing CSS:
+		 *
+		 *   duotone  "Duotone gradient": the moving two-colour double gradient
+		 *            (#ff6b35 -> #2ec4b6) laid over the image or video frame
+		 *   neon     the "neon" style's pink radial glow
+		 *   vhs      the "glitch" style / "Scanlines" effect: rolling black bars
+		 *
+		 * Row styles resolve to:
+		 *   Cinematic Film -> duotone (double gradient on video and image)
+		 *   Neon Night     -> neon + vhs
+		 *   Retro Poster   -> vhs
+		 *   everything else -> the shared CSS filter only
+		 *
+		 * window.__videoStyleEffects() from app-js.ts is the shared authority;
+		 * the local map keeps this bundle standalone if it is ever loaded on
+		 * its own (the same guard style window.__videoStyleFilter uses).
+		 */
+		var STYLE_EFFECT_NAMES = ["duotone", "neon", "vhs"];
+		var STYLE_EFFECT_LABELS = { duotone: "double gradient", neon: "neon glow", vhs: "VHS scanlines" };
+		var STYLE_EFFECT_FALLBACK = {
+			"Cinematic Film": ["duotone"],
+			"Neon Night": ["neon", "vhs"],
+			"Retro Poster": ["vhs"]
+		};
 
 		function openAssetDb() {
 			return new Promise(function (resolve, reject) {
@@ -203,6 +233,80 @@ export const TIMELINE_EDITOR_JS = `
 		}
 
 		/*
+		 * Effect resolution: window.__videoStyleEffects() (app-js.ts) is the
+		 * shared mapping; STYLE_EFFECT_FALLBACK keeps this bundle working when
+		 * it is loaded without it. A scene's own effect list always wins, so a
+		 * caller can hand over per-scene treatments explicitly.
+		 */
+		function styleEffectsFor(style) {
+			if (typeof window.__videoStyleEffects === "function") {
+				try {
+					var shared = window.__videoStyleEffects(style);
+					if (Array.isArray(shared)) return shared.filter(function (name) { return STYLE_EFFECT_NAMES.indexOf(name) !== -1; });
+				} catch (error) {}
+			}
+			var direct = STYLE_EFFECT_FALLBACK[String(style || "")];
+			if (direct) return direct.slice();
+			var text = String(style || "");
+			var list = [];
+			if (/duotone|cinematic/i.test(text)) list.push("duotone");
+			if (/neon/i.test(text)) list.push("neon");
+			if (/neon|retro|vhs|glitch/i.test(text)) list.push("vhs");
+			return list;
+		}
+		function normalizeEffects(list, style) {
+			if (!Array.isArray(list) || !list.length) return styleEffectsFor(style);
+			var names = list.map(function (name) { return String(name || "").toLowerCase(); }).filter(function (name) { return STYLE_EFFECT_NAMES.indexOf(name) !== -1; });
+			return names.length ? Array.from(new Set(names)) : styleEffectsFor(style);
+		}
+		function effectLabel(effects) {
+			return (Array.isArray(effects) ? effects : [])
+				.map(function (name) { return STYLE_EFFECT_LABELS[name] || String(name || ""); })
+				.filter(Boolean)
+				.join(" + ");
+		}
+
+		/*
+		 * The project detail is the row's identity plus its visual treatment.
+		 * The Quick Batch Edit handoff now sends one (payload.projectDetail), and
+		 * the timeline keeps it in state so the heading can name the style and
+		 * the effects instead of guessing them from the canvas.
+		 */
+		function normalizeProjectDetail(raw, fallback, scenes) {
+			var source = raw && typeof raw === "object" ? raw : {};
+			var style = String(source.style || fallback.style || "Cinematic Film");
+			var effects = normalizeEffects(source.effects, style);
+			var detailScenes = scenes.map(function (scene) {
+				return {
+					id: String(scene && scene.id || ""),
+					index: Number(scene && scene.index) || 0,
+					mediaType: String(scene && scene.mediaType || "image"),
+					startSec: number(scene && scene.startSec, 0),
+					durationSec: number(scene && scene.durationSec, 0),
+					effects: normalizeEffects(scene && scene.effects, style)
+				};
+			});
+			return {
+				id: String(source.id || fallback.id || ""),
+				rowId: String(source.rowId || source.id || fallback.rowId || ""),
+				vid: String(source.vid || fallback.vid || ""),
+				title: String(source.title || fallback.title || "").slice(0, 70),
+				topic: String(source.topic || fallback.topic || "").slice(0, 160),
+				sourcePageId: String(source.sourcePageId || fallback.sourcePageId || ""),
+				targetPageId: String(source.targetPageId || fallback.targetPageId || ""),
+				style: style,
+				effects: effects,
+				effectLabel: effectLabel(effects),
+				resolution: String(source.resolution || ""),
+				orientation: String(source.orientation || ""),
+				quality: String(source.quality || ""),
+				frame: source.frame || fallback.frame || { width: 1280, height: 720, orientation: "landscape" },
+				sceneCount: detailScenes.length,
+				scenes: detailScenes
+			};
+		}
+
+		/*
 		 * The dummy text clip lives in the first text/graphics lane at exactly
 		 * 0:00. Its duration is short on purpose: a sentence long enough to read
 		 * is the user's job, an empty lane is not.
@@ -236,10 +340,12 @@ export const TIMELINE_EDITOR_JS = `
 			var scenes = [];
 			var mediaItems = [];
 			var span = Math.max(0.25, duration / 12);
+			var videoStyle = "Cinematic Film";
+			var styleEffects = styleEffectsFor(videoStyle);
 			for (var i = 0; i < 12; i++) {
 				var sceneId = "scene-" + (i + 1);
 				var start = i * span;
-				scenes.push({ id: sceneId, index: i, name: "Scene " + (i + 1), startSec: start, durationSec: span, mediaType: "image", mediaAssetId: "", mediaName: "", mediaSource: "pending", prompt: "", elements: [] });
+				scenes.push({ id: sceneId, index: i, name: "Scene " + (i + 1), startSec: start, durationSec: span, mediaType: "image", mediaAssetId: "", mediaName: "", mediaSource: "pending", prompt: "", effects: styleEffects.slice(), videoStyle: videoStyle, elements: [] });
 				mediaItems.push({ id: "media-" + (i + 1), kind: "media", sceneId: sceneId, assetId: "", label: "Scene " + (i + 1) + " · media pending", mediaType: "image", startSec: start, durationSec: span, trimStartSec: 0, fit: "cover", visible: true });
 			}
 			return {
@@ -248,7 +354,9 @@ export const TIMELINE_EDITOR_JS = `
 				updatedAt: Date.now(),
 				durationSec: duration,
 				frame: { width: 1280, height: 720, orientation: "landscape" },
-				videoStyle: "Cinematic Film",
+				videoStyle: videoStyle,
+				videoStyleEffects: styleEffects.slice(),
+				projectDetail: null,
 				subtitles: [],
 				playheadSec: 0,
 				soundExpanded: false,
@@ -421,6 +529,18 @@ export const TIMELINE_EDITOR_JS = `
 				layer.items = layer.items.filter(function (item) { return !isCaptionItem(item); });
 			});
 			tracks = tracks.concat(visualLayers);
+			/*
+			 * The row's video style arrives as project data: the handoff puts it
+			 * in basicSettings.style, in projectDetail.style and in
+			 * timelineState.videoStyle. Any of the three is enough, and a legacy
+			 * project without one falls back to the studio default.
+			 */
+			var videoStyle = String(
+				base.videoStyle ||
+				transition && transition.projectDetail && transition.projectDetail.style ||
+				transition && transition.basicSettings && transition.basicSettings.style ||
+				"Cinematic Film"
+			);
 			var sceneSource = Array.isArray(base.scenes) ? base.scenes : [];
 			var scenes = sceneSource.slice(0, 100).map(function (scene, index) {
 				var copy = Object.assign({}, scene || {});
@@ -431,6 +551,9 @@ export const TIMELINE_EDITOR_JS = `
 				copy.durationSec = clamp(copy.durationSec, MIN_CLIP_SEC, MAX_DURATION_SEC);
 				copy.mediaType = String(copy.mediaType || "image");
 				copy.mediaAssetId = String(copy.mediaAssetId || "");
+				/* Every scene keeps the resolved template-modal effects of the row style. */
+				copy.videoStyle = String(copy.videoStyle || videoStyle);
+				copy.effects = normalizeEffects(copy.effects, copy.videoStyle);
 				copy.elements = Array.isArray(copy.elements) ? copy.elements.map(function (item) { return normalizeItem(item, { kind: "visual" }); }) : [];
 				return copy;
 			});
@@ -447,14 +570,31 @@ export const TIMELINE_EDITOR_JS = `
 				if (firstVisualLayer) firstVisualLayer.items.push(dummyTextItem(scenes));
 			}
 			var duration = clamp(base.durationSec, 1, MAX_DURATION_SEC);
+			var frame = base.frame || transition && transition.timelineState && transition.timelineState.frame || { width: 1280, height: 720, orientation: "landscape" };
 			var result = {
 				version: 3,
 				projectId: pageId,
 				updatedAt: number(base.updatedAt, Date.now()),
 				sourcePageId: String(base.sourcePageId || transition && transition.sourcePageId || ""),
 				sourceRowId: String(base.sourceRowId || transition && transition.basicSettings && transition.basicSettings.id || ""),
-				frame: base.frame || transition && transition.timelineState && transition.timelineState.frame || { width: 1280, height: 720, orientation: "landscape" },
-				videoStyle: base.videoStyle || transition && transition.basicSettings && transition.basicSettings.style || "Cinematic Film",
+				frame: frame,
+				videoStyle: videoStyle,
+				videoStyleEffects: normalizeEffects(base.videoStyleEffects, videoStyle),
+				projectDetail: normalizeProjectDetail(
+					base.projectDetail || transition && transition.projectDetail,
+					{
+						style: videoStyle,
+						frame: frame,
+						id: base.sourceRowId || transition && transition.basicSettings && transition.basicSettings.id,
+						rowId: base.sourceRowId || transition && transition.basicSettings && transition.basicSettings.id,
+						vid: transition && transition.basicSettings && transition.basicSettings.vid,
+						title: transition && transition.basicSettings && transition.basicSettings.title,
+						topic: transition && transition.basicSettings && transition.basicSettings.topic,
+						sourcePageId: base.sourcePageId || transition && transition.sourcePageId,
+						targetPageId: transition && transition.targetPageId
+					},
+					scenes
+				),
 				subtitles: normalizeSubtitles(base.subtitles && base.subtitles.length
 					? base.subtitles
 					: transition && transition.timelineState && transition.timelineState.subtitles),
@@ -1322,20 +1462,50 @@ export const TIMELINE_EDITOR_JS = `
 		/*
 		 * Image/video effect overlays copied from the editor layout's video
 		 * template modal (template-scene-editor.ts reelDrawBackground):
+		 *   - the "Duotone gradient" double gradient (duotone effect)
 		 *   - the neon scene's pink radial glow  ("neon effect")
 		 *   - the VHS/glitch scene's rolling scanlines ("vhs effect")
-		 * The effect is chosen by the Quick Batch row's video style once it is
-		 * passed into the timeline details (state.videoStyle), on top of the
-		 * shared window.__videoStyleFilter() CSS filter. They sit above the
-		 * background media and below the text/graphics layers, exactly like the
-		 * template modal paints them. Guards keep bare canvas test doubles safe.
+		 * The effects are resolved from the Quick Batch row's video style, which
+		 * the Edit handoff passes in as project data (state.videoStyle and
+		 * state.projectDetail.style) and stamps onto every scene (scene.effects),
+		 * on top of the shared window.__videoStyleFilter() CSS filter. They sit
+		 * above the background media and below the text/graphics layers, exactly
+		 * like the template modal paints them. Guards keep bare canvas test
+		 * doubles safe.
 		 */
-		function drawStyleEffects(context, width, height, seconds) {
-			if (!context || !state) return;
-			var style = String(state.videoStyle || "");
-			if (!style) return;
+		function drawStyleEffects(context, width, height, seconds, scene) {
+			if (!context || !state) return [];
+			var style = String(scene && scene.videoStyle || state.videoStyle || "");
+			/*
+			 * Every scene carries its own resolved effect list, so the treatment
+			 * is applied to ALL scenes: a cinematic row paints the double
+			 * gradient on each video and image scene, a neon row paints the neon
+			 * glow plus the VHS bars on each one. state.videoStyleEffects is the
+			 * fallback for a scene saved before this field existed.
+			 */
+			var effects = scene && Array.isArray(scene.effects)
+				? normalizeEffects(scene.effects, style)
+				: normalizeEffects(state.videoStyleEffects, style);
+			if (!effects.length) return [];
 			var scale = Math.max(0.5, height / 720);
-			if (/neon/i.test(style) && typeof context.createRadialGradient === "function") {
+			if (effects.indexOf("duotone") !== -1 && typeof context.createLinearGradient === "function") {
+				/*
+				 * "Duotone gradient" from the template modal: two colours
+				 * (#ff6b35 and #2ec4b6) in one moving gradient, i.e. the double
+				 * gradient laid over the image or video frame. The modal's
+				 * bg.speed factor is modal-only, so it is omitted here.
+				 */
+				var shift = ((seconds * 14) % 100) / 100;
+				var duo = context.createLinearGradient(width * (shift - 0.5), 0, width * (shift + 1), 0);
+				duo.addColorStop(0, "rgba(255,107,53,0.42)");
+				duo.addColorStop(0.5, "rgba(255,107,53,0.12)");
+				duo.addColorStop(1, "rgba(46,196,182,0.44)");
+				context.save();
+				context.fillStyle = duo;
+				context.fillRect(0, 0, width, height);
+				context.restore();
+			}
+			if (effects.indexOf("neon") !== -1 && typeof context.createRadialGradient === "function") {
 				context.save();
 				var glow = context.createRadialGradient(width * 0.5, height * 0.5, width * 0.03, width * 0.5, height * 0.5, width * 0.72);
 				glow.addColorStop(0, "rgba(255,45,149,0.08)");
@@ -1344,7 +1514,7 @@ export const TIMELINE_EDITOR_JS = `
 				context.fillRect(0, 0, width, height);
 				context.restore();
 			}
-			if (/retro|vhs|glitch/i.test(style)) {
+			if (effects.indexOf("vhs") !== -1) {
 				context.save();
 				context.globalAlpha = 0.3;
 				context.fillStyle = "rgba(0,0,0,0.72)";
@@ -1354,6 +1524,7 @@ export const TIMELINE_EDITOR_JS = `
 				for (var y = -gap; y < height + gap; y += gap) context.fillRect(0, y + scroll, width, effectLine);
 				context.restore();
 			}
+			return effects;
 		}
 
 		function drawPreview() {
@@ -1378,8 +1549,11 @@ export const TIMELINE_EDITOR_JS = `
 				context.restore();
 			}
 			if (!drawn && active) drawPlaceholder(context, width, height, scene);
-			/* Template-modal image effects (neon / VHS) ride on the background layer. */
-			drawStyleEffects(context, width, height, state.playheadSec);
+			/*
+			 * Template-modal image effects (double gradient / neon / VHS) ride on
+			 * the background layer of EVERY scene, resolved from the scene itself.
+			 */
+			drawStyleEffects(context, width, height, state.playheadSec, scene);
 			/* Layers 1..4 — every text and graphic clip paints above the background. */
 			visualTracks().forEach(function (track) {
 				track.items.forEach(function (item) {
@@ -1554,7 +1728,8 @@ export const TIMELINE_EDITOR_JS = `
 				targetCtx.restore();
 			}
 			if (!drawn && active) drawPlaceholder(targetCtx, width, height, scene);
-			drawStyleEffects(targetCtx, width, height, seconds);
+			/* Exported frames carry the same per-scene treatments as the preview. */
+			drawStyleEffects(targetCtx, width, height, seconds, scene);
 			visualTracks().forEach(function (track) {
 				track.items.forEach(function (item) {
 					var live = seconds >= item.startSec && seconds < item.startSec + item.durationSec;
@@ -2096,8 +2271,21 @@ export const TIMELINE_EDITOR_JS = `
 			var title = document.getElementById("timeline-project-title");
 			var subtitle = document.getElementById("timeline-project-subtitle");
 			var settings = transition && transition.basicSettings || {};
+			var detail = state && state.projectDetail || {};
+			var effects = effectLabel(detail.effects || state && state.videoStyleEffects || []);
 			if (title) title.textContent = settings.title ? String(settings.title) : "Timeline editor";
-			if (subtitle) subtitle.textContent = "Quick Batch row " + String(settings.id || "") + " · " + state.scenes.length + " scenes · " + String(state.videoStyle || "Cinematic Film") + " style · browser-only timing";
+			if (subtitle) {
+				/*
+				 * The project detail line names the row style that came in with
+				 * the Edit handoff and the template-modal effects resolved from
+				 * it, so the style is visible project data, not hidden state.
+				 */
+				subtitle.textContent = "Quick Batch row " + String(settings.id || detail.rowId || "") +
+					" · " + state.scenes.length + " scenes · " +
+					String(state.videoStyle || "Cinematic Film") + " style" +
+					(effects ? " · " + effects : "") +
+					" · browser-only timing";
+			}
 		}
 
 		function boot() {
@@ -2146,6 +2334,9 @@ export const TIMELINE_EDITOR_JS = `
 		};
 		api.addGraphicElement = function () { return state ? addVisualElementFromAction("graphic") : null; };
 		api.setItemTiming = setItemTiming;
+		/* The row's project detail (style + template-modal effects) is inspectable. */
+		api.getProjectDetail = function () { return state ? state.projectDetail : null; };
+		api.getStyleEffects = function (style) { return styleEffectsFor(style); };
 		api.save = persistNow;
 		api.addMediaFiles = addMediaFiles;
 		api.addAudioFile = addAudioFile;

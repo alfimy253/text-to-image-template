@@ -42,14 +42,27 @@ function makeTimelineState() {
 }
 
 function canvasContext() {
-	return {
+	const context = {
 		fillStyle: "", strokeStyle: "", lineWidth: 1, font: "", textAlign: "center", textBaseline: "middle",
-		clearRect() {}, fillRect() {}, strokeRect() {}, save() {}, restore() {},
+		globalAlpha: 1,
+		clearRect() {}, strokeRect() {}, save() {}, restore() {},
+		fillRect(...args) { context.rects.push(args); },
 		beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, arc() {}, translate() {}, rotate() {},
-		drawnTexts: [], fills: 0,
+		drawnTexts: [], fills: 0, rects: [], gradients: [], radials: 0,
 		fill() { this.fills++; }, stroke() {}, fillText(text) { this.drawnTexts.push(String(text)); }, drawImage() {},
-		createLinearGradient() { return { addColorStop() {} }; }
+		createLinearGradient(x0, y0, x1, y1) {
+			const gradient = { kind: "linear", x0, y0, x1, y1, stops: [], addColorStop(offset, color) { gradient.stops.push([offset, color]); } };
+			context.gradients.push(gradient);
+			return gradient;
+		},
+		createRadialGradient(x0, y0, r0, x1, y1, r1) {
+			const gradient = { kind: "radial", x0, y0, r0, x1, y1, r1, stops: [], addColorStop(offset, color) { gradient.stops.push([offset, color]); } };
+			context.gradients.push(gradient);
+			context.radials += 1;
+			return gradient;
+		}
 	};
+	return context;
 }
 
 function memoryIndexedDB() {
@@ -717,6 +730,19 @@ test("subtitle cues paint on the timeline preview while their tracks layer stays
 	assert.ok(!previewContext.drawnTexts.includes("Across scene two"));
 });
 
+function seekTo(w, clientX) {
+	const ruler = w.document.querySelector(".te-ruler");
+	ruler.getBoundingClientRect = () => ({ left: 0 });
+	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX }));
+	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
+}
+
+const DUOTONE_STOPS = ["rgba(255,107,53,0.42)", "rgba(255,107,53,0.12)", "rgba(46,196,182,0.44)"];
+
+function duotoneGradients(context) {
+	return context.gradients.filter((gradient) => gradient.kind === "linear" && DUOTONE_STOPS.every((stop) => gradient.stops.some((entry) => entry[1] === stop)));
+}
+
 test("the timeline preview applies the passed row video style plus the template-modal neon and VHS effects", (t) => {
 	const saved = makeTimelineState();
 	saved.projectId = "timeline-p_source_test-row-7";
@@ -727,33 +753,83 @@ test("the timeline preview applies the passed row video style plus the template-
 	const state = w.__TIMELINE_EDITOR_STATE__;
 	assert.equal(state.videoStyle, "Retro Poster", "the Quick Batch row style arrives in the timeline details");
 	assert.match(w.document.getElementById("timeline-project-subtitle").textContent, /Retro Poster style/, "the heading details show the passed style");
+	assert.equal(state.projectDetail.style, "Retro Poster", "the project detail carries the row style");
+	assert.deepEqual(Array.from(state.projectDetail.effects), ["vhs"], "Retro Poster resolves to the VHS treatment");
 
 	/* the shared Quick Batch CSS filter still paints the background layer */
 	assert.match(TIMELINE_EDITOR_JS, /window\.__videoStyleFilter && "filter" in context/, "the row style's canvas filter is applied on Layer 0");
 	assert.match(TIMELINE_EDITOR_JS, /window\.__videoStyleFilter && "filter" in targetCtx/, "the export painter applies it too");
 	/* and the effects copied from the editor layout's template modal run off the same style */
-	assert.match(TIMELINE_EDITOR_JS, /function drawStyleEffects\(/, "the template-modal effect painter exists");
-	assert.match(TIMELINE_EDITOR_JS, /\/neon\/i\.test\(style\)/, "neon styles get the neon glow overlay");
-	assert.match(TIMELINE_EDITOR_JS, /\/retro\|vhs\|glitch\/i\.test\(style\)/, "retro/VHS styles get the scanline overlay");
+	assert.ok(TIMELINE_EDITOR_JS.includes("function drawStyleEffects("), "the template-modal effect painter exists");
+	assert.ok(TIMELINE_EDITOR_JS.includes("function styleEffectsFor("), "the row style resolves to a template-modal effect list");
+	assert.ok(TIMELINE_EDITOR_JS.includes('if (/neon/i.test(text)) list.push("neon")'), "neon styles get the neon glow overlay");
+	assert.ok(TIMELINE_EDITOR_JS.includes('if (/neon|retro|vhs|glitch/i.test(text)) list.push("vhs")'), "neon, retro and VHS styles get the scanline overlay");
+	assert.ok(TIMELINE_EDITOR_JS.includes('if (/duotone|cinematic/i.test(text)) list.push("duotone")'), "cinematic styles get the double gradient");
 
 	/* VHS scanlines: copied from template-scene-editor.ts style "glitch" */
-	const fillCalls = [];
-	const baseFillRect = previewContext.fillRect;
-	previewContext.fillRect = function (...args) { fillCalls.push(args); return baseFillRect.apply(this, args); };
-	const ruler = w.document.querySelector(".te-ruler");
-	ruler.getBoundingClientRect = () => ({ left: 0 });
-	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 15 }));
-	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
-	previewContext.fillRect = baseFillRect;
-	assert.ok(fillCalls.some((args) => args[2] >= 300 && args[3] <= 9), "the Retro Poster style draws rolling VHS scanline bands");
+	previewContext.rects.length = 0;
+	seekTo(w, 15);
+	assert.ok(previewContext.rects.some((args) => args[2] >= 300 && args[3] <= 9), "the Retro Poster style draws rolling VHS scanline bands");
+});
 
-	/* neon glow: copied from template-scene-editor.ts style "neon" */
-	previewContext.radials = 0;
-	previewContext.createRadialGradient = function () { previewContext.radials += 1; return { addColorStop() {} }; };
-	state.videoStyle = "Neon Night";
-	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 18 }));
-	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
-	assert.ok(previewContext.radials >= 1, "the Neon Night style draws the pink radial neon glow overlay");
+test("a Neon Night row applies the neon image effect together with the VHS effect on every scene", (t) => {
+	const saved = makeTimelineState();
+	saved.projectId = "timeline-p_source_test-row-7";
+	saved.videoStyle = "Neon Night";
+	saved.subtitles = [];
+	const { dom, w, previewContext } = openTimeline(saved);
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	assert.equal(state.videoStyle, "Neon Night");
+	assert.deepEqual(Array.from(state.videoStyleEffects), ["neon", "vhs"], "a neon row resolves to the neon glow plus the VHS bars");
+	assert.equal(state.scenes.length, 12);
+	assert.ok(state.scenes.every((scene) => scene.effects.join(",") === "neon,vhs"), "every one of the 12 scenes carries both effects");
+	assert.deepEqual(Array.from(state.projectDetail.effects), ["neon", "vhs"]);
+	assert.ok(state.projectDetail.scenes.every((scene) => scene.effects.join(",") === "neon,vhs"), "the project detail lists both effects on every scene");
+	assert.match(w.document.getElementById("timeline-project-subtitle").textContent, /neon glow \+ VHS scanlines/, "the heading names the effects");
+
+	/* the neon radial glow AND the rolling VHS bars are painted, scene after scene */
+	for (const clientX of [15, 105]) {
+		previewContext.gradients.length = 0;
+		previewContext.radials = 0;
+		previewContext.rects.length = 0;
+		seekTo(w, clientX);
+		assert.ok(previewContext.radials >= 1, "the neon pink radial glow is painted at " + clientX + "px");
+		assert.ok(
+			previewContext.gradients.some((gradient) => gradient.kind === "radial" && gradient.stops.some((entry) => entry[1] === "rgba(255,45,149,0.08)")),
+			"the neon glow uses the template modal's pink stop"
+		);
+		assert.ok(previewContext.rects.some((args) => args[2] >= 300 && args[3] <= 9), "the VHS scanline bands are painted at " + clientX + "px");
+	}
+});
+
+test("a Cinematic Film row paints the template-modal double gradient on every video and image scene", (t) => {
+	const saved = makeTimelineState();
+	saved.projectId = "timeline-p_source_test-row-7";
+	saved.videoStyle = "Cinematic Film";
+	saved.subtitles = [];
+	/* scene 1 is an image, scene 2 is a video clip: both must be treated */
+	saved.scenes[1].mediaType = "video";
+	saved.scenes[1].mediaAssetId = "asset-scene-2";
+	saved.tracks.find((track) => track.kind === "media").items[1].mediaType = "video";
+	const { dom, w, previewContext } = openTimeline(saved);
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	assert.equal(state.videoStyle, "Cinematic Film");
+	assert.deepEqual(Array.from(state.videoStyleEffects), ["duotone"], "Cinematic Film resolves to the double gradient");
+	assert.ok(state.scenes.every((scene) => scene.effects.join(",") === "duotone"), "all 12 scenes carry the double gradient");
+	assert.ok(state.scenes.some((scene) => scene.mediaType === "image") && state.scenes.some((scene) => scene.mediaType === "video"), "the project mixes image and video scenes");
+
+	/* seek into scene 1 (image) and scene 3 (video at 10s) and check both frames */
+	const pps = 18;
+	for (const seconds of [1, 10]) {
+		previewContext.gradients.length = 0;
+		seekTo(w, Math.round(seconds * pps));
+		const painted = duotoneGradients(previewContext);
+		assert.ok(painted.length >= 1, "the double gradient is painted at " + seconds + "s");
+		assert.deepEqual(painted[0].stops.map((entry) => entry[1]), DUOTONE_STOPS, "the double gradient uses the template modal's two colours");
+		assert.ok(painted[0].x0 !== painted[0].x1, "the double gradient is a moving horizontal gradient");
+	}
 });
 
 test("timeline chrome follows the site theme instead of hardcoded black", () => {
