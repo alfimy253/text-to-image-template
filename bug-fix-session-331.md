@@ -1492,4 +1492,4 @@ Honesty notes:
 - Branch: `arena/4d1103b2-text-to-image-template` (the only branch this section was written on).
 - The documented source of truth is the current code in this workspace; this file now matches it.
 - Focused suites 83/83 green; `tests/timeline-editor.test.mjs` 23/23; full-suite total 540 with a failure-name set identical to `62f046e`; `wrangler deploy --dry-run` compiles (2974.81 KiB / 1354.99 KiB gzip); `tsc --noEmit` unchanged at the 30 pre-existing `src/index.ts` diagnostics.
-- Commit: COMMIT_PLACEHOLDER.
+- Commit: `4118106` *"Section 16: bottom empty scroll layer, a new lane per text/graphic click, and canvas drag for text and graphics"* (this doc record follows in a second commit, the same pattern as 15.10).
