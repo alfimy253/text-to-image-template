@@ -997,3 +997,19 @@ Honesty notes:
 - Branch: `arena/3008d8cb-text-to-image-template` (the only branch this section was written on).
 - The documented source of truth is the current code in this workspace; this file now matches it.
 - No commit, push, merge or pull request was made as part of writing this section.
+
+## 12. Timeline controls, frame and video treatments (2026-11-06)
+
+### Request
+Add export in the timeline header and play/pause and export beneath the preview; constrain its height to 320px and match the studio theme. Make timeline edits immediately affect the canvas, add a draggable top seeker and an empty horizontal-scroll lane, preserve project frame orientation instead of always displaying 9:16, and apply video-style treatments to Quick Batch and editor output. Document the work here.
+
+### Changes
+- Quick Batch hands the selected frame dimensions, orientation and style into timeline project state, which is persisted with timing. Legacy projects without frame metadata default to landscape. The canvas buffer follows the stored dimensions (including intentional portrait or square projects); its stage is fixed at 320px and the shell uses studio theme tokens for its main surfaces and accent.
+- Added header and preview export controls, a second synchronized play/pause control, draggable ruler playhead, and a blank top lane that can be dragged horizontally. The existing clip timing changes redraw immediately; gaps no longer show the selected or first background clip. Paused video seeks to the playhead and redraws when seeking completes.
+- Timeline export records the current canvas in real time with MediaRecorder and mixes available timeline audio tracks via Web Audio. It downloads the browser-supported format, usually WebM; selected text outlines are omitted. It requires a browser supporting canvas capture and MediaRecorder, and the tab must remain open. Source-video audio and Quick Batch subtitle cues are not included in this timeline export. Browser codec and background-tab throttling can affect results.
+- Added shared CSS canvas-filter approximations for the Quick Batch style names, used for the table preview, timeline preview and shared renderer for Quick Batch and editor exports. The existing template filters are animation effects rather than a mapping for these Quick Batch style names, so these are new approximations, not exact template effects. Filters affect media rather than text overlays and depend on browser canvas filter support. The editor layout's own non-timeline asset previews are not styled by this change.
+
+### Verification and limitations
+- `node --import tsx --test tests/timeline-editor.test.mjs tests/quick-batch-table.test.mjs`: 26 passed, including a new frame persistence, seeking, gap and control test. Browser MediaRecorder/audio mixing and visual appearance were not exercised by these JSDOM tests.
+- `npx tsc --noEmit` still reports numerous existing errors in `src/index.ts`; it is not a clean project-wide check.
+- Timeline export is a real-time browser recording, not the existing Quick Batch MP4 encoder; it does not yet preserve subtitle cues or audio embedded in video clips. Theme coverage uses the application's theme tokens for major surfaces but some timeline track/inspector details retain their existing dark styling.

@@ -839,19 +839,22 @@ export const PAGE_MARKUP = `
 					<span id="timeline-project-subtitle">Adjust scene and element timing</span>
 				</div>
 				<span id="timeline-save-status" class="te-save-status" role="status" aria-live="polite">Local timing edits</span>
+				<button type="button" class="te-secondary" data-timeline-action="export">Export</button>
 				<button type="button" class="te-play te-primary" data-timeline-action="play">\u25b6 Play</button>
 			</div>
 
-			<!-- 1/3 — the full-width sticky preview canvas (400 px floor) -->
+			<!-- 1/3 — the full-width sticky preview canvas (320 px stage) -->
 			<section class="te-preview-panel" aria-label="Video preview">
 					<div class="te-panel-heading"><strong>Preview</strong><span id="timeline-current-scene">Scene 1</span></div>
 					<div class="te-preview-stage">
-						<canvas id="timeline-preview-canvas" width="720" height="1280" aria-label="Timeline preview canvas"></canvas>
+						<canvas id="timeline-preview-canvas" width="1280" height="720" aria-label="Timeline preview canvas"></canvas>
 						<div id="timeline-preview-placeholder" class="te-preview-placeholder">Select or upload media to preview this scene</div>
 					</div>
 					<div class="te-preview-controls">
 						<button type="button" data-timeline-action="restart" title="Return to the start">\u21ba</button>
 						<button type="button" data-timeline-action="step-back" title="Previous scene">\u2039</button>
+						<button type="button" class="te-play" data-timeline-action="play">Play</button>
+						<button type="button" data-timeline-action="export">Export</button>
 						<button type="button" data-timeline-action="step-forward" title="Next scene">\u203a</button>
 						<output id="timeline-time-readout">0:00 / 1:00</output>
 					</div>

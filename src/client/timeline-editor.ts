@@ -146,7 +146,9 @@ export const TIMELINE_EDITOR_JS = `
 		var suppressClick = false;
 		var pendingAudioTrackId = "";
 		var selectedSceneId = "";
-		var playButton = document.querySelector('[data-timeline-action="play"]');
+		var recorder = null;
+		var exportAudioContext = null;
+		var audioSources = Object.create(null);
 		var canvas = document.getElementById("timeline-preview-canvas");
 		var canvasContext = canvas && typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
 
@@ -236,6 +238,8 @@ export const TIMELINE_EDITOR_JS = `
 				projectId: pageId,
 				updatedAt: Date.now(),
 				durationSec: duration,
+				frame: { width: 1280, height: 720, orientation: "landscape" },
+				videoStyle: "Cinematic Film",
 				playheadSec: 0,
 				soundExpanded: false,
 				zoom: 1,
@@ -405,6 +409,8 @@ export const TIMELINE_EDITOR_JS = `
 				updatedAt: number(base.updatedAt, Date.now()),
 				sourcePageId: String(base.sourcePageId || transition && transition.sourcePageId || ""),
 				sourceRowId: String(base.sourceRowId || transition && transition.basicSettings && transition.basicSettings.id || ""),
+				frame: base.frame || transition && transition.timelineState && transition.timelineState.frame || { width: 1280, height: 720, orientation: "landscape" },
+				videoStyle: base.videoStyle || transition && transition.basicSettings && transition.basicSettings.style || "Cinematic Film",
 				durationSec: duration,
 				playheadSec: clamp(base.playheadSec, 0, duration),
 				soundExpanded: number(base.version, 1) >= 2 && base.soundExpanded === true,
@@ -506,7 +512,7 @@ export const TIMELINE_EDITOR_JS = `
 			if (!track || !track.items.length) return null;
 			var active = track.items.find(function (item) { return seconds >= item.startSec && seconds < item.startSec + item.durationSec; });
 			if (active) return active;
-			return track.items.find(function (item) { return String(item.id) === String(state.selectedItemId); }) || track.items[0];
+			return null;
 		}
 		function activeSceneAt(seconds) {
 			var media = activeMediaAt(seconds);
@@ -567,7 +573,7 @@ export const TIMELINE_EDITOR_JS = `
 				grid.style.setProperty("--te-content-width", width + "px");
 				grid.style.gridTemplateColumns = "156px var(--te-content-width)";
 			var interval = state.durationSec <= 30 ? 2 : state.durationSec <= 120 ? 5 : state.durationSec <= 360 ? 10 : state.durationSec <= 900 ? 30 : 60;
-			var html = '<div class="te-grid-corner">TRACKS</div><div class="te-ruler" style="width:' + width + 'px">';
+			var html = '<div class="te-grid-corner">SCROLL</div><div class="te-scroll-lane" data-scroll-lane style="width:' + width + 'px"></div><div class="te-grid-corner">TRACKS</div><div class="te-ruler" style="width:' + width + 'px">';
 			for (var tick = 0; tick <= state.durationSec; tick += interval) {
 				html += '<span class="te-ruler-tick" style="left:' + (tick * pps).toFixed(1) + 'px"><i></i>' + esc(formatTime(tick)) + '</span>';
 			}
@@ -1010,6 +1016,7 @@ export const TIMELINE_EDITOR_JS = `
 				var video = document.createElement("video");
 				video.muted = true; video.loop = true; video.playsInline = true; video.preload = "auto"; video.src = url;
 				video.addEventListener("loadeddata", function () { drawPreview(); });
+				video.addEventListener("seeked", function () { if (!isPlaying) drawPreview(); });
 				record.video = video;
 			}
 			assetMap[String(id)] = record;
@@ -1147,13 +1154,14 @@ export const TIMELINE_EDITOR_JS = `
 			Object.keys(assetMap).forEach(function (key) {
 				var candidate = assetMap[key];
 				if (!candidate.video) return;
-				if (!isPlaying || !active || !asset || candidate !== asset) {
+				if (!active || !asset || candidate !== asset) {
 					try { candidate.video.pause(); } catch (error) {}
 					return;
 				}
 				var offset = Math.max(0, seconds - active.startSec + number(active.trimStartSec, 0));
 				if (Number.isFinite(candidate.video.duration) && candidate.video.duration > 0) offset = offset % candidate.video.duration;
 				if (Math.abs(number(candidate.video.currentTime, 0) - offset) > 0.3 && !candidate.video.seeking) { try { candidate.video.currentTime = offset; } catch (error) {} }
+				if (!isPlaying) { try { candidate.video.pause(); } catch (error) {} return; }
 				if (candidate.video.paused) { var played = candidate.video.play(); if (played && typeof played.catch === "function") played.catch(function () {}); }
 			});
 		}
@@ -1183,26 +1191,29 @@ export const TIMELINE_EDITOR_JS = `
 			var context = canvasContext;
 			context.clearRect(0, 0, width, height);
 			var active = activeMediaAt(state.playheadSec);
-			var scene = active && active.sceneId ? sceneById(active.sceneId) : getSelectedMediaScene();
+			var scene = active && active.sceneId ? sceneById(active.sceneId) : null;
 			var asset = active && active.assetId ? assetMap[active.assetId] : null;
 			context.fillStyle = "#08090c"; context.fillRect(0, 0, width, height);
 			var drawn = false;
+		syncVideoPreview(active, active && active.visible !== false ? asset : null, state.playheadSec);
 			/* Layer 0 — the background layer. Pixabay stock and uploads land here. */
 			if (active && active.visible !== false && asset) {
+				context.save();
+				if (window.__videoStyleFilter && "filter" in context) context.filter = window.__videoStyleFilter(state.videoStyle);
 				if (asset.video) {
-					syncVideoPreview(active, asset, state.playheadSec);
 					drawn = asset.video.readyState >= 2 && drawImageCover(context, asset.video, width, height, active.fit || "cover");
 				}
 				else if (asset.image && asset.image.complete) drawn = drawImageCover(context, asset.image, width, height, active.fit || "cover");
+				context.restore();
 			}
-			if (!drawn) drawPlaceholder(context, width, height, scene);
+			if (!drawn && active) drawPlaceholder(context, width, height, scene);
 			/* Layers 1..4 — every text and graphic clip paints above the background. */
 			visualTracks().forEach(function (track) {
 				track.items.forEach(function (item) {
 					var live = state.playheadSec >= item.startSec && state.playheadSec < item.startSec + item.durationSec;
 					if (!live) return;
 					if (item.kind === "graphic" && item.visible !== false) drawGraphic(context, item, width, height);
-					if (item.kind === "text") drawText(context, item, width, height, String(item.id) === String(state.selectedItemId));
+					if (item.kind === "text") drawText(context, item, width, height, !recorder && String(item.id) === String(state.selectedItemId));
 				});
 			});
 			var placeholder = document.getElementById("timeline-preview-placeholder");
@@ -1223,6 +1234,7 @@ export const TIMELINE_EDITOR_JS = `
 				if (state.playheadSec >= state.durationSec) {
 					state.playheadSec = state.durationSec;
 					setPlaying(false);
+					if (recorder && recorder.state !== "inactive") recorder.stop();
 				}
 				updatePlayhead();
 				if (state.playheadSec > 0 && Math.floor(state.playheadSec) !== Math.floor(state.playheadSec - elapsed)) scheduleSave();
@@ -1233,7 +1245,7 @@ export const TIMELINE_EDITOR_JS = `
 		}
 		function setPlaying(value) {
 			isPlaying = Boolean(value);
-			if (playButton) playButton.textContent = isPlaying ? "Ⅱ Pause" : "▶ Play";
+			document.querySelectorAll('[data-timeline-action="play"]').forEach(function (button) { button.textContent = isPlaying ? "Ⅱ Pause" : "▶ Play"; });
 			if (isPlaying) previousFrameAt = performance.now();
 			syncAudioPlayback();
 			drawPreview();
@@ -1254,7 +1266,8 @@ export const TIMELINE_EDITOR_JS = `
 		}
 
 		function handleAction(action, target) {
-			if (action === "play") { setPlaying(!isPlaying); return; }
+			if (action === "export") { exportTimeline(); return; }
+			if (action === "play") { if (recorder) return; if (!isPlaying && state.playheadSec >= state.durationSec) setPlayhead(0, false); setPlaying(!isPlaying); return; }
 			if (action === "restart") { setPlaying(false); setPlayhead(0, true); return; }
 			if (action === "step-back") { moveScene(-1); return; }
 			if (action === "step-forward") { moveScene(1); return; }
@@ -1268,6 +1281,44 @@ export const TIMELINE_EDITOR_JS = `
 				var track = findTrack(target.getAttribute("data-track-toggle"));
 				if (track) { track.expanded = track.expanded === false; renderTimeline(); scheduleSave(); }
 			}
+		}
+		function seekAt(x, ruler) {
+			var pps = Math.max(14, Math.min(48, 1080 / Math.max(20, state.durationSec))) * clamp(state.zoom, 0.5, 2);
+			setPlayhead((x - ruler.getBoundingClientRect().left) / pps, true);
+		}
+		function exportTimeline() {
+			if (recorder) return;
+			if (!canvas.captureStream || typeof MediaRecorder === "undefined") { setStatus("Video export is not supported by this browser.", true); return; }
+			try {
+				setPlaying(false); setPlayhead(0, false);
+				var stream = canvas.captureStream(30);
+				var AudioCtx = window.AudioContext || window.webkitAudioContext;
+				if (AudioCtx) {
+					if (!exportAudioContext) exportAudioContext = new AudioCtx();
+					var destination = exportAudioContext.createMediaStreamDestination();
+					state.tracks.filter(function (track) { return track.kind === "audio"; }).forEach(function (track) { track.items.forEach(function (item) {
+						var asset = assetMap[item.assetId]; if (!asset || !asset.url) return;
+						var audio = audioMap[item.id] || (audioMap[item.id] = new Audio(asset.url));
+						var source = audioSources[item.id];
+						if (!source) { source = exportAudioContext.createMediaElementSource(audio); source.connect(exportAudioContext.destination); audioSources[item.id] = source; }
+						source.connect(destination);
+					}); });
+					destination.stream.getAudioTracks().forEach(function (track) { stream.addTrack(track); });
+					exportAudioContext.resume();
+				}
+				var chunks = []; recorder = new MediaRecorder(stream);
+				recorder.ondataavailable = function (event) { if (event.data.size) chunks.push(event.data); };
+				recorder.onstop = function () {
+					var type = recorder.mimeType || "video/webm";
+					var url = URL.createObjectURL(new Blob(chunks, { type: type }));
+					var link = document.createElement("a"); link.href = url; link.download = "timeline." + (type.indexOf("mp4") >= 0 ? "mp4" : "webm"); link.click();
+					setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+					stream.getTracks().forEach(function (track) { track.stop(); });
+					Object.keys(audioSources).forEach(function (id) { try { audioSources[id].disconnect(destination); } catch (error) {} });
+					recorder = null; setStatus("Export complete.", false);
+				};
+				recorder.start(); setStatus("Exporting in real time; keep this tab open. Timeline audio tracks are included; source-video audio and subtitles are not.", false); setPlaying(true);
+			} catch (error) { recorder = null; setStatus("Export failed: " + String(error.message || error), true); }
 		}
 		function bindEvents() {
 			var root = document.getElementById("timeline-editor");
@@ -1295,6 +1346,12 @@ export const TIMELINE_EDITOR_JS = `
 				setPlayhead((event.clientX - rect.left) / pps, true);
 			});
 			grid.addEventListener("pointerdown", function (event) {
+				var ruler = event.target && event.target.closest && event.target.closest(".te-ruler");
+				var scrollLane = event.target && event.target.closest && event.target.closest("[data-scroll-lane]");
+				if (ruler) {
+					activeDrag = { mode: "seek" }; seekAt(event.clientX, ruler); event.preventDefault(); return;
+				}
+				if (scrollLane) { activeDrag = { mode: "scroll", startX: event.clientX, scrollLeft: document.getElementById("timeline-scroll").scrollLeft }; event.preventDefault(); return; }
 				var clip = event.target && event.target.closest ? event.target.closest("[data-clip-id]") : null;
 				if (!clip) return;
 				var itemId = clip.getAttribute("data-clip-id");
@@ -1306,6 +1363,8 @@ export const TIMELINE_EDITOR_JS = `
 			});
 			document.addEventListener("pointermove", function (event) {
 				if (!activeDrag) return;
+				if (activeDrag.mode === "seek") { var ruler = grid.querySelector(".te-ruler"); if (ruler) seekAt(event.clientX, ruler); return; }
+				if (activeDrag.mode === "scroll") { document.getElementById("timeline-scroll").scrollLeft = activeDrag.scrollLeft - (event.clientX - activeDrag.startX); return; }
 				var found = findItem(activeDrag.id);
 				if (!found) return;
 				var pps = Math.max(14, Math.min(48, 1080 / Math.max(20, state.durationSec))) * clamp(state.zoom, 0.5, 2);
@@ -1399,6 +1458,10 @@ export const TIMELINE_EDITOR_JS = `
 			if (transition && transition.basicSettings && transition.basicSettings.script && !state.scenes.some(function (scene) { return scene.prompt; })) {
 				/* The scene list remains a timing scaffold; no pipeline or prompt request is run here. */
 				state.scenes.forEach(function (scene, index) { if (index === 0) scene.note = "Script is available in the Quick Batch row"; });
+			}
+			if (canvas) {
+				canvas.width = clamp(state.frame.width, 256, 3840);
+				canvas.height = clamp(state.frame.height, 256, 3840);
 			}
 			window.__TIMELINE_EDITOR_STATE__ = state;
 			var firstTrack = findTrack(state.selectedTrackId) || mediaTrack();

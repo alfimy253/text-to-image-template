@@ -6542,7 +6542,7 @@ export const APP_CSS = `
 
 		#tpl-modal .tm-gframe {
 			display: block;
-			aspect-ratio: 9 / 16;
+			aspect-ratio: auto;
 			border-radius: 8px;
 			overflow: hidden;
 			background: #000;
@@ -9055,7 +9055,7 @@ export const APP_CSS = `
 		/*
 		 * Session 331 (latest request) — the timeline page is a vertical stack,
 		 * not a fixed 100vh shell: the sticky preview canvas takes the full
-		 * width at the top (min 400px tall), the selected-element panel sits
+		 * width at the top (320px tall), the selected-element panel sits
 		 * directly under it, and the timeline dock closes the stack. The page
 		 * itself scrolls, so the dock can leave empty space below it on a tall
 		 * screen instead of being squeezed into the viewport.
@@ -9081,8 +9081,8 @@ export const APP_CSS = `
 			height: auto;
 			max-height: none;
 			overflow: visible;
-			background: #101116;
-			color: #f3f4f6;
+			background: var(--bg);
+			color: var(--text);
 		}
 
 		#studio-app.timeline-mode .app-main {
@@ -9104,21 +9104,21 @@ export const APP_CSS = `
 		}
 
 		.timeline-editor-shell {
-			--te-panel: #17191f;
-			--te-panel-raised: #1e2028;
-			--te-lane: #12141a;
+			--te-panel: var(--card);
+			--te-panel-raised: var(--card);
+			--te-lane: var(--bg);
 			--te-border: #30333d;
-			--te-muted: #969ba8;
-			--te-accent: #a6d85b;
-			--te-accent-ink: #151a0d;
+			--te-muted: var(--text);
+			--te-accent: var(--accent);
+			--te-accent-ink: var(--bg);
 			width: 100%;
 			min-height: 100vh;
 			min-height: 100dvh;
 			display: flex;
 			flex-direction: column;
 			overflow: visible;
-			background: #101116;
-			color: #f3f4f6;
+			background: var(--bg);
+			color: var(--text);
 			font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 		}
 
@@ -9139,7 +9139,7 @@ export const APP_CSS = `
 			gap: 14px;
 			padding: 9px 16px;
 			border-bottom: 1px solid var(--te-border);
-			background: #17191f;
+			background: var(--card);
 			box-shadow: 0 6px 16px rgba(0, 0, 0, .3);
 		}
 
@@ -9256,7 +9256,7 @@ export const APP_CSS = `
 			min-height: 0;
 			border-right: 0;
 			border-bottom: 1px solid var(--te-border);
-			background: #14161c;
+			background: var(--card);
 			box-shadow: 0 14px 28px rgba(0, 0, 0, .38);
 		}
 
@@ -9279,15 +9279,14 @@ export const APP_CSS = `
 		}
 
 		/*
-		 * The canvas area keeps a 400 px floor at every viewport and grows with a
-		 * tall screen (up to 720 px) so the full-width preview is as large as the
-		 * available height allows.
+		 * The preview stage stays 320 px high while its canvas preserves the project frame ratio.
 		 */
 		.te-preview-stage {
 			position: relative;
 			flex: 1 1 auto;
-			min-height: 400px;
-			height: clamp(400px, 52vh, 720px);
+			min-height: 320px;
+			max-height: 320px;
+			height: 320px;
 			display: flex;
 			align-items: center;
 			justify-content: center;
@@ -9298,9 +9297,7 @@ export const APP_CSS = `
 		}
 
 		/*
-		 * The canvas keeps its 9:16 drawing buffer and scales up to fill the
-		 * full-width stage, so the preview reads as a real video frame instead of
-		 * a small phone-sized thumbnail.
+		 * The drawing buffer uses the project dimensions and fits within the stage.
 		 */
 		.te-preview-stage canvas#timeline-preview-canvas {
 			display: block;
@@ -9308,7 +9305,7 @@ export const APP_CSS = `
 			height: auto;
 			max-width: 100%;
 			max-height: 100%;
-			aspect-ratio: 9 / 16;
+			aspect-ratio: auto;
 			object-fit: contain;
 			background: #08090c;
 		}
@@ -9346,6 +9343,7 @@ export const APP_CSS = `
 			font-size: 1.05rem;
 		}
 
+		 .te-preview-controls button[data-timeline-action="play"], .te-preview-controls button[data-timeline-action="export"] { width: auto; padding: 0 12px; font-size: .8rem; }
 		.te-preview-controls output {
 			margin-left: auto;
 			color: #d4d7df;
@@ -9650,7 +9648,7 @@ export const APP_CSS = `
 			max-height: none;
 			display: flex;
 			flex-direction: column;
-			background: #14161c;
+			background: var(--card);
 			overflow: hidden;
 		}
 
@@ -9758,11 +9756,14 @@ export const APP_CSS = `
 
 		.te-ruler {
 			position: sticky;
-			left: 156px;
-			background: #1b1e25;
+			left: auto;
+			background: var(--card);
 			overflow: hidden;
 		}
 
+		 .te-scroll-lane { height: 26px; background: var(--te-lane); cursor: grab; touch-action: pan-x; }
+		.te-ruler { cursor: pointer; touch-action: none; }
+		.te-ruler .te-playhead { pointer-events: auto; width: 12px; margin-left: -5px; cursor: ew-resize; background: var(--te-accent); }
 		.te-ruler-tick {
 			position: absolute;
 			top: 0;
@@ -10162,7 +10163,7 @@ export const APP_CSS = `
 				padding: 7px 6px;
 			}
 			.te-preview-stage {
-				min-height: 400px;
+				min-height: 320px;
 			}
 			.te-preview-note {
 				display: none;
@@ -10195,7 +10196,7 @@ export const APP_CSS = `
 				width: 132px;
 			}
 			.te-ruler {
-				left: 132px;
+				left: auto;
 			}
 			#timeline-track-grid {
 				grid-template-columns: 132px var(--te-content-width) !important;
