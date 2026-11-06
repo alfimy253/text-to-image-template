@@ -7514,6 +7514,134 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	const DEFAULT_SEO_IMAGE_STYLE =
 		"Cinematic Film";
 
+	/*
+	 * Template-modal image effects for a Quick Batch row style.
+	 *
+	 * The "Add video from template" modal in the editor layout paints its
+	 * image treatments on the canvas (template-scene-editor.ts
+	 * reelDrawBackground), so there is no CSS gradient to reuse - the
+	 * treatments themselves are the existing code:
+	 *
+	 *   duotone  the template modal's "Duotone gradient" style: a moving
+	 *            two-colour gradient (#ff6b35 -> #2ec4b6), i.e. the double
+	 *            gradient painted over the image or video frame
+	 *   neon     the "neon" style's pink radial glow (createRadialGradient)
+	 *   vhs      the "glitch" style / "Scanlines" effect: rolling black bars
+	 *
+	 * Requested mapping (session 331, section 15):
+	 *
+	 *   Cinematic Film  -> duotone (double gradient on video and image)
+	 *   Neon Night      -> neon + vhs (neon image effect together with VHS)
+	 *   Retro Poster    -> vhs
+	 *   anything else   -> the CSS filter only (window.__videoStyleFilter)
+	 *
+	 * The same list is stamped onto every scene of the timeline handoff so
+	 * the treatment is not a preview-only trick: every scene, every table
+	 * preview frame and every exported frame resolves the same names.
+	 */
+	const VIDEO_STYLE_EFFECT_LABELS = {
+		duotone: "double gradient",
+		neon: "neon glow",
+		vhs: "VHS scanlines"
+	};
+
+	function videoStyleEffects(style) {
+		const name =
+			String(style || "");
+		const effects = [];
+		if (
+			/duotone|cinematic/i.test(name) ||
+			name === DEFAULT_SEO_IMAGE_STYLE
+		) {
+			effects.push("duotone");
+		}
+		if (/neon/i.test(name)) effects.push("neon");
+		if (/neon|retro|vhs|glitch/i.test(name)) effects.push("vhs");
+		return effects;
+	}
+
+	window.__videoStyleEffects = videoStyleEffects;
+
+	window.__VIDEO_STYLE_EFFECT_LABELS = VIDEO_STYLE_EFFECT_LABELS;
+
+	function videoStyleEffectLabel(effects) {
+		return (Array.isArray(effects) ? effects : [])
+			.map(function (effect) {
+				return VIDEO_STYLE_EFFECT_LABELS[effect] || String(effect || "");
+			})
+			.filter(function (label) { return Boolean(label); })
+			.join(" + ");
+	}
+
+	window.__videoStyleEffectLabel = videoStyleEffectLabel;
+
+	/*
+	 * One painter for the three template-modal treatments above, copied from
+	 * reelDrawBackground() so every surface (Quick Batch table preview,
+	 * timeline preview, timeline MP4 export and the shared MP4 renderer)
+	 * paints the identical bytes. Guards keep bare canvas test doubles safe.
+	 *
+	 * Order matters and matches the modal: duotone gradient, then the neon
+	 * glow, then the rolling VHS bars.
+	 */
+	window.__paintVideoStyleEffects = function (context, width, height, seconds, style, effects) {
+		if (!context) return [];
+		const list =
+			Array.isArray(effects) && effects.length
+				? effects
+				: videoStyleEffects(style);
+		if (!list.length) return [];
+		const scale =
+			Math.max(0.5, Number(height || 0) / 720);
+		const time =
+			Math.max(0, Number(seconds) || 0);
+		if (
+			list.indexOf("duotone") !== -1 &&
+			typeof context.createLinearGradient === "function"
+		) {
+			const shift =
+				((time * 14) % 100) / 100;
+			const duo =
+				context.createLinearGradient(width * (shift - 0.5), 0, width * (shift + 1), 0);
+			duo.addColorStop(0, "rgba(255,107,53,0.42)");
+			duo.addColorStop(0.5, "rgba(255,107,53,0.12)");
+			duo.addColorStop(1, "rgba(46,196,182,0.44)");
+			context.save();
+			context.fillStyle = duo;
+			context.fillRect(0, 0, width, height);
+			context.restore();
+		}
+		if (
+			list.indexOf("neon") !== -1 &&
+			typeof context.createRadialGradient === "function"
+		) {
+			const glow =
+				context.createRadialGradient(width * 0.5, height * 0.5, width * 0.03, width * 0.5, height * 0.5, width * 0.72);
+			glow.addColorStop(0, "rgba(255,45,149,0.08)");
+			glow.addColorStop(1, "rgba(0,0,0,0.52)");
+			context.save();
+			context.fillStyle = glow;
+			context.fillRect(0, 0, width, height);
+			context.restore();
+		}
+		if (list.indexOf("vhs") !== -1) {
+			const effectLine =
+				Math.max(2, Math.round(2 * scale));
+			const gap =
+				Math.max(5, Math.round(7 * scale));
+			const scroll =
+				Math.floor((time * 24) % gap);
+			context.save();
+			context.globalAlpha = 0.3;
+			context.fillStyle = "rgba(0,0,0,0.72)";
+			for (let y = -gap; y < height + gap; y += gap) {
+				context.fillRect(0, y + scroll, width, effectLine);
+			}
+			context.restore();
+		}
+		return list;
+	};
+
 	// =========================================================
 	// MODULE 1c: quick-batch table (the studio's "table layout")
 	//
@@ -9174,6 +9302,16 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const slides = Array.isArray(row && row.slides) ? row.slides : [];
 		const prompts = Array.isArray(row && row.prompts) ? row.prompts : [];
 		/*
+		 * The row's video style is the project's visual treatment. It travels in
+		 * the project detail AND on the timeline state, and its template-modal
+		 * effect names are stamped onto EVERY scene, so the treatment is not a
+		 * first-scene or preview-only accident: cinematic rows carry the double
+		 * gradient on each video and image scene, neon rows carry the neon glow
+		 * plus the VHS bars on each scene.
+		 */
+		const videoStyle = row.style || "Cinematic Film";
+		const styleEffects = window.__videoStyleEffects(videoStyle);
+		/*
 		 * Subtitles are cue DATA, never timeline clips. The cues ride along in
 		 * timelineState.subtitles so the timeline preview can burn them onto
 		 * the canvas exactly where the voiceover says them, while the dock keeps
@@ -9229,6 +9367,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				mediaName: String(media && (media.stockFilename || media.blob && media.blob.stockFilename) || ""),
 				mediaSource: media && media.stockSource && media.stockSource.provider ? String(media.stockSource.provider) : (media ? "Pixabay" : "pending"),
 				prompt: String(prompts[index] || ""),
+				/* Every scene carries the row style's template-modal effects. */
+				effects: styleEffects.slice(),
+				videoStyle: videoStyle,
 				elements: []
 			};
 			mediaItems.push({
@@ -9285,7 +9426,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		return {
 			version: 3,
 			frame: batchRowDimensions(row),
-			videoStyle: row.style || "Cinematic Film",
+			videoStyle: videoStyle,
+			videoStyleEffects: styleEffects.slice(),
 			subtitles: subtitles,
 			durationSec: Math.min(3600, durationSec),
 			playheadSec: 0,
@@ -9306,10 +9448,57 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		};
 	}
 
+	/*
+	 * The project detail of the Edit handoff: everything the timeline page
+	 * needs to describe the project without running the pipeline. The video
+	 * style lives here (and in basicSettings and in timelineState.videoStyle)
+	 * together with the template-modal effect names resolved from it, so the
+	 * timeline editor receives the row's style as project data rather than
+	 * re-deriving it.
+	 */
+	function batchProjectDetail(row, timelineState) {
+		const style =
+			String(row && row.style || "Cinematic Film");
+		const frame =
+			timelineState && timelineState.frame ? timelineState.frame : batchRowDimensions(row);
+		return {
+			id: String(row && row.id != null ? row.id : ""),
+			rowId: String(row && row.id != null ? row.id : ""),
+			vid: String(row && row.vid || ""),
+			title: String(row && row.title || "").slice(0, 70),
+			topic: String(row && row.topic || "").slice(0, 160),
+			style: style,
+			effects: window.__videoStyleEffects(style),
+			effectLabel: window.__videoStyleEffectLabel(window.__videoStyleEffects(style)),
+			resolution: String(row && row.resolution || ""),
+			orientation: String(row && row.orientation || ""),
+			quality: String(row && row.quality || "balanced"),
+			frame: frame,
+			sceneCount: timelineState && Array.isArray(timelineState.scenes) ? timelineState.scenes.length : AUTO_MEDIA_TOTAL,
+			/*
+			 * Every scene keeps its own copy of the resolved effect list, so
+			 * the detail view can promise the treatment on all scenes without
+			 * walking the timeline model.
+			 */
+			scenes: (timelineState && Array.isArray(timelineState.scenes) ? timelineState.scenes : [])
+				.map(function (scene) {
+					return {
+						id: String(scene && scene.id || ""),
+						index: Number(scene && scene.index) || 0,
+						mediaType: String(scene && scene.mediaType || "image"),
+						startSec: Number(scene && scene.startSec) || 0,
+						durationSec: Number(scene && scene.durationSec) || 0,
+						effects: Array.isArray(scene && scene.effects) ? scene.effects.slice() : window.__videoStyleEffects(style)
+					};
+				})
+		};
+	}
+
 	function batchProjectJson(row) {
 		if (!row) return null;
 		const script = String(row.script || "");
 		const firstLine = script.split(/\\r?\\n/).find(function (line) { return line.trim(); }) || "";
+		const timelineState = batchTimelineState(row);
 		return {
 			version: 1,
 			transitionOnly: true,
@@ -9320,13 +9509,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				title: String(row.title || firstLine || "").slice(0, 70),
 				topic: String(row.topic || firstLine || "my video").slice(0, 160),
 				script: script,
-				style: row.style || "Cinematic Film",
+				style: timelineState.videoStyle,
 				minutes: Number(row.minutes) > 0 ? Number(row.minutes) : 1,
 				resolution: row.resolution || "",
 				orientation: row.orientation || "",
 				quality: row.quality || "balanced"
 			},
-			timelineState: batchTimelineState(row)
+			projectDetail: batchProjectDetail(row, timelineState),
+			timelineState: timelineState
 		};
 	}
 
@@ -9339,6 +9529,12 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		payload.sourcePageId = pipelineManagementStore.pageId;
 		payload.targetPageId = targetPageId;
 		payload.basicSettings.vid = row.vid || pipelineManagementStore.pageId + "-row-" + String(row.id);
+		/* The project detail carries the same identity, so the timeline can show it. */
+		if (payload.projectDetail) {
+			payload.projectDetail.vid = payload.basicSettings.vid;
+			payload.projectDetail.sourcePageId = payload.sourcePageId;
+			payload.projectDetail.targetPageId = targetPageId;
+		}
 		/* Large media blobs travel browser-to-browser through IndexedDB, never through localStorage or a URL. */
 		try {
 			/*
@@ -9378,7 +9574,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				"=" + encodeURIComponent(JSON.stringify({
 					v: 1, key: key, createdAt: payload.createdAt,
 					sourcePageId: payload.sourcePageId, targetPageId: payload.targetPageId,
-					vid: payload.basicSettings.vid
+					vid: payload.basicSettings.vid,
+					/* The mirror names the style too, so a handoff can be audited from the cookie alone. */
+					style: payload.projectDetail && payload.projectDetail.style || payload.basicSettings.style,
+					effects: payload.projectDetail && payload.projectDetail.effects || []
 				})) + "; Path=/; SameSite=Lax" +
 				(window.location && window.location.protocol === "https:" ? "; Secure" : "");
 		} catch (storageError) { }
@@ -11469,6 +11668,61 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
+	/*
+	 * Session 331, section 15: the Edit handoff carries the LIVE row values.
+	 *
+	 * syncBatchRowsFromDom() above only copies a control that was flagged
+	 * touched, and the Edit button itself fires no change event. Pressing the
+	 * edit icon therefore reads that row's current controls first, so the
+	 * video style the user sees in the row is the style that lands in the
+	 * project detail and in the timeline editor's project state.
+	 */
+	function syncBatchRowFromDom(row) {
+
+		if (!row) {
+
+			return null;
+
+		}
+
+		const tr =
+			document.querySelector('[data-batch-row="' + row.id + '"]');
+
+		if (!tr) {
+
+			return row;
+
+		}
+
+		/*
+		 * Only the script and the video style are re-read here. Those two are the
+		 * handoff's text and visual treatment; the frame controls already commit
+		 * on "change", and re-reading them would normalise a value the table
+		 * never displayed (for example a model value of "720p" that the select
+		 * renders as 1024 px).
+		 */
+		for (const field of ["script", "style"]) {
+
+			const element =
+				tr.querySelector('[data-batch-field="' + field + '"]');
+
+			if (!element) {
+
+				continue;
+
+			}
+
+			element._batchTouched =
+				true;
+
+			syncBatchRowInput(row, field, element, true);
+
+		}
+
+		return row;
+
+	}
+
 	async function generateBatchRows() {
 
 		if (batchRunBusy) {
@@ -12076,6 +12330,23 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					drawHeight
 				);
 				context.restore();
+
+			}
+
+			/*
+			 * Template-modal treatments for the row style, painted on the table
+			 * preview for every slide (video or image): cinematic rows get the
+			 * double gradient, neon rows get the neon glow plus VHS bars.
+			 */
+			if (window.__paintVideoStyleEffects) {
+
+				window.__paintVideoStyleEffects(
+					context,
+					width,
+					height,
+					localSeconds,
+					row.style
+				);
 
 			}
 
@@ -12782,7 +13053,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 					if (action === "edit") {
 
-						openBatchEditPage(row);
+						/* Read the row's live controls first: style, frame and script travel with the handoff. */
+						openBatchEditPage(syncBatchRowFromDom(row) || row);
 
 						return;
 
@@ -25071,6 +25343,28 @@ async function retryImagePromptFlow(n) {
 							dh
 						);
 						ctx.restore();
+
+					}
+
+
+					// =========================================
+					// TEMPLATE-MODAL STYLE TREATMENTS
+					//
+					// The same duotone double gradient / neon glow / VHS bars
+					// the table preview paints, so an exported MP4 matches the
+					// preview for every scene. They sit on the media and below
+					// the title and captions, exactly like the template modal.
+					// =========================================
+
+					if (window.__paintVideoStyleEffects) {
+
+						window.__paintVideoStyleEffects(
+							ctx,
+							WIDTH,
+							HEIGHT,
+							currentFrame / FPS,
+							renderContext && renderContext.videoStyle
+						);
 
 					}
 

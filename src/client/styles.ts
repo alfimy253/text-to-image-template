@@ -9320,6 +9320,8 @@ export const APP_CSS = `
 			aspect-ratio: auto;
 			object-fit: contain;
 			background: #08090c;
+			/* Text and graphic clips are dragged straight on this canvas. */
+			touch-action: none;
 		}
 
 		.te-preview-placeholder {
@@ -9823,6 +9825,69 @@ export const APP_CSS = `
 			background: var(--te-lane);
 			cursor: grab;
 			touch-action: pan-x;
+		}
+
+		/*
+		 * Bottom-most row of the dock: an EMPTY layer whose only job is to act
+		 * as the tracks' horizontal scroll bar. It reuses the lane look (same
+		 * tokens, same 80px grid, same height band) so it reads as one more
+		 * layer instead of a scrollbar widget, and its hint is sticky so the
+		 * lane still explains itself after the tracks have been panned.
+		 */
+		.te-track-scroll {
+			gap: 0;
+			padding-left: 10px;
+			background: var(--t-panel-3, #101116);
+			border-bottom: 1px solid var(--t-line-2, #282b33);
+		}
+
+		.te-track-scroll-label {
+			display: flex;
+			flex-direction: column;
+			gap: 1px;
+			pointer-events: none;
+			color: var(--t-muted, #9ea3af);
+			font-size: 0.58rem;
+			font-weight: 850;
+			letter-spacing: .1em;
+			white-space: nowrap;
+		}
+
+		.te-track-scroll-label small {
+			color: var(--t-muted, #8a8f9c);
+			font-size: 0.55rem;
+			font-weight: 600;
+			letter-spacing: .02em;
+		}
+
+		.te-scroll-layer {
+			position: relative;
+			display: flex;
+			align-items: center;
+			min-height: 44px;
+			border-bottom: 1px solid var(--t-line-2, #282b33);
+			background-color: var(--te-lane);
+			background-image: repeating-linear-gradient(90deg, transparent 0, transparent 80px, var(--t-line, rgba(255,255,255,.035)) 81px, var(--t-line, rgba(255,255,255,.035)) 82px);
+			cursor: grab;
+			touch-action: pan-x;
+		}
+
+		.te-scroll-layer:active {
+			cursor: grabbing;
+		}
+
+		.te-scroll-layer .te-scroll-hint {
+			position: sticky;
+			left: 8px;
+			margin-left: 8px;
+			padding: 4px 8px;
+			border: 1px dashed var(--t-line-2, #41444e);
+			border-radius: 6px;
+			background: var(--t-panel-2, rgba(32, 35, 43, .75));
+			pointer-events: none;
+			color: var(--t-muted, #a9aebb);
+			font-size: 0.6rem;
+			white-space: nowrap;
 		}
 
 		.te-ruler .te-playhead {

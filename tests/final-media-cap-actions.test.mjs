@@ -207,6 +207,56 @@ test("a Quick Batch row hands off one dummy text at 0:00 instead of caption clip
 	);
 });
 
+test("the edit icon passes the row's live video style into the project detail and the timeline handoff", () => {
+	let opened = "";
+	const { dom, w } = makeApp("https://studio.test/free", (win) => {
+		win.open = (href) => { opened = String(href); return null; };
+	});
+	test.after(() => dom.window.close());
+	const row = w.addBatchRow({ script: "Quiet rooftop gardens in the morning.", style: "Neon Night", minutes: 1 });
+	const tr = w.document.querySelector('[data-batch-row="' + row.id + '"]');
+	/* the user picks a new style; the click itself must read it even before a change event commits */
+	const styleSelect = tr.querySelector('[data-batch-field="style"]');
+	styleSelect.value = "Cinematic Film";
+	tr.querySelector('[data-batch-action="edit"]').click();
+
+	const payload = w.__BATCH_EDIT_PROJECT__;
+	assert.equal(row.style, "Cinematic Film", "the row model follows the control the user picked");
+	assert.equal(payload.basicSettings.style, "Cinematic Film", "the style lands in the transition-only basic settings");
+	assert.ok(payload.projectDetail, "the handoff now carries a project detail");
+	assert.equal(payload.projectDetail.style, "Cinematic Film", "the project detail carries the video style");
+	assert.deepEqual(Array.from(payload.projectDetail.effects), ["duotone"], "Cinematic Film resolves to the double gradient");
+	assert.equal(payload.projectDetail.effectLabel, "double gradient");
+	assert.equal(payload.projectDetail.sceneCount, 12);
+	assert.equal(payload.projectDetail.scenes.length, 12);
+	assert.ok(
+		payload.projectDetail.scenes.every((scene) => Array.from(scene.effects).join(",") === "duotone"),
+		"every scene in the project detail carries the double gradient"
+	);
+	assert.equal(payload.timelineState.videoStyle, "Cinematic Film", "the timeline state carries the same style");
+	assert.deepEqual(Array.from(payload.timelineState.videoStyleEffects), ["duotone"]);
+	assert.equal(payload.timelineState.scenes.length, 12);
+	assert.ok(
+		payload.timelineState.scenes.every((scene) => Array.from(scene.effects).join(",") === "duotone" && scene.videoStyle === "Cinematic Film"),
+		"all 12 timeline scenes are stamped with the style and its effects"
+	);
+	const key = new URL(opened, "https://studio.test").searchParams.get("projectEdit");
+	const stored = JSON.parse(w.localStorage.getItem("ytvs.transition-project.v1." + key));
+	assert.equal(stored.projectDetail.style, "Cinematic Film", "the stored handoff carries the project detail too");
+	assert.match(decodeURIComponent(w.document.cookie), /Cinematic Film/, "the short cookie mirror names the style");
+
+	/* a neon row asked for the neon image effect together with the VHS effect */
+	styleSelect.value = "Neon Night";
+	styleSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
+	tr.querySelector('[data-batch-action="edit"]').click();
+	assert.deepEqual(Array.from(w.__BATCH_EDIT_PROJECT__.projectDetail.effects), ["neon", "vhs"]);
+	assert.deepEqual(Array.from(w.__BATCH_EDIT_PROJECT__.timelineState.videoStyleEffects), ["neon", "vhs"]);
+	assert.ok(
+		w.__BATCH_EDIT_PROJECT__.timelineState.scenes.every((scene) => Array.from(scene.effects).join(",") === "neon,vhs"),
+		"a neon row applies the neon and VHS effects to all scenes"
+	);
+});
+
 test("the new page consumes project JSON for the transition only and restores basic settings", async () => {
 	const payload = {
 		version: 1,

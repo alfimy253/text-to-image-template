@@ -1182,3 +1182,314 @@ Programmatic pass over the timeline block in `src/client/styles.ts` (from `body.
 - Branch: `arena/88ef7082-text-to-image-template` (`active`); committed and pushed as `9873df0` *"Section 14: timeline subtitles on preview, studio theme trace, hidden subtitle layer, neon/VHS effects"* (7 files, +499/−100).
 - Validation set 77/77 green; full suite failure set identical to the base commit (no regressions); `wrangler deploy --dry-run` compiles (`2941.38 KiB / gzip: 1345.54 KiB`); `new Function(TIMELINE_EDITOR_JS)` / `new Function(APP_JS…)` syntax checks pass.
 - Known follow-ups: subtitle cues remain unselectable-by-design (the layer is invisible; there is no toggle to reveal it); `npx tsc --noEmit` remains unclean on `src/index.ts` from earlier sessions (30 errors, identical on the base commit).
+
+---
+
+## 15. Row video style into the project detail, and the template-modal effects on every scene (2026-11-06)
+
+This section records the newest request on branch `arena/4d1103b2-text-to-image-template`. It supersedes Section 14.6 for the effect set (the neon/VHS pair is no longer the whole story: the duotone double gradient is added and the effect list becomes project data). **The current code in this workspace is the source of truth.**
+
+The request, verbatim:
+
+> Study code and reference the md file #331 ... And when the edit icon on table layout rows are clicked the video style must be added to the project detail and passed to the time line editor ....and the video effects must be applied if cinematic is applied apply the double gradient on video and image using thee css on add video from template image effect. ....if neon was selected on row use vhs effects along with neon image effect these are already existing css code apply this to all scenes.......document the request in #331 md file and then study code and document them in 331 md file.....
+
+Split into four acceptance criteria:
+
+1. Pressing the ✎ action in a Quick Batch **table** row must put that row's **video style** into the **project detail** and pass it to the **timeline editor**.
+2. When the row style is **cinematic**, apply the **double gradient** from the "Add video from template" image effects to the **video and the image** frames.
+3. When the row style is **neon**, apply the **VHS effect together with the neon image effect**.
+4. Those treatments must be **applied to all scenes**, not just the preview or the first scene - and all of it documented here.
+
+### 15.1 Code study that drove the changes
+
+Read from the code, not from prose:
+
+| Question | Answer found in code (before this section) | Consequence |
+|---|---|---|
+| Did the Edit handoff already carry the style? | Yes, twice: `batchProjectJson()` set `basicSettings.style = row.style \|\| "Cinematic Film"` and `batchTimelineState()` set `videoStyle`. | The style arrived, but only as loose scalars. There was no project-detail object. |
+| Did a **project detail** exist? | No. `grep -rn "projectDetail"` over `src/` and `tests/` returned **zero hits**. | Criteria 1 could not be met by the old payload. |
+| Did the ✎ click read the live control? | No. The click handler called `openBatchEditPage(row)` with the model row. Only the `input`/`change` listeners called `syncBatchRowInput()`, and `syncBatchRowsFromDom()` re-read a control **only** when `_batchTouched` was set. | A style picked but not yet committed could be dropped from the handoff. |
+| Which effects did the timeline paint? | `drawStyleEffects()` (Section 14.6) painted the neon radial glow for `/neon/i` and the rolling scanlines for `/retro\|vhs\|glitch/i`, both keyed off the project-wide `state.videoStyle`. | No double gradient anywhere, and no per-scene effect data. |
+| Where does the "Add video from template" image effect live? | `src/client/template-scene-editor.ts` → `reelDrawBackground()`: the "Duotone gradient" block at L400 (`createLinearGradient` with `rgba(255,107,53,…)` → `rgba(46,196,182,…)`, i.e. the **double gradient**), the neon glow at L409 (`createRadialGradient`, pink `rgba(255,45,149,0.08)` → `rgba(0,0,0,0.52)`), and the VHS/scanline block at L416 (`globalAlpha 0.3`, 2 px bars on a 7 px pitch, scrolling with time). | All three are **canvas** painters. There is no CSS gradient or CSS filter for them in the repository. |
+| What CSS does exist for a row style? | `window.__videoStyleFilter(style)` (app-js L7497) - a ten-entry `contrast()/saturate()/hue-rotate()` map. | The CSS filter stays; the three modal treatments ride on top of it. |
+| Did Quick Batch paint the effects? | No. `batchPreviewTick()` (table Preview) and `generateMP4()` (the shared MP4 renderer) applied `__videoStyleFilter` only. | "Apply to all scenes" would have been false for the table layout and for every exported frame. |
+| Did scenes carry effect metadata? | No. `batchTimelineState()` scenes held only timing + media fields. | There was nowhere to say "this treatment applies to scene 7". |
+
+So the four criteria reduce to: **one style → effect mapping**, **one painter per effect**, **per-scene effect lists**, and **a project-detail carrier** for the style.
+
+### 15.2 Change 1 - the Edit click reads the live style and the handoff carries a project detail
+
+`src/client/app-js.ts`
+
+1. **`syncBatchRowFromDom(row)` (L11680).** The ✎ handler is now `openBatchEditPage(syncBatchRowFromDom(row) || row)`. It re-reads exactly two controls from that row's `<tr>`: `[data-batch-field="script"]` and `[data-batch-field="style"]`, so the payload can never carry a stale style. The other controls are deliberately **not** re-read: they already commit on `change`, and normalising them here would rewrite a value the table never displayed (a model value of `"720p"` renders as `1024` via `batchResolution()`, which would silently change an existing handoff contract).
+2. **`batchProjectDetail(row, timelineState)` (L9459).** New project-detail builder. It returns:
+   ```text
+   id, rowId, vid, title, topic,
+   style, effects[], effectLabel,
+   resolution, orientation, quality, frame,
+   sceneCount, scenes[] (id, index, mediaType, startSec, durationSec, effects[])
+   ```
+   `scenes[]` is the proof that the treatment is a project-wide promise, not a preview trick.
+3. **`batchProjectJson(row)`** now builds the timeline state once and uses `timelineState.videoStyle` for `basicSettings.style` (one source, not two), adds `projectDetail`, and `openBatchEditPage()` fills `projectDetail.vid`, `sourcePageId` and `targetPageId` once the stable row project id is allocated.
+4. **The short cookie mirror** gains `style` and `effects`, so a handoff can be audited from the cookie alone (its `createdAt` matching rule is unchanged).
+
+`src/client/timeline-editor.ts`
+
+5. **`normalizeProjectDetail(raw, fallback, scenes)` (L275)** validates and re-resolves `state.projectDetail`, including a per-scene `effects` list. `normalizeState()` populates it from `transition.projectDetail` (the new handoff) or synthesises it from `basicSettings` for an older payload.
+6. **The style resolution chain** in `normalizeState()` is now: saved `base.videoStyle` → `transition.projectDetail.style` → `transition.basicSettings.style` → `"Cinematic Film"`. Every scene also stores `videoStyle` beside its `effects`.
+7. **`updateProjectHeading()` (L2270)** prints the project detail: `Quick Batch row 7 · 12 scenes · Cinematic Film style · double gradient · browser-only timing`. The existing `/Retro Poster style/` contract still matches.
+8. **`api.getProjectDetail()` / `api.getStyleEffects()`** expose the detail and the resolver for deterministic debugging; `state.projectDetail` is persisted by the existing `persistNow()` because it is part of `state`.
+
+### 15.3 Change 2 - one effect mapping, shared by every surface
+
+`src/client/app-js.ts` (L7548, next to `__videoStyleFilter`):
+
+```text
+window.__videoStyleEffects(style) -> ["duotone"] | ["neon","vhs"] | ["vhs"] | []
+window.__VIDEO_STYLE_EFFECT_LABELS = { duotone: "double gradient", neon: "neon glow", vhs: "VHS scanlines" }
+window.__videoStyleEffectLabel(effects)
+window.__paintVideoStyleEffects(context, width, height, seconds, style, effects)
+```
+
+| Row style | Effects | What is painted |
+|---|---|---|
+| `Cinematic Film` (also anything matching `/duotone\|cinematic/i`) | `duotone` | the modal's **double gradient**: a moving `createLinearGradient` with `rgba(255,107,53,0.42)` → `rgba(255,107,53,0.12)` → `rgba(46,196,182,0.44)` |
+| `Neon Night` (anything matching `/neon/i`) | `neon` + `vhs` | the pink radial glow **and** the rolling black bars |
+| `Retro Poster` (anything matching `/retro\|vhs\|glitch/i`) | `vhs` | the rolling black bars |
+| any other style | none | the existing CSS filter only |
+
+`src/client/timeline-editor.ts` keeps `styleEffectsFor()` (L241) and `normalizeEffects()` (L257): the shared `window.__videoStyleEffects()` is consulted first, and `STYLE_EFFECT_FALLBACK` (`Cinematic Film → duotone`, `Neon Night → neon+vhs`, `Retro Poster → vhs`) keeps the timeline bundle standalone in the same guarded way it already uses `window.__videoStyleFilter`.
+
+### 15.4 Change 3 - the treatments are applied to all scenes
+
+1. **Handoff (`batchTimelineState()`):** `videoStyle` and `styleEffects` are computed once, every one of the 12 `scenes[]` is stamped with `effects: styleEffects.slice()` and `videoStyle`, and the timeline state carries `videoStyleEffects` at the root.
+2. **Timeline load (`normalizeState()`, `defaultTimeline()`):** every scene keeps (or receives) its own `effects` list, so a saved project, an old handoff and a bare `layout=timeline` page all behave the same.
+3. **Timeline painters:** `drawStyleEffects(context, width, height, seconds, scene)` (L1476) now takes the **scene**. `drawPreview()` passes the active scene and `paintTimelineFrameAt()` passes the scene for exported frames, so the seeker crossing scene 1 → scene 12 repaints the treatment every time. The order matches the modal: duotone → neon → VHS bars, above the background media and below text/graphics and subtitles.
+4. **Quick Batch table layout:** `batchPreviewTick()` and the shared MP4 renderer `generateMP4()` both call `window.__paintVideoStyleEffects(...)` after the media draw and before the title/captions. Scenes in the table Preview and every exported frame therefore carry the same double gradient / neon + VHS treatment as the timeline.
+
+### 15.5 Why the effect is canvas code, not CSS
+
+The request says "using the css on add video from template image effect". In this codebase the "Add video from template" image treatments are **not** CSS: `reelDrawBackground()` paints them with `createLinearGradient`, `createRadialGradient` and `fillRect` on a canvas. The only CSS-ish layer for a row style is `window.__videoStyleFilter()`, which is a canvas `filter` string, not a stylesheet gradient.
+
+Section 12/14 already took this reading ("the existing template filters are animation effects rather than a mapping for these Quick Batch style names"), and this section keeps it: the painters are **byte-faithful copies** of the modal blocks (colours, stop offsets, alpha, bar pitch, scroll rate), the CSS filter still runs on Layer 0, and **no CSS file was touched**. The two modal-only inputs the timeline cannot have - `bg.speed` for the VHS scroll and the per-scene `style` switch - are replaced by the project style and the playhead time, exactly as Section 14.6 did for the scanlines.
+
+### 15.6 Files touched in this section
+
+| File | Change |
+|---|---|
+| `src/client/app-js.ts` | `videoStyleEffects()`/`__videoStyleEffects`, `__VIDEO_STYLE_EFFECT_LABELS`, `__videoStyleEffectLabel`, `__paintVideoStyleEffects()`; `batchProjectDetail()`; `projectDetail` + style/effects in the cookie mirror; per-scene `effects`/`videoStyle` and root `videoStyleEffects` in `batchTimelineState()`; `batchProjectJson()` builds the timeline state once; `syncBatchRowFromDom()` + live style on the ✎ click; effect painting in `batchPreviewTick()` and `generateMP4()`. |
+| `src/client/timeline-editor.ts` | `STYLE_EFFECT_*` constants; `styleEffectsFor()`, `normalizeEffects()`, `effectLabel()`, `normalizeProjectDetail()`; style resolution chain incl. `projectDetail.style`; per-scene `effects`/`videoStyle` in `normalizeState()` and `defaultTimeline()`; `drawStyleEffects(…, scene)` with the duotone double gradient; scene-aware calls in `drawPreview()` / `paintTimelineFrameAt()`; heading prints the detail; `api.getProjectDetail()` / `api.getStyleEffects()`. |
+| `src/client/markup.ts` | Inspector hint and dock footer describe the style-driven treatments on all scenes and in the exported MP4. |
+| `tests/timeline-editor.test.mjs` | Canvas double now records `fillRect` calls and gradient stops; retro/VHS test updated; two new tests (neon + VHS on every scene, cinematic double gradient on image and video scenes); source assertions switched to `includes()` for the new resolver. |
+| `tests/final-media-cap-actions.test.mjs` | New test: the ✎ click carries the live style into `basicSettings`, `projectDetail` and `timelineState` (12 scenes stamped), for both a cinematic and a neon row. |
+| `bug-fix-session-331.md` | This section. |
+
+### 15.7 Verification
+
+```text
+node --import tsx --test tests/timeline-editor.test.mjs tests/quick-batch-table.test.mjs \
+  tests/final-media-cap-actions.test.mjs tests/template-composer.test.mjs \
+  tests/public-entry-points.test.mjs tests/editor-subtitles-parity.test.mjs     80 / 80 pass
+node --import tsx --test tests/timeline-editor.test.mjs                          20 / 20 pass
+node --import tsx --test tests/final-media-cap-actions.test.mjs                  11 / 11 pass
+new Function(APP_JS) / new Function(TIMELINE_EDITOR_JS)                          syntax OK
+full npm test (this tree)                                                        537 total / 490 pass / 41 fail / 6 cancelled
+full npm test (HEAD worktree, same sandbox)                                      534 total / 488 pass / 40 fail / 6 cancelled
+failure-identity diff vs HEAD                                                    identical, except one flaky voiceover test (below)
+npx tsc --noEmit --pretty false                                                  30 diagnostics, all src/index.ts (identical to HEAD)
+npx wrangler deploy --dry-run                                                    exit 0 - 2960.25 KiB (1350.96 KiB gzip)
+createHTML() served markup                                                       new hint + dock footer copy present
+```
+
+The three extra tests are this section's (+2 in `tests/timeline-editor.test.mjs`, +1 in `tests/final-media-cap-actions.test.mjs`). The failure-identity diff against a `git worktree` of HEAD is empty **except** `handleVoiceover strips bare URLs, fails over when MeloTTS returns empty output, heals WAV->MP3 container switches, and honors AbortSignal` in `tests/deep-debug-regressions.test.mjs`, which failed once inside the loaded full run and passes twice in isolation on **both** trees (an earlier full run of this tree matched HEAD exactly at 40 failures / 491 passes). It is a pre-existing load-sensitive test in a Worker/voiceover suite that this section does not touch.
+
+What the new tests actually assert:
+
+1. *"a Neon Night row applies the neon image effect together with the VHS effect on every scene"* - `state.videoStyleEffects === ["neon","vhs"]`, all 12 scenes and all 12 project-detail scenes carry `neon,vhs`, the heading names both, and seeking at 0.83 s **and** 5.8 s paints a radial gradient with the modal's `rgba(255,45,149,0.08)` stop **and** fillRects wider than 300 px with a height of 9 px or less (the rolling bars).
+2. *"a Cinematic Film row paints the template-modal double gradient on every video and image scene"* - `["duotone"]` on the project, on all 12 scenes, and a linear gradient whose three stops are exactly `rgba(255,107,53,0.42)`, `rgba(255,107,53,0.12)`, `rgba(46,196,182,0.44)` is repainted at 1 s (image scene) and 10 s (video scene), with different `x0`/`x1` (the gradient moves).
+3. *"the edit icon passes the row's live video style into the project detail and the timeline handoff"* - the style select is changed **without** dispatching `change`, the ✎ button is clicked, and `basicSettings.style`, `projectDetail.style/effects/effectLabel/sceneCount/scenes[]`, `timelineState.videoStyle/effects/scenes[]`, the localStorage payload and the cookie mirror all agree. A second pass with `change` dispatched and `Neon Night` selected yields `["neon","vhs"]` everywhere.
+
+Honesty notes:
+
+- The suite is **not** green and was never green: the 40 failures / 6 cancellations are the pre-existing Pixabay, relay, image-batch and e2e groups already listed in Sections 8.6, 10.8, 11.8 and 14.10. The HEAD worktree comparison in 15.7 shows the same failure set; the focused set is fully green.
+- Everything is verified in JSDOM with a recording canvas double. No real browser was available in this sandbox, so the visual weight of the double gradient and the neon + VHS pairing was not eyeballed frame by frame.
+- The double gradient is asserted by its **stops and its moving endpoints**, not by pixels: a canvas mock cannot rasterise.
+
+### 15.8 Notes, gotchas and deliberate decisions
+
+1. **Cross-realm `deepStrictEqual` strikes again.** `state.videoStyleEffects` and `state.projectDetail.effects` are arrays created inside the JSDOM realm, so every assertion goes through `Array.from(...)` (Section 14.7.6 found the same trap for cue objects).
+2. **Regex literals inside `assert.match` are fragile when the test is generated.** Source assertions that needed `\/` were switched to `TIMELINE_EDITOR_JS.includes('if (/neon/i.test(text)) list.push("neon")')`, which cannot be mangled by escaping layers.
+3. **`scene.effects` is load-time data.** Changing `state.videoStyle` in a live session does **not** re-stamp existing scenes (nothing in the UI changes the style today). A future style switcher must call `__videoStyleEffects()` and rewrite `scene.effects` for all scenes.
+4. **The Edit click re-reads only script + style.** Re-reading the frame controls would normalise a value the table never showed (`"720p"` → `1024`), changing a handoff contract that other tests pin.
+5. **Two painters, one mapping.** `__paintVideoStyleEffects()` lives in `app-js.ts` (used by the table preview and both MP4 renderers) and `drawStyleEffects()` lives in the timeline bundle. The duplication is deliberate and matches the existing `drawSubtitles` split: the timeline must paint without depending on a table-layout module, so the **mapping** is shared (`window.__videoStyleEffects`) while the **painting** is local with a fallback map.
+6. **Effects are painted with no media gate.** A scene whose blob has not decoded still gets the treatment over the placeholder, for the same reason as Section 14.5 (JSDOM never decodes media, and the treatment belongs to the style, not the asset).
+7. **No CSS and no server work.** `styles.ts`, all Worker routes, KV keys, cookies and the storage schemas are untouched; the only new persisted field is `state.projectDetail` inside the existing per-row `ytvs.timeline-editor.v1.<id>` record.
+8. **`bg.speed` stays modal-only.** The modal multiplies the scanline scroll and the duotone shift by `bg.speed`; the timeline uses the playhead time so exports stay deterministic.
+
+### 15.9 Still open
+
+1. **Real-browser eyeball.** The double gradient over a bright Pixabay photo, and the neon + VHS stack, are asserted structurally, not visually.
+2. **`row.style` and the canvas filter are not per scene.** `state.videoStyle` still drives `__videoStyleFilter` on Layer 0; a scene-level style override would need the filter call to read `scene.videoStyle` too.
+3. **The editor layout's non-timeline gallery previews remain unstyled** (unchanged boundary from Section 12) even though the shared `generateMP4()` renderer now paints the treatments.
+4. **A style switcher in the timeline does not exist**, so `scene.effects` cannot drift in practice - see 15.8.3 for what must happen if one is added.
+5. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10); `npx tsc --noEmit` still reports the long-standing `src/index.ts` diagnostics.
+
+### 15.10 Status
+
+- Branch: `arena/4d1103b2-text-to-image-template` (the only branch this section was written on); committed and pushed as `5e74958` *"Section 15: row video style into the project detail, template-modal double gradient and neon+VHS on every scene"*.
+- The documented source of truth is the current code in this workspace; this file now matches it.
+- Focused suites 80/80 green; full-suite failure identity identical to a HEAD worktree (one pre-existing load-sensitive voiceover test excepted, see 15.7); `wrangler deploy --dry-run` compiles (2960.25 KiB / 1350.96 KiB gzip); `tsc --noEmit` unchanged at the 30 pre-existing `src/index.ts` diagnostics.
+
+## 16. Timeline dock: an empty scroll layer at the bottom, a new lane per element, and text/graphics dragged on the preview canvas (2026-11-07)
+
+### 16.1 Request
+
+Four asks about the timeline editor page:
+
+1. Add an **extra layer, empty, at the bottom-most of the tracks**, whose job is to act as a **scroll bar** but which **looks only like a layer** - not like a scrollbar widget.
+2. Clicking **+ Text** or **+ Graphic** on the tracks must **produce a new layer on top of the existing layer**, with the text or graphic added to it (one new lane per added element, stacked above the previous lanes).
+3. When a **graphic or text is selected**, it must be **draggable on the preview video canvas**.
+4. That drag must **update the x / y points** of the element, and the inspector values must stay in sync.
+
+Scope decisions taken from the standing constraints: `bug-fix-session-331.md` is the only doc target, the current workspace code is the source of truth, existing CSS/canvas code is reused, and no new artwork was invented.
+
+### 16.2 Code study that drove the changes
+
+Read-only audit before any edit (`src/client/timeline-editor.ts`, `src/client/styles.ts`, `src/client/markup.ts`):
+
+1. `renderTimeline()` builds the dock HTML string. It emitted the pinned **`SCROLL` corner + `.te-scroll-lane[data-scroll-lane]` first, at the top** of `.te-track-grid`, then the ruler, the text/graphics group, the subtitle group, the background lane and the soundtrack group. The pan gesture lives in the **grid `pointerdown`** handler: `event.target.closest("[data-scroll-lane]")` sets `activeDrag = { mode: "scroll", startX, scrollLeft }`, and the `document` `pointermove` handler writes `document.getElementById("timeline-scroll").scrollLeft = activeDrag.scrollLeft - (event.clientX - activeDrag.startX)`. Any new element carrying `data-scroll-lane` therefore pans the dock for free.
+2. `addVisualElement(kind, targetTrack)` **reused** a lane: it fell back to `selectedTrack()`, then to `visualTracks()[0]`, then to `addVisualTrack()`. So **+ Text / + Graphic could not satisfy "a new layer on top"** without changing that path. `addVisualTrack()` **appends** to `state.tracks` (i.e. to the end of the visual group) and is capped by `MAX_VISUAL_TRACKS = 4`.
+3. Paint order in `drawPreview()`: Layer 0 is the pinned background lane, then visual lanes are painted **in state order**, so the **last** visual track in state paints **last = highest on the canvas**. No paint-order change was needed for "new lane on top"; only the **dock's reading order** had to be flipped.
+4. There was **no canvas item dragging anywhere** in the bundle. Text/graphic items carry `x`/`y` as 0-100 percentages (`text` defaults `50 / 78`, `graphic` defaults `50 / 50`) and the inspector exposes them through `addRange("X position"/"Y position", ...)`, whose callback is `item.x = value; drawPreview(); scheduleSave();`. `addRange` is `controlUI.addRange` (= `reelAddRange` from `template-scene-editor.ts`, which listens on `input` for live values) with a plain number-input fallback in JSDOM.
+5. `#timeline-preview-canvas` is inside `.te-preview-stage`, drawn into a fixed `1280x720` buffer and scaled by CSS (`max-width/max-height: 100%`, `object-fit: contain`), so a pointer must be converted through `getBoundingClientRect()` before it can be turned into percentages.
+
+### 16.3 Change 1 - the dock now closes with an empty scroll layer
+
+`renderTimeline()` appends one more row **after the soundtrack group, as the last row of the grid**:
+
+```html
+<div class="te-track-label te-track-scroll">
+  <span class="te-track-scroll-label">SCROLL LAYER<small>empty · drag to pan</small></span>
+</div>
+<div class="te-scroll-layer" data-scroll-lane data-scroll-layer="bottom"
+     style="width:<track width>px" title="Empty layer: drag left or right to scroll the tracks">
+  <span class="te-scroll-hint">Empty scroll layer · drag horizontally to pan the tracks</span>
+</div>
+```
+
+Deliberate properties:
+
+- **It looks like a lane.** `.te-scroll-layer` reuses the exact lane recipe: `background-color: var(--te-lane)`, the same `repeating-linear-gradient` 80 px grid, `min-height: 44px`, a bottom hairline, and the same 156 px sticky label column. Its hint is styled like the existing `.te-lane-empty-static` pill and is `position: sticky; left: 8px`, so it stays readable after the tracks have been panned.
+- **It is not a scrollbar widget.** No `overflow-x: scroll`, no `::-webkit-scrollbar` rules; the gesture is the same grab-drag the pinned lane already used (`cursor: grab` / `:active { cursor: grabbing }`, `touch-action: pan-x`).
+- **It is not a track.** It carries **no `.te-lane` class and no `data-lane-track`**, so it can never be selected, seeked on, moved, resized, deleted or counted as a lane; the existing `.te-lane` / `data-lane-track` lookups in the bundle and in the tests are untouched.
+- **It pans the dock with the code that already existed** - the grid `pointerdown` handler only needed the element to carry `data-scroll-lane`.
+
+The pinned `SCROLL` lane at the top is kept: the request was to *add* a layer, not to move the existing handle.
+
+### 16.4 Change 2 - every + Text / + Graphic opens a new lane on top
+
+`addVisualElementFromAction(kind)` (the handler behind `add-text` / `add-graphic`, shared by the track buttons and the selected-element header) changed from "reuse the selected lane" to:
+
+```text
+lanes < 4  -> addVisualTrack()  (appends to the visual group = highest layer), then addVisualElement(kind, created)
+lanes = 4  -> addVisualElement(kind, lanes[last]) and a status line that says the element
+              was added to the top layer because four lanes are already open
+```
+
+`renderTimeline()` also renders the visual lanes **in reverse state order** (`dockVisuals = visuals.slice().reverse()`), so the newest/highest lane is the **first lane under the TEXT & GRAPHICS header** and the oldest one sits directly above the background lane - the dock now reads top-down like the canvas. Nothing else changed: state order (paint order), the lane ids (`visual-<n>-<ts>`), the labels (`Text & graphics n`), the `n / 4` counter and the four-lane cap all behave as before.
+
+### 16.5 Change 3 - text and graphics are dragged on the preview canvas
+
+New block in the bundle (above `previewTick`), all geometry mirroring `drawText()` / `drawGraphic()`:
+
+- `canvasFrameSize()` / `canvasPointerPoint(event)` - convert `clientX/clientY` into the canvas **buffer** space through `getBoundingClientRect()`, so a CSS-scaled canvas still maps 1:1.
+- `itemBounds(item, width, height)` - the grab box. Graphic = a `size` square centred on its anchor; text = its line box (`fontSize * 1.2 * lines`, widest line at `0.6 * fontSize` per character) plus padding, offset by `align` (`left`/`center`/`right`), which is exactly where `drawText` paints.
+- `canvasDraggableEntries(seconds)` - every **visible** `text`/`graphic` clip whose start/duration window contains the playhead, **highest layer first**.
+- `canvasHitTest(point, seconds)` - first box that contains the pointer; if none does, the **selected** clip is returned when it is a live text/graphic, so a small element never needs pixel-perfect aiming.
+- `beginCanvasDrag / moveCanvasDrag / endCanvasDrag` - pointer flow:
+
+```text
+pointerdown  hit test -> chooseItem() if it was not the selection -> canvasDrag = {id, startX/Y, originX/Y, width, height}
+             cursor: grabbing, setPointerCapture when available
+pointermove  dx/dy in buffer px -> /width*100 -> + origin -> clamp 0..100 -> round to 0.1 -> item.x / item.y
+             drawPreview() + syncPositionControls(item); a 0.15 % dead zone keeps a plain click a click
+pointerup    renderInspector() + persistNow() + status "Text moved - x 55%, y 60%."
+```
+
+- Media and audio clips are **not** draggable: `canvasHitTest` only ever returns `text`/`graphic` entries, and the fallback requires the selected clip to be one of those, so a background clip can never be nudged.
+- If the selected text/graphic is **not live at the playhead**, the pointerdown writes a status line ("Move the playhead into this clip's time range before dragging it on the canvas.") instead of failing silently.
+- A selected graphic gets a **dashed selection box** (`drawSelectionBox`) so it reads as draggable; it is gated by `!recorder && !isExporting`, so exports and the table preview never carry it.
+- The canvas is registered with `pointerdown` / `pointermove` (hover sets `cursor: grab`) / `pointerup` / `pointercancel`, and the `document` `pointermove` handler now checks `canvasDrag` first so a drag survives the pointer leaving the canvas. `touch-action: none` was added to `canvas#timeline-preview-canvas` so the gesture works on touch screens.
+
+### 16.6 Change 4 - the inspector X/Y stays in sync with the drag
+
+The two position ranges are tagged by `tagPositionControl(input, "x" | "y")`, which only sets `data-te-position`. During a drag, `syncPositionControls(item)` writes the new percentage into the matching input and re-fires an `input` event, so the shared range control updates its own readout **and** the model through the same callback the slider uses. A `.te-inspector-note` line under the sliders tells the user the clip can be dragged ("Tip: drag this text clip directly on the preview canvas ..."), and the canvas `aria-label` / `title`, the preview note and the dock footer were updated to describe the drag and the scroll layer.
+
+### 16.7 Files touched in this section
+
+| File | Change |
+| --- | --- |
+| `src/client/timeline-editor.ts` | bottom scroll layer rows; reversed dock order for visual lanes; `addVisualElementFromAction` opens a lane per click; canvas drag block (`canvasFrameSize`, `canvasPointerPoint`, `textLines`, `itemBounds`, `canvasDraggableEntries`, `canvasHitTest`, `beginCanvasDrag`, `moveCanvasDrag`, `endCanvasDrag`, `syncPositionControls`, `drawSelectionBox`); `tagPositionControl`; canvas pointer listeners; `canvasDrag` state |
+| `src/client/styles.ts` | `.te-track-scroll`, `.te-track-scroll-label`, `.te-scroll-layer`, `.te-scroll-layer .te-scroll-hint`; `touch-action: none` on `canvas#timeline-preview-canvas` |
+| `src/client/markup.ts` | canvas `aria-label`/`title`, preview note, selected-element hint and dock footer copy for the new lane behaviour and the canvas drag |
+| `tests/timeline-editor.test.mjs` | +3 tests (scroll layer, lane per click, canvas drag); the two existing tests that assumed a single shared visual lane were updated |
+| `bug-fix-session-331.md` | this section |
+
+No Worker route, KV key, cookie, storage schema or persisted field changed: `x`/`y` were already part of the saved element, so a drag only rewrites existing data.
+
+### 16.8 Verification
+
+```text
+```text
+node --import tsx --test tests/timeline-editor.test.mjs tests/quick-batch-table.test.mjs \
+  tests/final-media-cap-actions.test.mjs tests/template-composer.test.mjs \
+  tests/public-entry-points.test.mjs tests/editor-subtitles-parity.test.mjs      83 / 83 pass
+node --import tsx --test tests/timeline-editor.test.mjs                           23 / 23 pass   (20 before this section)
+new Function(TIMELINE_EDITOR_JS)                                                  syntax OK
+createHTML() served markup                                                        SCROLL LAYER label, canvas drag aria-label/title, preview note and dock footer copy present
+full npm test (this tree)                                                         540 total / 494 pass / 40 fail / 6 cancelled   (759 s, exit 1)
+full npm test (worktree of 62f046e, same sandbox, run in parallel)                537 total / 491 pass / 40 fail / 6 cancelled   (exit 1)
+failure-name diff vs 62f046e                                                      empty - 46 "not ok" lines on both sides, identical set
+npx tsc --noEmit --pretty false                                                   30 diagnostics, all src/index.ts (identical to 62f046e)
+npx wrangler deploy --dry-run                                                     exit 0 - 2974.81 KiB (1354.99 KiB gzip); 62f046e was 2960.25 / 1350.96
+```
+
+The three extra tests are this section's own (+3 in `tests/timeline-editor.test.mjs`); nothing was added to or removed from any other suite, and the failing/cancelled sets are **identical** to the previous commit, so no pre-existing test changed state. The 40 failures / 6 cancellations are the same pre-existing Pixabay, relay, image-batch and e2e groups listed in Sections 8.6, 10.8, 11.8 and 14.10.
+```
+
+What the new tests assert:
+
+1. *"the dock ends in an empty scroll layer that pans the tracks and reads as one more layer"* - exactly two `[data-scroll-lane]` handles, `[data-scroll-layer="bottom"]` is the **last child** of the grid and sits **after** the background lane, it has no `.te-lane` class, no `data-lane-track`, no clips/playhead/empty-track button; the CSS block carries `var(--te-lane)`, the `repeating-linear-gradient` grid, `cursor: grab` and `min-height: 44px` but no scrollbar rules; the sticky hint exists; a pointerdrag on it moves `#timeline-scroll.scrollLeft` by exactly the pointer delta (120 px, then back to 0) and changes no clip.
+2. *"each + Text and + Graphic click opens a new lane on top of the lanes already open"* - one click = one new lane, the element lives in the new lane, the previous lane is untouched, the new lane is the **first** `.te-lane` row and the background stays the last, the counter reads `2 / 4` then `3 / 4`, the newest lane is above the previous one in state order, a manual lane brings it to `4 / 4`, a fifth element does **not** open a fifth lane but lands in the current top layer with a status message, and the scroll layer never enters the lane count.
+3. *"a selected text or graphic is dragged on the preview canvas and the drag writes the inspector x and y"* - the tagged X/Y inputs exist and start at `50 / 50`; a 64 x 72 px drag on a 1280 x 720 buffer writes exactly `55 / 60` into the item **and** into both inputs; an out-of-canvas drag clamps to `100 / 100`; the cursor is released and the status line reports `Graphic moved - x 55%, y 60%`; `size` is untouched; the saved element carries `x: 55, y: 60`; a text clip drags the same way (`40 / 78`, only the moved axis changes); and after selecting `media-1`, a pointer drag on the canvas moves nothing and keeps the media selection.
+
+Honesty notes:
+
+- The suite is still not green and never was: 40 failures / 6 cancellations, the same pre-existing groups as 62f046e (identical failure-name set, see the block above).
+- Everything is verified in JSDOM. jsdom ships no `PointerEvent`, so the tests dispatch `MouseEvent` objects with `pointerdown`/`pointermove`/`pointerup` type names, which the listeners handle identically. jsdom also does not clamp `scrollLeft`, which is why the pan assertion drags back to the **original** x instead of past 0.
+- The drag was not eyeballed in a real browser: the px -> % maths, the clamping, the inspector wiring and the persisted numbers are asserted, the *feel* (grab box size, cursor changes) is not.
+
+### 16.9 Notes, gotchas and deliberate decisions
+
+1. **Dock order is not state order any more.** State order is the paint order (last visual track paints last, on top); the dock lists visual lanes reversed so the highest layer is the top row. Anything that walks `.te-lane` in DOM order sees highest-first; anything that walks `state.tracks` still sees lowest-first.
+2. **The bottom scroll layer must never be a `.te-lane`.** Several existing tests and the bundle itself count/scan `.te-lane` and `data-lane-track`; reusing those hooks would have made the empty layer selectable, seekable and counted as a track.
+3. **+ Text now consumes a lane.** The old cap test looped three manual `addVisualTrack()` calls after one `addTextElement`; it now loops two, because the element action itself opens a lane. The cap itself (four) is unchanged.
+4. **The old "one shared lane" assumption was dropped in two tests.** `text and graphics continue rendering ...` and the cap test both used `state.tracks.find(kind === "visual")` to reach an element added later; with a lane per element the lookup has to span the visual lanes (`filter(...).flatMap(...)`). The production behaviour the tests were pinning (a clip keeps rendering for its full seconds-based range across scene boundaries) is unchanged.
+5. **`item.x` / `item.y` are the only new writers of position.** No new field, no schema bump: the drag writes the same percentages the sliders write, then `persistNow()` saves the existing record.
+6. **The graphic selection box is a preview-only affordance.** It is drawn in `drawPreview()` behind `!recorder && !isExporting`, exactly like the text selection stroke that already existed, so exports stay clean.
+7. **`syncPositionControls` re-fires `input` instead of calling the callback directly.** That keeps the range control's own `<output>` readout correct in the real UI (where `addRange` is `reelAddRange`) and is a no-op in the number-input fallback, where the model was already written by the drag.
+8. **No CSS variable was invented.** The new rules use the existing `--te-lane`, `--t-line`, `--t-line-2`, `--t-panel-2`, `--t-panel-3`, `--t-muted` tokens with the same fallbacks as their neighbours.
+
+### 16.10 Still open
+
+1. **Real-browser eyeball** of the drag feel and of the scroll layer's weight next to a real lane.
+2. **The four-lane cap still applies**, so the fifth `+ Text` lands in the current top lane instead of a fifth layer (by design, and the status line says so). Raising `MAX_VISUAL_TRACKS` would be a one-line change plus its test.
+3. **The drag is X/Y only** - no resize/rotate handles on the canvas, no keyboard nudging, and no snapping to the centre lines.
+4. **Media clips cannot be dragged**; the pinned background stays a cover-fit layer.
+5. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10), and `npx tsc --noEmit` still reports the long-standing `src/index.ts` diagnostics.
+
+### 16.11 Status
+- Branch: `arena/4d1103b2-text-to-image-template` (the only branch this section was written on).
+- The documented source of truth is the current code in this workspace; this file now matches it.
+- Focused suites 83/83 green; `tests/timeline-editor.test.mjs` 23/23; full-suite total 540 with a failure-name set identical to `62f046e`; `wrangler deploy --dry-run` compiles (2974.81 KiB / 1354.99 KiB gzip); `tsc --noEmit` unchanged at the 30 pre-existing `src/index.ts` diagnostics.
+- Commit: `4118106` *"Section 16: bottom empty scroll layer, a new lane per text/graphic click, and canvas drag for text and graphics"* (this doc record follows in a second commit, the same pattern as 15.10).

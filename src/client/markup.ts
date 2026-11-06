@@ -847,7 +847,7 @@ export const PAGE_MARKUP = `
 			<section class="te-preview-panel" aria-label="Video preview">
 					<div class="te-panel-heading"><strong>Preview</strong><span id="timeline-current-scene">Scene 1</span></div>
 					<div class="te-preview-stage">
-						<canvas id="timeline-preview-canvas" width="1280" height="720" aria-label="Timeline preview canvas"></canvas>
+						<canvas id="timeline-preview-canvas" width="1280" height="720" aria-label="Timeline preview canvas: drag a selected text or graphic to move it" title="Drag a selected text or graphic to change its X and Y"></canvas>
 						<div id="timeline-preview-placeholder" class="te-preview-placeholder">Select or upload media to preview this scene</div>
 					</div>
 					<div class="te-export-progress" id="timeline-export-progress" hidden aria-hidden="true"><div class="te-export-progress-bar" id="timeline-export-progress-bar"></div></div>
@@ -859,7 +859,7 @@ export const PAGE_MARKUP = `
 						<button type="button" data-timeline-action="step-forward" title="Next scene">\u203a</button>
 						<output id="timeline-time-readout">0:00 / 1:00</output>
 					</div>
-					<p class="te-preview-note" id="timeline-preview-note">Preview and timing changes stay in this browser.</p>
+					<p class="te-preview-note" id="timeline-preview-note">Preview and timing changes stay in this browser. Drag a selected text or graphic on the canvas to move it.</p>
 			</section>
 
 			<!-- 2/3 — the selected-element section always follows the preview -->
@@ -874,7 +874,7 @@ export const PAGE_MARKUP = `
 								<button type="button" id="timeline-delete-element" class="tm-scene-delete" data-timeline-action="delete" hidden disabled>Delete</button>
 							</div>
 						</div>
-						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it. The Pixabay background is the bottom layer; text and graphics always paint above it. Every video opens with one dummy text clip at 0:00 when it has no text or graphic yet. Subtitle cues follow the music: they paint on the preview, but their timeline layer stays hidden and read-only.</p>
+						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it. The Pixabay background is the bottom layer; text and graphics always paint above it. Every video opens with one dummy text clip at 0:00 when it has no text or graphic yet. Subtitle cues follow the music: they paint on the preview, but their timeline layer stays hidden and read-only. The row's video style is carried into this project and its template-modal treatment is painted on every scene: Cinematic Film paints the double gradient, Neon Night paints the neon glow together with the VHS bars. Every \uff0b Text or \uff0b Graphic click opens a new lane on top of the ones already open, and a selected text or graphic can be dragged straight on the preview canvas - that drag writes the same X and Y percentages the sliders show.</p>
 						<div id="timeline-element-selector" class="tm-scene-objects" aria-label="Scene elements"></div>
 						<div id="timeline-inspector" class="tm-scene-inspector"></div>
 						<div id="timeline-inspector-empty" class="te-inspector-empty">Choose a track or element to see its controls.</div>
@@ -895,7 +895,7 @@ export const PAGE_MARKUP = `
 				<div class="te-timeline-scroll" id="timeline-scroll">
 					<div class="te-track-grid" id="timeline-track-grid"></div>
 				</div>
-				<div class="te-dock-footer"><span>Text and graphics lanes stack above the pinned background layer, where every Pixabay image, GIF and upload lives. Subtitles paint on the preview but their layer is hidden here because cues follow the music and are not editable; Soundtrack starts collapsed and you can add up to four visual lanes.</span><span id="timeline-status" role="status" aria-live="polite"></span></div>
+				<div class="te-dock-footer"><span>Text and graphics lanes stack above the pinned background layer, where every Pixabay image, GIF and upload lives. Subtitles paint on the preview but their layer is hidden here because cues follow the music and are not editable; Soundtrack starts collapsed and you can add up to four visual lanes; the empty SCROLL LAYER at the very bottom is a lane too - drag it left or right to pan the tracks. The Quick Batch row style is project detail here, so its effects (double gradient for Cinematic Film, neon plus VHS for Neon Night) are painted on all scenes and in the exported MP4.</span><span id="timeline-status" role="status" aria-live="polite"></span></div>
 				<!-- Short tail: keeps the sticky preview pinned until the dock itself ends. -->
 				<div class="te-dock-tail" aria-hidden="true"></div>
 			</section>

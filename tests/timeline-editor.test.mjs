@@ -42,14 +42,27 @@ function makeTimelineState() {
 }
 
 function canvasContext() {
-	return {
+	const context = {
 		fillStyle: "", strokeStyle: "", lineWidth: 1, font: "", textAlign: "center", textBaseline: "middle",
-		clearRect() {}, fillRect() {}, strokeRect() {}, save() {}, restore() {},
+		globalAlpha: 1,
+		clearRect() {}, strokeRect() {}, save() {}, restore() {},
+		fillRect(...args) { context.rects.push(args); },
 		beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, arc() {}, translate() {}, rotate() {},
-		drawnTexts: [], fills: 0,
+		drawnTexts: [], fills: 0, rects: [], gradients: [], radials: 0,
 		fill() { this.fills++; }, stroke() {}, fillText(text) { this.drawnTexts.push(String(text)); }, drawImage() {},
-		createLinearGradient() { return { addColorStop() {} }; }
+		createLinearGradient(x0, y0, x1, y1) {
+			const gradient = { kind: "linear", x0, y0, x1, y1, stops: [], addColorStop(offset, color) { gradient.stops.push([offset, color]); } };
+			context.gradients.push(gradient);
+			return gradient;
+		},
+		createRadialGradient(x0, y0, r0, x1, y1, r1) {
+			const gradient = { kind: "radial", x0, y0, r0, x1, y1, r1, stops: [], addColorStop(offset, color) { gradient.stops.push([offset, color]); } };
+			context.gradients.push(gradient);
+			context.radials += 1;
+			return gradient;
+		}
 	};
+	return context;
 }
 
 function memoryIndexedDB() {
@@ -228,8 +241,10 @@ test("text and graphics continue rendering across background scene boundaries fo
 	assert.ok(media.items.some((item) => item.sceneId === "scene-2" && item.startSec <= state.playheadSec && state.playheadSec < item.startSec + item.durationSec), "the playhead is now in the next background scene");
 	assert.ok(previewContext.drawnTexts.includes("Your text here"), "text remains visible after crossing the original scene boundary");
 	assert.ok(previewContext.fills > 0, "a graphic clip also renders at a time in the next scene");
-	assert.equal(state.tracks.find((track) => track.kind === "visual").items.find((item) => item.id === "dummy-text-1").durationSec, 8);
-	assert.equal(state.tracks.find((track) => track.kind === "visual").items.find((item) => item.id === graphic.id).durationSec, 8);
+	/* the graphic opened a lane of its own, so look across the shared text/graphics lanes */
+	const visualItems = state.tracks.filter((track) => track.kind === "visual").flatMap((track) => track.items);
+	assert.equal(visualItems.find((item) => item.id === "dummy-text-1").durationSec, 8);
+	assert.equal(visualItems.find((item) => item.id === graphic.id).durationSec, 8);
 });
 
 test("Quick Batch media and voiceover Blobs transfer through IndexedDB, not localStorage", async (t) => {
@@ -263,7 +278,9 @@ test("scene and element timing changes persist; shared text/graphics lanes cap a
 	const added = api.addTextElement("A new caption");
 	assert.ok(added);
 	api.setItemTiming(added.id, 4, 5);
-	for (let index = 0; index < 3; index++) assert.ok(api.addVisualTrack());
+	/* ＋ Text opens a lane of its own, so two manual lanes bring the total to four. */
+	assert.equal(state.tracks.filter((track) => track.kind === "visual").length, 2);
+	for (let index = 0; index < 2; index++) assert.ok(api.addVisualTrack());
 	assert.equal(api.addVisualTrack(), null, "the maximum is four shared text/graphics lanes");
 	assert.equal(state.tracks.length, 8, "three audio, one media and four shared text/graphics tracks");
 	assert.equal(state.tracks.filter((track) => track.kind === "visual").length, 4);
@@ -717,6 +734,19 @@ test("subtitle cues paint on the timeline preview while their tracks layer stays
 	assert.ok(!previewContext.drawnTexts.includes("Across scene two"));
 });
 
+function seekTo(w, clientX) {
+	const ruler = w.document.querySelector(".te-ruler");
+	ruler.getBoundingClientRect = () => ({ left: 0 });
+	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX }));
+	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
+}
+
+const DUOTONE_STOPS = ["rgba(255,107,53,0.42)", "rgba(255,107,53,0.12)", "rgba(46,196,182,0.44)"];
+
+function duotoneGradients(context) {
+	return context.gradients.filter((gradient) => gradient.kind === "linear" && DUOTONE_STOPS.every((stop) => gradient.stops.some((entry) => entry[1] === stop)));
+}
+
 test("the timeline preview applies the passed row video style plus the template-modal neon and VHS effects", (t) => {
 	const saved = makeTimelineState();
 	saved.projectId = "timeline-p_source_test-row-7";
@@ -727,33 +757,83 @@ test("the timeline preview applies the passed row video style plus the template-
 	const state = w.__TIMELINE_EDITOR_STATE__;
 	assert.equal(state.videoStyle, "Retro Poster", "the Quick Batch row style arrives in the timeline details");
 	assert.match(w.document.getElementById("timeline-project-subtitle").textContent, /Retro Poster style/, "the heading details show the passed style");
+	assert.equal(state.projectDetail.style, "Retro Poster", "the project detail carries the row style");
+	assert.deepEqual(Array.from(state.projectDetail.effects), ["vhs"], "Retro Poster resolves to the VHS treatment");
 
 	/* the shared Quick Batch CSS filter still paints the background layer */
 	assert.match(TIMELINE_EDITOR_JS, /window\.__videoStyleFilter && "filter" in context/, "the row style's canvas filter is applied on Layer 0");
 	assert.match(TIMELINE_EDITOR_JS, /window\.__videoStyleFilter && "filter" in targetCtx/, "the export painter applies it too");
 	/* and the effects copied from the editor layout's template modal run off the same style */
-	assert.match(TIMELINE_EDITOR_JS, /function drawStyleEffects\(/, "the template-modal effect painter exists");
-	assert.match(TIMELINE_EDITOR_JS, /\/neon\/i\.test\(style\)/, "neon styles get the neon glow overlay");
-	assert.match(TIMELINE_EDITOR_JS, /\/retro\|vhs\|glitch\/i\.test\(style\)/, "retro/VHS styles get the scanline overlay");
+	assert.ok(TIMELINE_EDITOR_JS.includes("function drawStyleEffects("), "the template-modal effect painter exists");
+	assert.ok(TIMELINE_EDITOR_JS.includes("function styleEffectsFor("), "the row style resolves to a template-modal effect list");
+	assert.ok(TIMELINE_EDITOR_JS.includes('if (/neon/i.test(text)) list.push("neon")'), "neon styles get the neon glow overlay");
+	assert.ok(TIMELINE_EDITOR_JS.includes('if (/neon|retro|vhs|glitch/i.test(text)) list.push("vhs")'), "neon, retro and VHS styles get the scanline overlay");
+	assert.ok(TIMELINE_EDITOR_JS.includes('if (/duotone|cinematic/i.test(text)) list.push("duotone")'), "cinematic styles get the double gradient");
 
 	/* VHS scanlines: copied from template-scene-editor.ts style "glitch" */
-	const fillCalls = [];
-	const baseFillRect = previewContext.fillRect;
-	previewContext.fillRect = function (...args) { fillCalls.push(args); return baseFillRect.apply(this, args); };
-	const ruler = w.document.querySelector(".te-ruler");
-	ruler.getBoundingClientRect = () => ({ left: 0 });
-	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 15 }));
-	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
-	previewContext.fillRect = baseFillRect;
-	assert.ok(fillCalls.some((args) => args[2] >= 300 && args[3] <= 9), "the Retro Poster style draws rolling VHS scanline bands");
+	previewContext.rects.length = 0;
+	seekTo(w, 15);
+	assert.ok(previewContext.rects.some((args) => args[2] >= 300 && args[3] <= 9), "the Retro Poster style draws rolling VHS scanline bands");
+});
 
-	/* neon glow: copied from template-scene-editor.ts style "neon" */
-	previewContext.radials = 0;
-	previewContext.createRadialGradient = function () { previewContext.radials += 1; return { addColorStop() {} }; };
-	state.videoStyle = "Neon Night";
-	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 18 }));
-	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
-	assert.ok(previewContext.radials >= 1, "the Neon Night style draws the pink radial neon glow overlay");
+test("a Neon Night row applies the neon image effect together with the VHS effect on every scene", (t) => {
+	const saved = makeTimelineState();
+	saved.projectId = "timeline-p_source_test-row-7";
+	saved.videoStyle = "Neon Night";
+	saved.subtitles = [];
+	const { dom, w, previewContext } = openTimeline(saved);
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	assert.equal(state.videoStyle, "Neon Night");
+	assert.deepEqual(Array.from(state.videoStyleEffects), ["neon", "vhs"], "a neon row resolves to the neon glow plus the VHS bars");
+	assert.equal(state.scenes.length, 12);
+	assert.ok(state.scenes.every((scene) => scene.effects.join(",") === "neon,vhs"), "every one of the 12 scenes carries both effects");
+	assert.deepEqual(Array.from(state.projectDetail.effects), ["neon", "vhs"]);
+	assert.ok(state.projectDetail.scenes.every((scene) => scene.effects.join(",") === "neon,vhs"), "the project detail lists both effects on every scene");
+	assert.match(w.document.getElementById("timeline-project-subtitle").textContent, /neon glow \+ VHS scanlines/, "the heading names the effects");
+
+	/* the neon radial glow AND the rolling VHS bars are painted, scene after scene */
+	for (const clientX of [15, 105]) {
+		previewContext.gradients.length = 0;
+		previewContext.radials = 0;
+		previewContext.rects.length = 0;
+		seekTo(w, clientX);
+		assert.ok(previewContext.radials >= 1, "the neon pink radial glow is painted at " + clientX + "px");
+		assert.ok(
+			previewContext.gradients.some((gradient) => gradient.kind === "radial" && gradient.stops.some((entry) => entry[1] === "rgba(255,45,149,0.08)")),
+			"the neon glow uses the template modal's pink stop"
+		);
+		assert.ok(previewContext.rects.some((args) => args[2] >= 300 && args[3] <= 9), "the VHS scanline bands are painted at " + clientX + "px");
+	}
+});
+
+test("a Cinematic Film row paints the template-modal double gradient on every video and image scene", (t) => {
+	const saved = makeTimelineState();
+	saved.projectId = "timeline-p_source_test-row-7";
+	saved.videoStyle = "Cinematic Film";
+	saved.subtitles = [];
+	/* scene 1 is an image, scene 2 is a video clip: both must be treated */
+	saved.scenes[1].mediaType = "video";
+	saved.scenes[1].mediaAssetId = "asset-scene-2";
+	saved.tracks.find((track) => track.kind === "media").items[1].mediaType = "video";
+	const { dom, w, previewContext } = openTimeline(saved);
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	assert.equal(state.videoStyle, "Cinematic Film");
+	assert.deepEqual(Array.from(state.videoStyleEffects), ["duotone"], "Cinematic Film resolves to the double gradient");
+	assert.ok(state.scenes.every((scene) => scene.effects.join(",") === "duotone"), "all 12 scenes carry the double gradient");
+	assert.ok(state.scenes.some((scene) => scene.mediaType === "image") && state.scenes.some((scene) => scene.mediaType === "video"), "the project mixes image and video scenes");
+
+	/* seek into scene 1 (image) and scene 3 (video at 10s) and check both frames */
+	const pps = 18;
+	for (const seconds of [1, 10]) {
+		previewContext.gradients.length = 0;
+		seekTo(w, Math.round(seconds * pps));
+		const painted = duotoneGradients(previewContext);
+		assert.ok(painted.length >= 1, "the double gradient is painted at " + seconds + "s");
+		assert.deepEqual(painted[0].stops.map((entry) => entry[1]), DUOTONE_STOPS, "the double gradient uses the template modal's two colours");
+		assert.ok(painted[0].x0 !== painted[0].x1, "the double gradient is a moving horizontal gradient");
+	}
 });
 
 test("timeline chrome follows the site theme instead of hardcoded black", () => {
@@ -778,4 +858,175 @@ test("timeline chrome follows the site theme instead of hardcoded black", () => 
 	]) assert.ok(APP_CSS.includes(themed), "theme token with preserved fallback: " + themed);
 	/* the subtitle layer stays hidden on every theme */
 	assert.match(APP_CSS, /\.te-subtitle-lane\s*\{[^}]*display:\s*none/, "the subtitle lane is hidden by CSS");
+});
+
+function pointerEvent(target, type, x, y, windowRef) {
+	target.dispatchEvent(new windowRef.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+}
+
+function frameCanvas(canvas, width, height) {
+	canvas.getBoundingClientRect = () => ({ left: 0, top: 0, right: width, bottom: height, width, height, x: 0, y: 0 });
+}
+
+test("the dock ends in an empty scroll layer that pans the tracks and reads as one more layer", (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const grid = doc.getElementById("timeline-track-grid");
+
+	const handles = Array.from(doc.querySelectorAll("[data-scroll-lane]"));
+	assert.equal(handles.length, 2, "the pinned SCROLL lane and the new bottom layer are the dock's two pan handles");
+	const bottom = doc.querySelector('[data-scroll-layer="bottom"]');
+	assert.ok(bottom, "the bottom layer is marked as the bottom scroll layer");
+	assert.equal(bottom.className, "te-scroll-layer");
+	assert.equal(bottom.hasAttribute("data-lane-track"), false, "it is not a track");
+	assert.equal(bottom.classList.contains("te-lane"), false, "it never joins the track lane list");
+	assert.equal(bottom.querySelectorAll(".te-clip, .te-playhead, .te-lane-empty").length, 0, "the layer is empty: no clips, no playhead, no empty-track button");
+	assert.equal(grid.lastElementChild, bottom, "the scroll layer is the bottom-most row of the tracks");
+
+	const background = doc.querySelector('[data-lane-track="background-media"]');
+	assert.ok(background.compareDocumentPosition(bottom) & w.Node.DOCUMENT_POSITION_FOLLOWING, "it sits below the pinned background layer");
+	assert.equal(doc.querySelectorAll(".te-lane").length, 2, "the extra layer does not add a track lane");
+	const label = doc.querySelector(".te-track-scroll");
+	assert.ok(label, "the label column has a matching row");
+	assert.match(label.textContent, /SCROLL/i, "the label column names the layer");
+	assert.match(label.textContent, /empty/i, "the label says the layer is empty");
+
+	/* it looks like a lane instead of a scrollbar widget */
+	const base = APP_CSS.slice(APP_CSS.indexOf(".te-scroll-layer {"), APP_CSS.indexOf(".te-scroll-layer:active"));
+	assert.match(base, /background-color:\s*var\(--te-lane\)/, "the layer reuses the lane background token");
+	assert.match(base, /repeating-linear-gradient/, "the layer paints the same 80px lane grid");
+	assert.match(base, /cursor:\s*grab/, "the layer advertises the pan gesture with a grab cursor");
+	assert.match(base, /min-height:\s*44px/, "the layer is as tall as a lane band");
+	assert.doesNotMatch(base, /::-webkit-scrollbar|overflow-x:\s*scroll/, "it is not a scrollbar widget");
+	assert.match(APP_CSS, /\.te-scroll-layer \.te-scroll-hint\s*\{[^}]*position:\s*sticky/, "the hint stays readable after the tracks are panned");
+
+	/* dragging it pans the dock exactly like the pinned SCROLL lane */
+	const scroll = doc.getElementById("timeline-scroll");
+	frameCanvas(bottom, 900, 44);
+	pointerEvent(bottom, "pointerdown", 500, 20, w);
+	pointerEvent(doc, "pointermove", 380, 20, w);
+	assert.equal(scroll.scrollLeft, 120, "dragging the empty layer scrolls the tracks left");
+	pointerEvent(doc, "pointermove", 500, 20, w);
+	assert.equal(scroll.scrollLeft, 0, "dragging back returns to the start");
+	pointerEvent(doc, "pointerup", 500, 20, w);
+	assert.equal(doc.querySelectorAll(".te-clip").length, 15, "panning the empty layer changes no clip");
+	assert.equal(doc.querySelectorAll(".te-playhead").length >= 1, true);
+});
+
+test("each ＋ Text and ＋ Graphic click opens a new lane on top of the lanes already open", (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const api = w.__TIMELINE_EDITOR__;
+	const visuals = () => state.tracks.filter((track) => track.kind === "visual");
+	const dockOrder = () => Array.from(doc.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track"));
+
+	assert.equal(visuals().length, 1);
+	const firstLane = visuals()[0];
+	const firstLaneItems = firstLane.items.length;
+
+	doc.getElementById("timeline-add-text").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(visuals().length, 2, "one click opens exactly one new lane");
+	const textLane = visuals()[1];
+	assert.notEqual(textLane.id, firstLane.id);
+	assert.equal(textLane.items.length, 1, "the new text lives in the new lane");
+	assert.equal(textLane.items[0].kind, "text");
+	assert.equal(firstLane.items.length, firstLaneItems, "the existing lane is left alone");
+	assert.equal(dockOrder()[0], textLane.id, "the new lane is listed on top of the existing layer");
+	assert.equal(dockOrder()[dockOrder().length - 1], "background-media", "the pinned background stays the last track lane");
+	assert.equal(doc.getElementById("timeline-layer-count").textContent.trim(), "2 / 4");
+	assert.equal(state.selectedItemId, textLane.items[0].id, "the new element is selected");
+
+	doc.querySelector('[data-timeline-action="add-graphic"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(visuals().length, 3, "＋ Graphic opens its own lane too");
+	const graphicLane = visuals()[2];
+	assert.equal(graphicLane.items[0].kind, "graphic");
+	assert.equal(dockOrder()[0], graphicLane.id, "the newest lane is the topmost row");
+	assert.equal(doc.getElementById("timeline-layer-count").textContent.trim(), "3 / 4");
+
+	/* state order is the paint order: the newest lane paints last, i.e. on top */
+	assert.ok(state.tracks.indexOf(graphicLane) > state.tracks.indexOf(textLane), "the newest lane sits above the previous one in state order");
+	assert.ok(state.tracks.indexOf(graphicLane) > state.tracks.indexOf(firstLane));
+
+	assert.ok(api.addVisualTrack(), "a manual lane brings the count to four");
+	assert.equal(visuals().length, 4);
+	const topLane = visuals()[3];
+	assert.equal(doc.getElementById("timeline-layer-count").textContent.trim(), "4 / 4");
+	doc.getElementById("timeline-add-graphic").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(visuals().length, 4, "the four-lane cap still holds");
+	assert.equal(topLane.items.length, 1, "at the cap the new element lands in the current top layer");
+	assert.equal(topLane.items[0].kind, "graphic");
+	assert.match(doc.getElementById("timeline-status").textContent, /top layer/i, "the status line explains the cap");
+
+	assert.equal(doc.querySelectorAll(".te-lane").length, 5, "four text/graphics lanes plus the pinned background lane");
+	assert.equal(doc.querySelector('[data-scroll-layer="bottom"]').hasAttribute("data-lane-track"), false, "the scroll layer stays outside the lane count");
+});
+
+test("a selected text or graphic is dragged on the preview canvas and the drag writes the inspector x and y", (t) => {
+	const { dom, w, payload } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const api = w.__TIMELINE_EDITOR__;
+	const canvas = doc.getElementById("timeline-preview-canvas");
+	frameCanvas(canvas, 1280, 720);
+	state.playheadSec = 0;
+
+	const graphic = api.addGraphicElement();
+	assert.equal(state.selectedItemId, graphic.id);
+	const xInput = () => doc.querySelector('#timeline-inspector [data-te-position="x"]');
+	const yInput = () => doc.querySelector('#timeline-inspector [data-te-position="y"]');
+	assert.ok(xInput() && yInput(), "the inspector X and Y controls are tagged for the drag");
+	assert.equal(xInput().value, "50");
+	assert.equal(yInput().value, "50");
+	assert.ok(doc.querySelector("#timeline-inspector .te-inspector-note"), "the inspector tells the user the clip is draggable");
+
+	/* grab the graphic where it is painted: 50% of 1280 by 50% of 720 */
+	pointerEvent(canvas, "pointerdown", 640, 360, w);
+	assert.equal(canvas.style.cursor, "grabbing", "the canvas shows the dragging cursor");
+	pointerEvent(doc, "pointermove", 704, 432, w);
+	assert.equal(graphic.x, 55, "64px of 1280 is +5 percent");
+	assert.equal(graphic.y, 60, "72px of 720 is +10 percent");
+	assert.equal(xInput().value, "55", "the X slider follows the drag");
+	assert.equal(yInput().value, "60", "the Y slider follows the drag");
+	pointerEvent(doc, "pointermove", 1400, 900, w);
+	assert.equal(graphic.x, 100, "the drag clamps to the canvas edges");
+	assert.equal(graphic.y, 100);
+	pointerEvent(doc, "pointermove", 704, 432, w);
+	pointerEvent(doc, "pointerup", 704, 432, w);
+	assert.equal(canvas.style.cursor, "", "the cursor is released");
+	assert.match(doc.getElementById("timeline-status").textContent, /Graphic moved - x 55%, y 60%/, "the status line reports the new position");
+	assert.equal(graphic.size, 72, "dragging never resizes the clip");
+
+	/* the dragged percentages live on the saved element */
+	assert.equal(api.save(), true);
+	const saved = JSON.parse(w.localStorage.getItem("ytvs.timeline-editor.v1." + payload.targetPageId));
+	const savedGraphic = saved.scenes.flatMap((scene) => scene.elements).find((item) => item.id === graphic.id);
+	assert.equal(savedGraphic.x, 55);
+	assert.equal(savedGraphic.y, 60);
+
+	/* text clips drag the same way, and the anchor is their own default y of 78 */
+	const text = api.addTextElement("Drag me");
+	state.playheadSec = 0;
+	pointerEvent(canvas, "pointerdown", 640, Math.round(720 * 0.78), w);
+	pointerEvent(doc, "pointermove", 512, Math.round(720 * 0.78), w);
+	assert.equal(text.x, 40, "-128px of 1280 is -10 percent");
+	assert.equal(text.y, 78, "the drag keeps the axis it did not move");
+	assert.equal(xInput().value, "40");
+	pointerEvent(doc, "pointerup", 512, Math.round(720 * 0.78), w);
+	assert.match(doc.getElementById("timeline-status").textContent, /Text moved - x 40%, y 78%/);
+
+	/* a click on an invisible part of the canvas still re-selects nothing else: media is not draggable */
+	doc.querySelector('[data-clip-id="media-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(state.selectedItemId, "media-1");
+	const beforeX = text.x;
+	pointerEvent(canvas, "pointerdown", 300, 120, w);
+	pointerEvent(doc, "pointermove", 500, 320, w);
+	pointerEvent(doc, "pointerup", 500, 320, w);
+	assert.equal(text.x, beforeX, "media clips and empty canvas clicks never move a text clip");
+	assert.equal(state.selectedItemId, "media-1", "the media selection is kept");
+
+	assert.match(APP_CSS, /canvas#timeline-preview-canvas \{[^}]*touch-action:\s*none/, "the canvas opts out of native panning so the drag works on touch screens");
 });
