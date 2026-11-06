@@ -181,6 +181,7 @@ export const TIMELINE_EDITOR_JS = `
 		var previousFrameAt = 0;
 		var saveTimer = 0;
 		var activeDrag = null;
+		var canvasDrag = null;
 		var suppressClick = false;
 		var pendingAudioTrackId = "";
 		var selectedSceneId = "";
@@ -782,9 +783,17 @@ export const TIMELINE_EDITOR_JS = `
 			 * DOM and always the lowest layer on the canvas.
 			 */
 			var visuals = visualTracks();
+			/*
+			 * The dock reads top-down like the canvas: the LAST text/graphics
+			 * track in state order is the HIGHEST layer (it paints last in
+			 * drawPreview), so it is listed first here. A new ＋ Text or
+			 * ＋ Graphic click appends a lane, and that lane therefore lands on
+			 * top of the existing ones.
+			 */
+			var dockVisuals = visuals.slice().reverse();
 			html += '<div class="te-group-title te-group-visuals"><span class="te-group-label">TEXT &amp; GRAPHICS <small>' + visuals.length + ' / ' + MAX_VISUAL_TRACKS + ' lanes · above the background</small></span></div>';
 			html += '<div class="te-group-fill te-visual-actions"><button type="button" class="te-add-inline" data-timeline-action="add-text">＋ Text</button><button type="button" class="te-add-inline" data-timeline-action="add-graphic">＋ Graphic</button>' + playheadHtml(playheadLeft, false) + '</div>';
-			visuals.forEach(function (track) {
+			dockVisuals.forEach(function (track) {
 				html += '<div class="te-track-label' + (String(state.selectedTrackId) === String(track.id) ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(track.id) + '">' + esc(track.label) + '<small>' + (track.items.length ? track.items.length + (track.items.length === 1 ? " clip" : " clips") : "empty") + '</small></button></div>';
 				html += '<div class="te-lane te-visual-lane" data-lane-track="' + esc(track.id) + '" style="width:' + width + 'px">';
 				if (!track.items.length) html += '<span class="te-lane-empty-static">Use + Text or + Graphic to add an element</span>';
@@ -832,6 +841,17 @@ export const TIMELINE_EDITOR_JS = `
 					html += '</div>';
 				});
 			}
+			/*
+			 * Bottom-most row of the tracks: an EMPTY layer that works as the
+			 * dock's horizontal scroll handle. It looks like any other lane
+			 * (same label column, same lane grid) but it holds no clips and no
+			 * playhead, and dragging it pans #timeline-scroll exactly like the
+			 * SCROLL lane pinned at the top. It is deliberately NOT a .te-lane
+			 * and carries no data-lane-track, so it can never be selected,
+			 * seeked on, or confused with a real track.
+			 */
+			html += '<div class="te-track-label te-track-scroll"><span class="te-track-scroll-label">SCROLL LAYER<small>empty · drag to pan</small></span></div>';
+			html += '<div class="te-scroll-layer" data-scroll-lane data-scroll-layer="bottom" style="width:' + width + 'px" title="Empty layer: drag left or right to scroll the tracks"><span class="te-scroll-hint">Empty scroll layer · drag horizontally to pan the tracks</span></div>';
 			grid.innerHTML = html;
 			var duration = document.getElementById("timeline-duration-label");
 			if (duration) duration.textContent = formatTime(state.durationSec);
@@ -1027,6 +1047,13 @@ export const TIMELINE_EDITOR_JS = `
 			}
 		}
 
+		/* Marks an X/Y control so a canvas drag can move the same slider. */
+		function tagPositionControl(input, axis) {
+			if (!input || !input.setAttribute) return input;
+			input.setAttribute("data-te-position", axis);
+			return input;
+		}
+
 		function renderItemControls(inspector, track, item) {
 			var cap = Math.min(MAX_DURATION_SEC, Math.max(60, state.durationSec * 2, item.startSec + item.durationSec));
 			addSectionTitle(inspector, "Timing");
@@ -1061,8 +1088,12 @@ export const TIMELINE_EDITOR_JS = `
 				addColor(inspector, "Color", item.color || "#ffffff", function (value) { item.color = value; drawPreview(); scheduleSave(); });
 				addSelect(inspector, "Font", [["Sans", "sans"], ["Serif", "serif"], ["Mono", "mono"]], item.font || "sans", function (value) { item.font = value; drawPreview(); scheduleSave(); });
 				addSelect(inspector, "Alignment", [["Left", "left"], ["Center", "center"], ["Right", "right"]], item.align || "center", function (value) { item.align = value; drawPreview(); scheduleSave(); });
-				addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { item.x = value; drawPreview(); scheduleSave(); }, "%");
-				addRange(inspector, "Y position", item.y == null ? 78 : item.y, 0, 100, 1, function (value) { item.y = value; drawPreview(); scheduleSave(); }, "%");
+				tagPositionControl(addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { item.x = value; drawPreview(); scheduleSave(); }, "%"), "x");
+				tagPositionControl(addRange(inspector, "Y position", item.y == null ? 78 : item.y, 0, 100, 1, function (value) { item.y = value; drawPreview(); scheduleSave(); }, "%"), "y");
+				var textDragNote = document.createElement("div");
+				textDragNote.className = "te-inspector-note";
+				textDragNote.textContent = "Tip: drag this text clip directly on the preview canvas to set X and Y without the sliders.";
+				inspector.appendChild(textDragNote);
 				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { item.visible = value; drawPreview(); scheduleSave(); });
 				return;
 			}
@@ -1071,8 +1102,12 @@ export const TIMELINE_EDITOR_JS = `
 				addSelect(inspector, "Graphic", [["Circle", "circle"], ["Square", "square"], ["Triangle", "triangle"], ["Star", "star"], ["Heart", "heart"], ["Arrow", "arrow"]], item.graphic || "circle", function (value) { item.graphic = value; drawPreview(); scheduleSave(); });
 				addRange(inspector, "Size", item.size || 72, 12, 500, 1, function (value) { item.size = value; drawPreview(); scheduleSave(); }, "px");
 				addColor(inspector, "Color", item.color || "#7aac2b", function (value) { item.color = value; drawPreview(); scheduleSave(); });
-				addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { item.x = value; drawPreview(); scheduleSave(); }, "%");
-				addRange(inspector, "Y position", item.y == null ? 50 : item.y, 0, 100, 1, function (value) { item.y = value; drawPreview(); scheduleSave(); }, "%");
+				tagPositionControl(addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { item.x = value; drawPreview(); scheduleSave(); }, "%"), "x");
+				tagPositionControl(addRange(inspector, "Y position", item.y == null ? 50 : item.y, 0, 100, 1, function (value) { item.y = value; drawPreview(); scheduleSave(); }, "%"), "y");
+				var graphicDragNote = document.createElement("div");
+				graphicDragNote.className = "te-inspector-note";
+				graphicDragNote.textContent = "Tip: drag this graphic directly on the preview canvas to set X and Y without the sliders.";
+				inspector.appendChild(graphicDragNote);
 				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { item.visible = value; drawPreview(); scheduleSave(); });
 			}
 		}
@@ -1321,8 +1356,25 @@ export const TIMELINE_EDITOR_JS = `
 			setStatus("Added " + (file.name || track.label) + " to " + track.label + ".", false);
 		}
 
+		/*
+		 * ＋ Text / ＋ Graphic in the tracks (and the same actions in the
+		 * selected-element header) add a NEW layer on top of the existing
+		 * ones and drop the element into it. addVisualTrack() appends to the
+		 * visual group, which is the highest paint layer and the first lane
+		 * listed in the dock. At the four-lane cap the element goes into the
+		 * current top layer instead, and the status line says so.
+		 */
 		function addVisualElementFromAction(kind) {
-			return addVisualElement(kind, selectedTrack());
+			var lanes = visualTracks();
+			if (lanes.length >= MAX_VISUAL_TRACKS) {
+				var top = lanes[lanes.length - 1] || null;
+				if (!top) return null;
+				setStatus("Four text and graphics lanes are already open - the element is added to the top layer.", true);
+				return addVisualElement(kind, top);
+			}
+			var created = addVisualTrack();
+			if (!created) return null;
+			return addVisualElement(kind, created);
 		}
 		function getSelectedMediaScene() {
 			var item = activeMediaAt(state.playheadSec);
@@ -1559,7 +1611,11 @@ export const TIMELINE_EDITOR_JS = `
 				track.items.forEach(function (item) {
 					var live = state.playheadSec >= item.startSec && state.playheadSec < item.startSec + item.durationSec;
 					if (!live) return;
-					if (item.kind === "graphic" && item.visible !== false) drawGraphic(context, item, width, height);
+					if (item.kind === "graphic" && item.visible !== false) {
+						drawGraphic(context, item, width, height);
+						/* The dashed box is the drag affordance; exports never carry it. */
+						if (!recorder && !isExporting && String(item.id) === String(state.selectedItemId)) drawSelectionBox(context, item, width, height);
+					}
 					if (item.kind === "text") drawText(context, item, width, height, !recorder && !isExporting && String(item.id) === String(state.selectedItemId));
 				});
 			});
@@ -1576,6 +1632,187 @@ export const TIMELINE_EDITOR_JS = `
 			syncAudioPlayback();
 			updateReadout();
 			if (isPlaying || shouldAnimatePreview()) schedulePreviewFrame();
+		}
+
+		/*
+		 * Drag-to-position on the preview canvas.
+		 *
+		 * A text or graphic clip can be dragged with the pointer: the pointer
+		 * position is converted back to the item's 0-100 % x/y anchors, which
+		 * is the same scale the inspector sliders use. Dragging therefore
+		 * updates the model, the inspector X/Y readouts and the stored
+		 * project metadata. Media and audio clips are never draggable.
+		 *
+		 * The geometry mirrors drawText() / drawGraphic() so the grab area is
+		 * where the element actually is on screen.
+		 */
+		function canvasFrameSize() {
+			return {
+				width: Math.max(1, Number(canvas && canvas.width) || 1280),
+				height: Math.max(1, Number(canvas && canvas.height) || 720)
+			};
+		}
+		function canvasPointerPoint(event) {
+			var frame = canvasFrameSize();
+			var rect = canvas && canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+			if (!rect) rect = { left: 0, top: 0, width: frame.width, height: frame.height };
+			var cssWidth = Math.max(1, Number(rect.width) || frame.width);
+			var cssHeight = Math.max(1, Number(rect.height) || frame.height);
+			return {
+				x: (Number(event && event.clientX) - Number(rect.left || 0)) * (frame.width / cssWidth),
+				y: (Number(event && event.clientY) - Number(rect.top || 0)) * (frame.height / cssHeight),
+				width: frame.width,
+				height: frame.height
+			};
+		}
+		function textLines(item) {
+			return String(item && item.text || "").split("\\n").slice(0, 8);
+		}
+		function itemBounds(item, width, height) {
+			var scale = Math.max(1, height / 720);
+			var anchorX = width * (number(item && item.x, 50) / 100);
+			var anchorY = height * (number(item && item.y, item && item.kind === "graphic" ? 50 : 78) / 100);
+			if (item && item.kind === "graphic") {
+				var size = Math.max(8, number(item.size, 72) * scale);
+				return { left: anchorX - size / 2, top: anchorY - size / 2, width: size, height: size };
+			}
+			var fontSize = Math.max(10, number(item && item.fontSize, 28) * scale);
+			var lines = textLines(item);
+			var lineHeight = fontSize * 1.2;
+			/* Rough advance width: wide enough to grab a caption, tight enough to miss empty pixels. */
+			var longest = 1;
+			lines.forEach(function (line) { longest = Math.max(longest, String(line).length); });
+			var boxWidth = clamp(longest * fontSize * 0.6, fontSize * 1.6, width);
+			var boxHeight = lineHeight * Math.max(1, lines.length);
+			var align = item && item.align || "center";
+			var left = align === "left" ? anchorX : align === "right" ? anchorX - boxWidth : anchorX - boxWidth / 2;
+			var pad = Math.max(6, fontSize * 0.35);
+			return { left: left - pad, top: anchorY - boxHeight / 2 - pad, width: boxWidth + pad * 2, height: boxHeight + pad * 2 };
+		}
+		function canvasDraggableEntries(seconds) {
+			var list = [];
+			/* Highest layer first: the last visual track paints last, so it wins a hit test. */
+			visualTracks().slice().reverse().forEach(function (track) {
+				track.items.forEach(function (item) {
+					if (!item || (item.kind !== "text" && item.kind !== "graphic")) return;
+					if (item.visible === false) return;
+					if (!(seconds >= item.startSec && seconds < item.startSec + item.durationSec)) return;
+					list.push({ track: track, item: item });
+				});
+			});
+			return list;
+		}
+		function canvasHitTest(point, seconds) {
+			var entries = canvasDraggableEntries(seconds);
+			for (var index = 0; index < entries.length; index++) {
+				var box = itemBounds(entries[index].item, point.width, point.height);
+				if (point.x >= box.left && point.x <= box.left + box.width && point.y >= box.top && point.y <= box.top + box.height) return entries[index];
+			}
+			/*
+			 * Nothing under the pointer: the SELECTED clip stays draggable so a
+			 * small element never needs pixel-perfect aiming.
+			 */
+			var selected = selectedEntry();
+			if (selected && selected.item && (selected.item.kind === "text" || selected.item.kind === "graphic") &&
+				selected.item.visible !== false &&
+				seconds >= selected.item.startSec && seconds < selected.item.startSec + selected.item.durationSec) return selected;
+			return null;
+		}
+		function beginCanvasDrag(event) {
+			if (!canvas || !state || isExporting || recorder) return;
+			if (event && Number(event.button) > 0) return;
+			var point = canvasPointerPoint(event);
+			var hit = canvasHitTest(point, state.playheadSec);
+			if (!hit) {
+				/*
+				 * A clip can only be dragged while the playhead is inside its
+				 * range, because that is when it is painted. Say so instead of
+				 * silently ignoring the pointer.
+				 */
+				var pending = selectedEntry();
+				var pendingItem = pending && pending.item;
+				if (pendingItem && (pendingItem.kind === "text" || pendingItem.kind === "graphic") && pendingItem.visible !== false &&
+					!(state.playheadSec >= pendingItem.startSec && state.playheadSec < pendingItem.startSec + pendingItem.durationSec)) {
+					setStatus("Move the playhead into this clip's time range before dragging it on the canvas.", true);
+				}
+				return;
+			}
+			if (String(state.selectedItemId) !== String(hit.item.id)) chooseItem(hit.track, hit.item);
+			canvasDrag = {
+				id: String(hit.item.id),
+				startX: point.x,
+				startY: point.y,
+				originX: number(hit.item.x, 50),
+				originY: number(hit.item.y, hit.item.kind === "graphic" ? 50 : 78),
+				width: point.width,
+				height: point.height,
+				moved: false
+			};
+			canvas.style.cursor = "grabbing";
+			if (event && event.pointerId != null && canvas.setPointerCapture) {
+				try { canvas.setPointerCapture(event.pointerId); } catch (error) {}
+			}
+			if (event && event.preventDefault) event.preventDefault();
+		}
+		function moveCanvasDrag(event) {
+			if (!canvasDrag || !state) return;
+			var point = canvasPointerPoint(event);
+			var deltaX = ((point.x - canvasDrag.startX) / Math.max(1, canvasDrag.width)) * 100;
+			var deltaY = ((point.y - canvasDrag.startY) / Math.max(1, canvasDrag.height)) * 100;
+			if (!canvasDrag.moved && Math.abs(deltaX) < 0.15 && Math.abs(deltaY) < 0.15) return;
+			var found = findItem(canvasDrag.id);
+			if (!found) { canvasDrag = null; return; }
+			canvasDrag.moved = true;
+			found.item.x = Math.round(clamp(canvasDrag.originX + deltaX, 0, 100) * 10) / 10;
+			found.item.y = Math.round(clamp(canvasDrag.originY + deltaY, 0, 100) * 10) / 10;
+			state.selectedTrackId = found.track.id;
+			state.selectedItemId = found.item.id;
+			drawPreview();
+			syncPositionControls(found.item);
+			if (event && event.preventDefault) event.preventDefault();
+		}
+		function endCanvasDrag() {
+			if (!canvasDrag) return;
+			var moved = canvasDrag.moved;
+			canvasDrag = null;
+			if (canvas) canvas.style.cursor = "";
+			if (!moved) return;
+			renderInspector();
+			persistNow();
+			var found = findItem(state && state.selectedItemId);
+			if (found) setStatus((found.item.kind === "graphic" ? "Graphic moved" : "Text moved") + " - x " + found.item.x + "%, y " + found.item.y + "%.", false);
+		}
+		/*
+		 * While the pointer moves, the inspector's X and Y controls show the
+		 * new percentages. Firing "input" lets the shared range control update
+		 * its own readout as well as the model.
+		 */
+		function syncPositionControls(item) {
+			var inspector = document.getElementById("timeline-inspector");
+			if (!inspector || !item) return;
+			["x", "y"].forEach(function (axis) {
+				var input = inspector.querySelector('[data-te-position="' + axis + '"]');
+				if (!input) return;
+				var value = axis === "x" ? number(item.x, 50) : number(item.y, 78);
+				var text = String(Math.round(value * 10) / 10);
+				if (String(input.value) === text) return;
+				input.value = text;
+				try {
+					var event = document.createEvent ? document.createEvent("Event") : null;
+					if (event) { event.initEvent("input", true, false); input.dispatchEvent(event); }
+				} catch (error) {}
+			});
+		}
+		/* A dashed box marks the selected graphic so it reads as draggable. */
+		function drawSelectionBox(context, item, width, height) {
+			var box = itemBounds(item, width, height);
+			if (typeof context.setLineDash === "function") context.setLineDash([6, 4]);
+			context.save();
+			context.strokeStyle = "#c8f36f";
+			context.lineWidth = Math.max(1, width / 720);
+			context.strokeRect(box.left, box.top, box.width, box.height);
+			context.restore();
+			if (typeof context.setLineDash === "function") context.setLineDash([]);
 		}
 
 		function previewTick(now) {
@@ -2194,6 +2431,8 @@ export const TIMELINE_EDITOR_JS = `
 				try { clip.setPointerCapture(event.pointerId); } catch (error) {}
 			});
 			document.addEventListener("pointermove", function (event) {
+				/* A canvas drag outlives the pointer leaving the canvas element. */
+				if (canvasDrag) { moveCanvasDrag(event); return; }
 				if (!activeDrag) return;
 				if (activeDrag.mode === "seek") { var ruler = grid.querySelector(".te-ruler"); if (ruler) seekAt(event.clientX, ruler); return; }
 				if (activeDrag.mode === "scroll") { document.getElementById("timeline-scroll").scrollLeft = activeDrag.scrollLeft - (event.clientX - activeDrag.startX); return; }
@@ -2208,7 +2447,25 @@ export const TIMELINE_EDITOR_JS = `
 				else itemTimingChanged(found, Math.max(0, activeDrag.startSec + delta), found.item.durationSec, false, true);
 				event.preventDefault();
 			});
+			/*
+			 * Preview canvas: click to select a text or graphic clip, then drag
+			 * it to set its X/Y percentages. Pointer capture keeps the drag
+			 * alive when the cursor leaves the canvas; the document-level
+			 * pointerup below is the safety net.
+			 */
+			if (canvas) {
+				canvas.addEventListener("pointerdown", function (event) { beginCanvasDrag(event); });
+				canvas.addEventListener("pointermove", function (event) {
+					if (canvasDrag) { moveCanvasDrag(event); return; }
+					if (!state || isExporting || recorder || !canvas.getBoundingClientRect) return;
+					var hover = canvasHitTest(canvasPointerPoint(event), state.playheadSec);
+					canvas.style.cursor = hover ? "grab" : "";
+				});
+				canvas.addEventListener("pointerup", function () { endCanvasDrag(); });
+				canvas.addEventListener("pointercancel", function () { endCanvasDrag(); });
+			}
 			document.addEventListener("pointerup", function () {
+				if (canvasDrag) endCanvasDrag();
 				if (!activeDrag) return;
 				if (activeDrag.moved) { persistNow(); setTimeout(function () { suppressClick = false; }, 0); }
 				activeDrag = null;

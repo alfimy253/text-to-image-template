@@ -1339,3 +1339,157 @@ Honesty notes:
 - Branch: `arena/4d1103b2-text-to-image-template` (the only branch this section was written on); committed and pushed as `5e74958` *"Section 15: row video style into the project detail, template-modal double gradient and neon+VHS on every scene"*.
 - The documented source of truth is the current code in this workspace; this file now matches it.
 - Focused suites 80/80 green; full-suite failure identity identical to a HEAD worktree (one pre-existing load-sensitive voiceover test excepted, see 15.7); `wrangler deploy --dry-run` compiles (2960.25 KiB / 1350.96 KiB gzip); `tsc --noEmit` unchanged at the 30 pre-existing `src/index.ts` diagnostics.
+
+## 16. Timeline dock: an empty scroll layer at the bottom, a new lane per element, and text/graphics dragged on the preview canvas (2026-11-07)
+
+### 16.1 Request
+
+Four asks about the timeline editor page:
+
+1. Add an **extra layer, empty, at the bottom-most of the tracks**, whose job is to act as a **scroll bar** but which **looks only like a layer** - not like a scrollbar widget.
+2. Clicking **+ Text** or **+ Graphic** on the tracks must **produce a new layer on top of the existing layer**, with the text or graphic added to it (one new lane per added element, stacked above the previous lanes).
+3. When a **graphic or text is selected**, it must be **draggable on the preview video canvas**.
+4. That drag must **update the x / y points** of the element, and the inspector values must stay in sync.
+
+Scope decisions taken from the standing constraints: `bug-fix-session-331.md` is the only doc target, the current workspace code is the source of truth, existing CSS/canvas code is reused, and no new artwork was invented.
+
+### 16.2 Code study that drove the changes
+
+Read-only audit before any edit (`src/client/timeline-editor.ts`, `src/client/styles.ts`, `src/client/markup.ts`):
+
+1. `renderTimeline()` builds the dock HTML string. It emitted the pinned **`SCROLL` corner + `.te-scroll-lane[data-scroll-lane]` first, at the top** of `.te-track-grid`, then the ruler, the text/graphics group, the subtitle group, the background lane and the soundtrack group. The pan gesture lives in the **grid `pointerdown`** handler: `event.target.closest("[data-scroll-lane]")` sets `activeDrag = { mode: "scroll", startX, scrollLeft }`, and the `document` `pointermove` handler writes `document.getElementById("timeline-scroll").scrollLeft = activeDrag.scrollLeft - (event.clientX - activeDrag.startX)`. Any new element carrying `data-scroll-lane` therefore pans the dock for free.
+2. `addVisualElement(kind, targetTrack)` **reused** a lane: it fell back to `selectedTrack()`, then to `visualTracks()[0]`, then to `addVisualTrack()`. So **+ Text / + Graphic could not satisfy "a new layer on top"** without changing that path. `addVisualTrack()` **appends** to `state.tracks` (i.e. to the end of the visual group) and is capped by `MAX_VISUAL_TRACKS = 4`.
+3. Paint order in `drawPreview()`: Layer 0 is the pinned background lane, then visual lanes are painted **in state order**, so the **last** visual track in state paints **last = highest on the canvas**. No paint-order change was needed for "new lane on top"; only the **dock's reading order** had to be flipped.
+4. There was **no canvas item dragging anywhere** in the bundle. Text/graphic items carry `x`/`y` as 0-100 percentages (`text` defaults `50 / 78`, `graphic` defaults `50 / 50`) and the inspector exposes them through `addRange("X position"/"Y position", ...)`, whose callback is `item.x = value; drawPreview(); scheduleSave();`. `addRange` is `controlUI.addRange` (= `reelAddRange` from `template-scene-editor.ts`, which listens on `input` for live values) with a plain number-input fallback in JSDOM.
+5. `#timeline-preview-canvas` is inside `.te-preview-stage`, drawn into a fixed `1280x720` buffer and scaled by CSS (`max-width/max-height: 100%`, `object-fit: contain`), so a pointer must be converted through `getBoundingClientRect()` before it can be turned into percentages.
+
+### 16.3 Change 1 - the dock now closes with an empty scroll layer
+
+`renderTimeline()` appends one more row **after the soundtrack group, as the last row of the grid**:
+
+```html
+<div class="te-track-label te-track-scroll">
+  <span class="te-track-scroll-label">SCROLL LAYER<small>empty · drag to pan</small></span>
+</div>
+<div class="te-scroll-layer" data-scroll-lane data-scroll-layer="bottom"
+     style="width:<track width>px" title="Empty layer: drag left or right to scroll the tracks">
+  <span class="te-scroll-hint">Empty scroll layer · drag horizontally to pan the tracks</span>
+</div>
+```
+
+Deliberate properties:
+
+- **It looks like a lane.** `.te-scroll-layer` reuses the exact lane recipe: `background-color: var(--te-lane)`, the same `repeating-linear-gradient` 80 px grid, `min-height: 44px`, a bottom hairline, and the same 156 px sticky label column. Its hint is styled like the existing `.te-lane-empty-static` pill and is `position: sticky; left: 8px`, so it stays readable after the tracks have been panned.
+- **It is not a scrollbar widget.** No `overflow-x: scroll`, no `::-webkit-scrollbar` rules; the gesture is the same grab-drag the pinned lane already used (`cursor: grab` / `:active { cursor: grabbing }`, `touch-action: pan-x`).
+- **It is not a track.** It carries **no `.te-lane` class and no `data-lane-track`**, so it can never be selected, seeked on, moved, resized, deleted or counted as a lane; the existing `.te-lane` / `data-lane-track` lookups in the bundle and in the tests are untouched.
+- **It pans the dock with the code that already existed** - the grid `pointerdown` handler only needed the element to carry `data-scroll-lane`.
+
+The pinned `SCROLL` lane at the top is kept: the request was to *add* a layer, not to move the existing handle.
+
+### 16.4 Change 2 - every + Text / + Graphic opens a new lane on top
+
+`addVisualElementFromAction(kind)` (the handler behind `add-text` / `add-graphic`, shared by the track buttons and the selected-element header) changed from "reuse the selected lane" to:
+
+```text
+lanes < 4  -> addVisualTrack()  (appends to the visual group = highest layer), then addVisualElement(kind, created)
+lanes = 4  -> addVisualElement(kind, lanes[last]) and a status line that says the element
+              was added to the top layer because four lanes are already open
+```
+
+`renderTimeline()` also renders the visual lanes **in reverse state order** (`dockVisuals = visuals.slice().reverse()`), so the newest/highest lane is the **first lane under the TEXT & GRAPHICS header** and the oldest one sits directly above the background lane - the dock now reads top-down like the canvas. Nothing else changed: state order (paint order), the lane ids (`visual-<n>-<ts>`), the labels (`Text & graphics n`), the `n / 4` counter and the four-lane cap all behave as before.
+
+### 16.5 Change 3 - text and graphics are dragged on the preview canvas
+
+New block in the bundle (above `previewTick`), all geometry mirroring `drawText()` / `drawGraphic()`:
+
+- `canvasFrameSize()` / `canvasPointerPoint(event)` - convert `clientX/clientY` into the canvas **buffer** space through `getBoundingClientRect()`, so a CSS-scaled canvas still maps 1:1.
+- `itemBounds(item, width, height)` - the grab box. Graphic = a `size` square centred on its anchor; text = its line box (`fontSize * 1.2 * lines`, widest line at `0.6 * fontSize` per character) plus padding, offset by `align` (`left`/`center`/`right`), which is exactly where `drawText` paints.
+- `canvasDraggableEntries(seconds)` - every **visible** `text`/`graphic` clip whose start/duration window contains the playhead, **highest layer first**.
+- `canvasHitTest(point, seconds)` - first box that contains the pointer; if none does, the **selected** clip is returned when it is a live text/graphic, so a small element never needs pixel-perfect aiming.
+- `beginCanvasDrag / moveCanvasDrag / endCanvasDrag` - pointer flow:
+
+```text
+pointerdown  hit test -> chooseItem() if it was not the selection -> canvasDrag = {id, startX/Y, originX/Y, width, height}
+             cursor: grabbing, setPointerCapture when available
+pointermove  dx/dy in buffer px -> /width*100 -> + origin -> clamp 0..100 -> round to 0.1 -> item.x / item.y
+             drawPreview() + syncPositionControls(item); a 0.15 % dead zone keeps a plain click a click
+pointerup    renderInspector() + persistNow() + status "Text moved - x 55%, y 60%."
+```
+
+- Media and audio clips are **not** draggable: `canvasHitTest` only ever returns `text`/`graphic` entries, and the fallback requires the selected clip to be one of those, so a background clip can never be nudged.
+- If the selected text/graphic is **not live at the playhead**, the pointerdown writes a status line ("Move the playhead into this clip's time range before dragging it on the canvas.") instead of failing silently.
+- A selected graphic gets a **dashed selection box** (`drawSelectionBox`) so it reads as draggable; it is gated by `!recorder && !isExporting`, so exports and the table preview never carry it.
+- The canvas is registered with `pointerdown` / `pointermove` (hover sets `cursor: grab`) / `pointerup` / `pointercancel`, and the `document` `pointermove` handler now checks `canvasDrag` first so a drag survives the pointer leaving the canvas. `touch-action: none` was added to `canvas#timeline-preview-canvas` so the gesture works on touch screens.
+
+### 16.6 Change 4 - the inspector X/Y stays in sync with the drag
+
+The two position ranges are tagged by `tagPositionControl(input, "x" | "y")`, which only sets `data-te-position`. During a drag, `syncPositionControls(item)` writes the new percentage into the matching input and re-fires an `input` event, so the shared range control updates its own readout **and** the model through the same callback the slider uses. A `.te-inspector-note` line under the sliders tells the user the clip can be dragged ("Tip: drag this text clip directly on the preview canvas ..."), and the canvas `aria-label` / `title`, the preview note and the dock footer were updated to describe the drag and the scroll layer.
+
+### 16.7 Files touched in this section
+
+| File | Change |
+| --- | --- |
+| `src/client/timeline-editor.ts` | bottom scroll layer rows; reversed dock order for visual lanes; `addVisualElementFromAction` opens a lane per click; canvas drag block (`canvasFrameSize`, `canvasPointerPoint`, `textLines`, `itemBounds`, `canvasDraggableEntries`, `canvasHitTest`, `beginCanvasDrag`, `moveCanvasDrag`, `endCanvasDrag`, `syncPositionControls`, `drawSelectionBox`); `tagPositionControl`; canvas pointer listeners; `canvasDrag` state |
+| `src/client/styles.ts` | `.te-track-scroll`, `.te-track-scroll-label`, `.te-scroll-layer`, `.te-scroll-layer .te-scroll-hint`; `touch-action: none` on `canvas#timeline-preview-canvas` |
+| `src/client/markup.ts` | canvas `aria-label`/`title`, preview note, selected-element hint and dock footer copy for the new lane behaviour and the canvas drag |
+| `tests/timeline-editor.test.mjs` | +3 tests (scroll layer, lane per click, canvas drag); the two existing tests that assumed a single shared visual lane were updated |
+| `bug-fix-session-331.md` | this section |
+
+No Worker route, KV key, cookie, storage schema or persisted field changed: `x`/`y` were already part of the saved element, so a drag only rewrites existing data.
+
+### 16.8 Verification
+
+```text
+```text
+node --import tsx --test tests/timeline-editor.test.mjs tests/quick-batch-table.test.mjs \
+  tests/final-media-cap-actions.test.mjs tests/template-composer.test.mjs \
+  tests/public-entry-points.test.mjs tests/editor-subtitles-parity.test.mjs      83 / 83 pass
+node --import tsx --test tests/timeline-editor.test.mjs                           23 / 23 pass   (20 before this section)
+new Function(TIMELINE_EDITOR_JS)                                                  syntax OK
+createHTML() served markup                                                        SCROLL LAYER label, canvas drag aria-label/title, preview note and dock footer copy present
+full npm test (this tree)                                                         540 total / 494 pass / 40 fail / 6 cancelled   (759 s, exit 1)
+full npm test (worktree of 62f046e, same sandbox, run in parallel)                537 total / 491 pass / 40 fail / 6 cancelled   (exit 1)
+failure-name diff vs 62f046e                                                      empty - 46 "not ok" lines on both sides, identical set
+npx tsc --noEmit --pretty false                                                   30 diagnostics, all src/index.ts (identical to 62f046e)
+npx wrangler deploy --dry-run                                                     exit 0 - 2974.81 KiB (1354.99 KiB gzip); 62f046e was 2960.25 / 1350.96
+```
+
+The three extra tests are this section's own (+3 in `tests/timeline-editor.test.mjs`); nothing was added to or removed from any other suite, and the failing/cancelled sets are **identical** to the previous commit, so no pre-existing test changed state. The 40 failures / 6 cancellations are the same pre-existing Pixabay, relay, image-batch and e2e groups listed in Sections 8.6, 10.8, 11.8 and 14.10.
+```
+
+What the new tests assert:
+
+1. *"the dock ends in an empty scroll layer that pans the tracks and reads as one more layer"* - exactly two `[data-scroll-lane]` handles, `[data-scroll-layer="bottom"]` is the **last child** of the grid and sits **after** the background lane, it has no `.te-lane` class, no `data-lane-track`, no clips/playhead/empty-track button; the CSS block carries `var(--te-lane)`, the `repeating-linear-gradient` grid, `cursor: grab` and `min-height: 44px` but no scrollbar rules; the sticky hint exists; a pointerdrag on it moves `#timeline-scroll.scrollLeft` by exactly the pointer delta (120 px, then back to 0) and changes no clip.
+2. *"each + Text and + Graphic click opens a new lane on top of the lanes already open"* - one click = one new lane, the element lives in the new lane, the previous lane is untouched, the new lane is the **first** `.te-lane` row and the background stays the last, the counter reads `2 / 4` then `3 / 4`, the newest lane is above the previous one in state order, a manual lane brings it to `4 / 4`, a fifth element does **not** open a fifth lane but lands in the current top layer with a status message, and the scroll layer never enters the lane count.
+3. *"a selected text or graphic is dragged on the preview canvas and the drag writes the inspector x and y"* - the tagged X/Y inputs exist and start at `50 / 50`; a 64 x 72 px drag on a 1280 x 720 buffer writes exactly `55 / 60` into the item **and** into both inputs; an out-of-canvas drag clamps to `100 / 100`; the cursor is released and the status line reports `Graphic moved - x 55%, y 60%`; `size` is untouched; the saved element carries `x: 55, y: 60`; a text clip drags the same way (`40 / 78`, only the moved axis changes); and after selecting `media-1`, a pointer drag on the canvas moves nothing and keeps the media selection.
+
+Honesty notes:
+
+- The suite is still not green and never was: 40 failures / 6 cancellations, the same pre-existing groups as 62f046e (identical failure-name set, see the block above).
+- Everything is verified in JSDOM. jsdom ships no `PointerEvent`, so the tests dispatch `MouseEvent` objects with `pointerdown`/`pointermove`/`pointerup` type names, which the listeners handle identically. jsdom also does not clamp `scrollLeft`, which is why the pan assertion drags back to the **original** x instead of past 0.
+- The drag was not eyeballed in a real browser: the px -> % maths, the clamping, the inspector wiring and the persisted numbers are asserted, the *feel* (grab box size, cursor changes) is not.
+
+### 16.9 Notes, gotchas and deliberate decisions
+
+1. **Dock order is not state order any more.** State order is the paint order (last visual track paints last, on top); the dock lists visual lanes reversed so the highest layer is the top row. Anything that walks `.te-lane` in DOM order sees highest-first; anything that walks `state.tracks` still sees lowest-first.
+2. **The bottom scroll layer must never be a `.te-lane`.** Several existing tests and the bundle itself count/scan `.te-lane` and `data-lane-track`; reusing those hooks would have made the empty layer selectable, seekable and counted as a track.
+3. **+ Text now consumes a lane.** The old cap test looped three manual `addVisualTrack()` calls after one `addTextElement`; it now loops two, because the element action itself opens a lane. The cap itself (four) is unchanged.
+4. **The old "one shared lane" assumption was dropped in two tests.** `text and graphics continue rendering ...` and the cap test both used `state.tracks.find(kind === "visual")` to reach an element added later; with a lane per element the lookup has to span the visual lanes (`filter(...).flatMap(...)`). The production behaviour the tests were pinning (a clip keeps rendering for its full seconds-based range across scene boundaries) is unchanged.
+5. **`item.x` / `item.y` are the only new writers of position.** No new field, no schema bump: the drag writes the same percentages the sliders write, then `persistNow()` saves the existing record.
+6. **The graphic selection box is a preview-only affordance.** It is drawn in `drawPreview()` behind `!recorder && !isExporting`, exactly like the text selection stroke that already existed, so exports stay clean.
+7. **`syncPositionControls` re-fires `input` instead of calling the callback directly.** That keeps the range control's own `<output>` readout correct in the real UI (where `addRange` is `reelAddRange`) and is a no-op in the number-input fallback, where the model was already written by the drag.
+8. **No CSS variable was invented.** The new rules use the existing `--te-lane`, `--t-line`, `--t-line-2`, `--t-panel-2`, `--t-panel-3`, `--t-muted` tokens with the same fallbacks as their neighbours.
+
+### 16.10 Still open
+
+1. **Real-browser eyeball** of the drag feel and of the scroll layer's weight next to a real lane.
+2. **The four-lane cap still applies**, so the fifth `+ Text` lands in the current top lane instead of a fifth layer (by design, and the status line says so). Raising `MAX_VISUAL_TRACKS` would be a one-line change plus its test.
+3. **The drag is X/Y only** - no resize/rotate handles on the canvas, no keyboard nudging, and no snapping to the centre lines.
+4. **Media clips cannot be dragged**; the pinned background stays a cover-fit layer.
+5. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10), and `npx tsc --noEmit` still reports the long-standing `src/index.ts` diagnostics.
+
+### 16.11 Status
+- Branch: `arena/4d1103b2-text-to-image-template` (the only branch this section was written on).
+- The documented source of truth is the current code in this workspace; this file now matches it.
+- Focused suites 83/83 green; `tests/timeline-editor.test.mjs` 23/23; full-suite total 540 with a failure-name set identical to `62f046e`; `wrangler deploy --dry-run` compiles (2974.81 KiB / 1354.99 KiB gzip); `tsc --noEmit` unchanged at the 30 pre-existing `src/index.ts` diagnostics.
+- Commit: COMMIT_PLACEHOLDER.
