@@ -977,7 +977,7 @@ Honesty notes:
 2. **`position: sticky` on a flex child needs a scrolling ancestor with room.** Any future change that puts `.te-preview-panel` back inside an `overflow: hidden` wrapper silently turns the pin off; the CSS comment records this.
 3. **Sticky preview vs. a very short dock.** The pin is released when the shell's content box ends. The `.te-dock-tail` provides 260 px of that box; if the tail is ever removed, a document that ends exactly at the dock footer would unpin the preview one screen early and the dock would no longer be the last element in view.
 4. **The dummy text is only added when the lane is empty.** A row that already has a graphic but no text gets no dummy. That is the requested behaviour ("doesn't have text or graphics"), but it means a graphics-only video has no placeholder text.
-5. **`row.subtitles` is still alive for export.** Deleting the cue→clip mapping removed the only place the timeline reflected subtitles. If subtitle-aware timeline editing is wanted later it must come back as an explicit, user-toggled track rather than implicit caption clips.
+5. **`row.subtitles` is still alive for export.** Deleting the cue→clip mapping removed the only place the timeline reflected subtitles. If subtitle-aware timeline editing is wanted later it must come back as an explicit, user-toggled track rather than implicit caption clips. **(Superseded by Section 14: cue data now rides along in `timelineState.subtitles`, is burned onto the preview canvas, and renders as a hidden read-only tracks layer — still never as editable clips.)**
 6. **The suite is still not green** (Section 8.6 / 10.8). This section added no new failures.
 
 ### 11.9 Files touched in this section
@@ -1006,13 +1006,13 @@ Add export in the timeline header and play/pause and export beneath the preview;
 ### Changes
 - Quick Batch hands the selected frame dimensions, orientation and style into timeline project state, which is persisted with timing. Legacy projects without frame metadata default to landscape. The canvas buffer follows the stored dimensions (including intentional portrait or square projects); its stage is fixed at 320px and the shell uses studio theme tokens for its main surfaces and accent.
 - Added header and preview export controls, a second synchronized play/pause control, draggable ruler playhead, and a blank top lane that can be dragged horizontally. The existing clip timing changes redraw immediately; gaps no longer show the selected or first background clip. Paused video seeks to the playhead and redraws when seeking completes.
-- Timeline export records the current canvas in real time with MediaRecorder and mixes available timeline audio tracks via Web Audio. It downloads the browser-supported format, usually WebM; selected text outlines are omitted. It requires a browser supporting canvas capture and MediaRecorder, and the tab must remain open. Source-video audio and Quick Batch subtitle cues are not included in this timeline export. Browser codec and background-tab throttling can affect results.
+- Timeline export records the current canvas in real time with MediaRecorder and mixes available timeline audio tracks via Web Audio. It downloads the browser-supported format, usually WebM; selected text outlines are omitted. It requires a browser supporting canvas capture and MediaRecorder, and the tab must remain open. Source-video audio and Quick Batch subtitle cues are not included in this timeline export. Browser codec and background-tab throttling can affect results. **(Subtitle-cue exclusion superseded by Section 14: cues are now painted onto the preview and every export path.)**
 - Added shared CSS canvas-filter approximations for the Quick Batch style names, used for the table preview, timeline preview and shared renderer for Quick Batch and editor exports. The existing template filters are animation effects rather than a mapping for these Quick Batch style names, so these are new approximations, not exact template effects. Filters affect media rather than text overlays and depend on browser canvas filter support. The editor layout's own non-timeline asset previews are not styled by this change.
 
 ### Verification and limitations
 - `node --import tsx --test tests/timeline-editor.test.mjs tests/quick-batch-table.test.mjs`: 26 passed, including a new frame persistence, seeking, gap and control test. Browser MediaRecorder/audio mixing and visual appearance were not exercised by these JSDOM tests.
 - `npx tsc --noEmit` still reports numerous existing errors in `src/index.ts`; it is not a clean project-wide check.
-- Timeline export is a real-time browser recording, not the existing Quick Batch MP4 encoder; it does not yet preserve subtitle cues or audio embedded in video clips. Theme coverage uses the application's theme tokens for major surfaces but some timeline track/inspector details retain their existing dark styling.
+- Timeline export is a real-time browser recording, not the existing Quick Batch MP4 encoder; it does not yet preserve subtitle cues or audio embedded in video clips. Theme coverage uses the application's theme tokens for major surfaces but some timeline track/inspector details retain their existing dark styling. **(Both limitations superseded by Sections 13 and 14: WebCodecs + `Mp4Muxer` MP4 export burns subtitle cues, and Section 14 re-themed every hardcoded track/inspector surface onto the `--t-*` studio tokens.)**
 
 ---
 
@@ -1084,3 +1084,90 @@ Add export in the timeline header and play/pause and export beneath the preview;
 
 - Branch: `arena/f7b837b7-text-to-image-template` (`active`).
 - All timeline, Quick Batch, composer, and public entry-point test suites pass (`67 / 67`) and `wrangler deploy --dry-run` succeeds.
+
+---
+
+## 14. Subtitles back on the preview, full theme trace, hidden subtitle layer, and neon/VHS effect filters (2026-11-06)
+
+### 14.1 Request
+
+1. Make the subtitle appear again on the timeline editor **video preview** (Section 11.3 removed captions as timeline clips; the cues must render on the preview canvas instead).
+2. Trace the **black theme** of the timeline editor — some sections appear in black; the timeline editor must have the same theme as the site theme (studio `--t-*` tokens across all 7 themes: `default`, `strata`, `stellar`, `nightlab`, `paper`, `swiss`, `neo`).
+3. Once subtitle layers appear in the timeline tracks, **hide** them — subtitles must not be editable because they rely on the music.
+4. Add image/video **effect filters** on the video preview: the video templates modal of the editor layout has image filters like neon effect and VHS effect — copy those onto the timeline preview, applied once the video style is passed into timeline editor details from Quick Batch row values.
+5. Study the code and `bug-fix-session-331.md`, then document the work here.
+
+### 14.2 Pre-change audit
+
+1. **Subtitles had no representation in the timeline at all.** After Section 11.3 `batchTimelineState()` dropped the cue→clip loop entirely, so `timelineState` carried no subtitle data; `defaultTimeline()` had no `subtitles` slot and neither `drawPreview()` nor the WebCodecs `paintTimelineFrameAt()` painter knew about cues. The only `drawSubtitles` in the codebase is the global painter in `app-js.ts`, which expects real decoded media and a full canvas 2D API — calling it from the timeline would crash the JSDOM canvas mock (no `measureText`, `rect` or `createRadialGradient`) and would draw behind the timeline's own layer stack.
+2. **The timeline CSS was a hardcoded dark island.** The block from `body.timeline-editor-page {` to the end of `styles.ts` (≈1260 lines) hardcoded its own palette instead of the studio tokens: page background `#101116`, inspector panel `#101116`, group rows `#191b22`/`#20232a`, track labels `#20222a`, toolbar buttons `#22252d`/`#292c34`, inputs `#1d2027`, ~25 line colours (`#30333d`, `#282b33`, `#363944`, `#3a3d46`, `#454852`, …), ~14 ink colours (`#f3f4f6`, `#e5e7eb`, `#d4d7df`, …) and ~9 muted colours (`#9398a5`, `#9297a2`, `#aeb2bd`, …). The `--t-*` tokens exist only on the six named `html[data-theme]` selectors, never on `:root`, so new rules must carry a dark fallback (`var(--t-line, #30333d)`) or the `default` theme breaks.
+3. **Hidden rows need CSS, not just attributes.** The track grid rows are `display: flex` at author origin, so a `hidden` attribute (UA origin `display: none`) cannot hide them, and any wrapper element inside `.te-track-grid` would become one grid item and break the row/column structure — a hidden layer has to be emitted as sibling rows and killed with `display: none !important`.
+4. **The effects live in `template-scene-editor.ts`, not the composer.** Grepping `markup.ts`, `styles.ts` and `template-composer-js.ts` for `neon`/`vhs` finds nothing; the reusable effect overlays are inside `reelDrawBackground()` (neon radial glow, VHS/glitch scanline bars, duotone) next to `reelBackgroundMotion()`'s animated seconds input. The timeline already receives `state.videoStyle` from Quick Batch (`videoStyle: row.style` in `batchTimelineState()`) and already runs it through `window.__videoStyleFilter` on Layer 0 (Section 12) — but that CSS filter is only the backdrop pass, not the modal's neon/VHS overlays.
+
+### 14.3 Change 1 — subtitle cues ride along and burn onto the preview canvas
+
+1. **Handoff (`src/client/app-js.ts`, `batchTimelineState()` L9172):** maps `row.subtitles` into `timelineState.subtitles` — `{ startMs, endMs, text }`, empty/zero-length cues dropped, capped at 400 — and returns it from the state builder next to `videoStyle` (L9288–9289). The cue loop that created `<sceneId>-caption-<n>` clips stays deleted (Section 11.3 unchanged: cues are data, never clips). `localStorage` persistence and `applyTransitionProject` → `window.__TIMELINE_PROJECT__` → boot carry it through unchanged.
+2. **Persistence (`src/client/timeline-editor.ts`):** `normalizeSubtitles(list)` (L283) validates the array (≤400 cues, clamped non-negative ms, `endMs > startMs`, trimmed non-empty text). `defaultTimeline()` gains `subtitles: []` and `normalizeState()` (L458) reads `base.subtitles` with a fallback to `transition.timelineState.subtitles`, so both a restored project and a fresh handoff populate it.
+3. **Local guarded painter:** `drawTimelineSubtitles(context, cues, timestampMs, width, height)` (L1284) — a timeline-local copy of the shared cue painting behaviour, fully guarded against the JSDOM canvas mock: picks the active cue (`startMs ≤ t < endMs`), white 22px `Bookman Old Style, Georgia, serif` with a `rgba(0,0,0,0.55)` box, baseline at `height - height/3`, splits on `"\n"`, `measureText` width with a `len * 22 * 0.5` fallback, and uses `fillRect`/`fillText` only when they exist (`rect`/`fillText` fallbacks otherwise).
+4. **Both render paths call it:** `drawPreview()` calls it after all visuals/layers (L1397) and the WebCodecs/`MediaRecorder` export painter `paintTimelineFrameAt()` calls it per frame at `seconds * 1000` (L1567) — so the interactive preview, the MP4 export and the fallback recording all burn the same cues in. (This supersedes the Section 12 note that subtitle cues are excluded from timeline export.)
+5. **Heading details:** `updateProjectHeading()` (L2095) now appends ` · <state.videoStyle> style`, so the frame details row shows which Quick Batch style the preview is rendering with.
+
+### 14.4 Change 2 — the black island is re-themed onto the studio `--t-*` tokens
+
+Programmatic pass over the timeline block in `src/client/styles.ts` (from `body.timeline-editor-page {` to the end of the file) with per-pattern expected-count assertions:
+
+1. **Structural surfaces now point at the site's live theme variables:** the page background `#101116` → `var(--bg)`; `.te-inspector-panel` `#101116` → `var(--card)`; `.te-lane.collapsed` → `var(--t-panel-3, #101116)`; `--te-border` → `var(--t-line, #30333d)`.
+2. **~70 hardcoded declarations wrapped as `var(--t-X, <same hex>)`** — preserving the exact dark values as the `default`-theme fallback (tokens are absent from `:root`):
+   - *panels*: `#191b22`, `#20222a`, `#20232a`, `#191d15`, `#1b2116`, `#1b1e25`, `#1c1f26`, `#161a12`, `#1d2417`, `#252830`, `#2c3a22`, `#20251c`, `#17191f`, `#14161c`, `#16181f`, `#333741` → `--t-panel`/`--t-panel-2`/`--t-panel-3`;
+   - *lines/borders*: `#30333d`, `#282b33`, `#363944`, `#3a3d46`, `#454852`, `#454853`, `#41454f`, `#41444e`, `#535761`, `#373a43`, `#2d3039`, `#24272f`, `#2e3526`, `#3a4430`, `#30323a`, `#454955` → `--t-line`/`--t-line-2`;
+   - *inks*: `#f3f4f6`, `#e5e7eb`, `#d4d7df`, `#cdd1da`, `#c0c3cb`, `#d8dbe2`, `#c5cbd4`, `#c7cbd4`, `#d5d7de`, `#b9bec8`, `#dff3bf`, `#e7e9ef`/`#dce6cf` → `--t-ink`/`--t-btn2-ink`;
+   - *muteds*: `#9398a5`, `#9297a2`, `#aeb2bd`, `#a1a5b0`, `#9ea3af`, `#747986`, `#a9aebb`, `#bdc1ca`, `#bcd79a` → `--t-muted`/`--t-accent-ink`;
+   - *controls*: `#22252d`/`#292c34` → `--t-btn2-bg`, `#1d2027` → `--t-input`, `rgba(255, 255, 255, .12)` progress track → `--t-track`, `#a6d85b`/`#bbdf86` → `--t-accent-ink`, `#fca5a5` → `#ef4444` (unified with the Section 13 seeker red).
+3. **Deliberately kept constant:** clip-identity gradients and label inks (purple/blue/gold clip groups, `.te-export-btn`'s green gradient block), the `#08090c` video letterbox/placeholder, `#d1d5db` placeholder text over video, `#ef4444` seeker/error red (test-locked), `#7f1d1d`/`#431b20`/`#fecaca` destructive delete colours, `#d5f7a1` selection ring, `rgba(166, 216, 91, …)` accent wash — these are self-contained on purpose, exactly like the kept section 12 note for clip gradients.
+4. Verified each `--t-*` token exists on all six `html[data-theme]` selectors (multi-line values on `strata`/`stellar` etc.), and the result follows the site convention: 150 pre-existing `var(--t-X, <fallback>)` usages use the same fallback form.
+
+### 14.5 Change 3 — the subtitle layer appears in the tracks, then stays hidden and read-only
+
+1. **Cues never enter `state.tracks`** (unchanged Section 11.3 invariant), so nothing selects, drags, ripples or lengthens them; `isCaptionItem()` continues to drop legacy `<scene>-caption-<n>` clips on open.
+2. **`renderTimeline()` (L665–674)** emits, as sibling rows inside `#timeline-track-grid` (only when cues exist):
+   - `.te-subtitle-group` — a `te-group-title`-shaped header reading `SUBTITLES · locked to the music · hidden, not editable` (`aria-hidden`);
+   - `.te-subtitle-fill` / `.te-subtitle-label` — the sticky left label row (`Voiceover subtitles · N cues · read-only`);
+   - `.te-subtitle-lane` (`data-lane-track="subtitles"`, `aria-hidden="true"`) containing one `.te-clip.text` per cue via `subtitleClipFor()` (L293; ids `subtitle-1..N`, label = cue text, read-only flags), rendered with the normal `htmlTrackItem()` so the rows stay grid-aligned.
+3. **CSS kill switch (`styles.ts` ~L10195):** `.te-subtitle-group, .te-subtitle-fill, .te-subtitle-label, .te-subtitle-lane { display: none !important; }` — author-level `!important` beats the `display: flex` of the row rules and works on every theme; the rows exist for structure/audit but are invisible in the dock.
+4. **Copy updated (`src/client/markup.ts`):** the inspector hint (L877) and dock footer now say subtitle cues follow the music, paint on the preview, and their timeline layer stays hidden and read-only.
+
+### 14.6 Change 4 — neon and VHS effects copied from the video templates modal onto the preview
+
+1. **`drawStyleEffects(context, width, height, seconds)` (L1333)** reads `state.videoStyle` (the Quick Batch row style handed over in `timelineState.videoStyle`) and paints the same two overlays `reelDrawBackground()` uses in `template-scene-editor.ts`:
+   - `/neon/i` → pink radial glow: `createRadialGradient(w * .5, h * .42, 0)` with stops `rgba(255,45,149,.30)` → `rgba(151,71,255,.20)` at .45 → `rgba(0,0,0,.52)` at 1, guarded to no-op when `createRadialGradient` is missing;
+   - `/retro|vhs|glitch/i` → rolling scanline bars: `globalAlpha 0.3`, 720p-scaled `gap = max(4, h / 90)`, bar height `max(1, gap / 6)`, scrolling with `(seconds * 24) % gap`, painted with `fillRect` (or `rect` fallback) and skipped when media never drew (`drawn` gate) so the empty placeholder stays clean.
+2. **Called unconditionally in both painters:** `drawPreview()` (L1382, after the placeholder, below the visuals so text stays legible) and `paintTimelineFrameAt()` (L1557) — exports get the identical effect. The Section 12 Layer-0 `__videoStyleFilter` CSS filter pass is untouched (backdrop filter + overlay effects now stack the same way the template modal's do).
+
+### 14.7 Verification
+
+- `node --import tsx --test tests/timeline-editor.test.mjs tests/quick-batch-table.test.mjs tests/final-media-cap-actions.test.mjs tests/template-composer.test.mjs tests/public-entry-points.test.mjs tests/editor-subtitles-parity.test.mjs` — **77 / 77 passing**, including 3 new tests in `tests/timeline-editor.test.mjs`:
+  1. *"subtitle cues paint on the timeline preview while their tracks layer stays hidden and read-only"* — cue data survives `normalizeState`, the group/label/lane rows exist with `aria-hidden` and one clip per cue, CSS hides all four classes, cues never enter `state.tracks`, and ruler seeks at ≈0.83s / 3s / 6s show cue 1 / cue 2 / nothing in `previewContext.drawnTexts`;
+  2. *"the timeline preview applies the passed row video style plus the template-modal neon and VHS effects"* — `state.videoStyle` and the heading carry `Retro Poster style`, Layer-0 `__videoStyleFilter` hooks exist in both painters, and real seeks record rolling scanline `fillRect` bands (Retro/VHS) and a `createRadialGradient` call (Neon Night);
+  3. *"timeline chrome follows the site theme instead of hardcoded black"* — `doesNotMatch` the old `background: #101116` page/inspector/collapsed rules, matches `var(--bg)` / `var(--card)` / `--te-border: var(--t-line, #30333d)`, and pins the themed tokens incl. `var(--t-input, #1d2027)` and the subtitle-lane hide rule.
+- `tests/final-media-cap-actions.test.mjs` handoff test extended: `timelineState.subtitles` deep-equals the row cues `[{0, 2000, "Quiet rooftop gardens"}, {2000, 4000, "in the morning"}]` while caption ids stay zero.
+- Full `npm test` compared against a clean-stash baseline of the base commit: **identical failure set (46 pre-existing failures in API-relay/worker suites, zero regressions from this work; 488/534 pass on both).**
+- `npx wrangler deploy --dry-run` — **bundle compiles cleanly** (`2941.38 KiB / gzip: 1345.54 KiB`).
+- `npx tsc --noEmit` — still exactly the 30 pre-existing errors in `src/index.ts` (none in any file touched here), same as the base commit.
+
+### 14.8 Files touched in this section
+
+| File | Change |
+|---|---|
+| `src/client/app-js.ts` | `batchTimelineState()` rewritten cue-data comment; maps `row.subtitles` → `timelineState.subtitles` (≤400, validated) and returns it beside `videoStyle`. |
+| `src/client/timeline-editor.ts` | `normalizeSubtitles` + `subtitleClipFor`; `defaultTimeline.subtitles` + `normalizeState` persistence (handoff fallback); `drawTimelineSubtitles` + `drawStyleEffects` and their hooks in `drawPreview` / `paintTimelineFrameAt`; hidden sibling subtitle rows in `renderTimeline`; `updateProjectHeading` shows the passed style. |
+| `src/client/styles.ts` | Full theme-token pass over the timeline CSS block (~70 `var(--t-X, <fallback>)` wraps, page/inspector/collapsed → `--bg`/`--card`/`--t-panel-3`); `.te-subtitle-*` `display: none !important` rule; group-label `#bcd79a` → `--t-accent-ink`. |
+| `src/client/markup.ts` | Inspector hint and dock footer copy: cues paint on the preview, layer is hidden and read-only. |
+| `tests/timeline-editor.test.mjs` | Fixture gains two cues (`A quiet morning` / `Across scene two`); clip count 13 → 15 with the hidden `aria-hidden` lane; 3 new tests (preview burn, neon/VHS effects, theme tokens). |
+| `tests/final-media-cap-actions.test.mjs` | Handoff test asserts `timelineState.subtitles` deep-equals the row's two cues. |
+| `bug-fix-session-331.md` | This section, plus supersede markers on the Section 11.7 / 12 notes this work replaces. |
+
+### 14.9 Status
+
+- Branch: `arena/88ef7082-text-to-image-template` (`active`).
+- Validation set 77/77 green; full suite failure set identical to the base commit (no regressions); `wrangler deploy --dry-run` compiles.
+- Known follow-ups: subtitle cues remain unselectable-by-design (the layer is invisible; there is no toggle to reveal it); `npx tsc --noEmit` remains unclean on `src/index.ts` from earlier sessions.

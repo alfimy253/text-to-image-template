@@ -23,6 +23,11 @@ function makeTimelineState() {
 		playheadSec: 0,
 		soundExpanded: false,
 		zoom: 1,
+		/* cue DATA from the Quick Batch row: painted on the preview, never clips */
+		subtitles: [
+			{ startMs: 0, endMs: 2000, text: "A quiet morning" },
+			{ startMs: 2000, endMs: 4500, text: "Across scene two" }
+		],
 		scenes,
 		tracks: [
 			{ id: "voiceover", kind: "audio", label: "Voiceover", expanded: true, items: [] },
@@ -153,8 +158,19 @@ test("Quick Batch timeline route is isolated, starts with one media lane and one
 	assert.equal(state.tracks.find((track) => track.id === "visual-1").items[0].id, "dummy-text-1", "the saved caption clip is dropped and the dummy text takes its place");
 	assert.equal(w.document.querySelectorAll(".te-lane").length, 2, "Soundtrack is collapsed and there is no separate overlay lane");
 	assert.ok(Array.from(w.document.querySelectorAll(".te-group-title .te-group-label")).some((label) => /TEXT & GRAPHICS/i.test(label.textContent)));
-	assert.equal(w.document.querySelectorAll(".te-clip").length, 13, "12 scene clips plus the dummy text clip are rendered");
-	assert.ok(!w.document.body.textContent.includes("A quiet morning"), "subtitle cues are not drawn as timeline clips");
+	assert.equal(w.document.querySelectorAll(".te-clip").length, 15, "12 scene clips, the dummy text clip and the two hidden subtitle cue clips are in the DOM");
+	/*
+	 * Subtitles are back as cue data: the cue text exists only inside the
+	 * hidden, read-only subtitle layer, never as an editable timeline clip.
+	 */
+	const subtitleLane = w.document.querySelector(".te-subtitle-lane");
+	assert.ok(subtitleLane, "the subtitle layer exists in the tracks");
+	assert.equal(subtitleLane.getAttribute("aria-hidden"), "true");
+	assert.ok(w.document.body.textContent.includes("A quiet morning"), "the cue text is carried into the tracks as a hidden layer");
+	const editableClipText = Array.from(w.document.querySelectorAll(".te-clip"))
+		.filter((clip) => !clip.closest(".te-subtitle-lane"))
+		.map((clip) => clip.textContent).join(" ");
+	assert.ok(!editableClipText.includes("A quiet morning"), "subtitle cues are not editable timeline clips");
 	assert.ok(w.localStorage.getItem("ytvs.timeline-editor.v1." + payload.targetPageId), "the timeline state is stored under its stable row project id");
 
 	w.document.querySelector('[data-timeline-action="toggle-sound"]').click();
@@ -660,4 +676,106 @@ test("Export falls back cleanly to MediaRecorder when WebCodecs or Mp4Muxer is u
 	assert.equal(result.mode, "mediarecorder");
 	assert.equal(downloadedName, "YouTubeVibeStudio_Garden_story.webm");
 	assert.equal(stoppedTracks, 1);
+});
+
+test("subtitle cues paint on the timeline preview while their tracks layer stays hidden and read-only", (t) => {
+	const { dom, w, previewContext } = openTimeline();
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	assert.deepEqual(Array.from(state.subtitles, (cue) => cue.text), ["A quiet morning", "Across scene two"], "the row's cue data survives normalizeState");
+
+	/* the layer exists in the tracks DOM... */
+	const lane = w.document.querySelector(".te-subtitle-lane");
+	const group = w.document.querySelector(".te-subtitle-group");
+	const label = w.document.querySelector(".te-subtitle-label");
+	assert.ok(lane && group && label, "the subtitle group, label and lane render inside the track grid");
+	assert.equal(lane.getAttribute("aria-hidden"), "true");
+	assert.equal(lane.querySelectorAll(".te-clip").length, 2, "one clip per cue");
+	/* ...but CSS hides every part of it on every theme */
+	for (const cls of ["te-subtitle-group", "te-subtitle-fill", "te-subtitle-label", "te-subtitle-lane"]) {
+		assert.match(APP_CSS, new RegExp("\\." + cls + "[^}]*display:\\s*none"), "." + cls + " is hidden by CSS");
+	}
+	/* read-only: the cues never enter state.tracks, so nothing can select or move them */
+	assert.equal(state.tracks.some((track) => track.kind === "subtitle" || String(track.id) === "subtitles"), false, "subtitle cues are not stored as tracks");
+	assert.equal(w.document.querySelectorAll('[data-track-select="subtitles"]').length, 0, "the hidden layer exposes no track selector");
+
+	/* the preview canvas burns the active cue in at the playhead */
+	const ruler = w.document.querySelector(".te-ruler");
+	ruler.getBoundingClientRect = () => ({ left: 0 });
+	previewContext.drawnTexts.length = 0;
+	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 15 })); /* 15px / 18 pps ≈ 0.83s → cue 1 */
+	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
+	assert.ok(previewContext.drawnTexts.includes("A quiet morning"), "cue 1 is painted on the preview at 0.83s");
+	previewContext.drawnTexts.length = 0;
+	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 54 })); /* 3s → cue 2 */
+	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
+	assert.ok(previewContext.drawnTexts.includes("Across scene two"), "cue 2 is painted on the preview at 3s");
+	previewContext.drawnTexts.length = 0;
+	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 108 })); /* 6s → past both cues */
+	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
+	assert.ok(!previewContext.drawnTexts.includes("A quiet morning"), "no subtitle is painted between cues");
+	assert.ok(!previewContext.drawnTexts.includes("Across scene two"));
+});
+
+test("the timeline preview applies the passed row video style plus the template-modal neon and VHS effects", (t) => {
+	const saved = makeTimelineState();
+	saved.projectId = "timeline-p_source_test-row-7";
+	saved.videoStyle = "Retro Poster";
+	saved.subtitles = [];
+	const { dom, w, previewContext } = openTimeline(saved);
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	assert.equal(state.videoStyle, "Retro Poster", "the Quick Batch row style arrives in the timeline details");
+	assert.match(w.document.getElementById("timeline-project-subtitle").textContent, /Retro Poster style/, "the heading details show the passed style");
+
+	/* the shared Quick Batch CSS filter still paints the background layer */
+	assert.match(TIMELINE_EDITOR_JS, /window\.__videoStyleFilter && "filter" in context/, "the row style's canvas filter is applied on Layer 0");
+	assert.match(TIMELINE_EDITOR_JS, /window\.__videoStyleFilter && "filter" in targetCtx/, "the export painter applies it too");
+	/* and the effects copied from the editor layout's template modal run off the same style */
+	assert.match(TIMELINE_EDITOR_JS, /function drawStyleEffects\(/, "the template-modal effect painter exists");
+	assert.match(TIMELINE_EDITOR_JS, /\/neon\/i\.test\(style\)/, "neon styles get the neon glow overlay");
+	assert.match(TIMELINE_EDITOR_JS, /\/retro\|vhs\|glitch\/i\.test\(style\)/, "retro/VHS styles get the scanline overlay");
+
+	/* VHS scanlines: copied from template-scene-editor.ts style "glitch" */
+	const fillCalls = [];
+	const baseFillRect = previewContext.fillRect;
+	previewContext.fillRect = function (...args) { fillCalls.push(args); return baseFillRect.apply(this, args); };
+	const ruler = w.document.querySelector(".te-ruler");
+	ruler.getBoundingClientRect = () => ({ left: 0 });
+	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 15 }));
+	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
+	previewContext.fillRect = baseFillRect;
+	assert.ok(fillCalls.some((args) => args[2] >= 300 && args[3] <= 9), "the Retro Poster style draws rolling VHS scanline bands");
+
+	/* neon glow: copied from template-scene-editor.ts style "neon" */
+	previewContext.radials = 0;
+	previewContext.createRadialGradient = function () { previewContext.radials += 1; return { addColorStop() {} }; };
+	state.videoStyle = "Neon Night";
+	ruler.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 18 }));
+	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
+	assert.ok(previewContext.radials >= 1, "the Neon Night style draws the pink radial neon glow overlay");
+});
+
+test("timeline chrome follows the site theme instead of hardcoded black", () => {
+	/* the sections that used to render black now come from the site's --t-* tokens */
+	assert.doesNotMatch(APP_CSS, /body\.timeline-editor-page\s*\{[^}]*background:\s*#101116/, "the page background follows --bg");
+	assert.doesNotMatch(APP_CSS, /\.te-inspector-panel\s*\{[^}]*background:\s*#101116/, "the selected-element panel follows --card");
+	assert.doesNotMatch(APP_CSS, /\.te-lane\.collapsed\s*\{[^}]*background:\s*#101116/, "collapsed lanes follow the panel tokens");
+	assert.doesNotMatch(APP_CSS, /\.te-group-title\s*\{[^}]*background:\s*#20232a/, "group title rows are tokenized");
+	assert.match(APP_CSS, /body\.timeline-editor-page\s*\{[^}]*background:\s*var\(--bg\)/);
+	assert.match(APP_CSS, /\.te-inspector-panel\s*\{[^}]*background:\s*var\(--card\)/);
+	assert.match(APP_CSS, /--te-border:\s*var\(--t-line, #30333d\)/, "the timeline border token follows --t-line");
+	for (const themed of [
+		"var(--t-panel-2, #191b22)", /* track label rows */
+		"var(--t-panel, #20232a)", /* group title rows */
+		"var(--t-btn2-bg, #22252d)", /* toolbar buttons */
+		"var(--t-btn2-ink, #e7e9ef)",
+		"var(--t-ink, #f3f4f6)", /* inspector text */
+		"var(--t-muted, #9398a5)", /* muted labels */
+		"var(--t-input, #1d2027)", /* inspector inputs */
+		"var(--t-panel-3, #14161c)", /* dock tail stripes */
+		"var(--t-track, rgba(255, 255, 255, .12))" /* export progress track */
+	]) assert.ok(APP_CSS.includes(themed), "theme token with preserved fallback: " + themed);
+	/* the subtitle layer stays hidden on every theme */
+	assert.match(APP_CSS, /\.te-subtitle-lane\s*\{[^}]*display:\s*none/, "the subtitle lane is hidden by CSS");
 });

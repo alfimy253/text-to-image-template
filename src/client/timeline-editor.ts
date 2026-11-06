@@ -34,6 +34,14 @@ export const TIMELINE_EDITOR_JS = `
 		 */
 		var DUMMY_TEXT = "Your text here";
 		var DUMMY_TEXT_MAX_SEC = 6;
+		/*
+		 * Burned-in script subtitles. The cue list comes from the Quick Batch
+		 * row (state.subtitles) and is painted with the same typography the
+		 * Quick Batch preview/export uses: white Bookman on a translucent
+		 * black box, one third of the frame up from the bottom.
+		 */
+		var SUBTITLE_FONT_SIZE = 22;
+		var SUBTITLE_FONT_STACK = "'Bookman Old Style', 'Bookman', 'URW Bookman L', Georgia, serif";
 
 		function openAssetDb() {
 			return new Promise(function (resolve, reject) {
@@ -241,6 +249,7 @@ export const TIMELINE_EDITOR_JS = `
 				durationSec: duration,
 				frame: { width: 1280, height: 720, orientation: "landscape" },
 				videoStyle: "Cinematic Film",
+				subtitles: [],
 				playheadSec: 0,
 				soundExpanded: false,
 				zoom: 1,
@@ -262,6 +271,40 @@ export const TIMELINE_EDITOR_JS = `
 			var id = String(item.id || "");
 			var name = String(item.name || item.label || "");
 			return /-caption-\\d+$/.test(id) || /^Caption\\b/.test(name);
+		}
+
+		/*
+		 * Subtitle cues are plain {text, startMs, endMs} records — the same
+		 * shape Quick Batch's drawSubtitles() consumes. They are normalized on
+		 * load but are NEVER turned into editable timeline clips: the dock
+		 * shows them on a hidden read-only layer because their timing comes
+		 * from the music, not from the user.
+		 */
+		function normalizeSubtitles(list) {
+			if (!Array.isArray(list)) return [];
+			return list.slice(0, 400).map(function (cue) {
+				if (!cue) return null;
+				var startMs = Math.max(0, number(cue.startMs, 0));
+				var endMs = Math.max(startMs + 1, number(cue.endMs, startMs + 1));
+				var text = String(cue.text || "").slice(0, 600);
+				return text ? { text: text, startMs: startMs, endMs: endMs } : null;
+			}).filter(Boolean);
+		}
+		function subtitleClipFor(cue, index) {
+			var startSec = Math.max(0, number(cue.startMs, 0) / 1000);
+			var durationSec = Math.max(MIN_CLIP_SEC, (number(cue.endMs, 0) - number(cue.startMs, 0)) / 1000);
+			var text = String(cue.text || "");
+			return {
+				id: "subtitle-" + (index + 1),
+				kind: "text",
+				type: "text",
+				name: text || ("Subtitle " + (index + 1)),
+				label: text || ("Subtitle " + (index + 1)),
+				text: text,
+				startSec: startSec,
+				durationSec: durationSec,
+				readOnly: true
+			};
 		}
 
 		function normalizeItem(item, track) {
@@ -412,6 +455,9 @@ export const TIMELINE_EDITOR_JS = `
 				sourceRowId: String(base.sourceRowId || transition && transition.basicSettings && transition.basicSettings.id || ""),
 				frame: base.frame || transition && transition.timelineState && transition.timelineState.frame || { width: 1280, height: 720, orientation: "landscape" },
 				videoStyle: base.videoStyle || transition && transition.basicSettings && transition.basicSettings.style || "Cinematic Film",
+				subtitles: normalizeSubtitles(base.subtitles && base.subtitles.length
+					? base.subtitles
+					: transition && transition.timelineState && transition.timelineState.subtitles),
 				durationSec: duration,
 				playheadSec: clamp(base.playheadSec, 0, duration),
 				soundExpanded: number(base.version, 1) >= 2 && base.soundExpanded === true,
@@ -605,6 +651,26 @@ export const TIMELINE_EDITOR_JS = `
 				track.items.forEach(function (item) { html += htmlTrackItem(track, item, pps); });
 				html += playheadHtml(playheadLeft, false) + '</div>';
 			});
+			/*
+			 * Subtitle layer. The row's cues are present in the tracks area so
+			 * the layer exists as a real row, but every row ships with a
+			 * .te-subtitle-* class that CSS hides (display:none) and carries
+			 * aria-hidden. The cues follow the music, so they are read-only:
+			 * these clips are generated here and never stored in state.tracks,
+			 * which means they can never be selected, dragged, resized or
+			 * deleted from the dock.
+			 */
+			var subtitleCues = Array.isArray(state.subtitles) ? state.subtitles : [];
+			if (subtitleCues.length) {
+				html += '<div class="te-group-title te-subtitle-group" aria-hidden="true"><span class="te-group-label">SUBTITLES <small>locked to the music · hidden, not editable</small></span></div>';
+				html += '<div class="te-group-fill te-subtitle-fill" aria-hidden="true">' + playheadHtml(playheadLeft, false) + '</div>';
+				html += '<div class="te-track-label te-subtitle-label" aria-hidden="true"><span class="te-track-select">Voiceover subtitles<small>' + subtitleCues.length + (subtitleCues.length === 1 ? " cue" : " cues") + ' · read-only</small></span></div>';
+				html += '<div class="te-subtitle-lane" data-lane-track="subtitles" aria-hidden="true" style="width:' + width + 'px">';
+				subtitleCues.forEach(function (cue, index) {
+					html += htmlTrackItem({ id: "subtitles", kind: "text" }, subtitleClipFor(cue, index), pps);
+				});
+				html += playheadHtml(playheadLeft, false) + '</div>';
+			}
 			html += '<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER <small>pinned lowest · Pixabay, GIF, image or MP4</small></span><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button></div><div class="te-group-fill te-group-fill-background">' + playheadHtml(playheadLeft, false) + '</div>';
 			var backgroundTrack = mediaTrack();
 			html += '<div class="te-track-label te-track-background' + (String(state.selectedTrackId) === MEDIA_TRACK_ID ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(MEDIA_TRACK_ID) + '">' + esc(backgroundTrack && backgroundTrack.label || MEDIA_TRACK_LABEL) + '<small><span class="te-track-badge">BG</span> ' + (backgroundTrack ? backgroundTrack.items.length + " scenes" : "empty") + '</small></button></div>';
@@ -1208,6 +1274,88 @@ export const TIMELINE_EDITOR_JS = `
 				});
 			});
 		}
+		/*
+		 * Burned-in subtitle painter for the timeline preview. It matches the
+		 * Quick Batch painter (app-js drawSubtitles): white Bookman text on a
+		 * translucent black box, centred one third of the frame up from the
+		 * bottom, one fillText per wrapped line. measureText/fillRect are
+		 * guarded so a bare canvas test double still works.
+		 */
+		function drawTimelineSubtitles(context, cues, timestampMs, width, height) {
+			if (!context || !Array.isArray(cues) || !cues.length) return;
+			var active = null;
+			for (var i = 0; i < cues.length; i++) {
+				var cue = cues[i];
+				if (!cue) continue;
+				if (timestampMs >= number(cue.startMs, 0) && timestampMs < number(cue.endMs, 0)) { active = cue; break; }
+			}
+			if (!active) return;
+			context.save();
+			context.font = SUBTITLE_FONT_SIZE + "px " + SUBTITLE_FONT_STACK;
+			context.textAlign = "center";
+			context.textBaseline = "middle";
+			var x = width / 2;
+			var y = height - height / 3;
+			var lines = String(active.text || "").split("\\n").slice(0, 6);
+			var padX = 10;
+			var padY = 6;
+			var lineHeight = SUBTITLE_FONT_SIZE + 4;
+			var maxLineWidth = Math.max(1, width - padX * 2);
+			var widths = lines.map(function (line) {
+				return context.measureText ? context.measureText(line).width : line.length * SUBTITLE_FONT_SIZE * 0.5;
+			});
+			var textWidth = Math.min(maxLineWidth, Math.max.apply(null, widths));
+			var boxWidth = textWidth + padX * 2;
+			var boxHeight = lines.length * lineHeight + padY * 2;
+			var boxX = x - boxWidth / 2;
+			var boxY = y - boxHeight / 2;
+			context.fillStyle = "rgba(0, 0, 0, 0.55)";
+			if (typeof context.fillRect === "function") context.fillRect(boxX, boxY, boxWidth, boxHeight);
+			else { context.beginPath(); context.rect(boxX, boxY, boxWidth, boxHeight); context.fill(); }
+			context.fillStyle = "#ffffff";
+			for (var lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+				context.fillText(lines[lineIndex], x, y + (lineIndex - (lines.length - 1) / 2) * lineHeight, maxLineWidth);
+			}
+			context.restore();
+		}
+
+		/*
+		 * Image/video effect overlays copied from the editor layout's video
+		 * template modal (template-scene-editor.ts reelDrawBackground):
+		 *   - the neon scene's pink radial glow  ("neon effect")
+		 *   - the VHS/glitch scene's rolling scanlines ("vhs effect")
+		 * The effect is chosen by the Quick Batch row's video style once it is
+		 * passed into the timeline details (state.videoStyle), on top of the
+		 * shared window.__videoStyleFilter() CSS filter. They sit above the
+		 * background media and below the text/graphics layers, exactly like the
+		 * template modal paints them. Guards keep bare canvas test doubles safe.
+		 */
+		function drawStyleEffects(context, width, height, seconds) {
+			if (!context || !state) return;
+			var style = String(state.videoStyle || "");
+			if (!style) return;
+			var scale = Math.max(0.5, height / 720);
+			if (/neon/i.test(style) && typeof context.createRadialGradient === "function") {
+				context.save();
+				var glow = context.createRadialGradient(width * 0.5, height * 0.5, width * 0.03, width * 0.5, height * 0.5, width * 0.72);
+				glow.addColorStop(0, "rgba(255,45,149,0.08)");
+				glow.addColorStop(1, "rgba(0,0,0,0.52)");
+				context.fillStyle = glow;
+				context.fillRect(0, 0, width, height);
+				context.restore();
+			}
+			if (/retro|vhs|glitch/i.test(style)) {
+				context.save();
+				context.globalAlpha = 0.3;
+				context.fillStyle = "rgba(0,0,0,0.72)";
+				var effectLine = Math.max(2, Math.round(2 * scale));
+				var gap = Math.max(5, Math.round(7 * scale));
+				var scroll = Math.floor((seconds * 24) % gap);
+				for (var y = -gap; y < height + gap; y += gap) context.fillRect(0, y + scroll, width, effectLine);
+				context.restore();
+			}
+		}
+
 		function drawPreview() {
 			if (!canvas || !canvasContext || !state) return;
 			var width = canvas.width || 720; var height = canvas.height || 1280;
@@ -1230,6 +1378,8 @@ export const TIMELINE_EDITOR_JS = `
 				context.restore();
 			}
 			if (!drawn && active) drawPlaceholder(context, width, height, scene);
+			/* Template-modal image effects (neon / VHS) ride on the background layer. */
+			drawStyleEffects(context, width, height, state.playheadSec);
 			/* Layers 1..4 — every text and graphic clip paints above the background. */
 			visualTracks().forEach(function (track) {
 				track.items.forEach(function (item) {
@@ -1239,6 +1389,12 @@ export const TIMELINE_EDITOR_JS = `
 					if (item.kind === "text") drawText(context, item, width, height, !recorder && !isExporting && String(item.id) === String(state.selectedItemId));
 				});
 			});
+			/*
+			 * Burned-in script subtitles paint last, above the user's own text
+			 * and graphics, exactly where the voiceover says them. They are
+			 * cue data from the Quick Batch row, never timeline clips.
+			 */
+			drawTimelineSubtitles(context, state.subtitles, state.playheadSec * 1000, width, height);
 			var placeholder = document.getElementById("timeline-preview-placeholder");
 			if (placeholder) placeholder.hidden = drawn;
 			var note = document.getElementById("timeline-preview-note");
@@ -1398,6 +1554,7 @@ export const TIMELINE_EDITOR_JS = `
 				targetCtx.restore();
 			}
 			if (!drawn && active) drawPlaceholder(targetCtx, width, height, scene);
+			drawStyleEffects(targetCtx, width, height, seconds);
 			visualTracks().forEach(function (track) {
 				track.items.forEach(function (item) {
 					var live = seconds >= item.startSec && seconds < item.startSec + item.durationSec;
@@ -1406,6 +1563,8 @@ export const TIMELINE_EDITOR_JS = `
 					if (item.kind === "text") drawText(targetCtx, item, width, height, false);
 				});
 			});
+			/* The exported frame carries the same burned-in subtitles as the preview. */
+			drawTimelineSubtitles(targetCtx, state.subtitles, seconds * 1000, width, height);
 		}
 		async function mixTimelineAudioForExport(durationSec) {
 			var AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -1938,7 +2097,7 @@ export const TIMELINE_EDITOR_JS = `
 			var subtitle = document.getElementById("timeline-project-subtitle");
 			var settings = transition && transition.basicSettings || {};
 			if (title) title.textContent = settings.title ? String(settings.title) : "Timeline editor";
-			if (subtitle) subtitle.textContent = "Quick Batch row " + String(settings.id || "") + " · " + state.scenes.length + " scenes · browser-only timing";
+			if (subtitle) subtitle.textContent = "Quick Batch row " + String(settings.id || "") + " · " + state.scenes.length + " scenes · " + String(state.videoStyle || "Cinematic Film") + " style · browser-only timing";
 		}
 
 		function boot() {
