@@ -1013,3 +1013,74 @@ Add export in the timeline header and play/pause and export beneath the preview;
 - `node --import tsx --test tests/timeline-editor.test.mjs tests/quick-batch-table.test.mjs`: 26 passed, including a new frame persistence, seeking, gap and control test. Browser MediaRecorder/audio mixing and visual appearance were not exercised by these JSDOM tests.
 - `npx tsc --noEmit` still reports numerous existing errors in `src/index.ts`; it is not a clean project-wide check.
 - Timeline export is a real-time browser recording, not the existing Quick Batch MP4 encoder; it does not yet preserve subtitle cues or audio embedded in video clips. Theme coverage uses the application's theme tokens for major surfaces but some timeline track/inspector details retain their existing dark styling.
+
+---
+
+## 13. Timeline Export MP4 button & red inverted-triangle moving seeker handle (2026-11-06)
+
+### 13.1 Request
+
+1. Add an **Export** button in the timeline editor page (`#view-timeline`).
+2. In the timeline at the bottom where there is a moving seeker when the video plays, add a **seeker handle** shaped like an **inverted triangle pointing down**, colored **red**, moving in sync as the seeker line moves.
+3. Study the codebase and reference `bug-fix-session-331.md`, and document these changes in `bug-fix-session-331.md`.
+
+### 13.2 Pre-change audit (what Section 12 left unfinished)
+
+1. **Export UI & contrast across themes:**
+   - `.te-topbar` rendered Export as a small muted `.te-secondary` button (`0.66rem`), `.te-dock-toolbar` at the bottom of `#view-timeline` had no Export control at all, and `--te-accent-ink` was set to `var(--bg)`, which turns primary CTA text near-invisible on light-background themes with bright accents (such as `neo`, where `--accent` is `#d8ff00` and `--bg` is `#f6f3e9`).
+   - Clicking Export gave no button `disabled` / `aria-busy` state or visual progress bar, detached `<a download>` from `document.body` before `.click()`, and relied solely on real-time `MediaRecorder(canvas.captureStream(30))` (typically `.webm`, vulnerable to tab throttling) rather than the studio's existing browser-only WebCodecs + `mp4-muxer@5.1.3` `.mp4` pipeline (`src/client/markup.ts` already loads `mp4-muxer@5.1.3`).
+2. **Seeker handle shape, color, clipping, and continuity:**
+   - `.te-ruler .te-playhead` was styled as `width: 12px; margin-left: -5px; background: var(--te-accent);` inside `.te-ruler { overflow: hidden; }`, while `.te-playhead` in `.te-lane` was a `2px` red line (`#ff5263`).
+   - That produced a 12×32px rectangular block in the theme accent color rather than a red downward-pointing inverted triangle (`▼`), clipped the left half of the handle at `0:00` (`left: 0px`), and left vertical breaks in the red seeker line across `.te-group-fill` header rows and collapsed audio lanes.
+
+### 13.3 Timeline Export MP4 buttons & WebCodecs + `Mp4Muxer` offline `.mp4` renderer
+
+1. **Prominent Export MP4 controls in all three timeline zones (`src/client/markup.ts`, `src/client/styles.ts`):**
+   - **Sticky top header (`.te-topbar`):** primary CTA `<button type="button" class="te-export te-primary" id="timeline-export-btn" data-timeline-action="export">⬇ Export MP4</button>`.
+   - **Preview transport bar (`.te-preview-controls`):** `<button type="button" class="te-export" data-timeline-action="export">⬇ Export MP4</button>` paired with synchronized live progress bar `#timeline-export-progress` / `#timeline-export-progress-bar`.
+   - **Bottom timeline dock toolbar (`.te-dock-toolbar` / `.te-dock-actions`):** `<button type="button" class="te-export" data-timeline-action="export">⬇ Export MP4</button>` directly above the tracks so users editing at the bottom of the page can export without scrolling up.
+   - Updated `--te-accent-ink: var(--t-on-accent, #10140d);` on `.timeline-editor-shell` (matching `#studio-app .app-generate`) so `.te-export` buttons stay high-contrast across all 7 studio themes (`default`, `strata`, `stellar`, `nightlab`, `paper`, `swiss`, `neo`).
+2. **Browser-only WebCodecs H.264 + AAC `Mp4Muxer` export (`src/client/timeline-editor.ts`):**
+   - Keeps RULE 1 / RULE 11 / RULE 28 intact: 100% browser-side rendering with zero Worker endpoints or network calls.
+   - **Primary path (`exportTimelineMp4`):** When `window.VideoEncoder`, `window.VideoFrame`, and `window.Mp4Muxer` are available:
+     - Mixes unmuted timeline audio tracks (`voiceover`, `sound-fx`, `background-music`) via `AudioContext.decodeAudioData` + `OfflineAudioContext` (with a pure-JS stereo PCM mixer fallback when `OfflineAudioContext` is absent) and encodes AAC (`"mp4a.40.2"`, 160 kbps) via `AudioEncoder` with bounded backpressure and flush timeouts.
+     - Renders deterministic 30 fps frames at even project dimensions (`exportWidth × exportHeight`) onto an offscreen canvas (`paintTimelineFrameAt`), seeking background `<video>` elements with a bounded timeout (`seekVideoForExport`), applying `window.__videoStyleFilter(state.videoStyle)` on Layer 0, and painting Layers 1..4 text/graphics clips above it with selection outlines suppressed (`!recorder && !isExporting`).
+     - Encodes H.264 (`"avc1.4d002a"` with `"avc1.42001f"` fallback via `VideoEncoder.isConfigSupported`), muxes video + AAC chunks into `Mp4Muxer.Muxer` (`fastStart: "in-memory"` up to 120s), closes every `VideoFrame` and encoder in `finally`, downloads `YouTubeVibeStudio_<slug>.mp4` via a `document.body`-attached `<a download>`, records `window.__TIMELINE_LAST_EXPORT__`, and restores `state.playheadSec` + UI button/progress state.
+   - **Fallback path (`exportTimelineMediaRecorder`):** Preserves real-time `MediaRecorder(canvas.captureStream(30))` recording when WebCodecs or `Mp4Muxer` is unavailable in the browser, now upgraded with MIME negotiation (`video/mp4` preferred before `video/webm`), live percentage updates on `#timeline-export-progress-bar`, synchronized button `disabled` state, and `document.body`-attached `<a download>`.
+   - Exposed `window.__TIMELINE_EDITOR__.exportTimeline` returning a Promise with `{ ok, format, mode, fileName, size }`.
+
+### 13.4 Red inverted-triangle seeker handle (`▼`) & continuous moving seeker line
+
+1. **Inverted-triangle geometry & unified `#ef4444` red (`src/client/styles.ts`):**
+   - Replaced the `12px` accent rectangle on `.te-ruler .te-playhead` with a `2px` `#ef4444` vertical stem (`margin-left: -1px`) matching `.te-playhead` across every track row.
+   - Added `.te-playhead-handle` inside `.te-ruler .te-playhead`:
+     - `width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 13px solid #ef4444; left: 50%; transform: translateX(-50%);` — forming a crisp 16×13px **red inverted triangle pointing straight down** into the `2px` red seeker line, with `filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .55))` and a `24×24px` `::after` hit-target cushion (`cursor: ew-resize`).
+   - Changed `.te-ruler` to `overflow: visible` with `z-index: 12` at rest and `#timeline-track-grid[data-scrolled="1"] .te-ruler { z-index: 8; }` when `#timeline-scroll.scrollLeft > 2`, so the full inverted triangle at `0:00` is never clipped in half while scrolled ticks still mask cleanly behind the sticky `TRACKS` corner (`z-index: 11`).
+2. **Continuous seeker line & synchronized playback/scrubbing (`src/client/timeline-editor.ts`):**
+   - `playheadHtml(leftPx, withHandle)` emits `<span class="te-playhead te-ruler-playhead" data-playhead ...><span class="te-playhead-handle" data-playhead-handle title="Drag seeker handle"></span></span>` in `.te-ruler`, and `<span class="te-playhead" data-playhead ...>` across `.te-group-fill` rows (`position: relative; overflow: hidden;`) as well as all `.te-lane` rows (including collapsed audio lanes), eliminating vertical gaps.
+   - `updatePlayhead()` updates `style.left` on every `[data-playhead]` element on each `previewTick` animation frame and `setPlayhead()` call, moving the red inverted-triangle handle and the vertical red seeker line in exact lockstep, and gently scrolls `#timeline-scroll` horizontally during playback when the moving seeker passes the visible right edge.
+   - `grid` `pointerdown` recognizes `[data-playhead-handle]` directly (in addition to `.te-ruler`), captures the pointer when available, and scrubs smoothly via `pointermove` / `seekAt()`.
+
+### 13.5 Verification
+
+- `node --import tsx --test tests/timeline-editor.test.mjs tests/quick-batch-table.test.mjs tests/final-media-cap-actions.test.mjs tests/template-composer.test.mjs tests/public-entry-points.test.mjs` — **67 / 67 passing** (`0` failures), including 3 new tests in `tests/timeline-editor.test.mjs`:
+  1. CSS + DOM + `requestAnimationFrame` playback + pointer-scrubbing verification for the red inverted-triangle seeker handle (`.te-playhead-handle`).
+  2. End-to-end WebCodecs (`VideoEncoder` + `VideoFrame` + `AudioEncoder` + `EncodedAudioChunk`) + `Mp4Muxer` `.mp4` export verification across all 3 Export MP4 buttons, progress UI, body-attached `<a download>`, and playhead restoration.
+  3. `MediaRecorder` fallback verification when WebCodecs / `Mp4Muxer` is absent.
+- `node --import tsx -e 'import { TIMELINE_EDITOR_JS } from "./src/client/timeline-editor.ts"; import { APP_JS } from "./src/client/app-js.ts"; new Function(TIMELINE_EDITOR_JS); new Function(APP_JS.replace("__PROMPTS_JSON__", "[]"));'` — **JS syntax OK**.
+- `npx wrangler deploy --dry-run` — **bundle compiles cleanly** (`2931.01 KiB / gzip: 1342.74 KiB`).
+
+### 13.6 Files touched in this section
+
+| File | Change |
+|---|---|
+| `src/client/markup.ts` | Upgraded `.te-topbar` and `.te-preview-controls` Export buttons to `.te-export` (`⬇ Export MP4`), added `#timeline-export-progress` / `#timeline-export-progress-bar`, and added a third `.te-export` button in `.te-dock-toolbar` above the bottom timeline tracks. |
+| `src/client/styles.ts` | Added `--te-accent-ink: var(--t-on-accent, #10140d)` and `.te-export` / `.te-export-progress*` styles; replaced the rectangular `.te-ruler .te-playhead` block with a `2px` `#ef4444` stem + `.te-playhead-handle` red downward-pointing inverted triangle (`border-top: 13px solid #ef4444`) + unclipped `0:00` ruler stacking + continuous `.te-group-fill` playhead rules. |
+| `src/client/timeline-editor.ts` | Emitted `[data-playhead-handle]` inside `.te-ruler` and continuous `[data-playhead]` segments across group-fill and lane rows; added playback horizontal auto-follow and direct handle scrubbing; implemented offline WebCodecs H.264 + AAC `Mp4Muxer` `.mp4` export (`exportTimelineMp4`) with `MediaRecorder` fallback (`exportTimelineMediaRecorder`) and `api.exportTimeline`. |
+| `tests/timeline-editor.test.mjs` | Updated Export button count (`3`) and added JSDOM tests for the red inverted-triangle seeker handle (playback sync + drag scrubbing), WebCodecs + `Mp4Muxer` MP4 video/audio export, and `MediaRecorder` fallback. |
+| `bug-fix-session-331.md` | Added Section 13 documenting the audit, architecture, CSS/JS changes, and verification results. |
+
+### 13.7 Status
+
+- Branch: `arena/f7b837b7-text-to-image-template` (`active`).
+- All timeline, Quick Batch, composer, and public entry-point test suites pass (`67 / 67`) and `wrangler deploy --dry-run` succeeds.

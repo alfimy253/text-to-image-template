@@ -426,7 +426,7 @@ test("frame details, ruler seeking, gap preview and controls survive timeline ed
  const canvas = w.document.getElementById("timeline-preview-canvas");
  assert.equal(canvas.width, 1080); assert.equal(canvas.height, 1920);
  assert.equal(state.videoStyle, "Neon Night");
- assert.equal(w.document.querySelectorAll('[data-timeline-action="export"]').length, 2);
+ assert.equal(w.document.querySelectorAll('[data-timeline-action="export"]').length, 3);
  assert.equal(w.document.querySelectorAll('[data-timeline-action="play"]').length, 2);
  assert.ok(w.document.querySelector('[data-scroll-lane]'));
  w.__TIMELINE_EDITOR__.setItemTiming("media-1", 10, 5);
@@ -438,4 +438,226 @@ test("frame details, ruler seeking, gap preview and controls survive timeline ed
  assert.equal(w.document.getElementById('timeline-current-scene').textContent, 'No scene selected');
  w.__TIMELINE_EDITOR__.save();
  assert.equal(JSON.parse(w.localStorage.getItem('ytvs.timeline-editor.v1.' + state.projectId)).frame.orientation, 'portrait');
+});
+
+test("timeline seeker handle is a red inverted triangle pointing down that moves in sync during playback and scrubbing", (t) => {
+	const handleMatch = APP_CSS.match(/\.te-playhead-handle\s*\{([^}]*)\}/);
+	assert.ok(handleMatch, ".te-playhead-handle CSS rule exists");
+	const handleCss = handleMatch[1];
+	assert.match(handleCss, /border-left:\s*8px solid transparent/, "left edge tapers inward");
+	assert.match(handleCss, /border-right:\s*8px solid transparent/, "right edge tapers inward");
+	assert.match(handleCss, /border-top:\s*13px solid #ef4444/i, "red top border forms an inverted triangle pointing down");
+	assert.match(handleCss, /transform:\s*translateX\(-50%\)/, "triangle tip is centered over the seeker line");
+
+	const playheadMatch = APP_CSS.match(/\.te-playhead\s*\{([^}]*)\}/);
+	assert.ok(playheadMatch, ".te-playhead CSS rule exists");
+	assert.match(playheadMatch[1], /background:\s*#ef4444/i, "seeker line uses matching red");
+
+	const rulerPlayheadMatch = APP_CSS.match(/\.te-ruler\s+\.te-playhead\s*\{([^}]*)\}/);
+	assert.ok(rulerPlayheadMatch, ".te-ruler .te-playhead CSS rule exists");
+	assert.match(rulerPlayheadMatch[1], /width:\s*2px/, "ruler stem matches the 2px red seeker line rather than a rectangular block");
+	assert.match(rulerPlayheadMatch[1], /background:\s*#ef4444/i);
+
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+
+	const rulerPlayhead = w.document.querySelector(".te-ruler [data-playhead]");
+	const handle = w.document.querySelector(".te-ruler [data-playhead] [data-playhead-handle]");
+	assert.ok(rulerPlayhead, "ruler contains the playhead stem");
+	assert.ok(handle, "ruler playhead contains the red inverted-triangle seeker handle");
+	assert.equal(handle.classList.contains("te-playhead-handle"), true);
+	assert.equal(parseFloat(rulerPlayhead.style.left), 0);
+
+	// Capture requestAnimationFrame so we can step real playback deterministically
+	let rafCallback = null;
+	let currentNow = 1000;
+	w.performance.now = () => currentNow;
+	w.requestAnimationFrame = (cb) => { rafCallback = cb; return 1; };
+
+	w.document.querySelector('[data-timeline-action="play"]').click();
+	assert.ok(rafCallback, "starting playback schedules a preview animation frame");
+
+	currentNow = 1200; // +0.20s -> 0.20 * 18 pps = 3.6px
+	const step1 = rafCallback;
+	rafCallback = null;
+	step1(currentNow);
+
+	const expectedLeft1 = "3.6px";
+	assert.equal(parseFloat(rulerPlayhead.style.left), 3.6);
+	const allLinesAfterStep1 = Array.from(w.document.querySelectorAll("[data-playhead]"));
+	assert.ok(allLinesAfterStep1.length >= 4, "continuous seeker spans ruler, group fills, and lanes");
+	for (const line of allLinesAfterStep1) {
+		assert.equal(line.style.left, expectedLeft1, "every seeker segment and the ruler handle parent move in lockstep");
+	}
+	assert.equal(handle.parentElement.style.left, expectedLeft1, "the red inverted-triangle handle moves with the seeker line");
+
+	// Stop playback and drag directly from the inverted-triangle seeker handle
+	w.document.querySelector('[data-timeline-action="play"]').click();
+	const ruler = w.document.querySelector(".te-ruler");
+	ruler.getBoundingClientRect = () => ({ left: 0 });
+	handle.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, clientX: 90 }));
+	assert.equal(state.playheadSec, 5, "pressing the inverted-triangle handle seeks immediately");
+	w.document.dispatchEvent(new w.MouseEvent("pointermove", { bubbles: true, clientX: 180 }));
+	assert.equal(state.playheadSec, 10, "dragging the inverted-triangle handle scrubs the seeker");
+	assert.equal(parseFloat(handle.parentElement.style.left), 180);
+	w.document.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
+});
+
+test("Export MP4 buttons appear in topbar, preview controls, and dock toolbar and export a valid MP4 via WebCodecs + Mp4Muxer", async (t) => {
+	const shortState = makeTimelineState();
+	shortState.projectId = "timeline-p_source_test-row-7";
+	shortState.durationSec = 1;
+	shortState.scenes = shortState.scenes.slice(0, 1);
+	shortState.scenes[0].durationSec = 1;
+	shortState.scenes[0].elements = [];
+	shortState.tracks.find((tr) => tr.id === "background-media").items = [
+		{ ...shortState.tracks.find((tr) => tr.id === "background-media").items[0], startSec: 0, durationSec: 1 }
+	];
+	shortState.tracks.find((tr) => tr.id === "visual-1").items = [
+		{ id: "title-1", kind: "text", label: "Title", text: "Hello timeline", sceneId: "scene-1", startSec: 0, durationSec: 1, x: 50, y: 78, fontSize: 28, color: "#ffffff", font: "sans", align: "center", visible: true }
+	];
+	shortState.playheadSec = 0.4;
+
+	const { dom, w } = openTimeline(shortState);
+	t.after(() => dom.window.close());
+
+	const topbarBtn = w.document.querySelector('.te-topbar [data-timeline-action="export"]');
+	const previewBtn = w.document.querySelector('.te-preview-controls [data-timeline-action="export"]');
+	const dockBtn = w.document.querySelector('.te-dock-toolbar [data-timeline-action="export"]');
+	assert.ok(topbarBtn && topbarBtn.classList.contains("te-export"), "topbar has a prominent Export MP4 button");
+	assert.ok(previewBtn && previewBtn.classList.contains("te-export"), "preview controls have an Export MP4 button");
+	assert.ok(dockBtn && dockBtn.classList.contains("te-export"), "timeline dock toolbar has an Export MP4 button");
+	assert.match(topbarBtn.textContent, /Export MP4/);
+
+	// Install deterministic WebCodecs + Mp4Muxer + AudioContext mocks on the window
+	let encodedFrames = 0;
+	let closedFrames = 0;
+	let muxedVideoChunks = 0;
+	let muxedAudioChunks = 0;
+	let sawBusyState = false;
+	let downloadAnchorInBody = false;
+	let downloadedFileName = "";
+
+	w.AudioContext = class {
+		async decodeAudioData() {
+			const samples = new Float32Array(4800).fill(0.25);
+			return { sampleRate: 48000, numberOfChannels: 2, length: 4800, duration: 0.1, getChannelData: () => samples };
+		}
+		async close() {}
+	};
+	await w.__TIMELINE_EDITOR__.addAudioFile("voiceover", new w.File([new Uint8Array([1, 2, 3, 4])], "voice.mp3", { type: "audio/mpeg" }));
+	w.__TIMELINE_EDITOR_STATE__.durationSec = 1;
+	w.__TIMELINE_EDITOR_STATE__.tracks.find((tr) => tr.id === "voiceover").items[0].durationSec = 1;
+	w.__TIMELINE_EDITOR_STATE__.playheadSec = 0.4;
+
+	w.HTMLAnchorElement.prototype.click = function () {
+		downloadAnchorInBody = w.document.body.contains(this);
+		downloadedFileName = this.download;
+	};
+	w.AudioData = class {
+		constructor(init) { this.timestamp = init.timestamp; this.numberOfFrames = init.numberOfFrames; }
+		close() {}
+	};
+	w.EncodedAudioChunk = class {
+		constructor(init) { Object.assign(this, init); }
+	};
+	w.AudioEncoder = class {
+		constructor({ output }) { this._output = output; this.encodeQueueSize = 0; this.state = "unconfigured"; }
+		configure() { this.state = "configured"; }
+		encode(audioData) {
+			this._output({
+				byteLength: 8,
+				timestamp: audioData.timestamp,
+				duration: Math.round((audioData.numberOfFrames / 48000) * 1000000),
+				type: "key",
+				copyTo(dest) { dest.fill(7); }
+			}, { decoderConfig: { codec: "mp4a.40.2" } });
+		}
+		async flush() {}
+		close() { this.state = "closed"; }
+	};
+	w.VideoFrame = class {
+		constructor(_source, init) { this.timestamp = init.timestamp; this.duration = init.duration; }
+		close() { closedFrames++; }
+	};
+	w.VideoEncoder = class {
+		constructor({ output }) { this._output = output; this.encodeQueueSize = 0; this.state = "unconfigured"; }
+		static async isConfigSupported(config) { return { supported: true, config }; }
+		configure() { this.state = "configured"; }
+		encode(frame, opts) {
+			if (topbarBtn.disabled && !w.document.getElementById("timeline-export-progress").hidden) {
+				sawBusyState = true;
+			}
+			encodedFrames++;
+			this._output({ byteLength: 16, timestamp: frame.timestamp, type: opts?.keyFrame ? "key" : "delta" }, {});
+		}
+		async flush() {}
+		close() { this.state = "closed"; }
+	};
+	w.Mp4Muxer = {
+		ArrayBufferTarget: class {
+			constructor() { this.buffer = new ArrayBuffer(64); }
+		},
+		Muxer: class {
+			constructor(options) { this.target = options.target; this.options = options; }
+			addVideoChunk() { muxedVideoChunks++; }
+			addAudioChunk() { muxedAudioChunks++; }
+			finalize() {}
+		}
+	};
+
+	const result = await w.__TIMELINE_EDITOR__.exportTimeline();
+	assert.equal(result.ok, true);
+	assert.equal(result.format, "mp4");
+	assert.equal(result.mode, "webcodecs");
+	assert.equal(encodedFrames, 30, "1 second timeline renders 30 deterministic frames at 30 fps");
+	assert.equal(closedFrames, 30, "every VideoFrame is closed immediately");
+	assert.equal(muxedVideoChunks, 30, "every encoded video chunk is muxed into the MP4 container");
+	assert.ok(muxedAudioChunks > 0, "encoded AAC soundtrack chunks are muxed into the MP4 container");
+	assert.equal(sawBusyState, true, "Export buttons disable and progress bar displays while rendering");
+	assert.equal(topbarBtn.disabled, false, "Export button re-enables after completion");
+	assert.equal(w.document.getElementById("timeline-export-progress").hidden, true, "progress bar hides after completion");
+	assert.equal(downloadAnchorInBody, true, "download link is attached to document.body before clicking");
+	assert.equal(downloadedFileName, "YouTubeVibeStudio_Garden_story.mp4");
+	assert.equal(Math.abs(w.__TIMELINE_EDITOR_STATE__.playheadSec - 0.4) < 0.001, true, "playhead position is restored after offline MP4 export");
+	assert.equal(w.__TIMELINE_LAST_EXPORT__.fileName, "YouTubeVibeStudio_Garden_story.mp4");
+});
+
+test("Export falls back cleanly to MediaRecorder when WebCodecs or Mp4Muxer is unavailable", async (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+
+	const canvas = w.document.getElementById("timeline-preview-canvas");
+	let stoppedTracks = 0;
+	canvas.captureStream = () => ({
+		getTracks: () => [{ stop() { stoppedTracks++; } }]
+	});
+	let downloadedName = "";
+	w.HTMLAnchorElement.prototype.click = function () { downloadedName = this.download; };
+	w.MediaRecorder = class {
+		static isTypeSupported(mime) { return mime === "video/webm"; }
+		constructor(_stream, opts) {
+			this.mimeType = opts?.mimeType || "video/webm";
+			this.state = "inactive";
+		}
+		start() {
+			this.state = "recording";
+			setTimeout(() => {
+				this.ondataavailable?.({ data: new w.Blob([new Uint8Array([1, 2, 3])], { type: this.mimeType }) });
+				this.state = "inactive";
+				this.onstop?.();
+			}, 10);
+		}
+		stop() {
+			this.state = "inactive";
+			this.onstop?.();
+		}
+	};
+
+	const result = await w.__TIMELINE_EDITOR__.exportTimeline();
+	assert.equal(result.ok, true);
+	assert.equal(result.mode, "mediarecorder");
+	assert.equal(downloadedName, "YouTubeVibeStudio_Garden_story.webm");
+	assert.equal(stoppedTracks, 1);
 });
