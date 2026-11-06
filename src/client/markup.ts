@@ -839,8 +839,8 @@ export const PAGE_MARKUP = `
 					<span id="timeline-project-subtitle">Adjust scene and element timing</span>
 				</div>
 				<span id="timeline-save-status" class="te-save-status" role="status" aria-live="polite">Local timing edits</span>
-				<button type="button" class="te-secondary" data-timeline-action="export">Export</button>
-				<button type="button" class="te-play te-primary" data-timeline-action="play">\u25b6 Play</button>
+				<button type="button" class="te-play" data-timeline-action="play">\u25b6 Play</button>
+				<button type="button" class="te-export te-primary" id="timeline-export-btn" data-timeline-action="export" title="Render and download this timeline as an MP4 video">\u2b07 Export MP4</button>
 			</div>
 
 			<!-- 1/3 — the full-width sticky preview canvas (320 px stage) -->
@@ -850,11 +850,12 @@ export const PAGE_MARKUP = `
 						<canvas id="timeline-preview-canvas" width="1280" height="720" aria-label="Timeline preview canvas"></canvas>
 						<div id="timeline-preview-placeholder" class="te-preview-placeholder">Select or upload media to preview this scene</div>
 					</div>
+					<div class="te-export-progress" id="timeline-export-progress" hidden aria-hidden="true"><div class="te-export-progress-bar" id="timeline-export-progress-bar"></div></div>
 					<div class="te-preview-controls">
 						<button type="button" data-timeline-action="restart" title="Return to the start">\u21ba</button>
 						<button type="button" data-timeline-action="step-back" title="Previous scene">\u2039</button>
-						<button type="button" class="te-play" data-timeline-action="play">Play</button>
-						<button type="button" data-timeline-action="export">Export</button>
+						<button type="button" class="te-play" data-timeline-action="play">\u25b6 Play</button>
+						<button type="button" class="te-export" data-timeline-action="export" title="Render and download this timeline as an MP4 video">\u2b07 Export MP4</button>
 						<button type="button" data-timeline-action="step-forward" title="Next scene">\u203a</button>
 						<output id="timeline-time-readout">0:00 / 1:00</output>
 					</div>
@@ -888,6 +889,7 @@ export const PAGE_MARKUP = `
 					<div class="te-dock-actions">
 							<button type="button" class="te-secondary" data-timeline-action="add-layer" title="Add a text and graphics lane, up to four">\uff0b Lane <span id="timeline-layer-count">1 / 4</span></button>
 						<label class="te-zoom">Zoom <input id="timeline-zoom" type="range" min="0.5" max="2" step="0.1" value="1"><output id="timeline-zoom-value">1\u00d7</output></label>
+						<button type="button" class="te-export" data-timeline-action="export" title="Render and download this timeline as an MP4 video">\u2b07 Export MP4</button>
 					</div>
 				</div>
 				<div class="te-timeline-scroll" id="timeline-scroll">

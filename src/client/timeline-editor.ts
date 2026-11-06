@@ -147,6 +147,7 @@ export const TIMELINE_EDITOR_JS = `
 		var pendingAudioTrackId = "";
 		var selectedSceneId = "";
 		var recorder = null;
+		var isExporting = false;
 		var exportAudioContext = null;
 		var audioSources = Object.create(null);
 		var canvas = document.getElementById("timeline-preview-canvas");
@@ -562,14 +563,23 @@ export const TIMELINE_EDITOR_JS = `
 			return '<button type="button" class="te-clip ' + esc(item.kind) + selected + empty + '" data-clip-id="' + esc(item.id) + '" data-track-id="' + esc(track.id) + '" style="left:' + left.toFixed(1) + 'px;width:' + width.toFixed(1) + 'px" title="' + esc(name + " · " + formatTime(item.startSec) + " · " + formatTime(item.durationSec)) + '">' +
 				'<span class="te-clip-label">' + esc(short) + '</span><span class="te-clip-time">' + esc(formatTime(item.durationSec)) + '</span><span class="te-clip-resize" data-resize-id="' + esc(item.id) + '" title="Drag to extend or shorten"></span></button>';
 		}
+		function playheadHtml(leftPx, withHandle) {
+			if (withHandle) {
+				return '<span class="te-playhead te-ruler-playhead" data-playhead style="left:' + leftPx + 'px"><span class="te-playhead-handle" data-playhead-handle title="Drag seeker handle"></span></span>';
+			}
+			return '<span class="te-playhead" data-playhead style="left:' + leftPx + 'px"></span>';
+		}
 		function renderTimeline() {
 			if (!state) return;
 			syncScenesFromTracks();
 			var grid = document.getElementById("timeline-track-grid");
 			if (!grid) return;
+			var scrollNode = document.getElementById("timeline-scroll");
+			grid.setAttribute("data-scrolled", scrollNode && scrollNode.scrollLeft > 2 ? "1" : "0");
 			var zoom = clamp(state.zoom, 0.5, 2);
 			var pps = Math.max(14, Math.min(48, 1080 / Math.max(20, state.durationSec))) * zoom;
 			var width = Math.max(720, Math.ceil(state.durationSec * pps));
+			var playheadLeft = (state.playheadSec * pps).toFixed(1);
 				grid.style.setProperty("--te-content-width", width + "px");
 				grid.style.gridTemplateColumns = "156px var(--te-content-width)";
 			var interval = state.durationSec <= 30 ? 2 : state.durationSec <= 120 ? 5 : state.durationSec <= 360 ? 10 : state.durationSec <= 900 ? 30 : 60;
@@ -577,7 +587,7 @@ export const TIMELINE_EDITOR_JS = `
 			for (var tick = 0; tick <= state.durationSec; tick += interval) {
 				html += '<span class="te-ruler-tick" style="left:' + (tick * pps).toFixed(1) + 'px"><i></i>' + esc(formatTime(tick)) + '</span>';
 			}
-			html += '<span class="te-playhead" data-playhead style="left:' + (state.playheadSec * pps).toFixed(1) + 'px"></span></div>';
+			html += playheadHtml(playheadLeft, true) + '</div>';
 			/*
 			 * The dock mirrors the paint stack top-down: text and graphics lanes come
 			 * first, and the single background layer sits pinned UNDER them. The dock is
@@ -587,21 +597,21 @@ export const TIMELINE_EDITOR_JS = `
 			 */
 			var visuals = visualTracks();
 			html += '<div class="te-group-title te-group-visuals"><span class="te-group-label">TEXT &amp; GRAPHICS <small>' + visuals.length + ' / ' + MAX_VISUAL_TRACKS + ' lanes · above the background</small></span></div>';
-			html += '<div class="te-group-fill te-visual-actions"><button type="button" class="te-add-inline" data-timeline-action="add-text">＋ Text</button><button type="button" class="te-add-inline" data-timeline-action="add-graphic">＋ Graphic</button></div>';
+			html += '<div class="te-group-fill te-visual-actions"><button type="button" class="te-add-inline" data-timeline-action="add-text">＋ Text</button><button type="button" class="te-add-inline" data-timeline-action="add-graphic">＋ Graphic</button>' + playheadHtml(playheadLeft, false) + '</div>';
 			visuals.forEach(function (track) {
 				html += '<div class="te-track-label' + (String(state.selectedTrackId) === String(track.id) ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(track.id) + '">' + esc(track.label) + '<small>' + (track.items.length ? track.items.length + (track.items.length === 1 ? " clip" : " clips") : "empty") + '</small></button></div>';
 				html += '<div class="te-lane te-visual-lane" data-lane-track="' + esc(track.id) + '" style="width:' + width + 'px">';
 				if (!track.items.length) html += '<span class="te-lane-empty-static">Use + Text or + Graphic to add an element</span>';
 				track.items.forEach(function (item) { html += htmlTrackItem(track, item, pps); });
-				html += '<span class="te-playhead" data-playhead style="left:' + (state.playheadSec * pps).toFixed(1) + 'px"></span></div>';
+				html += playheadHtml(playheadLeft, false) + '</div>';
 			});
-			html += '<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER <small>pinned lowest · Pixabay, GIF, image or MP4</small></span><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button></div><div class="te-group-fill te-group-fill-background"></div>';
+			html += '<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER <small>pinned lowest · Pixabay, GIF, image or MP4</small></span><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button></div><div class="te-group-fill te-group-fill-background">' + playheadHtml(playheadLeft, false) + '</div>';
 			var backgroundTrack = mediaTrack();
 			html += '<div class="te-track-label te-track-background' + (String(state.selectedTrackId) === MEDIA_TRACK_ID ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(MEDIA_TRACK_ID) + '">' + esc(backgroundTrack && backgroundTrack.label || MEDIA_TRACK_LABEL) + '<small><span class="te-track-badge">BG</span> ' + (backgroundTrack ? backgroundTrack.items.length + " scenes" : "empty") + '</small></button></div>';
 			html += '<div class="te-lane te-media-lane te-background-lane" data-lane-track="' + esc(MEDIA_TRACK_ID) + '" style="width:' + width + 'px">';
 			if (backgroundTrack) backgroundTrack.items.forEach(function (item) { html += htmlTrackItem(backgroundTrack, item, pps); });
-			html += '<span class="te-playhead" data-playhead style="left:' + (state.playheadSec * pps).toFixed(1) + 'px"></span></div>';
-			html += '<div class="te-group-title"><button type="button" class="te-group-toggle" data-timeline-action="toggle-sound" aria-expanded="' + (state.soundExpanded ? "true" : "false") + '"><span class="te-chevron">' + (state.soundExpanded ? "▾" : "▸") + '</span> Soundtrack <small>3 tracks</small></button></div><div class="te-group-fill"></div>';
+			html += playheadHtml(playheadLeft, false) + '</div>';
+			html += '<div class="te-group-title"><button type="button" class="te-group-toggle" data-timeline-action="toggle-sound" aria-expanded="' + (state.soundExpanded ? "true" : "false") + '"><span class="te-chevron">' + (state.soundExpanded ? "▾" : "▸") + '</span> Soundtrack <small>3 tracks</small></button></div><div class="te-group-fill">' + playheadHtml(playheadLeft, false) + '</div>';
 			var soundTracks = state.tracks.filter(function (track) { return track.kind === "audio"; });
 			if (state.soundExpanded) {
 				soundTracks.forEach(function (track) {
@@ -611,8 +621,8 @@ export const TIMELINE_EDITOR_JS = `
 					if (!collapsed) {
 						if (!track.items.length) html += '<button type="button" class="te-lane-empty" data-track-select="' + esc(track.id) + '">＋ Add ' + esc(track.label.toLowerCase()) + '</button>';
 						track.items.forEach(function (item) { html += htmlTrackItem(track, item, pps); });
-						html += '<span class="te-playhead" data-playhead style="left:' + (state.playheadSec * pps).toFixed(1) + 'px"></span>';
 					}
+					html += playheadHtml(playheadLeft, false);
 					html += '</div>';
 				});
 			}
@@ -645,7 +655,20 @@ export const TIMELINE_EDITOR_JS = `
 			if (!grid) return;
 			var zoom = clamp(state.zoom, 0.5, 2);
 			var pps = Math.max(14, Math.min(48, 1080 / Math.max(20, state.durationSec))) * zoom;
-			grid.querySelectorAll("[data-playhead]").forEach(function (line) { line.style.left = (state.playheadSec * pps).toFixed(1) + "px"; });
+			var playheadPx = state.playheadSec * pps;
+			var leftCss = playheadPx.toFixed(1) + "px";
+			grid.querySelectorAll("[data-playhead]").forEach(function (line) { line.style.left = leftCss; });
+			var scrollNode = document.getElementById("timeline-scroll");
+			if (isPlaying && scrollNode && scrollNode.clientWidth > 200) {
+				var labelWidth = 156;
+				var visibleWidth = Math.max(120, scrollNode.clientWidth - labelWidth);
+				if (playheadPx > scrollNode.scrollLeft + visibleWidth - 24) {
+					scrollNode.scrollLeft = Math.max(0, playheadPx - 48);
+				} else if (playheadPx < scrollNode.scrollLeft) {
+					scrollNode.scrollLeft = Math.max(0, playheadPx - 16);
+				}
+				grid.setAttribute("data-scrolled", scrollNode.scrollLeft > 2 ? "1" : "0");
+			}
 			updateReadout();
 		}
 		function setPlayhead(value, save) {
@@ -1213,7 +1236,7 @@ export const TIMELINE_EDITOR_JS = `
 					var live = state.playheadSec >= item.startSec && state.playheadSec < item.startSec + item.durationSec;
 					if (!live) return;
 					if (item.kind === "graphic" && item.visible !== false) drawGraphic(context, item, width, height);
-					if (item.kind === "text") drawText(context, item, width, height, !recorder && String(item.id) === String(state.selectedItemId));
+					if (item.kind === "text") drawText(context, item, width, height, !recorder && !isExporting && String(item.id) === String(state.selectedItemId));
 				});
 			});
 			var placeholder = document.getElementById("timeline-preview-placeholder");
@@ -1231,6 +1254,10 @@ export const TIMELINE_EDITOR_JS = `
 			if (isPlaying) {
 				var elapsed = Math.max(0, Math.min(0.25, (now - previousFrameAt) / 1000));
 				state.playheadSec += elapsed;
+				if (recorder && recorder.state === "recording") {
+					var recPct = state.durationSec > 0 ? clamp((state.playheadSec / state.durationSec) * 100, 0, 99) : 0;
+					setExportUi(true, "Exporting " + Math.round(recPct) + "%…", recPct);
+				}
 				if (state.playheadSec >= state.durationSec) {
 					state.playheadSec = state.durationSec;
 					setPlaying(false);
@@ -1267,10 +1294,10 @@ export const TIMELINE_EDITOR_JS = `
 
 		function handleAction(action, target) {
 			if (action === "export") { exportTimeline(); return; }
-			if (action === "play") { if (recorder) return; if (!isPlaying && state.playheadSec >= state.durationSec) setPlayhead(0, false); setPlaying(!isPlaying); return; }
-			if (action === "restart") { setPlaying(false); setPlayhead(0, true); return; }
-			if (action === "step-back") { moveScene(-1); return; }
-			if (action === "step-forward") { moveScene(1); return; }
+			if (action === "play") { if (recorder || isExporting) return; if (!isPlaying && state.playheadSec >= state.durationSec) setPlayhead(0, false); setPlaying(!isPlaying); return; }
+			if (action === "restart") { if (recorder || isExporting) return; setPlaying(false); setPlayhead(0, true); return; }
+			if (action === "step-back") { if (recorder || isExporting) return; moveScene(-1); return; }
+			if (action === "step-forward") { if (recorder || isExporting) return; moveScene(1); return; }
 			if (action === "add-layer") { addVisualTrack(); return; }
 			if (action === "add-text") { addVisualElementFromAction("text"); return; }
 			if (action === "add-graphic") { addVisualElementFromAction("graphic"); return; }
@@ -1286,39 +1313,495 @@ export const TIMELINE_EDITOR_JS = `
 			var pps = Math.max(14, Math.min(48, 1080 / Math.max(20, state.durationSec))) * clamp(state.zoom, 0.5, 2);
 			setPlayhead((x - ruler.getBoundingClientRect().left) / pps, true);
 		}
-		function exportTimeline() {
-			if (recorder) return;
-			if (!canvas.captureStream || typeof MediaRecorder === "undefined") { setStatus("Video export is not supported by this browser.", true); return; }
-			try {
-				setPlaying(false); setPlayhead(0, false);
-				var stream = canvas.captureStream(30);
-				var AudioCtx = window.AudioContext || window.webkitAudioContext;
-				if (AudioCtx) {
-					if (!exportAudioContext) exportAudioContext = new AudioCtx();
-					var destination = exportAudioContext.createMediaStreamDestination();
-					state.tracks.filter(function (track) { return track.kind === "audio"; }).forEach(function (track) { track.items.forEach(function (item) {
-						var asset = assetMap[item.assetId]; if (!asset || !asset.url) return;
-						var audio = audioMap[item.id] || (audioMap[item.id] = new Audio(asset.url));
-						var source = audioSources[item.id];
-						if (!source) { source = exportAudioContext.createMediaElementSource(audio); source.connect(exportAudioContext.destination); audioSources[item.id] = source; }
-						source.connect(destination);
-					}); });
-					destination.stream.getAudioTracks().forEach(function (track) { stream.addTrack(track); });
-					exportAudioContext.resume();
+		function exportFileSlug() {
+			var settings = transition && transition.basicSettings || {};
+			var raw = String(settings.title || (state && state.projectId) || "timeline");
+			var cleaned = raw.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48);
+			return "YouTubeVibeStudio_" + (cleaned || "timeline");
+		}
+		function setExportUi(active, label, percent) {
+			document.querySelectorAll('[data-timeline-action="export"]').forEach(function (button) {
+				button.disabled = Boolean(active);
+				button.setAttribute("aria-busy", active ? "true" : "false");
+				button.textContent = active ? String(label || "Exporting…") : "⬇ Export MP4";
+			});
+			document.querySelectorAll('[data-timeline-action="play"]').forEach(function (button) {
+				button.disabled = Boolean(active);
+			});
+			var wrap = document.getElementById("timeline-export-progress");
+			var bar = document.getElementById("timeline-export-progress-bar");
+			if (wrap) {
+				wrap.hidden = !active;
+				wrap.setAttribute("aria-hidden", active ? "false" : "true");
+			}
+			if (bar) {
+				bar.style.width = (active ? clamp(percent == null ? 0 : percent, 0, 100) : 0).toFixed(1) + "%";
+			}
+		}
+		function downloadExportBlob(blob, fileName, format, mode) {
+			var url = URL.createObjectURL(blob);
+			var link = document.createElement("a");
+			link.href = url;
+			link.download = fileName;
+			link.style.display = "none";
+			if (document.body) document.body.appendChild(link);
+			link.click();
+			if (link.parentNode) link.parentNode.removeChild(link);
+			setTimeout(function () { try { URL.revokeObjectURL(url); } catch (error) {} }, 10000);
+			var summary = { fileName: fileName, type: String(blob.type || ""), size: Number(blob.size || 0), format: format, mode: mode, createdAt: Date.now() };
+			window.__TIMELINE_LAST_EXPORT__ = summary;
+			return summary;
+		}
+		function seekVideoForExport(video, targetSec, timeoutMs) {
+			return new Promise(function (resolve) {
+				if (!video) { resolve(); return; }
+				var desired = Math.max(0, number(targetSec, 0));
+				if (Number.isFinite(video.duration) && video.duration > 0) desired = desired % video.duration;
+				if (Math.abs(number(video.currentTime, 0) - desired) <= 0.015 && !video.seeking) { resolve(); return; }
+				var done = false;
+				var timer = setTimeout(finish, timeoutMs || 900);
+				function finish() {
+					if (done) return;
+					done = true;
+					clearTimeout(timer);
+					try {
+						video.removeEventListener("seeked", finish);
+						video.removeEventListener("loadeddata", finish);
+						video.removeEventListener("error", finish);
+					} catch (error) {}
+					resolve();
 				}
-				var chunks = []; recorder = new MediaRecorder(stream);
-				recorder.ondataavailable = function (event) { if (event.data.size) chunks.push(event.data); };
-				recorder.onstop = function () {
-					var type = recorder.mimeType || "video/webm";
-					var url = URL.createObjectURL(new Blob(chunks, { type: type }));
-					var link = document.createElement("a"); link.href = url; link.download = "timeline." + (type.indexOf("mp4") >= 0 ? "mp4" : "webm"); link.click();
-					setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-					stream.getTracks().forEach(function (track) { track.stop(); });
-					Object.keys(audioSources).forEach(function (id) { try { audioSources[id].disconnect(destination); } catch (error) {} });
-					recorder = null; setStatus("Export complete.", false);
+				try {
+					video.addEventListener("seeked", finish);
+					video.addEventListener("loadeddata", finish);
+					video.addEventListener("error", finish);
+					video.currentTime = desired;
+				} catch (error) { finish(); }
+			});
+		}
+		function paintTimelineFrameAt(targetCtx, width, height, seconds) {
+			targetCtx.clearRect(0, 0, width, height);
+			targetCtx.fillStyle = "#08090c";
+			targetCtx.fillRect(0, 0, width, height);
+			var active = activeMediaAt(seconds);
+			var scene = active && active.sceneId ? sceneById(active.sceneId) : null;
+			var asset = active && active.assetId ? assetMap[active.assetId] : null;
+			var drawn = false;
+			if (active && active.visible !== false && asset) {
+				targetCtx.save();
+				if (window.__videoStyleFilter && "filter" in targetCtx) targetCtx.filter = window.__videoStyleFilter(state.videoStyle);
+				if (asset.video) {
+					drawn = (asset.video.readyState >= 2 || Number(asset.video.videoWidth || 0) > 0) && drawImageCover(targetCtx, asset.video, width, height, active.fit || "cover");
+				} else if (asset.image && (asset.image.complete || Number(asset.image.naturalWidth || 0) > 0)) {
+					drawn = drawImageCover(targetCtx, asset.image, width, height, active.fit || "cover");
+				}
+				targetCtx.restore();
+			}
+			if (!drawn && active) drawPlaceholder(targetCtx, width, height, scene);
+			visualTracks().forEach(function (track) {
+				track.items.forEach(function (item) {
+					var live = seconds >= item.startSec && seconds < item.startSec + item.durationSec;
+					if (!live) return;
+					if (item.kind === "graphic" && item.visible !== false) drawGraphic(targetCtx, item, width, height);
+					if (item.kind === "text") drawText(targetCtx, item, width, height, false);
+				});
+			});
+		}
+		async function mixTimelineAudioForExport(durationSec) {
+			var AudioCtx = window.AudioContext || window.webkitAudioContext;
+			if (!AudioCtx) return null;
+			var clips = [];
+			state.tracks.filter(function (track) { return track.kind === "audio"; }).forEach(function (track) {
+				track.items.forEach(function (item) {
+					if (!item || item.muted || number(item.volume, 1) <= 0) return;
+					var asset = item.assetId ? assetMap[item.assetId] : null;
+					if (!asset || !asset.blob) return;
+					clips.push({ item: item, blob: asset.blob, assetId: String(item.assetId) });
+				});
+			});
+			if (!clips.length) return null;
+			var decodeCtx = new AudioCtx();
+			var decodedByAsset = Object.create(null);
+			try {
+				for (var i = 0; i < clips.length; i++) {
+					var entry = clips[i];
+					if (decodedByAsset[entry.assetId]) continue;
+					var rawBuf = await entry.blob.arrayBuffer();
+					var decoded = await Promise.race([
+						decodeCtx.decodeAudioData(rawBuf.slice(0)),
+						new Promise(function (_, reject) { setTimeout(function () { reject(new Error("Audio decode timeout")); }, 15000); })
+					]);
+					if (decoded) decodedByAsset[entry.assetId] = decoded;
+				}
+			} finally {
+				try { if (typeof decodeCtx.close === "function") await decodeCtx.close(); } catch (error) {}
+			}
+			var sampleRate = 48000;
+			var firstKey = Object.keys(decodedByAsset)[0];
+			if (!firstKey) return null;
+			sampleRate = clamp(decodedByAsset[firstKey].sampleRate || 48000, 8000, 96000);
+			var totalFrames = Math.max(1, Math.ceil(durationSec * sampleRate));
+			var OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+			if (typeof OfflineCtx === "function") {
+				try {
+					var offline = new OfflineCtx(2, totalFrames, sampleRate);
+					clips.forEach(function (entry) {
+						var buffer = decodedByAsset[entry.assetId];
+						if (!buffer || !(buffer.duration > 0)) return;
+						var clipStart = clamp(entry.item.startSec, 0, durationSec);
+						var clipDur = Math.max(0, Math.min(entry.item.durationSec, durationSec - clipStart));
+						if (!(clipDur > 0)) return;
+						var src = offline.createBufferSource();
+						src.buffer = buffer;
+						src.loop = clipDur > buffer.duration + 0.02;
+						var gain = offline.createGain();
+						gain.gain.value = clamp(entry.item.volume == null ? 1 : entry.item.volume, 0, 1);
+						src.connect(gain);
+						gain.connect(offline.destination);
+						src.start(clipStart, 0, clipDur);
+					});
+					return await Promise.race([
+						offline.startRendering(),
+						new Promise(function (_, reject) { setTimeout(function () { reject(new Error("Audio mix timeout")); }, 30000); })
+					]);
+				} catch (error) {}
+			}
+			var leftOut = new Float32Array(totalFrames);
+			var rightOut = new Float32Array(totalFrames);
+			clips.forEach(function (entry) {
+				var buffer = decodedByAsset[entry.assetId];
+				if (!buffer || !buffer.length) return;
+				var vol = clamp(entry.item.volume == null ? 1 : entry.item.volume, 0, 1);
+				var startSample = Math.max(0, Math.floor(entry.item.startSec * sampleRate));
+				var endSample = Math.min(totalFrames, Math.ceil((entry.item.startSec + entry.item.durationSec) * sampleRate));
+				var srcL = buffer.getChannelData(0);
+				var srcR = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : srcL;
+				var ratio = (buffer.sampleRate || sampleRate) / sampleRate;
+				for (var dst = startSample; dst < endSample; dst++) {
+					var srcIdx = Math.floor((dst - startSample) * ratio) % srcL.length;
+					leftOut[dst] = clamp(leftOut[dst] + srcL[srcIdx] * vol, -1, 1);
+					rightOut[dst] = clamp(rightOut[dst] + srcR[srcIdx] * vol, -1, 1);
+				}
+			});
+			return {
+				sampleRate: sampleRate,
+				numberOfChannels: 2,
+				length: totalFrames,
+				duration: totalFrames / sampleRate,
+				getChannelData: function (ch) { return ch === 1 ? rightOut : leftOut; }
+			};
+		}
+		async function encodeTimelineAudioAac(audioBuffer, durationSec, onProgress) {
+			var AudioEnc = window.AudioEncoder;
+			var AudioFrame = window.AudioData;
+			if (!audioBuffer || typeof AudioEnc !== "function" || typeof AudioFrame !== "function") return null;
+			var sampleRate = audioBuffer.sampleRate || 48000;
+			var channels = Math.min(audioBuffer.numberOfChannels || 1, 2);
+			var totalSamples = Math.min(audioBuffer.length, Math.ceil(durationSec * sampleRate));
+			if (!(totalSamples > 0)) return null;
+			var left = audioBuffer.getChannelData(0);
+			var right = channels > 1 ? audioBuffer.getChannelData(1) : left;
+			var chunks = [];
+			var encodeErr = null;
+			var encoder = new AudioEnc({
+				output: function (chunk, meta) {
+					var bytes = new Uint8Array(chunk.byteLength);
+					chunk.copyTo(bytes);
+					chunks.push({ bytes: bytes, timestamp: chunk.timestamp, duration: chunk.duration || 0, type: chunk.type, meta: meta });
+				},
+				error: function (err) { encodeErr = err; }
+			});
+			try {
+				encoder.configure({ codec: "mp4a.40.2", sampleRate: sampleRate, numberOfChannels: channels, bitrate: 160000 });
+				var blockSize = 1024;
+				for (var offset = 0; offset < totalSamples; offset += blockSize) {
+					if (encodeErr) throw encodeErr;
+					var count = Math.min(blockSize, totalSamples - offset);
+					var pcm = new Int16Array(count * channels);
+					for (var s = 0; s < count; s++) {
+						var lVal = clamp(left[offset + s], -1, 1);
+						pcm[s * channels] = lVal < 0 ? Math.round(lVal * 32768) : Math.round(lVal * 32767);
+						if (channels > 1) {
+							var rVal = clamp(right[offset + s], -1, 1);
+							pcm[s * channels + 1] = rVal < 0 ? Math.round(rVal * 32768) : Math.round(rVal * 32767);
+						}
+					}
+					var audioData = new AudioFrame({
+						format: "s16",
+						sampleRate: sampleRate,
+						numberOfFrames: count,
+						numberOfChannels: channels,
+						timestamp: Math.round((offset / sampleRate) * 1000000),
+						data: pcm
+					});
+					encoder.encode(audioData);
+					audioData.close();
+					if (encoder.encodeQueueSize > 24) {
+						var waitStart = Date.now();
+						while (encoder.encodeQueueSize > 8 && !encodeErr) {
+							if (Date.now() - waitStart > 15000) throw new Error("Audio encoder backpressure timeout");
+							await new Promise(function (resolve) { setTimeout(resolve, 4); });
+						}
+					}
+					if (onProgress && ((offset / blockSize) % 32 === 0)) onProgress(offset / totalSamples);
+				}
+				await Promise.race([
+					encoder.flush(),
+					new Promise(function (_, reject) { setTimeout(function () { reject(new Error("Audio encoder flush timeout")); }, 30000); })
+				]);
+				if (encodeErr) throw encodeErr;
+				return chunks.length ? { chunks: chunks, sampleRate: sampleRate, channels: channels } : null;
+			} finally {
+				try { if (encoder.state !== "closed") encoder.close(); } catch (error) {}
+			}
+		}
+		function hasWebCodecsMp4Support() {
+			var muxerLib = window.Mp4Muxer;
+			return typeof window.VideoEncoder === "function" &&
+				typeof window.VideoFrame === "function" &&
+				Boolean(muxerLib) &&
+				typeof muxerLib.Muxer === "function" &&
+				typeof muxerLib.ArrayBufferTarget === "function";
+		}
+		async function exportTimelineMp4() {
+			var VideoEnc = window.VideoEncoder;
+			var VideoFrm = window.VideoFrame;
+			var EncAudioChunk = window.EncodedAudioChunk;
+			var muxerLib = window.Mp4Muxer;
+			var savedPlayhead = state.playheadSec;
+			var fps = 30;
+			var durationSec = Math.max(MIN_CLIP_SEC, Math.min(MAX_DURATION_SEC, number(state.durationSec, 5)));
+			var exportWidth = Math.max(256, Math.floor(clamp(state.frame && state.frame.width || 1280, 256, 3840) / 2) * 2);
+			var exportHeight = Math.max(256, Math.floor(clamp(state.frame && state.frame.height || 720, 256, 3840) / 2) * 2);
+			var renderCanvas = document.createElement("canvas");
+			renderCanvas.width = exportWidth;
+			renderCanvas.height = exportHeight;
+			var renderCtx = typeof renderCanvas.getContext === "function" ? renderCanvas.getContext("2d") : null;
+			if (!renderCtx && canvas && canvasContext) {
+				renderCanvas = canvas;
+				renderCtx = canvasContext;
+				exportWidth = Math.max(256, Math.floor((canvas.width || 1280) / 2) * 2);
+				exportHeight = Math.max(256, Math.floor((canvas.height || 720) / 2) * 2);
+			}
+			if (!renderCtx) throw new Error("2D canvas context is unavailable for MP4 export.");
+			isExporting = true;
+			setPlaying(false);
+			setExportUi(true, "Preparing MP4…", 2);
+			setSaveStatus("Rendering MP4…", false);
+			setStatus("Preparing timeline MP4 export…", false);
+			var videoEncoder = null;
+			try {
+				var audioTrack = null;
+				try {
+					var mixedAudio = await mixTimelineAudioForExport(durationSec);
+					if (mixedAudio) {
+						setExportUi(true, "Encoding audio…", 6);
+						setStatus("Encoding timeline soundtrack (AAC)…", false);
+						audioTrack = await encodeTimelineAudioAac(mixedAudio, durationSec, function (fraction) {
+							var pct = 6 + fraction * 12;
+							setExportUi(true, "Exporting " + Math.round(pct) + "%…", pct);
+						});
+					}
+				} catch (audioError) {
+					audioTrack = null;
+				}
+				var muxerOptions = {
+					target: new muxerLib.ArrayBufferTarget(),
+					video: { codec: "avc", width: exportWidth, height: exportHeight },
+					fastStart: durationSec <= 120 ? "in-memory" : false
 				};
-				recorder.start(); setStatus("Exporting in real time; keep this tab open. Timeline audio tracks are included; source-video audio and subtitles are not.", false); setPlaying(true);
-			} catch (error) { recorder = null; setStatus("Export failed: " + String(error.message || error), true); }
+				if (audioTrack) {
+					muxerOptions.audio = { codec: "aac", sampleRate: audioTrack.sampleRate, numberOfChannels: audioTrack.channels };
+				}
+				var muxer = new muxerLib.Muxer(muxerOptions);
+				var videoEncodeError = null;
+				videoEncoder = new VideoEnc({
+					output: function (chunk, meta) { muxer.addVideoChunk(chunk, meta); },
+					error: function (err) { videoEncodeError = err; }
+				});
+				var bitrate = exportWidth * exportHeight > 921600 ? 5000000 : 2500000;
+				var videoConfig = { codec: "avc1.4d002a", width: exportWidth, height: exportHeight, bitrate: bitrate, framerate: fps };
+				if (typeof VideoEnc.isConfigSupported === "function") {
+					try {
+						var check = await VideoEnc.isConfigSupported(videoConfig);
+						if (!check || !check.supported) videoConfig.codec = "avc1.42001f";
+					} catch (error) {}
+				}
+				videoEncoder.configure(videoConfig);
+				var totalFrames = Math.max(1, Math.ceil(durationSec * fps));
+				var frameDurationUs = Math.round(1000000 / fps);
+				var audioCursor = 0;
+				function drainAudioUpTo(timestampUs) {
+					if (!audioTrack || typeof EncAudioChunk !== "function") return;
+					while (audioCursor < audioTrack.chunks.length && audioTrack.chunks[audioCursor].timestamp <= timestampUs) {
+						var packet = audioTrack.chunks[audioCursor++];
+						var encoded = new EncAudioChunk({
+							type: packet.type,
+							timestamp: packet.timestamp,
+							duration: packet.duration,
+							data: packet.bytes
+						});
+						muxer.addAudioChunk(encoded, packet.meta);
+					}
+				}
+				for (var frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+					if (videoEncodeError) throw videoEncodeError;
+					var timeSec = Math.min(durationSec - 0.0001, frameIndex / fps);
+					var timestampUs = Math.round((frameIndex * 1000000) / fps);
+					var activeBg = activeMediaAt(timeSec);
+					var bgAsset = activeBg && activeBg.visible !== false && activeBg.assetId ? assetMap[activeBg.assetId] : null;
+					if (bgAsset && bgAsset.video) {
+						var videoOffset = Math.max(0, timeSec - activeBg.startSec + number(activeBg.trimStartSec, 0));
+						await seekVideoForExport(bgAsset.video, videoOffset, 900);
+					}
+					paintTimelineFrameAt(renderCtx, exportWidth, exportHeight, timeSec);
+					var frame = new VideoFrm(renderCanvas, { timestamp: timestampUs, duration: frameDurationUs });
+					try {
+						videoEncoder.encode(frame, { keyFrame: frameIndex % (fps * 5) === 0 });
+					} finally {
+						frame.close();
+					}
+					drainAudioUpTo(timestampUs);
+					if (videoEncoder.encodeQueueSize > 12) {
+						var bpStart = Date.now();
+						while (videoEncoder.encodeQueueSize > 4 && !videoEncodeError) {
+							if (Date.now() - bpStart > 15000) throw new Error("Video encoder backpressure timeout");
+							await new Promise(function (resolve) { setTimeout(resolve, 4); });
+						}
+					}
+					if (frameIndex % 15 === 0 || frameIndex === totalFrames - 1) {
+						var pct = 18 + ((frameIndex + 1) / totalFrames) * 78;
+						setExportUi(true, "Exporting " + Math.round(pct) + "%…", pct);
+						setSaveStatus("Rendering MP4 · " + Math.round(pct) + "%", false);
+						setStatus("Rendering MP4 frame " + (frameIndex + 1) + " / " + totalFrames + "…", false);
+						await new Promise(function (resolve) { setTimeout(resolve, 0); });
+					}
+				}
+				setExportUi(true, "Finalizing MP4…", 98);
+				await Promise.race([
+					videoEncoder.flush(),
+					new Promise(function (_, reject) { setTimeout(function () { reject(new Error("Video encoder flush timeout")); }, 180000); })
+				]);
+				if (videoEncodeError) throw videoEncodeError;
+				drainAudioUpTo(Number.MAX_SAFE_INTEGER);
+				muxer.finalize();
+				var mp4Buffer = muxer.target.buffer;
+				if (!mp4Buffer || !mp4Buffer.byteLength) throw new Error("Muxer produced an empty MP4 buffer.");
+				var mp4Blob = new Blob([mp4Buffer], { type: "video/mp4" });
+				var fileName = exportFileSlug() + ".mp4";
+				downloadExportBlob(mp4Blob, fileName, "mp4", "webcodecs");
+				setSaveStatus("MP4 exported", false);
+				setStatus("Export complete · downloaded " + fileName + ".", false);
+				return { ok: true, format: "mp4", mode: "webcodecs", fileName: fileName, size: mp4Blob.size };
+			} finally {
+				try { if (videoEncoder && videoEncoder.state !== "closed") videoEncoder.close(); } catch (error) {}
+				isExporting = false;
+				setExportUi(false, "", 0);
+				state.playheadSec = clamp(savedPlayhead, 0, state.durationSec);
+				updatePlayhead();
+				drawPreview();
+			}
+		}
+		function exportTimelineMediaRecorder() {
+			return new Promise(function (resolve) {
+				var RecorderCtor = window.MediaRecorder;
+				if (!canvas || !canvas.captureStream || typeof RecorderCtor !== "undefined" && typeof RecorderCtor !== "function" || typeof RecorderCtor === "undefined") {
+					setSaveStatus("Export unavailable", true);
+					setStatus("Video export is not supported by this browser.", true);
+					resolve({ ok: false, reason: "unsupported" });
+					return;
+				}
+				var destination = null;
+				var stream = null;
+				try {
+					setPlaying(false);
+					setPlayhead(0, false);
+					stream = canvas.captureStream(30);
+					var AudioCtx = window.AudioContext || window.webkitAudioContext;
+					if (AudioCtx) {
+						if (!exportAudioContext) exportAudioContext = new AudioCtx();
+						destination = exportAudioContext.createMediaStreamDestination();
+						state.tracks.filter(function (track) { return track.kind === "audio"; }).forEach(function (track) {
+							track.items.forEach(function (item) {
+								var asset = assetMap[item.assetId];
+								if (!asset || !asset.url) return;
+								var audio = audioMap[item.id] || (audioMap[item.id] = new Audio(asset.url));
+								var source = audioSources[item.id];
+								if (!source) {
+									source = exportAudioContext.createMediaElementSource(audio);
+									source.connect(exportAudioContext.destination);
+									audioSources[item.id] = source;
+								}
+								source.connect(destination);
+							});
+						});
+						destination.stream.getAudioTracks().forEach(function (track) { stream.addTrack(track); });
+						if (typeof exportAudioContext.resume === "function") exportAudioContext.resume();
+					}
+					var preferredType = "";
+					if (typeof RecorderCtor.isTypeSupported === "function") {
+						["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"].some(function (candidate) {
+							if (RecorderCtor.isTypeSupported(candidate)) { preferredType = candidate; return true; }
+							return false;
+						});
+					}
+					var chunks = [];
+					recorder = preferredType ? new RecorderCtor(stream, { mimeType: preferredType }) : new RecorderCtor(stream);
+					recorder.ondataavailable = function (event) { if (event.data && event.data.size) chunks.push(event.data); };
+					recorder.onerror = function (event) {
+						if (stream) stream.getTracks().forEach(function (track) { try { track.stop(); } catch (error) {} });
+						if (destination) Object.keys(audioSources).forEach(function (id) { try { audioSources[id].disconnect(destination); } catch (error) {} });
+						recorder = null;
+						setExportUi(false, "", 0);
+						var message = String(event && event.error && event.error.message || "Recording error");
+						setSaveStatus("Export failed", true);
+						setStatus("Export failed: " + message, true);
+						resolve({ ok: false, reason: message });
+					};
+					recorder.onstop = function () {
+						var activeRecorder = recorder;
+						var type = (activeRecorder && activeRecorder.mimeType) || preferredType || "video/webm";
+						var ext = type.indexOf("mp4") >= 0 ? "mp4" : "webm";
+						var outBlob = new Blob(chunks, { type: type });
+						var fileName = exportFileSlug() + "." + ext;
+						downloadExportBlob(outBlob, fileName, ext, "mediarecorder");
+						if (stream) stream.getTracks().forEach(function (track) { try { track.stop(); } catch (error) {} });
+						if (destination) Object.keys(audioSources).forEach(function (id) { try { audioSources[id].disconnect(destination); } catch (error) {} });
+						recorder = null;
+						setExportUi(false, "", 0);
+						setSaveStatus("Export complete", false);
+						setStatus("Export complete · downloaded " + fileName + ".", false);
+						resolve({ ok: true, format: ext, mode: "mediarecorder", fileName: fileName, size: outBlob.size });
+					};
+					setExportUi(true, "Exporting 0%…", 0);
+					setSaveStatus("Recording export…", false);
+					setStatus("Exporting in real time; keep this tab open.", false);
+					recorder.start();
+					setPlaying(true);
+				} catch (error) {
+					if (stream) stream.getTracks().forEach(function (track) { try { track.stop(); } catch (err) {} });
+					recorder = null;
+					setExportUi(false, "", 0);
+					var reason = String(error && error.message || error);
+					setSaveStatus("Export failed", true);
+					setStatus("Export failed: " + reason, true);
+					resolve({ ok: false, reason: reason });
+				}
+			});
+		}
+		async function exportTimeline() {
+			if (!state || recorder || isExporting) return { ok: false, reason: "busy" };
+			if (hasWebCodecsMp4Support()) {
+				try {
+					return await exportTimelineMp4();
+				} catch (error) {
+					var reason = String(error && error.message || error);
+					setSaveStatus("Export failed", true);
+					setStatus("Export failed: " + reason, true);
+					return { ok: false, reason: reason };
+				}
+			}
+			return await exportTimelineMediaRecorder();
 		}
 		function bindEvents() {
 			var root = document.getElementById("timeline-editor");
@@ -1338,7 +1821,14 @@ export const TIMELINE_EDITOR_JS = `
 					if (found) chooseItem(found.track, found.item);
 				}
 			});
+			var scrollEl = document.getElementById("timeline-scroll");
+			if (scrollEl) {
+				scrollEl.addEventListener("scroll", function () {
+					grid.setAttribute("data-scrolled", scrollEl.scrollLeft > 2 ? "1" : "0");
+				}, { passive: true });
+			}
 			grid.addEventListener("click", function (event) {
+				if (isExporting || recorder) return;
 				var lane = event.target && event.target.closest ? event.target.closest("[data-lane-track]") : null;
 				if (!lane || (event.target.closest && (event.target.closest("[data-clip-id]") || event.target.closest("[data-track-select]")))) return;
 				var rect = lane.getBoundingClientRect();
@@ -1346,10 +1836,18 @@ export const TIMELINE_EDITOR_JS = `
 				setPlayhead((event.clientX - rect.left) / pps, true);
 			});
 			grid.addEventListener("pointerdown", function (event) {
-				var ruler = event.target && event.target.closest && event.target.closest(".te-ruler");
+				if (isExporting || recorder) return;
+				var seekerHandle = event.target && event.target.closest && event.target.closest("[data-playhead-handle]");
+				var ruler = (seekerHandle && grid.querySelector(".te-ruler")) || (event.target && event.target.closest && event.target.closest(".te-ruler"));
 				var scrollLane = event.target && event.target.closest && event.target.closest("[data-scroll-lane]");
 				if (ruler) {
-					activeDrag = { mode: "seek" }; seekAt(event.clientX, ruler); event.preventDefault(); return;
+					activeDrag = { mode: "seek" };
+					seekAt(event.clientX, ruler);
+					if (event.pointerId != null && ruler.setPointerCapture) {
+						try { ruler.setPointerCapture(event.pointerId); } catch (error) {}
+					}
+					event.preventDefault();
+					return;
 				}
 				if (scrollLane) { activeDrag = { mode: "scroll", startX: event.clientX, scrollLeft: document.getElementById("timeline-scroll").scrollLeft }; event.preventDefault(); return; }
 				var clip = event.target && event.target.closest ? event.target.closest("[data-clip-id]") : null;
@@ -1492,6 +1990,7 @@ export const TIMELINE_EDITOR_JS = `
 		api.save = persistNow;
 		api.addMediaFiles = addMediaFiles;
 		api.addAudioFile = addAudioFile;
+		api.exportTimeline = exportTimeline;
 		api.booted = true;
 
 		boot();

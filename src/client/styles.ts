@@ -9110,7 +9110,8 @@ export const APP_CSS = `
 			--te-border: #30333d;
 			--te-muted: var(--text);
 			--te-accent: var(--accent);
-			--te-accent-ink: var(--bg);
+			--te-accent-ink: var(--t-on-accent, #10140d);
+			--te-seeker-red: #ef4444;
 			width: 100%;
 			min-height: 100vh;
 			min-height: 100dvh;
@@ -9145,6 +9146,7 @@ export const APP_CSS = `
 
 		.te-back,
 		.te-play,
+		.te-export,
 		.te-preview-controls button,
 		.te-secondary,
 		.te-add-inline,
@@ -9197,6 +9199,16 @@ export const APP_CSS = `
 		.te-play {
 			padding: 8px 14px;
 			font-weight: 800;
+			white-space: nowrap;
+		}
+
+		.te-export {
+			padding: 8px 14px;
+			border-color: var(--te-accent);
+			background: var(--te-accent);
+			color: var(--te-accent-ink);
+			font-weight: 800;
+			font-size: 0.78rem;
 			white-space: nowrap;
 		}
 
@@ -9329,6 +9341,27 @@ export const APP_CSS = `
 			display: none !important;
 		}
 
+		.te-export-progress {
+			flex: 0 0 auto;
+			width: 100%;
+			height: 6px;
+			overflow: hidden;
+			border-radius: 999px;
+			background: rgba(255, 255, 255, .12);
+		}
+
+		.te-export-progress[hidden] {
+			display: none !important;
+		}
+
+		.te-export-progress-bar {
+			width: 0%;
+			height: 100%;
+			border-radius: 999px;
+			background: var(--te-accent);
+			transition: width 120ms linear;
+		}
+
 		.te-preview-controls {
 			flex: 0 0 auto;
 			display: flex;
@@ -9343,7 +9376,19 @@ export const APP_CSS = `
 			font-size: 1.05rem;
 		}
 
-		 .te-preview-controls button[data-timeline-action="play"], .te-preview-controls button[data-timeline-action="export"] { width: auto; padding: 0 12px; font-size: .8rem; }
+		.te-preview-controls button[data-timeline-action="play"],
+		.te-preview-controls button[data-timeline-action="export"] {
+			width: auto;
+			padding: 0 12px;
+			font-size: 0.78rem;
+			font-weight: 800;
+		}
+
+		.te-preview-controls button.te-export {
+			border-color: var(--te-accent);
+			background: var(--te-accent);
+			color: var(--te-accent-ink);
+		}
 		.te-preview-controls output {
 			margin-left: auto;
 			color: #d4d7df;
@@ -9711,6 +9756,11 @@ export const APP_CSS = `
 			font-variant-numeric: tabular-nums;
 		}
 
+		.te-dock-toolbar .te-export {
+			padding: 6px 11px;
+			font-size: 0.72rem;
+		}
+
 		.te-timeline-scroll {
 			flex: 1 1 auto;
 			min-height: 220px;
@@ -9757,13 +9807,57 @@ export const APP_CSS = `
 		.te-ruler {
 			position: sticky;
 			left: auto;
+			z-index: 12;
 			background: var(--card);
-			overflow: hidden;
+			overflow: visible;
+			cursor: pointer;
+			touch-action: none;
 		}
 
-		 .te-scroll-lane { height: 26px; background: var(--te-lane); cursor: grab; touch-action: pan-x; }
-		.te-ruler { cursor: pointer; touch-action: none; }
-		.te-ruler .te-playhead { pointer-events: auto; width: 12px; margin-left: -5px; cursor: ew-resize; background: var(--te-accent); }
+		#timeline-track-grid[data-scrolled="1"] .te-ruler {
+			z-index: 8;
+		}
+
+		.te-scroll-lane {
+			height: 26px;
+			background: var(--te-lane);
+			cursor: grab;
+			touch-action: pan-x;
+		}
+
+		.te-ruler .te-playhead {
+			pointer-events: auto;
+			z-index: 9;
+			width: 2px;
+			margin-left: -1px;
+			cursor: ew-resize;
+			background: #ef4444;
+		}
+
+		.te-playhead-handle {
+			position: absolute;
+			top: 0;
+			left: 50%;
+			width: 0;
+			height: 0;
+			border-left: 8px solid transparent;
+			border-right: 8px solid transparent;
+			border-top: 13px solid #ef4444;
+			transform: translateX(-50%);
+			pointer-events: auto;
+			cursor: ew-resize;
+			filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .55));
+		}
+
+		.te-playhead-handle::after {
+			content: "";
+			position: absolute;
+			top: -15px;
+			left: -12px;
+			width: 24px;
+			height: 24px;
+		}
+
 		.te-ruler-tick {
 			position: absolute;
 			top: 0;
@@ -9809,6 +9903,8 @@ export const APP_CSS = `
 		}
 
 		.te-group-fill {
+			position: relative;
+			overflow: hidden;
 			min-height: 31px;
 			border-bottom: 1px solid #282b33;
 			background: repeating-linear-gradient(90deg, #191b22 0, #191b22 80px, #20222a 81px, #20222a 82px);
@@ -10084,8 +10180,9 @@ export const APP_CSS = `
 			bottom: 0;
 			z-index: 6;
 			width: 2px;
-			background: #ff5263;
-			box-shadow: 0 0 4px rgba(255, 82, 99, .7);
+			margin-left: -1px;
+			background: #ef4444;
+			box-shadow: 0 0 4px rgba(239, 68, 68, .75);
 			pointer-events: none;
 		}
 
@@ -10154,7 +10251,8 @@ export const APP_CSS = `
 			.te-save-status {
 				font-size: 0.57rem;
 			}
-			.te-play {
+			.te-play,
+			.te-export {
 				padding: 7px 9px;
 				font-size: 0.68rem;
 			}
