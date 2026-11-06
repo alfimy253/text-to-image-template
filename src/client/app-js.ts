@@ -7493,6 +7493,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
+	// Consistent stock-media treatments for Quick Batch and the timeline.
+	window.__videoStyleFilter = function (style) {
+		return ({ "Cinematic Film": "contrast(1.12) saturate(0.9)", "Editorial Magazine": "contrast(1.08) saturate(0.85)", "Kinetic Typography": "contrast(1.1)", "Neon Night": "contrast(1.15) saturate(1.4) hue-rotate(12deg)", "Minimalist": "saturate(0.65) contrast(1.05)", "Retro Poster": "sepia(0.32) saturate(1.25) contrast(1.12)", "Documentary": "saturate(0.8) contrast(1.05)", "Split Composition": "contrast(1.1)", "Dream Glow": "brightness(1.1) saturate(1.15)", "Pop Comic": "contrast(1.25) saturate(1.5)" })[style] || "none";
+	};
+
 	const SEO_IMAGE_STYLES = [
 		"Cinematic Film",
 		"Editorial Magazine",
@@ -9266,6 +9271,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		durationSec = Math.max(durationSec, cursor);
 		return {
 			version: 3,
+			frame: batchRowDimensions(row),
+			videoStyle: row.style || "Cinematic Film",
 			durationSec: Math.min(3600, durationSec),
 			playheadSec: 0,
 			soundExpanded: false,
@@ -12045,6 +12052,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				const drawHeight =
 					sourceHeight * cover;
 
+				context.save();
+				if ("filter" in context) context.filter = window.__videoStyleFilter(row.style);
 				context.drawImage(
 					slide.img,
 					(width - drawWidth) / 2,
@@ -12052,6 +12061,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					drawWidth,
 					drawHeight
 				);
+				context.restore();
 
 			}
 
@@ -12244,6 +12254,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				rowDims.width,
 			frameHeight:
 				rowDims.height,
+			videoStyle: row.style,
 			batchRow:
 				true
 		};
@@ -17581,6 +17592,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				project.audio;
 
 			renderContext = {
+				videoStyle: project.videoImageStyle,
 				fileName:
 					"YouTubeVibeStudio_" +
 					project.name.replace(
@@ -25035,6 +25047,8 @@ async function retryImagePromptFlow(n) {
 						)
 					) {
 
+						ctx.save();
+						if ("filter" in ctx) ctx.filter = window.__videoStyleFilter(renderContext && renderContext.videoStyle);
 						ctx.drawImage(
 							img,
 							dx,
@@ -25042,6 +25056,7 @@ async function retryImagePromptFlow(n) {
 							dw,
 							dh
 						);
+						ctx.restore();
 
 					}
 

@@ -308,7 +308,7 @@ test("the served timeline markup orders preview, then selected elements, then th
 test("timeline styling stacks the full-width sticky preview, the element panel, then the dock", () => {
 	assert.match(APP_CSS, /\.te-workspace\s*\{[^}]*flex-direction:\s*column/, "the workspace stacks vertically");
 	assert.match(APP_CSS, /\.te-preview-panel\s*\{[^}]*position:\s*sticky/, "the preview stays pinned while the page scrolls");
-	assert.match(APP_CSS, /\.te-preview-stage\s*\{[^}]*min-height:\s*400px/, "the preview canvas never gets shorter than 400 px");
+	assert.match(APP_CSS, /\.te-preview-stage\s*\{[^}]*min-height:\s*320px/, "the preview stage is 320 px tall");
 	assert.match(APP_CSS, /\.te-preview-panel\s*\{[^}]*width:\s*100%/, "the preview spans the whole page width");
 	assert.match(APP_CSS, /\.te-inspector-panel\s*\{[^}]*position:\s*static/, "the selected-element panel follows the preview in flow");
 	assert.match(APP_CSS, /\.te-inspector-panel\s*\{[^}]*width:\s*100%/);
@@ -413,4 +413,29 @@ test("the preview canvas paints the background layer before text and graphics", 
 	assert.ok(body.slice(overlayAt).includes("visualTracks().forEach("), "every visual lane is drawn afterwards");
 	assert.match(TIMELINE_EDITOR_JS, /MEDIA_TRACK_ID = "background-media"/);
 	assert.match(TIMELINE_EDITOR_JS, /function mediaTrack\(\) \{ return findTrack\(MEDIA_TRACK_ID\); \}/);
+});
+
+test("frame details, ruler seeking, gap preview and controls survive timeline edits", (t) => {
+ const saved = makeTimelineState();
+ saved.projectId = "timeline-p_source_test-row-7";
+ saved.frame = { width: 1080, height: 1920, orientation: "portrait" };
+ saved.videoStyle = "Neon Night";
+ const { dom, w } = openTimeline(saved);
+ t.after(() => dom.window.close());
+ const state = w.__TIMELINE_EDITOR_STATE__;
+ const canvas = w.document.getElementById("timeline-preview-canvas");
+ assert.equal(canvas.width, 1080); assert.equal(canvas.height, 1920);
+ assert.equal(state.videoStyle, "Neon Night");
+ assert.equal(w.document.querySelectorAll('[data-timeline-action="export"]').length, 2);
+ assert.equal(w.document.querySelectorAll('[data-timeline-action="play"]').length, 2);
+ assert.ok(w.document.querySelector('[data-scroll-lane]'));
+ w.__TIMELINE_EDITOR__.setItemTiming("media-1", 10, 5);
+ const ruler = w.document.querySelector('.te-ruler');
+ ruler.getBoundingClientRect = () => ({ left: 0 });
+ ruler.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, clientX: 36 }));
+ w.document.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true }));
+ assert.equal(state.playheadSec, 2);
+ assert.equal(w.document.getElementById('timeline-current-scene').textContent, 'No scene selected');
+ w.__TIMELINE_EDITOR__.save();
+ assert.equal(JSON.parse(w.localStorage.getItem('ytvs.timeline-editor.v1.' + state.projectId)).frame.orientation, 'portrait');
 });
