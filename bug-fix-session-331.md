@@ -1749,4 +1749,4 @@ The failure/cancellation sets are the same pre-existing Pixabay, relay, image-ba
 - Branch: `arena/e8450094-text-to-image-template` (the only branch this section was written on).
 - The documented source of truth is the current code in this workspace; this file is the secondary reference and now matches it.
 - Focused suites 86 / 86 green; `tests/timeline-editor.test.mjs` 26 / 26 (23 before + 3 new); full suite 543 total / 497 pass / 40 fail / 6 cancelled with a failure-name set identical to `459be7b`; `tsc --noEmit` identical to `459be7b` (31 pre-existing `src/index.ts` diagnostics); `wrangler deploy --dry-run` compiles at 3004.31 KiB / 1361.60 KiB gzip.
-- Commit: see the commit that carries this section plus the code in 17.7.
+- Commit: `bf976af` *"Section 17: duplicate placement after the original, background-owned child text/graphics, and the 70/30 child panel"* (the code in 17.7 and this doc record ride in it; the verification numbers above were re-measured on that tree).
