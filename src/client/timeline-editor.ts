@@ -425,6 +425,13 @@ export const TIMELINE_EDITOR_JS = `
 			out.assetId = String(out.assetId || "");
 			out.label = String(out.label || out.name || (out.kind === "text" ? "Text" : out.kind === "graphic" ? "Graphic" : out.kind === "audio" ? "Audio" : "Media"));
 			out.visible = out.visible !== false;
+			/*
+			 * A text or graphic added FROM a background clip stores that clip's
+			 * id here. The timing of a child is bound to the background clip
+			 * only (see bindChildTimings / clampChildToParent), which is what
+			 * the left child panel and the duplicate rule both rely on.
+			 */
+			out.parentId = String(out.parentId || "");
 			if (out.kind === "text") {
 				out.text = String(out.text || "");
 				out.x = clamp(out.x, 0, 100);
@@ -530,6 +537,12 @@ export const TIMELINE_EDITOR_JS = `
 				layer.items = layer.items.filter(function (item) { return !isCaptionItem(item); });
 			});
 			tracks = tracks.concat(visualLayers);
+			/*
+			 * Saved child elements are re-bound to their background clip on
+			 * every load: a missing parent drops the link, a valid one clamps
+			 * the child back inside the clip's own window.
+			 */
+			bindChildTimings(tracks);
 			/*
 			 * The row's video style arrives as project data: the handoff puts it
 			 * in basicSettings.style, in projectDetail.style and in
@@ -637,6 +650,84 @@ export const TIMELINE_EDITOR_JS = `
 		 */
 		function mediaTrack() { return findTrack(MEDIA_TRACK_ID); }
 		function visualTracks() { return state.tracks.filter(function (track) { return track.kind === "visual"; }); }
+		/*
+		 * Child text/graphics
+		 * -------------------
+		 * A text or graphic that was added FROM a background clip carries the
+		 * clip id in parentId. Its timing depends on that background clip
+		 * alone: the child can only live inside the background's own
+		 * [start, end] window, and when the background clip moves or is
+		 * resized the child is clamped back inside it. Nothing else owns the
+		 * relation, so the dock, the inspector, the left child panel and the
+		 * duplicate rule all read the same two helpers below.
+		 */
+		function childWindow(parentItem) {
+			var start = number(parentItem && parentItem.startSec, 0);
+			var end = start + Math.max(MIN_CLIP_SEC, number(parentItem && parentItem.durationSec, MIN_CLIP_SEC));
+			return { start: start, end: end };
+		}
+		function childItemsFor(parentItem) {
+			var list = [];
+			if (!parentItem) return list;
+			visualTracks().forEach(function (track) {
+				track.items.forEach(function (item) {
+					if (item && item.parentId && String(item.parentId) === String(parentItem.id)) list.push({ track: track, item: item });
+				});
+			});
+			return list.sort(function (a, b) { return a.item.startSec - b.item.startSec; });
+		}
+		/*
+		 * The background clip the selection belongs to: the selected background
+		 * itself, or the background of the selected child. Null for every other
+		 * selection, and that is what gives the preview its 100 % width back.
+		 */
+		function backgroundContext() {
+			var entry = selectedEntry();
+			var item = entry && entry.item;
+			if (!item) return null;
+			if (item.kind === "media") return item;
+			if (item.parentId) {
+				var parent = findItem(item.parentId);
+				if (parent && parent.item && parent.item.kind === "media") return parent.item;
+			}
+			return null;
+		}
+		function clampChildToParent(item) {
+			if (!item || !item.parentId) return;
+			var found = findItem(item.parentId);
+			var parent = found && found.item;
+			if (!parent || parent.kind !== "media") { item.parentId = ""; return; }
+			var limits = childWindow(parent);
+			item.startSec = clamp(item.startSec, limits.start, Math.max(limits.start, limits.end - MIN_CLIP_SEC));
+			item.durationSec = clamp(item.durationSec, MIN_CLIP_SEC, Math.max(MIN_CLIP_SEC, limits.end - item.startSec));
+			item.sceneId = String(parent.sceneId || item.sceneId || "");
+		}
+		function syncChildrenToParent(parentItem) {
+			if (!parentItem || parentItem.kind !== "media") return;
+			visualTracks().forEach(function (track) {
+				track.items.forEach(function (item) {
+					if (item && item.parentId && String(item.parentId) === String(parentItem.id)) clampChildToParent(item);
+				});
+			});
+		}
+		function bindChildTimings(tracks) {
+			var media = (tracks || []).filter(function (track) { return track && track.kind === "media"; })[0] || null;
+			if (!media) return;
+			var parents = Object.create(null);
+			(media.items || []).forEach(function (item) { parents[String(item.id)] = item; });
+			(tracks || []).forEach(function (track) {
+				if (!track || track.kind !== "visual") return;
+				(track.items || []).forEach(function (item) {
+					if (!item || !item.parentId) return;
+					var parent = parents[String(item.parentId)];
+					if (!parent) { item.parentId = ""; return; }
+					var end = parent.startSec + parent.durationSec;
+					item.sceneId = String(parent.sceneId || item.sceneId || "");
+					item.startSec = clamp(item.startSec, parent.startSec, Math.max(parent.startSec, end - MIN_CLIP_SEC));
+					item.durationSec = clamp(item.durationSec, MIN_CLIP_SEC, Math.max(MIN_CLIP_SEC, end - item.startSec));
+				});
+			});
+		}
 		function sceneElementTracks() { return visualTracks(); }
 		function sceneElementEntries(sceneId) {
 			var list = [];
@@ -916,6 +1007,12 @@ export const TIMELINE_EDITOR_JS = `
 			var durationDelta = nextDuration - oldDuration;
 			item.startSec = nextStart;
 			item.durationSec = nextDuration;
+			/*
+			 * A child text/graphic never leaves its background clip: any
+			 * timing edit (inspector, dock drag or resize) is clamped back
+			 * into the background's own window.
+			 */
+			if (track.kind === "visual" && item.parentId) clampChildToParent(item);
 			if (track.kind === "media" && item.sceneId) {
 				if (Math.abs(startDelta) > 0.0001) {
 					var related = sceneElementTracks().reduce(function (all, elementTrack) { return all.concat(elementTrack.items.filter(function (candidate) { return String(candidate.sceneId || "") === String(item.sceneId); })); }, []);
@@ -931,6 +1028,13 @@ export const TIMELINE_EDITOR_JS = `
 					});
 				}
 			}
+			/*
+			 * Child elements follow their background clip. The scene ripple
+			 * above already carried the child along when the background moved;
+			 * this clamp is what keeps it inside the background's new window
+			 * when the clip was shortened or lengthened.
+			 */
+			if (track.kind === "media") syncChildrenToParent(item);
 			ensureTimelineEnd(item.startSec + item.durationSec);
 			state.playheadSec = clamp(state.playheadSec, 0, state.durationSec);
 			renderTimeline();
@@ -1056,9 +1160,26 @@ export const TIMELINE_EDITOR_JS = `
 
 		function renderItemControls(inspector, track, item) {
 			var cap = Math.min(MAX_DURATION_SEC, Math.max(60, state.durationSec * 2, item.startSec + item.durationSec));
+			var parentEntry = item.parentId ? findItem(item.parentId) : null;
+			var parentItem = parentEntry && parentEntry.item && parentEntry.item.kind === "media" ? parentEntry.item : null;
 			addSectionTitle(inspector, "Timing");
+			if (parentItem) {
+				/*
+				 * A child of a background clip has no free timing: both ranges
+				 * are capped by the background's own window, so the child can
+				 * never be moved outside the clip that owns it.
+				 */
+				var parentLimits = childWindow(parentItem);
+				addRange(inspector, "Start inside background (seconds)", item.startSec, parentLimits.start, Math.max(parentLimits.start, parentLimits.end - MIN_CLIP_SEC), 0.25, function (value) { itemTimingChanged(findItem(item.id), value, item.durationSec, false, true); }, "s");
+				addRange(inspector, "Duration inside background (seconds)", item.durationSec, MIN_CLIP_SEC, Math.max(MIN_CLIP_SEC, parentLimits.end - item.startSec), 0.25, function (value) { itemTimingChanged(findItem(item.id), item.startSec, value, false, true); }, "s");
+				var boundNote = document.createElement("div");
+				boundNote.className = "te-inspector-note";
+				boundNote.textContent = 'Child of the background clip "' + String(parentItem.label || "media") + '" (' + formatTime(parentLimits.start) + ' – ' + formatTime(parentLimits.end) + '). Its timing depends on that clip only: move or resize the background to move the whole window.';
+				inspector.appendChild(boundNote);
+			} else {
 				addRange(inspector, "Start (seconds)", item.startSec, 0, cap, 0.25, function (value) { itemTimingChanged(findItem(item.id), value, item.durationSec, false, true); }, "s");
 				addRange(inspector, "Duration (seconds)", item.durationSec, MIN_CLIP_SEC, cap, 0.25, function (value) { itemTimingChanged(findItem(item.id), item.startSec, value, track.kind === "media", true); }, "s");
+			}
 
 			if (item.kind === "media") {
 				addSectionTitle(inspector, "Background media");
@@ -1069,6 +1190,37 @@ export const TIMELINE_EDITOR_JS = `
 				addSelect(inspector, "Fit", [["Fill frame", "cover"], ["Fit inside", "contain"]], item.fit || "cover", function (value) { item.fit = value; drawPreview(); scheduleSave(); });
 				addRange(inspector, "Trim in (seconds)", item.trimStartSec || 0, 0, 600, 0.25, function (value) { item.trimStartSec = value; drawPreview(); scheduleSave(); }, "s");
 				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { item.visible = value; drawPreview(); scheduleSave(); });
+				/*
+				 * ＋ Child text / ＋ Child graphic live on the background clip
+				 * itself: a background (Pixabay image, GIF or MP4) always offers
+				 * its two child buttons, and the child timing is the background
+				 * clip's window (never the playhead).
+				 */
+				addSectionTitle(inspector, "Child text & graphics");
+				var childActions = document.createElement("div");
+				childActions.className = "tm-scene-photo-controls";
+				var childTextButton = document.createElement("button");
+				childTextButton.type = "button";
+				childTextButton.className = "tm-scene-add";
+				childTextButton.textContent = "＋ Child text";
+				childTextButton.title = "Add a text that lives inside this background clip's window";
+				childTextButton.addEventListener("click", function () { addChildVisualElement("text", item); });
+				childActions.appendChild(childTextButton);
+				var childGraphicButton = document.createElement("button");
+				childGraphicButton.type = "button";
+				childGraphicButton.className = "tm-scene-add";
+				childGraphicButton.textContent = "＋ Child graphic";
+				childGraphicButton.title = "Add a graphic that lives inside this background clip's window";
+				childGraphicButton.addEventListener("click", function () { addChildVisualElement("graphic", item); });
+				childActions.appendChild(childGraphicButton);
+				inspector.appendChild(childActions);
+				var children = childItemsFor(item);
+				var childNote = document.createElement("div");
+				childNote.className = "te-inspector-note";
+				childNote.textContent = children.length
+					? (children.length + (children.length === 1 ? " child element is" : " child elements are") + " bound to this background clip's window. They are listed and edited in the child panel on the left and can be dragged on the preview canvas.")
+					: "No child text or graphic yet. Use the buttons above: the child is timed by this background clip only and can be dragged on the preview canvas.";
+				inspector.appendChild(childNote);
 				return;
 			}
 			if (item.kind === "audio") {
@@ -1118,6 +1270,7 @@ export const TIMELINE_EDITOR_JS = `
 			var selector = document.getElementById("timeline-element-selector");
 			var empty = document.getElementById("timeline-inspector-empty");
 			var deleteButton = document.getElementById("timeline-delete-element");
+			var duplicateButton = document.getElementById("timeline-duplicate-element");
 			if (!inspector || !selector) return;
 			inspector.innerHTML = "";
 			selector.innerHTML = "";
@@ -1147,8 +1300,93 @@ export const TIMELINE_EDITOR_JS = `
 				deleteButton.hidden = !canDelete;
 				deleteButton.disabled = !canDelete;
 			}
+			if (duplicateButton) {
+				duplicateButton.hidden = !item;
+				duplicateButton.disabled = !item;
+			}
 			if (item && track) renderItemControls(inspector, track, item);
 			else if (track) renderTrackControls(inspector, track);
+			/* The left child panel is driven by the same selection. */
+			renderChildPanel();
+		}
+
+		/*
+		 * The left child panel
+		 * --------------------
+		 * While a background clip (Pixabay image, GIF or MP4) - or one of its
+		 * own children - is selected, the stage row splits 70 / 30: the preview
+		 * keeps 70 % and this panel owns the other 30 %. It offers the
+		 * ＋ Child text / ＋ Child graphic buttons, the list of the background's
+		 * child clips and the editor of the selected child. Selecting any other
+		 * element hides the panel and gives the preview its 100 % width back.
+		 */
+		function renderChildPanel() {
+			var row = document.getElementById("timeline-stage-row");
+			var panel = document.getElementById("timeline-child-panel");
+			var listRoot = document.getElementById("timeline-child-list");
+			var editorRoot = document.getElementById("timeline-child-editor");
+			if (!row || !panel || !listRoot || !editorRoot) return;
+			var parentItem = backgroundContext();
+			var entry = selectedEntry();
+			listRoot.innerHTML = "";
+			editorRoot.innerHTML = "";
+			if (row.classList) {
+				if (parentItem) row.classList.add("te-child-open");
+				else row.classList.remove("te-child-open");
+			}
+			panel.hidden = !parentItem;
+			if (!parentItem) return;
+			var limits = childWindow(parentItem);
+			var children = childItemsFor(parentItem);
+			var title = document.getElementById("timeline-child-title");
+			if (title) title.textContent = String(parentItem.label || parentItem.name || "Background clip");
+			var windowLabel = document.getElementById("timeline-child-window");
+			if (windowLabel) windowLabel.textContent = "Pinned window " + formatTime(limits.start) + " – " + formatTime(limits.end) + " · " + children.length + (children.length === 1 ? " child element" : " child elements");
+			if (!children.length) {
+				var empty = document.createElement("p");
+				empty.className = "te-child-empty";
+				empty.textContent = "No child text or graphic yet. Use ＋ Child text or ＋ Child graphic above.";
+				listRoot.appendChild(empty);
+			}
+			children.forEach(function (child) {
+				var isSelected = Boolean(entry && entry.item && String(entry.item.id) === String(child.item.id));
+				var rowNode = document.createElement("div");
+				rowNode.className = "te-child-row" + (isSelected ? " selected" : "");
+				rowNode.setAttribute("data-child-id", String(child.item.id));
+				rowNode.setAttribute("role", "button");
+				rowNode.setAttribute("tabindex", "0");
+				rowNode.title = "Select this child element";
+				var label = document.createElement("span");
+				label.className = "te-child-row-label";
+				label.textContent = child.item.kind === "text"
+					? "Text · " + (String(child.item.text || "").slice(0, 26) || "empty")
+					: "Graphic · " + String(child.item.graphic || "shape");
+				var time = document.createElement("span");
+				time.className = "te-child-row-time";
+				time.textContent = formatTime(child.item.startSec) + " · " + formatTime(child.item.durationSec);
+				var remove = document.createElement("button");
+				remove.type = "button";
+				remove.className = "te-child-row-delete";
+				remove.setAttribute("data-child-delete-id", String(child.item.id));
+				remove.title = "Delete this child element";
+				remove.textContent = "✕";
+				rowNode.appendChild(label);
+				rowNode.appendChild(time);
+				rowNode.appendChild(remove);
+				listRoot.appendChild(rowNode);
+			});
+			if (entry && entry.item && entry.item.parentId && String(entry.item.parentId) === String(parentItem.id)) {
+				var editorTitle = document.createElement("div");
+				editorTitle.className = "te-child-editor-title";
+				editorTitle.textContent = entry.item.kind === "text" ? "Editing child text" : "Editing child graphic";
+				editorRoot.appendChild(editorTitle);
+				renderItemControls(editorRoot, entry.track, entry.item);
+			} else {
+				var hint = document.createElement("p");
+				hint.className = "te-child-empty";
+				hint.textContent = "Select a child element in the list to edit it here, or drag it on the preview canvas to place it. Child timing follows this background clip only.";
+				editorRoot.appendChild(hint);
+			}
 		}
 
 		function addVisualTrack() {
@@ -1165,27 +1403,186 @@ export const TIMELINE_EDITOR_JS = `
 			setStatus("Added " + track.label + " lane.", false);
 			return track;
 		}
-		function addVisualElement(kind, targetTrack) {
+		/*
+		 * parentItem is optional: when it is a background clip the new text
+		 * or graphic is created as that clip's CHILD. Its timing is the
+		 * background clip's own window (never the playhead) and it stores the
+		 * clip id in parentId, which is what binds the two together.
+		 */
+		function addVisualElement(kind, targetTrack, parentItem) {
 			var track = targetTrack && targetTrack.kind === "visual" ? targetTrack : findTrack(state.selectedTrackId);
 			if (!track || track.kind !== "visual") track = visualTracks()[0] || addVisualTrack();
 			if (!track) return null;
-			var scene = activeSceneAt(state.playheadSec) || state.scenes[0];
-			var start = clamp(state.playheadSec, 0, MAX_DURATION_SEC);
+			var parent = parentItem && parentItem.kind === "media" ? parentItem : null;
+			var scene = parent ? sceneById(parent.sceneId) : activeSceneAt(state.playheadSec) || state.scenes[0];
+			var start = parent ? clamp(parent.startSec, 0, MAX_DURATION_SEC) : clamp(state.playheadSec, 0, MAX_DURATION_SEC);
+			var duration = parent ? clamp(parent.durationSec, MIN_CLIP_SEC, MAX_DURATION_SEC) : 4;
+			var sceneId = parent && parent.sceneId ? String(parent.sceneId) : (scene && scene.id || "");
 			var id = makeId(kind);
 			var item = kind === "graphic" ? {
-				id: id, kind: "graphic", graphic: "circle", label: "Graphic", sceneId: scene && scene.id || "",
-				startSec: start, durationSec: 4, x: 50, y: 50, size: 72, color: "#7aac2b", visible: true
+				id: id, kind: "graphic", graphic: "circle", label: "Graphic", sceneId: sceneId,
+				startSec: start, durationSec: duration, x: 50, y: 50, size: 72, color: "#7aac2b", visible: true, parentId: parent ? String(parent.id) : ""
 			} : {
-				id: id, kind: "text", label: "Text", text: "Add your text", sceneId: scene && scene.id || "",
-				startSec: start, durationSec: 4, x: 50, y: 78, fontSize: 28, color: "#ffffff", font: "sans", align: "center", visible: true
+				id: id, kind: "text", label: "Text", text: "Add your text", sceneId: sceneId,
+				startSec: start, durationSec: duration, x: 50, y: 78, fontSize: 28, color: "#ffffff", font: "sans", align: "center", visible: true, parentId: parent ? String(parent.id) : ""
 			};
 			track.items.push(item);
 			state.selectedTrackId = track.id;
 			state.selectedItemId = id;
 			if (scene) selectedSceneId = scene.id;
+			/*
+			 * A child has to be on screen to be dragged into place, so a
+			 * playhead that sits outside the background window is parked at
+			 * the window start. The child can then be dragged on the canvas.
+			 */
+			if (parent) {
+				var parentLimits = childWindow(parent);
+				if (state.playheadSec < parentLimits.start || state.playheadSec >= parentLimits.end) state.playheadSec = parentLimits.start;
+			}
 			ensureTimelineEnd(start + item.durationSec);
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
 			return item;
+		}
+		/*
+		 * ＋ Child text / ＋ Child graphic: the buttons that live on a background
+		 * clip (in its inspector, in the selected-element header of the left
+		 * child panel and on the panel itself). A child always opens its own
+		 * lane on top like every other ＋ Text / ＋ Graphic click, and its
+		 * timing is the background clip's window.
+		 */
+		function addChildVisualElement(kind, parentItem) {
+			var parent = parentItem && parentItem.kind === "media" ? parentItem : backgroundContext();
+			if (!parent) {
+				setStatus("Select a background clip (Pixabay image, GIF or MP4) before adding a child text or graphic.", true);
+				return null;
+			}
+			var lanes = visualTracks();
+			var track = null;
+			var capped = false;
+			if (lanes.length >= MAX_VISUAL_TRACKS) {
+				track = lanes[lanes.length - 1] || null;
+				capped = true;
+			} else {
+				track = addVisualTrack();
+			}
+			if (!track) return null;
+			var item = addVisualElement(kind, track, parent);
+			if (item) {
+				var limits = childWindow(parent);
+				setStatus("Added a child " + kind + " inside " + String(parent.label || "the background clip") + " (" + formatTime(limits.start) + " – " + formatTime(limits.end) + "). Drag it on the preview canvas to place it." + (capped ? " Four lanes are already open, so it was added to the top layer." : ""), false);
+			}
+			return item;
+		}
+		/*
+		 * Duplicate
+		 * ---------
+		 * The copy is always placed immediately AFTER the original: its start
+		 * is the original's end (start + duration). That is the "next time
+		 * unit" for a background clip (one clip = one unit of the timeline)
+		 * and the "after the original timing ends" slot for a text, graphic or
+		 * audio clip. A duplicated background clip also duplicates its own
+		 * child text/graphics, so the copy is never an empty scene.
+		 */
+		function duplicateLabelFor(source) {
+			var base = String(source && (source.label || source.name) || (source && source.kind) || "Clip").replace(/ copy( \d+)?$/, "").slice(0, 60);
+			var labels = [];
+			state.tracks.forEach(function (track) {
+				track.items.forEach(function (item) { labels.push(String(item.label || item.name || "")); });
+			});
+			var candidate = base + " copy";
+			var counter = 1;
+			while (labels.indexOf(candidate) !== -1 && counter < 50) {
+				counter += 1;
+				candidate = base + " copy " + counter;
+			}
+			return candidate.slice(0, 80);
+		}
+		function duplicateSelectedItem() {
+			var found = selectedEntry();
+			if (!found) { setStatus("Select a clip in the timeline before duplicating it.", true); return null; }
+			var source = found.item;
+			var track = found.track;
+			var copy = deepCopy(source);
+			if (!copy) { setStatus("This clip could not be duplicated.", true); return null; }
+			var start = clamp(source.startSec + source.durationSec, 0, MAX_DURATION_SEC);
+			copy.id = makeId(source.kind);
+			copy.label = duplicateLabelFor(source);
+			copy.startSec = start;
+			copy.durationSec = clamp(source.durationSec, MIN_CLIP_SEC, MAX_DURATION_SEC);
+			delete copy.dummy;
+			var detachedChild = false;
+			if (source.kind === "media") {
+				/*
+				 * A duplicated background clip gets its own scene record, so
+				 * the dock, the scene list and the saved project all describe
+				 * the copy as a real unit next to the original.
+				 */
+				var sourceScene = source.sceneId ? sceneById(source.sceneId) : null;
+				var sceneCopy = sourceScene ? deepCopy(sourceScene) : { elements: [] };
+				sceneCopy = sceneCopy || { elements: [] };
+				sceneCopy.id = makeId("scene");
+				sceneCopy.name = String(sourceScene && sourceScene.name || "Scene") + " copy";
+				sceneCopy.startSec = start;
+				sceneCopy.durationSec = copy.durationSec;
+				sceneCopy.mediaType = source.mediaType || sceneCopy.mediaType || "image";
+				sceneCopy.mediaAssetId = source.assetId || "";
+				sceneCopy.mediaName = source.label || sceneCopy.mediaName || "";
+				sceneCopy.mediaSource = source.mediaSource || sceneCopy.mediaSource || "";
+				sceneCopy.elements = [];
+				var sceneIndex = state.scenes.indexOf(sourceScene);
+				if (sceneIndex === -1) state.scenes.push(sceneCopy);
+				else state.scenes.splice(sceneIndex + 1, 0, sceneCopy);
+				state.scenes.forEach(function (scene, position) { scene.index = position; });
+				copy.sceneId = sceneCopy.id;
+				var sourceIndex = track.items.indexOf(source);
+				track.items.splice(sourceIndex === -1 ? track.items.length : sourceIndex + 1, 0, copy);
+				/*
+				 * The background clip owns its children, so its duplicate owns
+				 * copies of them (same lane, same offset inside the window).
+				 */
+				childItemsFor(source).forEach(function (entry) {
+					var offset = entry.item.startSec - source.startSec;
+					var childCopy = deepCopy(entry.item);
+					if (!childCopy) return;
+					childCopy.id = makeId(entry.item.kind);
+					childCopy.parentId = copy.id;
+					childCopy.sceneId = sceneCopy.id;
+					childCopy.startSec = clamp(start + offset, start, start + copy.durationSec - MIN_CLIP_SEC);
+					childCopy.durationSec = clamp(entry.item.durationSec, MIN_CLIP_SEC, Math.max(MIN_CLIP_SEC, start + copy.durationSec - childCopy.startSec));
+					entry.track.items.push(childCopy);
+				});
+			} else {
+				var ownIndex = track.items.indexOf(source);
+				track.items.splice(ownIndex === -1 ? track.items.length : ownIndex + 1, 0, copy);
+				if (source.parentId) {
+					/*
+					 * A child copy only stays a child when the whole copy fits
+					 * inside the background window; otherwise it becomes a free
+					 * clip at the same "after the original" position.
+					 */
+					var parentEntry = findItem(source.parentId);
+					var parentItem = parentEntry && parentEntry.item;
+					var fits = parentItem && copy.startSec + copy.durationSec <= (parentItem.startSec + parentItem.durationSec) + 0.001;
+					if (fits) {
+						copy.parentId = String(parentItem.id);
+						copy.sceneId = String(parentItem.sceneId || copy.sceneId || "");
+					} else {
+						copy.parentId = "";
+						detachedChild = true;
+						var landing = activeSceneAt(copy.startSec);
+						if (landing) copy.sceneId = landing.id;
+					}
+				}
+			}
+			state.selectedTrackId = track.id;
+			state.selectedItemId = copy.id;
+			if (copy.sceneId) selectedSceneId = copy.sceneId;
+			ensureTimelineEnd(copy.startSec + copy.durationSec);
+			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
+			var message = 'Duplicated "' + String(source.label || source.name || source.kind) + '" at ' + formatTime(copy.startSec) + ' - right after the original ends.';
+			if (detachedChild) message += " The copy falls outside the background window, so it is now a free clip.";
+			setStatus(message, false);
+			return copy;
 		}
 		function deleteSelectedItem() {
 			var found = selectedEntry();
@@ -1196,6 +1593,14 @@ export const TIMELINE_EDITOR_JS = `
 			}
 			var removed = found.item;
 			found.track.items = found.track.items.filter(function (item) { return item !== removed; });
+			if (removed.kind === "media") {
+				/*
+				 * A child cannot outlive the background clip that owns it.
+				 * The scene cascade below covers the scene-linked elements;
+				 * this line covers a child that lost its scene link meanwhile.
+				 */
+				sceneElementTracks().forEach(function (track) { track.items = track.items.filter(function (item) { return String(item.parentId || "") !== String(removed.id); }); });
+			}
 			if (removed.kind === "media" && removed.sceneId) {
 				state.scenes = state.scenes.filter(function (scene) { return String(scene.id) !== String(removed.sceneId); });
 				sceneElementTracks().forEach(function (track) { track.items = track.items.filter(function (item) { return String(item.sceneId || "") !== String(removed.sceneId); }); });
@@ -1788,19 +2193,23 @@ export const TIMELINE_EDITOR_JS = `
 		 * its own readout as well as the model.
 		 */
 		function syncPositionControls(item) {
-			var inspector = document.getElementById("timeline-inspector");
-			if (!inspector || !item) return;
-			["x", "y"].forEach(function (axis) {
-				var input = inspector.querySelector('[data-te-position="' + axis + '"]');
-				if (!input) return;
-				var value = axis === "x" ? number(item.x, 50) : number(item.y, 78);
-				var text = String(Math.round(value * 10) / 10);
-				if (String(input.value) === text) return;
-				input.value = text;
-				try {
-					var event = document.createEvent ? document.createEvent("Event") : null;
-					if (event) { event.initEvent("input", true, false); input.dispatchEvent(event); }
-				} catch (error) {}
+			/* The same X/Y control can live in the inspector and in the left child panel. */
+			var hosts = [document.getElementById("timeline-inspector"), document.getElementById("timeline-child-editor")];
+			if (!item) return;
+			hosts.forEach(function (host) {
+				if (!host) return;
+				["x", "y"].forEach(function (axis) {
+					var input = host.querySelector('[data-te-position="' + axis + '"]');
+					if (!input) return;
+					var value = axis === "x" ? number(item.x, 50) : number(item.y, 78);
+					var text = String(Math.round(value * 10) / 10);
+					if (String(input.value) === text) return;
+					input.value = text;
+					try {
+						var event = document.createEvent ? document.createEvent("Event") : null;
+						if (event) { event.initEvent("input", true, false); input.dispatchEvent(event); }
+					} catch (error) {}
+				});
 			});
 		}
 		/* A dashed box marks the selected graphic so it reads as draggable. */
@@ -1868,6 +2277,9 @@ export const TIMELINE_EDITOR_JS = `
 			if (action === "add-layer") { addVisualTrack(); return; }
 			if (action === "add-text") { addVisualElementFromAction("text"); return; }
 			if (action === "add-graphic") { addVisualElementFromAction("graphic"); return; }
+			if (action === "add-child-text") { addChildVisualElement("text"); return; }
+			if (action === "add-child-graphic") { addChildVisualElement("graphic"); return; }
+			if (action === "duplicate") { duplicateSelectedItem(); return; }
 			if (action === "delete") { deleteSelectedItem(); return; }
 			if (action === "toggle-sound") { state.soundExpanded = !state.soundExpanded; renderTimeline(); scheduleSave(); return; }
 			if (action === "add-media") { var mediaInput = document.getElementById("timeline-media-upload"); if (mediaInput) mediaInput.click(); return; }
@@ -2385,12 +2797,41 @@ export const TIMELINE_EDITOR_JS = `
 				if (trackToggle) { handleAction("toggle-track", trackToggle); return; }
 				var trackNode = event.target && event.target.closest ? event.target.closest("[data-track-select]") : null;
 				if (trackNode) { chooseTrack(findTrack(trackNode.getAttribute("data-track-select"))); return; }
+				/*
+				 * The left child panel: a row selects one of the background's
+				 * children, its ✕ deletes that child.
+				 */
+				var childDelete = event.target && event.target.closest ? event.target.closest("[data-child-delete-id]") : null;
+				if (childDelete) {
+					var doomed = findItem(childDelete.getAttribute("data-child-delete-id"));
+					if (doomed) { chooseItem(doomed.track, doomed.item); deleteSelectedItem(); }
+					return;
+				}
+				var childRow = event.target && event.target.closest ? event.target.closest("[data-child-id]") : null;
+				if (childRow) {
+					var childFound = findItem(childRow.getAttribute("data-child-id"));
+					if (childFound) chooseItem(childFound.track, childFound.item);
+					return;
+				}
 				var clip = event.target && event.target.closest ? event.target.closest("[data-clip-id]") : null;
 				if (clip) {
 					if (suppressClick) { suppressClick = false; return; }
 					var found = findItem(clip.getAttribute("data-clip-id"));
 					if (found) chooseItem(found.track, found.item);
 				}
+			});
+			/*
+			 * The child rows in the left panel are keyboard reachable: Enter or
+			 * Space selects the child, exactly like a click.
+			 */
+			root.addEventListener("keydown", function (event) {
+				if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") return;
+				var rowNode = event.target && event.target.closest ? event.target.closest("[data-child-id]") : null;
+				if (!rowNode) return;
+				var foundChild = findItem(rowNode.getAttribute("data-child-id"));
+				if (!foundChild) return;
+				if (event.preventDefault) event.preventDefault();
+				chooseItem(foundChild.track, foundChild.item);
 			});
 			var scrollEl = document.getElementById("timeline-scroll");
 			if (scrollEl) {
@@ -2590,6 +3031,17 @@ export const TIMELINE_EDITOR_JS = `
 			return item;
 		};
 		api.addGraphicElement = function () { return state ? addVisualElementFromAction("graphic") : null; };
+		/* Duplicate the selected clip into the slot right after the original. */
+		api.duplicateSelectedItem = function () { return state ? duplicateSelectedItem() : null; };
+		/* Add a child text/graphic bound to a background clip (or the selected one). */
+		api.addChildElement = function (kind) { return state ? addChildVisualElement(kind === "graphic" ? "graphic" : "text") : null; };
+		api.getBackgroundContext = function () { return state ? backgroundContext() : null; };
+		api.getChildElements = function (parentId) {
+			if (!state) return [];
+			var parent = parentId ? findItem(parentId) : null;
+			var parentItem = parent && parent.item ? parent.item : backgroundContext();
+			return parentItem ? childItemsFor(parentItem).map(function (entry) { return entry.item; }) : [];
+		};
 		api.setItemTiming = setItemTiming;
 		/* The row's project detail (style + template-modal effects) is inspectable. */
 		api.getProjectDetail = function () { return state ? state.projectDetail : null; };
