@@ -877,18 +877,17 @@ export const PAGE_MARKUP = `
 						<button type="button" class="tm-scene-add" data-timeline-action="add-child-text" title="Add a text that lives inside this background clip's window">\uff0b Child text</button>
 						<button type="button" class="tm-scene-add" data-timeline-action="add-child-graphic" title="Add a graphic that lives inside this background clip's window">\uff0b Child graphic</button>
 					</div>
-					<p class="te-child-hint">Child text and graphics are timed by this background clip only: they live inside its window, they cannot be dragged outside it, and moving or resizing the background moves the whole window. Drag a child on the preview canvas to place it.</p>
 					<div id="timeline-child-list" class="te-child-list" aria-label="Child elements of this background clip"></div>
 					<div id="timeline-child-editor" class="te-child-editor"></div>
 				</aside>
 			</div>
 
-			<!-- 2/3 — the selected-element section always follows the preview -->
+			<!-- 2/3 — the selected-scene section always follows the preview -->
 			<div class="te-workspace">
-				<aside class="te-inspector-panel" aria-label="Selected element controls">
+				<aside class="te-inspector-panel" aria-label="Selected scene controls">
 					<div class="tm-scene-panel">
 						<div class="tm-scene-panel-head">
-							<div><div class="tm-scene-kicker">TIMELINE EDITOR</div><div class="tm-sec-title">Selected element</div></div>
+							<div><div class="tm-scene-kicker">TIMELINE EDITOR</div><div class="tm-sec-title">Selected Scene</div></div>
 							<div class="tm-scene-panel-actions">
 								<button type="button" id="timeline-add-text" class="tm-scene-add" data-timeline-action="add-text">\uff0b Text</button>
 								<button type="button" id="timeline-add-graphic" class="tm-scene-add" data-timeline-action="add-graphic">\uff0b Graphic</button>
@@ -896,7 +895,6 @@ export const PAGE_MARKUP = `
 								<button type="button" id="timeline-delete-element" class="tm-scene-delete" data-timeline-action="delete" hidden disabled>Delete</button>
 							</div>
 						</div>
-						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it. The Pixabay background is the bottom layer; text and graphics always paint above it. Every video opens with one dummy text clip at 0:00 when it has no text or graphic yet. Subtitle cues follow the music: they paint on the preview, but their timeline layer stays hidden and read-only. The row's video style is carried into this project and its template-modal treatment is painted on every scene: Cinematic Film paints the double gradient, Neon Night paints the neon glow together with the VHS bars. Every \uff0b Text or \uff0b Graphic click opens a new lane on top of the ones already open, and a selected text or graphic can be dragged straight on the preview canvas - that drag writes the same X and Y percentages the sliders show. \u29c9 Duplicate copies the selected clip into the slot right after the original: a duplicated background clip starts at the original clip's end (the next time unit of the timeline), and a duplicated text, graphic or audio clip starts when the original timing ends. Selecting a background clip (Pixabay image, GIF or MP4) shrinks the preview to 70 % and opens the 30 % child panel on the left with its \uff0b Child text and \uff0b Child graphic buttons; those children are timed by the background clip only and the panel closes - preview back to 100 % - as soon as another timeline element is selected.</p>
 						<div id="timeline-element-selector" class="tm-scene-objects" aria-label="Scene elements"></div>
 						<div id="timeline-inspector" class="tm-scene-inspector"></div>
 						<div id="timeline-inspector-empty" class="te-inspector-empty">Choose a track or element to see its controls.</div>
@@ -904,7 +902,7 @@ export const PAGE_MARKUP = `
 				</aside>
 			</div>
 
-			<!-- 3/3 — the timeline dock always follows the selected-element section -->
+			<!-- 3/3 — the timeline dock always follows the selected-scene section -->
 			<section class="te-dock" aria-label="Timeline tracks">
 				<div class="te-dock-toolbar">
 					<div><strong>Timeline</strong><span id="timeline-duration-label">1:00</span></div>
@@ -917,7 +915,7 @@ export const PAGE_MARKUP = `
 				<div class="te-timeline-scroll" id="timeline-scroll">
 					<div class="te-track-grid" id="timeline-track-grid"></div>
 				</div>
-				<div class="te-dock-footer"><span>Text and graphics lanes stack above the pinned background layer, where every Pixabay image, GIF and upload lives. Subtitles paint on the preview but their layer is hidden here because cues follow the music and are not editable; Soundtrack starts collapsed and you can add up to four visual lanes; the empty SCROLL LAYER at the very bottom is a lane too - drag it left or right to pan the tracks. The Quick Batch row style is project detail here, so its effects (double gradient for Cinematic Film, neon plus VHS for Neon Night) are painted on all scenes and in the exported MP4.</span><span id="timeline-status" role="status" aria-live="polite"></span></div>
+				<div class="te-dock-footer" hidden><span id="timeline-status" role="status" aria-live="polite"></span></div>
 				<!-- Short tail: keeps the sticky preview pinned until the dock itself ends. -->
 				<div class="te-dock-tail" aria-hidden="true"></div>
 			</section>

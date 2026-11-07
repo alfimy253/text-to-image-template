@@ -3194,85 +3194,100 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	// CREATE AI CARDS
 	// =========================================================
 
-	prompts.forEach(
-		(prompt, index) => {
+	const isInitialTimelineRoute = (() => {
+		try {
+			return new URLSearchParams(window.location.search || "").get("layout") === "timeline";
+		} catch (error) {
+			return false;
+		}
+	})();
 
-			const card =
-				document.createElement(
-					"div"
-				);
+	if (isInitialTimelineRoute) {
+		if (gallery) {
+			gallery.hidden = true;
+			gallery.style.display = "none";
+		}
+	} else if (gallery) {
+		prompts.forEach(
+			(prompt, index) => {
+
+				const card =
+					document.createElement(
+						"div"
+					);
 
 
-			card.className =
-				"card";
+				card.className =
+					"card";
 
 
-			card.id =
-				\`card-\${index}\`;
+				card.id =
+					\`card-\${index}\`;
 
 
-			card.innerHTML = \`
+				card.innerHTML = \`
 
-				<div
-					class="image-container"
-					id="container-\${index}"
-				>
+					<div
+						class="image-container"
+						id="container-\${index}"
+					>
 
-					<div class="loading">
+						<div class="loading">
 
-						<div class="spinner"></div>
+							<div class="spinner"></div>
 
-						Generating AI Scene
-						\${index + 1}...
+							Generating AI Scene
+							\${index + 1}...
+
+						</div>
 
 					</div>
 
-				</div>
 
-
-				<div
-					class="prompt"
-					title="\${escapeHTML(prompt)}"
-				>
-
-					\${index + 1}.
-					\${escapeHTML(prompt)}
-
-				</div>
-
-
-				<div class="card-actions">
-
-					<span
-						style="
-							font-size:0.75rem;
-							color:#6b7280;
-						"
+					<div
+						class="prompt"
+						title="\${escapeHTML(prompt)}"
 					>
-						Pixabay stock
-					</span>
+
+						\${index + 1}.
+						\${escapeHTML(prompt)}
+
+					</div>
 
 
-					<button
-						class="toggle-btn"
-						id="btn-\${index}"
-						disabled
-						onclick="toggleSlide(\${index})"
-					>
-						Loading...
-					</button>
+					<div class="card-actions">
 
-				</div>
-
-			\`;
+						<span
+							style="
+								font-size:0.75rem;
+								color:#6b7280;
+							"
+						>
+							Pixabay stock
+						</span>
 
 
-			gallery.appendChild(
-				card
-			);
+						<button
+							class="toggle-btn"
+							id="btn-\${index}"
+							disabled
+							onclick="toggleSlide(\${index})"
+						>
+							Loading...
+						</button>
 
-		}
-	);
+					</div>
+
+				\`;
+
+
+				gallery.appendChild(
+					card
+				);
+
+			}
+		);
+	}
 
 
 	// =========================================================
@@ -7388,9 +7403,15 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const viewSwitch = document.getElementById("view-switch");
 		const topGenerate = document.getElementById("top-generate");
 		const storageAlert = document.getElementById("pipeline-storage-alert");
+		const galleryEl = document.getElementById("gallery");
 		if (viewSwitch) viewSwitch.hidden = true;
 		if (topGenerate) topGenerate.hidden = true;
 		if (storageAlert) storageAlert.hidden = true;
+		if (galleryEl) {
+			galleryEl.hidden = true;
+			galleryEl.style.display = "none";
+			galleryEl.innerHTML = "";
+		}
 	}
 
 	function setStudioLayout(name) {
@@ -9440,7 +9461,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				},
 				{ id: "sound-fx", kind: "audio", label: "Sound effects", expanded: true, items: [] },
 				{ id: "background-music", kind: "audio", label: "Background music", expanded: true, items: [] },
-				{ id: "background-media", kind: "media", label: "Pixabay & uploaded media", expanded: true, items: mediaItems },
+				{ id: "background-media", kind: "media", label: "Scene's media", expanded: true, items: mediaItems },
 				{ id: "visual-1", kind: "visual", label: "Text & graphics 1", expanded: true, items: visualItems }
 			],
 			selectedTrackId: "background-media",

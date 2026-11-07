@@ -9068,7 +9068,9 @@ export const APP_CSS = `
 		}
 
 		body.timeline-editor-page #landing-page,
+		body.timeline-editor-page #gallery,
 		#studio-app.timeline-mode .app-top,
+		#studio-app.timeline-mode > #gallery,
 		#studio-app.timeline-mode > #pipeline-storage-alert,
 		#studio-app.timeline-mode > #cms-studio-top-links {
 			display: none !important;
@@ -9309,17 +9311,36 @@ export const APP_CSS = `
 			flex: 0 0 70%;
 			max-width: 70%;
 			width: 70%;
+			align-self: stretch;
+			max-height: calc(100vh - 70px);
+			justify-content: center;
+		}
+
+		.te-stage-row.te-child-open .te-preview-stage {
+			flex: 1 1 auto;
+			height: auto;
+			min-height: 320px;
+			max-height: none;
+			align-items: center;
+			justify-content: center;
+		}
+
+		.te-stage-row.te-child-open .te-preview-stage canvas#timeline-preview-canvas {
+			align-self: center;
+			margin: auto;
 		}
 
 		.te-stage-row.te-child-open > .te-child-panel {
 			flex: 0 0 30%;
 			max-width: 30%;
+			width: 30%;
+			align-self: stretch;
 		}
 
 		.te-child-panel {
 			/* Static inside the sticky stage row; it scrolls on its own. */
 			position: static;
-			align-self: flex-start;
+			align-self: stretch;
 			min-width: 0;
 			max-height: calc(100vh - 70px);
 			overflow-y: auto;
@@ -9373,7 +9394,6 @@ export const APP_CSS = `
 			cursor: pointer;
 		}
 
-		.te-child-hint,
 		.te-child-empty {
 			margin: 0;
 			color: var(--te-muted);
@@ -9462,11 +9482,20 @@ export const APP_CSS = `
 				flex: 1 1 auto;
 				max-width: 100%;
 				width: 100%;
+				max-height: none;
+				justify-content: flex-start;
+			}
+
+			.te-stage-row.te-child-open .te-preview-stage {
+				flex: 0 0 320px;
+				height: 320px;
+				max-height: 320px;
 			}
 
 			.te-stage-row.te-child-open > .te-child-panel {
 				flex: 1 1 auto;
 				max-width: 100%;
+				width: 100%;
 				border-left: 0;
 			}
 
@@ -9517,6 +9546,9 @@ export const APP_CSS = `
 		 */
 		.te-preview-stage canvas#timeline-preview-canvas {
 			display: block;
+			flex: 0 1 auto;
+			align-self: center;
+			margin: auto;
 			width: auto;
 			height: auto;
 			max-width: 100%;
@@ -10486,12 +10518,16 @@ export const APP_CSS = `
 			min-height: 27px;
 			display: flex;
 			align-items: center;
-			justify-content: space-between;
+			justify-content: flex-end;
 			gap: 10px;
 			padding: 5px 12px;
 			border-top: 1px solid var(--te-border);
 			color: var(--t-muted, #9297a2);
 			font-size: 0.59rem;
+		}
+
+		.te-dock-footer[hidden] {
+			display: none !important;
 		}
 
 		#timeline-status {

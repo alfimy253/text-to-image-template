@@ -23,7 +23,7 @@ export const TIMELINE_EDITOR_JS = `
 		 * placed below it, so the media track never needs a z-order of its own.
 		 */
 		var MEDIA_TRACK_ID = "background-media";
-		var MEDIA_TRACK_LABEL = "Pixabay & uploaded media · background";
+		var MEDIA_TRACK_LABEL = "Scene's media";
 		var MEDIA_TRACK_NAME = "BACKGROUND";
 		/*
 		 * Every timeline that has no text and no graphic of its own starts with
@@ -217,9 +217,13 @@ export const TIMELINE_EDITOR_JS = `
 		}
 		function setStatus(text, isError) {
 			var el = document.getElementById("timeline-status");
+			var msg = String(text || "");
 			if (el) {
-				el.textContent = String(text || "");
+				el.textContent = msg;
 				el.setAttribute("data-state", isError ? "error" : "ok");
+				if (el.parentElement && el.parentElement.classList && el.parentElement.classList.contains("te-dock-footer")) {
+					el.parentElement.hidden = !msg;
+				}
 			}
 		}
 		function setSaveStatus(text, isError) {
@@ -941,7 +945,7 @@ export const TIMELINE_EDITOR_JS = `
 			 * and carries no data-lane-track, so it can never be selected,
 			 * seeked on, or confused with a real track.
 			 */
-			html += '<div class="te-track-label te-track-scroll"><span class="te-track-scroll-label">SCROLL LAYER<small>empty · drag to pan</small></span></div>';
+			html += '<div class="te-track-label te-track-scroll" aria-label="Scroll layer"></div>';
 			html += '<div class="te-scroll-layer" data-scroll-lane data-scroll-layer="bottom" style="width:' + width + 'px" title="Empty layer: drag left or right to scroll the tracks"><span class="te-scroll-hint">Empty scroll layer · drag horizontally to pan the tracks</span></div>';
 			grid.innerHTML = html;
 			var duration = document.getElementById("timeline-duration-label");
@@ -1172,10 +1176,6 @@ export const TIMELINE_EDITOR_JS = `
 				var parentLimits = childWindow(parentItem);
 				addRange(inspector, "Start inside background (seconds)", item.startSec, parentLimits.start, Math.max(parentLimits.start, parentLimits.end - MIN_CLIP_SEC), 0.25, function (value) { itemTimingChanged(findItem(item.id), value, item.durationSec, false, true); }, "s");
 				addRange(inspector, "Duration inside background (seconds)", item.durationSec, MIN_CLIP_SEC, Math.max(MIN_CLIP_SEC, parentLimits.end - item.startSec), 0.25, function (value) { itemTimingChanged(findItem(item.id), item.startSec, value, false, true); }, "s");
-				var boundNote = document.createElement("div");
-				boundNote.className = "te-inspector-note";
-				boundNote.textContent = 'Child of the background clip "' + String(parentItem.label || "media") + '" (' + formatTime(parentLimits.start) + ' – ' + formatTime(parentLimits.end) + '). Its timing depends on that clip only: move or resize the background to move the whole window.';
-				inspector.appendChild(boundNote);
 			} else {
 				addRange(inspector, "Start (seconds)", item.startSec, 0, cap, 0.25, function (value) { itemTimingChanged(findItem(item.id), value, item.durationSec, false, true); }, "s");
 				addRange(inspector, "Duration (seconds)", item.durationSec, MIN_CLIP_SEC, cap, 0.25, function (value) { itemTimingChanged(findItem(item.id), item.startSec, value, track.kind === "media", true); }, "s");
@@ -1190,37 +1190,6 @@ export const TIMELINE_EDITOR_JS = `
 				addSelect(inspector, "Fit", [["Fill frame", "cover"], ["Fit inside", "contain"]], item.fit || "cover", function (value) { item.fit = value; drawPreview(); scheduleSave(); });
 				addRange(inspector, "Trim in (seconds)", item.trimStartSec || 0, 0, 600, 0.25, function (value) { item.trimStartSec = value; drawPreview(); scheduleSave(); }, "s");
 				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { item.visible = value; drawPreview(); scheduleSave(); });
-				/*
-				 * ＋ Child text / ＋ Child graphic live on the background clip
-				 * itself: a background (Pixabay image, GIF or MP4) always offers
-				 * its two child buttons, and the child timing is the background
-				 * clip's window (never the playhead).
-				 */
-				addSectionTitle(inspector, "Child text & graphics");
-				var childActions = document.createElement("div");
-				childActions.className = "tm-scene-photo-controls";
-				var childTextButton = document.createElement("button");
-				childTextButton.type = "button";
-				childTextButton.className = "tm-scene-add";
-				childTextButton.textContent = "＋ Child text";
-				childTextButton.title = "Add a text that lives inside this background clip's window";
-				childTextButton.addEventListener("click", function () { addChildVisualElement("text", item); });
-				childActions.appendChild(childTextButton);
-				var childGraphicButton = document.createElement("button");
-				childGraphicButton.type = "button";
-				childGraphicButton.className = "tm-scene-add";
-				childGraphicButton.textContent = "＋ Child graphic";
-				childGraphicButton.title = "Add a graphic that lives inside this background clip's window";
-				childGraphicButton.addEventListener("click", function () { addChildVisualElement("graphic", item); });
-				childActions.appendChild(childGraphicButton);
-				inspector.appendChild(childActions);
-				var children = childItemsFor(item);
-				var childNote = document.createElement("div");
-				childNote.className = "te-inspector-note";
-				childNote.textContent = children.length
-					? (children.length + (children.length === 1 ? " child element is" : " child elements are") + " bound to this background clip's window. They are listed and edited in the child panel on the left and can be dragged on the preview canvas.")
-					: "No child text or graphic yet. Use the buttons above: the child is timed by this background clip only and can be dragged on the preview canvas.";
-				inspector.appendChild(childNote);
 				return;
 			}
 			if (item.kind === "audio") {
@@ -1277,24 +1246,28 @@ export const TIMELINE_EDITOR_JS = `
 			var entry = selectedEntry();
 			var track = entry ? entry.track : selectedTrack();
 			var item = entry && entry.item;
-			var selectedScene = item && item.sceneId ? sceneById(item.sceneId) : activeSceneAt(state.playheadSec);
+			var bgParent = backgroundContext();
+			var inspectorTrack = bgParent ? mediaTrack() : track;
+			var inspectorItem = bgParent || item;
+			var selectedScene = inspectorItem && inspectorItem.sceneId ? sceneById(inspectorItem.sceneId) : activeSceneAt(state.playheadSec);
 			selectedSceneId = selectedScene && selectedScene.id || selectedSceneId;
 			var selectedLabel = document.createElement("div");
 			selectedLabel.className = "tm-scene-inspector-title";
-			selectedLabel.textContent = item ? String(item.label || item.name || (item.kind === "text" ? "Text" : item.kind)) : track ? track.label : "Nothing selected";
+			selectedLabel.textContent = inspectorItem ? String(inspectorItem.label || inspectorItem.name || (inspectorItem.kind === "text" ? "Text" : inspectorItem.kind)) : inspectorTrack ? inspectorTrack.label : "Nothing selected";
 			selector.appendChild(selectedLabel);
-			if (selectedScene) {
+			if (selectedScene && (!inspectorItem || inspectorItem.kind !== "media")) {
 				sceneElementEntries(selectedScene.id).forEach(function (candidate) {
+					if (candidate.item && candidate.item.parentId) return;
 					var button = document.createElement("button");
 					button.type = "button";
-					button.className = "tm-scene-object" + (item && String(item.id) === String(candidate.item.id) ? " selected" : "");
+					button.className = "tm-scene-object" + (inspectorItem && String(inspectorItem.id) === String(candidate.item.id) ? " selected" : "");
 					button.textContent = candidate.item.kind === "text" ? "Text · " + String(candidate.item.text || "").slice(0, 20) : "Graphic · " + String(candidate.item.graphic || "shape");
-					button.setAttribute("aria-pressed", item && String(item.id) === String(candidate.item.id) ? "true" : "false");
+					button.setAttribute("aria-pressed", inspectorItem && String(inspectorItem.id) === String(candidate.item.id) ? "true" : "false");
 					button.addEventListener("click", function () { chooseItem(candidate.track, candidate.item); });
 					selector.appendChild(button);
 				});
 			}
-			if (empty) empty.hidden = Boolean(item || track);
+			if (empty) empty.hidden = Boolean(inspectorItem || inspectorTrack);
 			if (deleteButton) {
 				var canDelete = Boolean(item && !(item.kind === "audio" && item.assetId === "voiceover" && track.id === "voiceover"));
 				deleteButton.hidden = !canDelete;
@@ -1304,8 +1277,8 @@ export const TIMELINE_EDITOR_JS = `
 				duplicateButton.hidden = !item;
 				duplicateButton.disabled = !item;
 			}
-			if (item && track) renderItemControls(inspector, track, item);
-			else if (track) renderTrackControls(inspector, track);
+			if (inspectorItem && inspectorTrack) renderItemControls(inspector, inspectorTrack, inspectorItem);
+			else if (inspectorTrack) renderTrackControls(inspector, inspectorTrack);
 			/* The left child panel is driven by the same selection. */
 			renderChildPanel();
 		}
@@ -2184,8 +2157,6 @@ export const TIMELINE_EDITOR_JS = `
 			if (!moved) return;
 			renderInspector();
 			persistNow();
-			var found = findItem(state && state.selectedItemId);
-			if (found) setStatus((found.item.kind === "graphic" ? "Graphic moved" : "Text moved") + " - x " + found.item.x + "%, y " + found.item.y + "%.", false);
 		}
 		/*
 		 * While the pointer moves, the inspector's X and Y controls show the
@@ -2990,6 +2961,12 @@ export const TIMELINE_EDITOR_JS = `
 			var app = document.getElementById("studio-app");
 			if (app) app.classList.add("timeline-mode");
 			if (document.body) document.body.classList.add("timeline-editor-page");
+			var galleryEl = document.getElementById("gallery");
+			if (galleryEl) {
+				galleryEl.hidden = true;
+				galleryEl.style.display = "none";
+				galleryEl.innerHTML = "";
+			}
 			var saved = null;
 			try { saved = JSON.parse(window.localStorage.getItem(storageKey) || "null"); } catch (error) {}
 			var initial = saved && saved.projectId === pageId ? saved : transition && transition.timelineState || null;
