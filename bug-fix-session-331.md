@@ -1744,9 +1744,254 @@ The failure/cancellation sets are the same pre-existing Pixabay, relay, image-ba
 6. **The 30 % panel does not replace the inspector.** The selected child's controls appear in both places; both write the same model, and a canvas drag keeps both X / Y readouts in sync, but a plain inspector slider edit does not re-render the panel until the next selection/`renderInspector()`.
 7. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10), and `npx tsc --noEmit` still reports the long-standing `src/index.ts` diagnostics (31 in this tree, identical to `459be7b`).
 
-### 17.12 Status
+### 17.13 Appendix A - code map of what was coded
+
+Location anchors are inside `src/client/timeline-editor.ts`, which exports one template string (`TIMELINE_EDITOR_JS`); the numbers below are the positions **in that file at commit `bf976af`** (the code commit of this section; `c71006c` only edits this document). "New" means added by Section 17, "changed" means an existing function gained Section 17 logic.
+
+| # | Symbol | Line | Status | What it does after Section 17 |
+| --- | --- | --- | --- | --- |
+| 1 | `normalizeItem(item, track)` | 419 | changed | adds `out.parentId = String(out.parentId \|\| "")` next to the existing per-kind normalisation |
+| 2 | `normalizeState(raw)` | 458 | changed | calls `bindChildTimings(tracks)` right after `tracks = tracks.concat(visualLayers)` and before the scenes are normalised |
+| 3 | `childWindow(parentItem)` | 664 | new | returns `{ start, end }` of the background clip (`end = start + max(MIN_CLIP_SEC, duration)`) |
+| 4 | `childItemsFor(parentItem)` | 669 | new | `[{ track, item }]` of every visual clip whose `parentId` equals the clip id, sorted by `startSec` |
+| 5 | `backgroundContext()` | 684 | new | the selected background clip, or the parent of the selected child; `null` for anything else |
+| 6 | `clampChildToParent(item)` | 695 | new | drops a dangling `parentId`, otherwise clamps start/duration into the window and re-links `sceneId` |
+| 7 | `syncChildrenToParent(parentItem)` | 705 | new | runs `clampChildToParent` over every child of a background clip |
+| 8 | `bindChildTimings(tracks)` | 713 | new | the same repair at load, working on the array passed in (no `state` access) |
+| 9 | `itemTimingChanged(...)` | 998 | changed | `if (track.kind === "visual" && item.parentId) clampChildToParent(item);` and `if (track.kind === "media") syncChildrenToParent(item);` |
+| 10 | `renderItemControls(inspector, track, item)` | 1161 | changed | parent-aware `Start inside background` / `Duration inside background` ranges + note; the `media` branch gains a "Child text & graphics" section with `＋ Child text` / `＋ Child graphic` |
+| 11 | `renderInspector()` | 1267 | changed | toggles `#timeline-duplicate-element` with the selection and ends with `renderChildPanel()` |
+| 12 | `renderChildPanel()` | 1323 | new | the 70 / 30 switch, the head, the child list, the child editor |
+| 13 | `addVisualElement(kind, targetTrack, parentItem)` | 1412 | changed | optional third argument; with a parent the timing is the background window and the item carries `parentId` |
+| 14 | `addChildVisualElement(kind, parentItem)` | 1453 | new | the child action: resolve parent → new lane (or top lane at the cap) → create → park the playhead inside the window → status |
+| 15 | `duplicateLabelFor(source)` | 1486 | new | `"<label> copy"`, `"<label> copy 2"`, … stripping an existing suffix first |
+| 16 | `duplicateSelectedItem()` | 1500 | new | the whole duplicate rule (clip, background scene, children, detached child) |
+| 17 | `deleteSelectedItem()` | 1587 | changed | a deleted background clip also deletes every clip whose `parentId` is that clip |
+| 18 | `syncPositionControls(item)` | 2195 | changed | writes the dragged X / Y into `#timeline-inspector` **and** `#timeline-child-editor` |
+| 19 | `handleAction(action, target)` | 2271 | changed | three new actions: `add-child-text`, `add-child-graphic`, `duplicate` |
+| 20 | `bindEvents()` | 2789 | changed | `[data-child-delete-id]` (select + delete), `[data-child-id]` (select), Enter / Space on a child row, all wired before the clip handler |
+| 21 | `api` (bottom of the bundle) | 3026+ | changed | new public test surface: `duplicateSelectedItem()`, `addChildElement(kind)`, `getBackgroundContext()`, `getChildElements(parentId?)` |
+
+Nothing else in the bundle changed: `drawPreview()`, `renderTimeline()`, `htmlTrackItem()`, the export paths (`paintTimelineFrameAt`, `exportTimelineMp4`, `exportTimelineMediaRecorder`), `persistNow()`, `addMediaFiles()`, `addAudioFile()` and the scene/subtitle machinery are untouched. A child therefore paints, exports and persists through the exact code paths every other text/graphic clip uses.
+
+Markup and stylesheet anchors:
+
+| File | Anchor | Status | What it is |
+| --- | --- | --- | --- |
+| `src/client/markup.ts` | line 850 | new | `<div class="te-stage-row" id="timeline-stage-row">` wrapping the preview panel and the child aside |
+| `src/client/markup.ts` | 870–882 | new | `#timeline-child-panel` aside: `#timeline-child-title`, `#timeline-child-window`, the two `add-child-*` buttons, `#timeline-child-list`, `#timeline-child-editor` |
+| `src/client/markup.ts` | 895 | new | `#timeline-duplicate-element` (`⧉ Duplicate`, `hidden disabled` until a clip is selected) |
+| `src/client/markup.ts` | hint copy | changed | the selected-element hint now explains duplicate, the child panel and the 70 / 30 switch |
+| `src/client/styles.ts` | 9285–9478 | new | `.te-stage-row` (the sticky box), the `te-child-open` 70 / 30 rules, `.te-child-panel` and its children, the `[hidden]` guard, the `max-width: 860px` fallback |
+| `tests/timeline-editor.test.mjs` | 1034, 1095, 1139 | new | the three tests (background duplicate, text/graphic/audio duplicate, 70 / 30 child panel) |
+
+### 17.14 Appendix B - DOM and action contract
+
+The panel is driven by four hooks; anything else is presentational:
+
+| Hook | Kind | Owner | Meaning |
+| --- | --- | --- | --- |
+| `#timeline-stage-row` | id | markup → `renderChildPanel()` | the flex row; carries `.te-child-open` while the 70 / 30 split is active |
+| `#timeline-child-panel` | id | markup → `renderChildPanel()` | the 30 % aside; `hidden` when there is no background context |
+| `data-timeline-action="duplicate"` | action | markup (`#timeline-duplicate-element`) | `handleAction` → `duplicateSelectedItem()` |
+| `data-timeline-action="add-child-text"` | action | markup (panel) | `handleAction` → `addChildVisualElement("text")` |
+| `data-timeline-action="add-child-graphic"` | action | markup (panel) | `handleAction` → `addChildVisualElement("graphic")` |
+| `data-child-id="<clip id>"` | attribute | rendered rows | selects that child (`chooseItem`); Enter / Space do the same |
+| `data-child-delete-id="<clip id>"` | attribute | rendered rows | selects then deletes that child |
+| `[data-te-position="x" \| "y"]` | attribute | the range controls | the canvas drag writes these; now in both `#timeline-inspector` and `#timeline-child-editor` |
+
+Rendered text the user reads (all produced by `renderChildPanel()` / `addChildVisualElement()`):
+
+```text
+#timeline-child-title   -> the background clip label            e.g. "Scene 1"
+#timeline-child-window  -> "Pinned window 0:00 – 0:05 · 1 child element"
+row label               -> "Text · Add your text" / "Graphic · circle"
+row time                -> "0:00 · 0:05"
+editor title            -> "Editing child text" / "Editing child graphic"
+empty list              -> "No child text or graphic yet. Use ＋ Child text or ＋ Child graphic above."
+empty editor            -> "Select a child element in the list to edit it here, or drag it on the preview canvas ..."
+status after add        -> "Added a child text inside Scene 1 (0:00 – 0:05). Drag it on the preview canvas to place it."
+status after duplicate  -> 'Duplicated "Scene 1" at 0:05 - right after the original ends.'
+status on a detached copy-> "... The copy falls outside the background window, so it is now a free clip."
+status with no parent   -> "Select a background clip (Pixabay image, GIF or MP4) before adding a child text or graphic."
+```
+
+### 17.15 Appendix C - what the saved project looks like
+
+`parentId` is the only new field. A project with one background clip, one child text and one duplicated background scene serialises like this (values shortened):
+
+```json
+{
+  "version": 3,
+  "projectId": "timeline-p_source_test-row-7",
+  "scenes": [
+    { "id": "scene-1", "index": 0, "name": "Scene 1", "startSec": 0, "durationSec": 5,
+      "mediaAssetId": "a-scene-1", "elements": [{ "id": "text-x1", "kind": "text", "parentId": "media-1", "startSec": 0, "durationSec": 5, "x": 50, "y": 78 }] },
+    { "id": "scene-m3", "index": 1, "name": "Scene 1 copy", "startSec": 5, "durationSec": 5,
+      "mediaAssetId": "a-scene-1", "elements": [{ "id": "text-c9", "kind": "text", "parentId": "media-c7", "startSec": 5, "durationSec": 5 }] },
+    { "id": "scene-2", "index": 2, "name": "Scene 2", "startSec": 5, "durationSec": 5 }
+  ],
+  "tracks": [
+    { "id": "background-media", "kind": "media", "items": [
+      { "id": "media-1",  "sceneId": "scene-1", "assetId": "a-scene-1", "label": "Scene 1",      "startSec": 0, "durationSec": 5 },
+      { "id": "media-c7", "sceneId": "scene-m3", "assetId": "a-scene-1", "label": "Scene 1 copy", "startSec": 5, "durationSec": 5 }
+    ] },
+    { "id": "visual-2-…", "kind": "visual", "items": [
+      { "id": "text-x1", "kind": "text", "parentId": "media-1", "sceneId": "scene-1", "startSec": 0, "durationSec": 5 }
+    ] }
+  ]
+}
+```
+
+Notes: the duplicated clip keeps the **same `assetId`** (one IndexedDB blob, two clips) and the copied child points at the **copy**, not the original. Load order is `normalizeItem` → `bindChildTimings` → scene normalisation, so a project saved by an older build (no `parentId`) loads unchanged and a project whose parent disappeared loads the child as a free clip.
+
+### 17.16 Appendix D - the three algorithms, as coded
+
+**D1 - panel switch** (`renderChildPanel()`, called at the end of every `renderInspector()`):
+
+```text
+parent = backgroundContext()          // selected media clip, or parent of the selected child
+clear #timeline-child-list and #timeline-child-editor
+row.classList.add/remove("te-child-open")
+panel.hidden = (parent == null)
+if (parent == null) return             // preview back to 100 %
+title  = parent.label
+window = "Pinned window " + formatTime(parent.start) + " – " + formatTime(parent.end)
+for each child in childItemsFor(parent):
+    row = div.te-child-row (+ .selected when it is the selection)
+          span.te-child-row-label  ("Text · …" | "Graphic · …")
+          span.te-child-row-time   ("0:00 · 0:05")
+          button.te-child-row-delete [data-child-delete-id]
+if the selection IS a child of parent:
+    editor = "Editing child text" | "Editing child graphic" + renderItemControls(editorRoot, track, item)
+else:
+    editor = "Select a child element in the list to edit it here ..."
+```
+
+**D2 - child creation and clamping**:
+
+```text
+addChildVisualElement(kind, parentItem?):
+    parent = (parentItem is media) ? parentItem : backgroundContext()
+    if !parent            -> status "Select a background clip …", return null
+    track  = visualTracks().length >= MAX_VISUAL_TRACKS ? visualTracks().last : addVisualTrack()
+    item   = addVisualElement(kind, track, parent)
+    playhead: if outside [parent.start, parent.end) -> parent.start   // so it is painted and draggable
+    status "Added a child <kind> inside <label> (start – end) …"
+
+addVisualElement(kind, track, parent):
+    start    = parent ? parent.startSec                                   : playhead
+    duration = parent ? parent.durationSec                                : 4
+    sceneId  = parent ? parent.sceneId : activeSceneAt(playhead).id
+    item.parentId = parent ? parent.id : ""
+
+clampChildToParent(item):                       // called on every child timing edit and after a background edit
+    parent = findItem(item.parentId)
+    if !parent or parent.kind != "media" -> item.parentId = "", return
+    item.startSec    = clamp(startSec,    parent.start,        parent.end - MIN_CLIP_SEC)
+    item.durationSec = clamp(durationSec, MIN_CLIP_SEC,        parent.end - item.startSec)
+    item.sceneId     = parent.sceneId
+```
+
+**D3 - duplicate** (`duplicateSelectedItem()`):
+
+```text
+source = selected clip in its track;  copy = deepCopy(source)
+copy.id   = makeId(source.kind)
+copy.label= duplicateLabelFor(source)
+start     = source.startSec + source.durationSec          // the one placement rule
+copy.startSec = start;  copy.durationSec = source.durationSec
+
+if source.kind == "media":
+    sceneCopy = deepCopy(source scene), new id, name + " copy", start/duration = copy's,
+                assetId/mediaType/mediaName/mediaSource from the clip, elements = []
+    scenes.splice(indexOf(sourceScene) + 1, 0, sceneCopy); renumber scene.index
+    copy.sceneId = sceneCopy.id
+    track.items.splice(indexOf(source) + 1, 0, copy)
+    for each child of source:
+        childCopy = deepCopy(child); new id; parentId = copy.id; sceneId = sceneCopy.id
+        childCopy.startSec    = clamp(start + (child.start - source.start), start, start + duration - 0.25)
+        childCopy.durationSec = clamp(child.duration, 0.25, start + duration - childCopy.startSec)
+        push childCopy into the child's own lane
+else:
+    track.items.splice(indexOf(source) + 1, 0, copy)
+    if source.parentId:
+        fits = copy.start + copy.duration <= parent.start + parent.duration + 0.001
+        fits ? (copy.parentId = parent.id, copy.sceneId = parent.sceneId)
+             : (copy.parentId = "", copy.sceneId = activeSceneAt(copy.start).id, detachedChild = true)
+
+selection = copy;  ensureTimelineEnd(copy.end);  renderTimeline + renderInspector + drawPreview + scheduleSave
+status 'Duplicated "<label>" at <time> - right after the original ends.' (+ detachment note)
+```
+
+### 17.17 Appendix E - behaviour matrix (before / after this section)
+
+| Surface | Before Section 17 | After Section 17 |
+| --- | --- | --- |
+| duplicate action | none existed in the bundle | `⧉ Duplicate` in the selected-element header for any selected clip; hidden+disabled with no clip selected |
+| background clip copy | - | copy at `original.end`, own cloned scene, same `assetId`, children copied |
+| text / graphic / audio copy | - | copy at `original.end`, same lane, right after the original, `"<label> copy"` |
+| child copy outside window | - | becomes a free clip with a status line |
+| linking a text to a media clip | no field existed | `parentId`, optional, repaired on load |
+| new text / graphic timing | playhead start, 4 s, current scene | unchanged for the global ＋ Text / ＋ Graphic; **background window** for `＋ Child text` / `＋ Child graphic` |
+| moving / resizing a background clip | moved the clips that share its `sceneId` | same ripple **plus** every child clamped into the new window |
+| editing a child's timing | free 0 … cap | bounded by `background.start … background.end - 0.25` on every surface |
+| background selected (layout) | preview 100 %, inspector below | preview **70 %** + 30 % child panel on the left, inspector unchanged below |
+| text / graphic / audio selected | full-width preview | full-width preview, child panel hidden |
+| child selected | full-width preview, inspector controls | 70 / 30 kept (still inside the background), child edited in both the left panel and the inspector |
+| child on the preview canvas | draggable like any text | same drag; playhead is parked inside the window so it is painted and grabbable, X / Y sync in both editors |
+| deleting a background clip | clip + scene + scene-linked elements | same **plus** every clip whose `parentId` is that clip |
+| load | tracks/scenes normalised | same **plus** `bindChildTimings()` (dangling link → free clip, live link → clamped) |
+| persistence | `sceneId`, `startSec`, `durationSec`, … | same **plus** `parentId`; no new key, cookie, KV entry or handoff field |
+
+### 17.18 Appendix F - the flows as built (manual walkthrough)
+
+**F1 - duplicate a background scene (the "next time unit" rule)**
+
+1. Open a Quick Batch row → **Edit** → the timeline page. The background clip of Scene 1 is selected by default and the 30 % child panel is already open.
+2. Click **⧉ Duplicate** in the selected-element header.
+3. The dock now ends Scene 1 with a `Scene 1 copy` clip at `0:05` (immediately after the original), its scene exists in the project (`Scene 1 copy`), and the selection jumps to the copy. The status line reads `Duplicated "Scene 1" at 0:05 - right after the original ends.`
+
+**F2 - duplicate a text or graphic**
+
+1. Select the text clip in the dock (or add one with the global ＋ Text).
+2. Set `Start 2 s`, `Duration 3 s` in the inspector.
+3. **⧉ Duplicate** → a `Text copy` clip starts at `5 s`, listed next to the original in the same lane.
+4. A child text whose window ends with the background duplicates to a **free clip** at the background's end; the status line says so.
+
+**F3 - child text / graphic inside a background element**
+
+1. Select the background clip (click `Scene 1` in the BACKGROUND lane). The preview becomes 70 % and the left 30 % panel appears with `Pinned window 0:00 – 0:05`.
+2. Click `＋ Child text`. A new text lane appears on top, the child starts at `0:00` for `5 s` (the clip's window), and it is listed and selected in the left panel.
+3. Drag the child on the preview canvas to place it; the left panel's X / Y readouts follow the drag.
+4. In the left panel set `Start inside background 1 s` / `Duration inside background 2 s` → the child now lives inside the window only; trying `30 s` clamps it to the last 0.25 s.
+5. Move the background clip to `2 s`, duration `8 s` → the child follows and the panel window reads `0:02 – 0:10`.
+6. Click the subtitle lane, an audio clip, a text clip or a track row → the panel closes and the preview is 100 % wide again. Click the child again (dock or panel) → the panel returns with that child selected.
+
+**F4 - cleanup**
+
+1. Delete the background clip (`Delete`) → its children disappear with it.
+2. Reload the page → the remaining `parentId` links are repaired by `bindChildTimings()`; a child whose background is gone comes back as a free clip instead of a broken reference.
+
+### 17.19 Appendix G - how to re-verify by hand
+
+```text
+node --import tsx --test tests/timeline-editor.test.mjs                26 / 26
+node --import tsx --test tests/timeline-editor.test.mjs \
+  tests/quick-batch-table.test.mjs tests/final-media-cap-actions.test.mjs \
+  tests/template-composer.test.mjs tests/public-entry-points.test.mjs \
+  tests/editor-subtitles-parity.test.mjs                              86 / 86
+npm test                        543 total / 497 pass / 40 fail / 6 cancelled (failure set identical to 459be7b)
+npx tsc --noEmit --pretty false 31 diagnostics, all src/index.ts (identical to 459be7b)
+npx wrangler deploy --dry-run   exit 0, 3004.31 KiB / 1361.60 KiB gzip
+```
+
+The three Section 17 tests are the executable specification of 17.3 / 17.4 / 17.5: they create the flows in F1-F3 through the real DOM (clicked buttons, `api` calls, `MouseEvent` pointer drags) and assert the resulting numbers, classes, text and saved JSON. The visual result (70 / 30 widths, sticky behaviour) still needs a real browser; that is item 1 of 17.11.
+
+### 17.20 Status
 
 - Branch: `arena/e8450094-text-to-image-template` (the only branch this section was written on).
 - The documented source of truth is the current code in this workspace; this file is the secondary reference and now matches it.
 - Focused suites 86 / 86 green; `tests/timeline-editor.test.mjs` 26 / 26 (23 before + 3 new); full suite 543 total / 497 pass / 40 fail / 6 cancelled with a failure-name set identical to `459be7b`; `tsc --noEmit` identical to `459be7b` (31 pre-existing `src/index.ts` diagnostics); `wrangler deploy --dry-run` compiles at 3004.31 KiB / 1361.60 KiB gzip.
-- Commit: `bf976af` *"Section 17: duplicate placement after the original, background-owned child text/graphics, and the 70/30 child panel"* (the code in 17.7 and this doc record ride in it; the verification numbers above were re-measured on that tree).
+- Commit: `bf976af` *"Section 17: duplicate placement after the original, background-owned child text/graphics, and the 70/30 child panel"*. The code-level record of that commit is Appendix A-G (17.13-17.19): symbol/line map, DOM and action contract, saved JSON shape, the three algorithms as coded, the before/after behaviour matrix, the manual walkthroughs and the re-verification commands.
+- Follow-up doc commit: `c71006c` *"Section 17: record the commit hash in the status block"* and the Appendix commit that follows it; neither touches code.
