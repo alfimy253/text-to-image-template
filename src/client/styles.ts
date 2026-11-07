@@ -9272,6 +9272,210 @@ export const APP_CSS = `
 			box-shadow: 0 14px 28px rgba(0, 0, 0, .38);
 		}
 
+		/*
+		 * Stage row
+		 * ---------
+		 * The preview is 100 % wide while nothing background-ish is selected.
+		 * Selecting a background clip (Pixabay image, GIF or MP4) - or one of
+		 * its children - adds .te-child-open, and the row splits 70 / 30: the
+		 * preview keeps 70 % and the child panel owns the other 30 %. Selecting
+		 * any other timeline element removes the class, hides the panel and the
+		 * preview is 100 % wide again.
+		 */
+		.te-stage-row {
+			/*
+			 * The row - not the preview panel inside it - is the sticky box:
+			 * it is the only ancestor tall enough to pin while the workspace
+			 * and the dock scroll underneath. It keeps the exact top offset
+			 * and stacking level the preview panel had on its own.
+			 */
+			position: sticky;
+			top: 58px;
+			z-index: 20;
+			flex: 0 0 auto;
+			width: 100%;
+			min-width: 0;
+			display: flex;
+			align-items: stretch;
+			min-height: 0;
+		}
+
+		.te-stage-row > .te-preview-panel {
+			flex: 1 1 auto;
+			min-width: 0;
+		}
+
+		.te-stage-row.te-child-open > .te-preview-panel {
+			flex: 0 0 70%;
+			max-width: 70%;
+			width: 70%;
+		}
+
+		.te-stage-row.te-child-open > .te-child-panel {
+			flex: 0 0 30%;
+			max-width: 30%;
+		}
+
+		.te-child-panel {
+			/* Static inside the sticky stage row; it scrolls on its own. */
+			position: static;
+			align-self: flex-start;
+			min-width: 0;
+			max-height: calc(100vh - 70px);
+			overflow-y: auto;
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+			padding: 12px 14px;
+			border-left: 1px solid var(--te-border);
+			border-bottom: 1px solid var(--te-border);
+			background: var(--card);
+			box-shadow: 0 14px 28px rgba(0, 0, 0, .28);
+		}
+
+		.te-child-panel[hidden] {
+			display: none !important;
+		}
+
+		.te-child-head {
+			display: flex;
+			flex-direction: column;
+			gap: 2px;
+		}
+
+		.te-child-head strong {
+			font-size: 0.82rem;
+			line-height: 1.3;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.te-child-head small {
+			color: var(--te-muted);
+			font-size: 0.68rem;
+			font-variant-numeric: tabular-nums;
+		}
+
+		.te-child-actions {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 6px;
+		}
+
+		.te-child-actions .tm-scene-add {
+			padding: 6px 9px;
+			border: 1px solid var(--te-border);
+			border-radius: 8px;
+			background: var(--t-btn2-bg, #22252d);
+			color: var(--t-btn2-ink, #e7e9ef);
+			font-size: 0.68rem;
+			cursor: pointer;
+		}
+
+		.te-child-hint,
+		.te-child-empty {
+			margin: 0;
+			color: var(--te-muted);
+			font-size: 0.66rem;
+			line-height: 1.4;
+		}
+
+		.te-child-list {
+			display: flex;
+			flex-direction: column;
+			gap: 4px;
+		}
+
+		.te-child-row {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			padding: 5px 7px;
+			border: 1px solid var(--te-border);
+			border-radius: 8px;
+			background: var(--te-lane);
+			cursor: pointer;
+		}
+
+		.te-child-row.selected {
+			border-color: var(--te-accent);
+			box-shadow: inset 0 0 0 1px var(--te-accent);
+		}
+
+		.te-child-row-label {
+			flex: 1 1 auto;
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			font-size: 0.7rem;
+		}
+
+		.te-child-row-time {
+			color: var(--te-muted);
+			font-size: 0.62rem;
+			font-variant-numeric: tabular-nums;
+			white-space: nowrap;
+		}
+
+		.te-child-row-delete {
+			flex: 0 0 auto;
+			width: 20px;
+			height: 20px;
+			padding: 0;
+			border: 1px solid var(--te-border);
+			border-radius: 6px;
+			background: transparent;
+			color: var(--te-muted);
+			cursor: pointer;
+			font-size: 0.66rem;
+			line-height: 1;
+		}
+
+		.te-child-editor {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+			min-height: 0;
+		}
+
+		.te-child-editor-title {
+			font-weight: 800;
+			font-size: 0.72rem;
+		}
+
+		/*
+		 * Narrow screens stack the 70 / 30 split back into one column. The
+		 * row stops being the sticky box there (a pinned box taller than the
+		 * viewport would hide the bottom of the child panel), so the preview
+		 * panel pins itself again exactly as it did before this section.
+		 */
+		@media (max-width: 860px) {
+			.te-stage-row,
+			.te-stage-row.te-child-open {
+				position: static;
+				flex-direction: column;
+			}
+
+			.te-stage-row.te-child-open > .te-preview-panel {
+				flex: 1 1 auto;
+				max-width: 100%;
+				width: 100%;
+			}
+
+			.te-stage-row.te-child-open > .te-child-panel {
+				flex: 1 1 auto;
+				max-width: 100%;
+				border-left: 0;
+			}
+
+			.te-child-panel {
+				position: static;
+				max-height: none;
+			}
+		}
+
 		.te-panel-heading {
 			flex: 0 0 auto;
 			display: flex;

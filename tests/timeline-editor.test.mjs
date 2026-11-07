@@ -1030,3 +1030,190 @@ test("a selected text or graphic is dragged on the preview canvas and the drag w
 
 	assert.match(APP_CSS, /canvas#timeline-preview-canvas \{[^}]*touch-action:\s*none/, "the canvas opts out of native panning so the drag works on touch screens");
 });
+
+test("a duplicated background clip lands in the next time unit after the original and carries its own scene and children", (t) => {
+	const { dom, w, payload } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const api = w.__TIMELINE_EDITOR__;
+
+	/* select the first background clip (a Pixabay image) */
+	doc.querySelector('[data-clip-id="media-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(state.selectedItemId, "media-1");
+	const duplicateButton = doc.getElementById("timeline-duplicate-element");
+	assert.equal(duplicateButton.hidden, false, "the duplicate button is available while a clip is selected");
+	assert.equal(duplicateButton.disabled, false);
+
+	/* a background clip can own child text/graphics, and its duplicate owns copies of them */
+	state.playheadSec = 0;
+	const child = api.addChildElement("graphic");
+	assert.equal(child.parentId, "media-1", "the child belongs to the background clip");
+	assert.equal(api.getChildElements("media-1").length, 1);
+
+	/* the child is selected after adding it; select the background clip again before duplicating it */
+	doc.querySelector('[data-clip-id="media-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(state.selectedItemId, "media-1");
+
+	const mediaTrack = state.tracks.find((track) => track.kind === "media");
+	const original = mediaTrack.items.find((item) => item.id === "media-1");
+	assert.equal(original.startSec, 0);
+	assert.equal(original.durationSec, 5);
+
+	duplicateButton.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+
+	const copy = mediaTrack.items.find((item) => item.id === state.selectedItemId);
+	assert.ok(copy, "the copy is selected after the duplication");
+	assert.notEqual(String(copy.id), "media-1");
+	assert.equal(copy.startSec, original.startSec + original.durationSec, "the copy starts exactly where the original ends - the next time unit");
+	assert.equal(copy.durationSec, original.durationSec, "the copy keeps the original duration");
+	assert.equal(copy.assetId, original.assetId, "the copy points at the same local media asset");
+	assert.equal(mediaTrack.items.indexOf(copy), mediaTrack.items.indexOf(original) + 1, "the copy sits right after the original in the background lane");
+	assert.match(copy.label, /copy/i);
+	assert.match(doc.getElementById("timeline-status").textContent, /right after the original ends/i);
+
+	const copyScene = state.scenes.find((scene) => scene.id === copy.sceneId);
+	assert.ok(copyScene, "the duplicated background clip owns its own scene");
+	assert.notEqual(copy.sceneId, original.sceneId);
+	assert.equal(copyScene.startSec, copy.startSec);
+	assert.equal(copyScene.durationSec, copy.durationSec);
+	assert.equal(state.scenes[state.scenes.indexOf(copyScene) - 1].id, original.sceneId, "the copy's scene follows the original scene");
+
+	const copiedChildren = api.getChildElements(copy.id);
+	assert.equal(copiedChildren.length, 1, "the background clip's children are duplicated with it");
+	assert.equal(copiedChildren[0].parentId, copy.id);
+	assert.equal(copiedChildren[0].sceneId, copy.sceneId);
+	assert.equal(copiedChildren[0].startSec, copy.startSec, "the child keeps its offset inside the duplicated window");
+
+	assert.equal(api.save(), true);
+	const saved = JSON.parse(w.localStorage.getItem("ytvs.timeline-editor.v1." + payload.targetPageId));
+	const savedCopy = saved.tracks.find((track) => track.kind === "media").items.find((item) => item.id === copy.id);
+	assert.equal(savedCopy.startSec, 5, "the duplicate placement is persisted");
+	assert.ok(saved.scenes.some((scene) => scene.id === copy.sceneId), "the duplicated scene is persisted");
+});
+
+test("a duplicated text, graphic or audio clip starts when the original timing ends", (t) => {
+	const { dom, w, payload } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const api = w.__TIMELINE_EDITOR__;
+
+	const text = api.addTextElement("Keep me");
+	api.setItemTiming(text.id, 2, 3);
+	assert.equal(state.selectedItemId, text.id, "the new text is selected");
+	const track = state.tracks.find((candidate) => candidate.items.some((item) => item.id === text.id));
+
+	doc.getElementById("timeline-duplicate-element").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	const textCopy = track.items.find((item) => item.id === state.selectedItemId);
+	assert.ok(textCopy && textCopy.id !== text.id);
+	assert.equal(textCopy.startSec, 5, "2 s + 3 s: the copy starts when the original ends");
+	assert.equal(textCopy.durationSec, 3);
+	assert.equal(textCopy.text, "Keep me");
+	assert.equal(track.items.indexOf(textCopy), track.items.indexOf(text) + 1, "the copy is listed next to the original");
+	assert.match(doc.getElementById("timeline-status").textContent, /right after the original ends/i);
+
+	const graphic = api.addGraphicElement();
+	api.setItemTiming(graphic.id, 1, 2);
+	doc.getElementById("timeline-duplicate-element").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	const graphicCopy = state.tracks.flatMap((candidate) => candidate.items).find((item) => item.id === state.selectedItemId);
+	assert.equal(graphicCopy.startSec, 3, "the graphic copy starts when the graphic ends");
+
+	/* a child copy that no longer fits the background window becomes a free clip */
+	doc.querySelector('[data-clip-id="media-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	const child = api.addChildElement("text");
+	assert.equal(child.parentId, "media-1");
+	api.duplicateSelectedItem();
+	const childCopy = state.tracks.flatMap((candidate) => candidate.items).find((item) => item.id === state.selectedItemId);
+	assert.equal(childCopy.startSec, 5, "the child copy also starts when the original ends");
+	assert.equal(childCopy.parentId, "", "outside the background window the copy is a free clip");
+	assert.match(doc.getElementById("timeline-status").textContent, /free clip/i);
+
+	assert.equal(api.save(), true);
+	const saved = JSON.parse(w.localStorage.getItem("ytvs.timeline-editor.v1." + payload.targetPageId));
+	const savedCopies = saved.tracks.flatMap((candidate) => candidate.items).filter((item) => [textCopy.id, graphicCopy.id, childCopy.id].includes(item.id));
+	assert.equal(savedCopies.length, 3, "every duplicate is persisted");
+	assert.equal(savedCopies.find((item) => item.id === textCopy.id).startSec, 5);
+});
+
+test("a selected background clip shrinks the preview to 70 % and opens the 30 % child panel with child timing bound to the clip", (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const api = w.__TIMELINE_EDITOR__;
+	const row = doc.getElementById("timeline-stage-row");
+	const panel = doc.getElementById("timeline-child-panel");
+
+	/* nothing background-ish selected at first: the panel is closed */
+	doc.querySelector('[data-clip-id="dummy-text-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(panel.hidden, true, "a text selection leaves the child panel closed");
+	assert.equal(row.classList.contains("te-child-open"), false, "the preview keeps 100 % width");
+
+	/* selecting the background clip opens the 30 % child section */
+	doc.querySelector('[data-clip-id="media-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(panel.hidden, false);
+	assert.equal(row.classList.contains("te-child-open"), true, "the stage row is in the 70 / 30 mode");
+	assert.equal(doc.getElementById("timeline-child-title").textContent, "Scene 1");
+	assert.match(doc.getElementById("timeline-child-window").textContent, /0:00 – 0:05/, "the panel names the background clip's window");
+	assert.equal(doc.querySelectorAll("#timeline-child-panel [data-timeline-action=\"add-child-text\"]").length, 1, "the panel offers the add-text button");
+	assert.equal(doc.querySelectorAll("#timeline-child-panel [data-timeline-action=\"add-child-graphic\"]").length, 1, "the panel offers the add-graphic button");
+	const inspectorButtons = Array.from(doc.querySelectorAll("#timeline-inspector .tm-scene-add"), (node) => node.textContent);
+	assert.ok(inspectorButtons.some((label) => /Child text/i.test(label)), "the background clip's inspector also offers a child text button");
+	assert.ok(inspectorButtons.some((label) => /Child graphic/i.test(label)), "the background clip's inspector also offers a child graphic button");
+
+	/* the child timing is the background window, not the playhead */
+	state.playheadSec = 0;
+	doc.querySelector('#timeline-child-panel [data-timeline-action="add-child-text"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	const child = api.getChildElements("media-1")[0];
+	assert.ok(child, "the child text was created");
+	assert.equal(child.parentId, "media-1");
+	assert.equal(child.kind, "text");
+	assert.equal(child.startSec, 0, "the child starts with its background clip");
+	assert.equal(child.durationSec, 5, "the child spans its background clip");
+	assert.equal(state.selectedItemId, child.id);
+	assert.equal(doc.querySelectorAll("#timeline-child-list .te-child-row").length, 1, "the child is listed in the left panel");
+	assert.equal(doc.querySelector("#timeline-child-list .te-child-row").classList.contains("selected"), true);
+	assert.ok(doc.querySelector("#timeline-child-editor .tm-scene-field"), "the left panel edits the selected child");
+	assert.match(doc.querySelector("#timeline-child-editor .te-inspector-note").textContent, /Child of the background clip/i);
+	const startLabels = Array.from(doc.querySelectorAll("#timeline-child-editor .tm-scene-field-label"), (node) => node.textContent);
+	assert.ok(startLabels.includes("Start inside background (seconds)"), "the child start is bounded by the background");
+	assert.ok(startLabels.includes("Duration inside background (seconds)"), "the child duration is bounded by the background");
+
+	/* the child can never leave the background window */
+	api.setItemTiming(child.id, 4, 10);
+	assert.equal(child.startSec, 4);
+	assert.equal(child.durationSec, 1, "the child duration is clipped to the rest of the background window");
+	api.setItemTiming(child.id, 30, 2);
+	assert.equal(child.startSec, 4.75, "a start past the background is clamped to the last quarter second");
+	assert.equal(child.durationSec, 0.25);
+
+	/* moving the background moves the child's whole window */
+	child.startSec = 1;
+	child.durationSec = 2;
+	api.setItemTiming("media-1", 2, 8);
+	assert.equal(child.startSec, 3, "the child follows the background move");
+	const windowLabel = doc.getElementById("timeline-child-window").textContent;
+	assert.match(windowLabel, /0:02 – 0:10/, "the panel window follows the background clip");
+
+	/* any other timeline element closes the panel and restores the full-width preview */
+	doc.querySelector('[data-clip-id="dummy-text-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(panel.hidden, true);
+	assert.equal(row.classList.contains("te-child-open"), false);
+	assert.equal(doc.getElementById("timeline-child-list").children.length, 0, "the child list is cleared with the panel");
+
+	/* a child keeps the background context open while it is the selection */
+	doc.querySelector('[data-clip-id="' + child.id + '"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	assert.equal(panel.hidden, false, "editing a child keeps its background context open");
+	assert.equal(api.getBackgroundContext().id, "media-1");
+
+	/* the markup and the stylesheet carry the 70 / 30 rule */
+	const html = createHTML();
+	assert.ok(html.includes('id="timeline-child-panel"'));
+	assert.ok(html.includes('data-timeline-action="add-child-text"'));
+	assert.ok(html.includes('data-timeline-action="add-child-graphic"'));
+	assert.ok(html.includes('id="timeline-duplicate-element"'));
+	assert.match(APP_CSS, /\.te-stage-row\.te-child-open > \.te-preview-panel\s*\{[^}]*flex:\s*0 0 70%/, "the preview shrinks to 70 %");
+	assert.match(APP_CSS, /\.te-stage-row\.te-child-open > \.te-child-panel\s*\{[^}]*flex:\s*0 0 30%/, "the child panel owns 30 %");
+	assert.match(APP_CSS, /\.te-child-panel\[hidden\]\s*\{[^}]*display:\s*none/, "the hidden panel takes no space");
+});

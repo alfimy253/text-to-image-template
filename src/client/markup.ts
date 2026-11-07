@@ -824,8 +824,11 @@ export const PAGE_MARKUP = `
 	     video-generation pipeline or call a server route.
 
 	     Reading order (Session 331, latest request):
-	     1. sticky preview canvas: full page width, 400 px floor;
-	     2. selected-element panel: full width, follows the preview;
+	     1. stage row: the sticky preview canvas (320 px stage) is
+	        100 % wide on its own, and 70 % wide with the left
+	        child panel taking the other 30 % while a background
+	        clip (Pixabay image, GIF or MP4) is selected;
+	     2. selected-element panel: full width, follows the stage;
 	     3. timeline dock: full width, follows the element panel.
 	     The dock is in normal flow, so a tall screen leaves empty
 	     space under the tracks instead of stretching them.
@@ -843,24 +846,42 @@ export const PAGE_MARKUP = `
 				<button type="button" class="te-export te-primary" id="timeline-export-btn" data-timeline-action="export" title="Render and download this timeline as an MP4 video">\u2b07 Export MP4</button>
 			</div>
 
-			<!-- 1/3 — the full-width sticky preview canvas (320 px stage) -->
-			<section class="te-preview-panel" aria-label="Video preview">
-					<div class="te-panel-heading"><strong>Preview</strong><span id="timeline-current-scene">Scene 1</span></div>
-					<div class="te-preview-stage">
-						<canvas id="timeline-preview-canvas" width="1280" height="720" aria-label="Timeline preview canvas: drag a selected text or graphic to move it" title="Drag a selected text or graphic to change its X and Y"></canvas>
-						<div id="timeline-preview-placeholder" class="te-preview-placeholder">Select or upload media to preview this scene</div>
+			<!-- 1/3 — the preview stage row: 100 % wide, or 70 % + 30 % child panel -->
+			<div class="te-stage-row" id="timeline-stage-row">
+				<section class="te-preview-panel" aria-label="Video preview">
+						<div class="te-panel-heading"><strong>Preview</strong><span id="timeline-current-scene">Scene 1</span></div>
+						<div class="te-preview-stage">
+							<canvas id="timeline-preview-canvas" width="1280" height="720" aria-label="Timeline preview canvas: drag a selected text or graphic to move it" title="Drag a selected text or graphic to change its X and Y"></canvas>
+							<div id="timeline-preview-placeholder" class="te-preview-placeholder">Select or upload media to preview this scene</div>
+						</div>
+						<div class="te-export-progress" id="timeline-export-progress" hidden aria-hidden="true"><div class="te-export-progress-bar" id="timeline-export-progress-bar"></div></div>
+						<div class="te-preview-controls">
+							<button type="button" data-timeline-action="restart" title="Return to the start">\u21ba</button>
+							<button type="button" data-timeline-action="step-back" title="Previous scene">\u2039</button>
+							<button type="button" class="te-play" data-timeline-action="play">\u25b6 Play</button>
+							<button type="button" class="te-export" data-timeline-action="export" title="Render and download this timeline as an MP4 video">\u2b07 Export MP4</button>
+							<button type="button" data-timeline-action="step-forward" title="Next scene">\u203a</button>
+							<output id="timeline-time-readout">0:00 / 1:00</output>
+						</div>
+						<p class="te-preview-note" id="timeline-preview-note">Preview and timing changes stay in this browser. Drag a selected text or graphic on the canvas to move it.</p>
+				</section>
+
+				<!-- The 30 % child section: shown only while a background clip (or one of its children) is selected -->
+				<aside class="te-child-panel" id="timeline-child-panel" aria-label="Child text and graphics of the selected background clip" hidden>
+					<div class="te-child-head">
+						<div class="tm-scene-kicker">BACKGROUND ELEMENT</div>
+						<strong id="timeline-child-title">Select a background clip</strong>
+						<small id="timeline-child-window">No background clip is selected</small>
 					</div>
-					<div class="te-export-progress" id="timeline-export-progress" hidden aria-hidden="true"><div class="te-export-progress-bar" id="timeline-export-progress-bar"></div></div>
-					<div class="te-preview-controls">
-						<button type="button" data-timeline-action="restart" title="Return to the start">\u21ba</button>
-						<button type="button" data-timeline-action="step-back" title="Previous scene">\u2039</button>
-						<button type="button" class="te-play" data-timeline-action="play">\u25b6 Play</button>
-						<button type="button" class="te-export" data-timeline-action="export" title="Render and download this timeline as an MP4 video">\u2b07 Export MP4</button>
-						<button type="button" data-timeline-action="step-forward" title="Next scene">\u203a</button>
-						<output id="timeline-time-readout">0:00 / 1:00</output>
+					<div class="te-child-actions">
+						<button type="button" class="tm-scene-add" data-timeline-action="add-child-text" title="Add a text that lives inside this background clip's window">\uff0b Child text</button>
+						<button type="button" class="tm-scene-add" data-timeline-action="add-child-graphic" title="Add a graphic that lives inside this background clip's window">\uff0b Child graphic</button>
 					</div>
-					<p class="te-preview-note" id="timeline-preview-note">Preview and timing changes stay in this browser. Drag a selected text or graphic on the canvas to move it.</p>
-			</section>
+					<p class="te-child-hint">Child text and graphics are timed by this background clip only: they live inside its window, they cannot be dragged outside it, and moving or resizing the background moves the whole window. Drag a child on the preview canvas to place it.</p>
+					<div id="timeline-child-list" class="te-child-list" aria-label="Child elements of this background clip"></div>
+					<div id="timeline-child-editor" class="te-child-editor"></div>
+				</aside>
+			</div>
 
 			<!-- 2/3 — the selected-element section always follows the preview -->
 			<div class="te-workspace">
@@ -871,10 +892,11 @@ export const PAGE_MARKUP = `
 							<div class="tm-scene-panel-actions">
 								<button type="button" id="timeline-add-text" class="tm-scene-add" data-timeline-action="add-text">\uff0b Text</button>
 								<button type="button" id="timeline-add-graphic" class="tm-scene-add" data-timeline-action="add-graphic">\uff0b Graphic</button>
+								<button type="button" id="timeline-duplicate-element" class="tm-scene-add" data-timeline-action="duplicate" title="Duplicate the selected clip into the slot right after the original" hidden disabled>\u29c9 Duplicate</button>
 								<button type="button" id="timeline-delete-element" class="tm-scene-delete" data-timeline-action="delete" hidden disabled>Delete</button>
 							</div>
 						</div>
-						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it. The Pixabay background is the bottom layer; text and graphics always paint above it. Every video opens with one dummy text clip at 0:00 when it has no text or graphic yet. Subtitle cues follow the music: they paint on the preview, but their timeline layer stays hidden and read-only. The row's video style is carried into this project and its template-modal treatment is painted on every scene: Cinematic Film paints the double gradient, Neon Night paints the neon glow together with the VHS bars. Every \uff0b Text or \uff0b Graphic click opens a new lane on top of the ones already open, and a selected text or graphic can be dragged straight on the preview canvas - that drag writes the same X and Y percentages the sliders show.</p>
+						<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. Drag the clip edge to extend it. The Pixabay background is the bottom layer; text and graphics always paint above it. Every video opens with one dummy text clip at 0:00 when it has no text or graphic yet. Subtitle cues follow the music: they paint on the preview, but their timeline layer stays hidden and read-only. The row's video style is carried into this project and its template-modal treatment is painted on every scene: Cinematic Film paints the double gradient, Neon Night paints the neon glow together with the VHS bars. Every \uff0b Text or \uff0b Graphic click opens a new lane on top of the ones already open, and a selected text or graphic can be dragged straight on the preview canvas - that drag writes the same X and Y percentages the sliders show. \u29c9 Duplicate copies the selected clip into the slot right after the original: a duplicated background clip starts at the original clip's end (the next time unit of the timeline), and a duplicated text, graphic or audio clip starts when the original timing ends. Selecting a background clip (Pixabay image, GIF or MP4) shrinks the preview to 70 % and opens the 30 % child panel on the left with its \uff0b Child text and \uff0b Child graphic buttons; those children are timed by the background clip only and the panel closes - preview back to 100 % - as soon as another timeline element is selected.</p>
 						<div id="timeline-element-selector" class="tm-scene-objects" aria-label="Scene elements"></div>
 						<div id="timeline-inspector" class="tm-scene-inspector"></div>
 						<div id="timeline-inspector-empty" class="te-inspector-empty">Choose a track or element to see its controls.</div>
