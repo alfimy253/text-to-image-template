@@ -1995,3 +1995,75 @@ The three Section 17 tests are the executable specification of 17.3 / 17.4 / 17.
 - Focused suites 86 / 86 green; `tests/timeline-editor.test.mjs` 26 / 26 (23 before + 3 new); full suite 543 total / 497 pass / 40 fail / 6 cancelled with a failure-name set identical to `459be7b`; `tsc --noEmit` identical to `459be7b` (31 pre-existing `src/index.ts` diagnostics); `wrangler deploy --dry-run` compiles at 3004.31 KiB / 1361.60 KiB gzip.
 - Commit: `bf976af` *"Section 17: duplicate placement after the original, background-owned child text/graphics, and the 70/30 child panel"*. The code-level record of that commit is Appendix A-G (17.13-17.19): symbol/line map, DOM and action contract, saved JSON shape, the three algorithms as coded, the before/after behaviour matrix, the manual walkthroughs and the re-verification commands.
 - Follow-up doc commit: `c71006c` *"Section 17: record the commit hash in the status block"* and the Appendix commit that follows it; neither touches code.
+
+## 18. Remove verbose timeline editor UI hints & vertically center preview video at 70 % width (2026-11-07)
+
+### 18.1 Request & authority order
+
+- **Primary source of truth:** current workspace code (`src/client/markup.ts`, `src/client/timeline-editor.ts`, `src/client/styles.ts`, `tests/timeline-editor.test.mjs`).
+- **Secondary source of truth:** `bug-fix-session-331.md` (Sections 11–17).
+- **Changes requested:**
+  1. Remove the three verbose hint texts from the timeline editor UI (`#view-timeline`):
+     - Selected-element panel `<p class="tm-scene-hint">Select a clip in the timeline to edit its start and duration. …</p>`.
+     - Child timing bound-window note (`Child of the background clip "<label>" (<start> – <end>). Its timing depends on that clip only: move or resize the background to move the whole window.`) rendered for child elements in `renderItemControls()`.
+     - Child panel `<p class="te-child-hint">Child text and graphics are timed by this background clip only: …</p>`.
+  2. Vertically center the video on the preview canvas on the timeline editor page when the preview width is 70 % (`.te-stage-row.te-child-open` above `860px`).
+
+### 18.2 Root-cause study & implementation
+
+1. **Hint removal (`src/client/markup.ts`, `src/client/timeline-editor.ts`, `src/client/styles.ts`):**
+   - Removed `<p class="tm-scene-hint">…</p>` inside `#view-timeline .te-inspector-panel .tm-scene-panel` and `<p class="te-child-hint">…</p>` inside `#timeline-child-panel` in `src/client/markup.ts` (and dropped the dead `.te-child-hint` selector in `src/client/styles.ts`).
+   - Removed `boundNote` creation in `renderItemControls()` (`src/client/timeline-editor.ts`), which previously injected the `Child of the background clip …` `.te-inspector-note` into both `#timeline-child-editor` and `#timeline-inspector` whenever a child clip was selected. All child timing range clamps (`Start inside background`, `Duration inside background`) and other status/inspector notes remain unchanged.
+
+2. **Vertical centering at 70 % preview width (`src/client/styles.ts`):**
+   - When a background clip or one of its children is selected on viewports wider than `860px`, `#timeline-stage-row` receives `.te-child-open` (`display: flex; align-items: stretch`): `.te-preview-panel` shrinks to `70%` width and `#timeline-child-panel` takes `30%`. When child controls expand `#timeline-child-panel` up to `calc(100vh - 70px)`, `.te-preview-panel` stretches to match the row height while `.te-preview-stage` stays capped at `320px`; because `.te-preview-panel` defaulted to `justify-content: flex-start`, the preview block remained pinned to the top of the stretched 70 % panel.
+   - Added `justify-content: center` on `.te-stage-row.te-child-open > .te-preview-panel`, fixed `.te-stage-row.te-child-open .te-preview-stage` to `flex: 0 0 320px; align-items: center; justify-content: center`, ensured `canvas#timeline-preview-canvas` carries `flex: 0 1 auto; align-self: center; margin: auto` (so width-constrained frames inside the `320px` stage also center on both axes), set `.te-child-panel { align-self: stretch }`, and reset `.te-stage-row.te-child-open > .te-preview-panel { justify-content: flex-start }` inside `@media (max-width: 860px)` where the preview returns to `100%` width.
+
+### 18.3 Verification
+
+- `node --import tsx --test tests/timeline-editor.test.mjs`: `27 / 27` pass (updated Section 17 child-editor assertion + added dedicated test covering hint removal and 70 % vertical centering rules).
+- Focused suites (`timeline-editor`, `quick-batch-table`, `final-media-cap-actions`, `template-composer`, `public-entry-points`, `editor-subtitles-parity`): `87 / 87` pass.
+- `npx wrangler deploy --dry-run`: exit `0` (`3002.55 KiB` / `1360.96 KiB` gzip).
+
+## 19. Timeline editor bottom gallery cleanup, Selected Scene background-only inspector, Scene's media label, dock/scroll copy removal, and equal-height 70/30 columns (2026-11-08)
+
+### 19.1 Request & authority order
+
+- **Primary source of truth:** current workspace code (`src/client/app-js.ts`, `src/client/markup.ts`, `src/client/timeline-editor.ts`, `src/client/styles.ts`, `tests/timeline-editor.test.mjs`).
+- **Secondary source of truth:** `bug-fix-session-331.md`.
+- **Changes requested on `layout=timeline`:**
+  1. Remove the two "video generating" cards (`#gallery`: `Generating AI Scene 1...`, `Generating AI Scene 2...`) appearing at the bottom-most part of the timeline editor.
+  2. Rename the `TIMELINE EDITOR - Selected element` section below the preview canvas to `Selected Scene`, and make it contain the background media only — not child text or child graphics.
+  3. Rename `Pixabay & uploaded media · background` to `Scene's media`.
+  4. Remove the `.te-dock-footer` explanatory paragraph (`Text and graphics lanes stack above the pinned background layer, ... painted on all scenes and in the exported MP4.`) and the `Text moved - ...` status readout.
+  5. Make the preview canvas / 70 % column the same height as the 30 % column once two columns are shown (`.te-stage-row.te-child-open`).
+  6. Remove the `SCROLL LAYER` and `empty · drag to pan` text on the bottom scroll lane.
+
+### 19.2 Root-cause study & implementation
+
+1. **Bottom `#gallery` cards (`src/client/app-js.ts`, `src/client/styles.ts`, `src/client/timeline-editor.ts`):**
+   - Top-level `prompts.forEach(...)` in `src/client/app-js.ts` appended `card-0` and `card-1` (`Generating AI Scene 1...`, `Generating AI Scene 2...`) into `#studio-app > #gallery` before route branching, while `layout=timeline` skipped `initVideoStudio()` (which hid `#gallery` in normal studio modes) and `#studio-app.timeline-mode` did not hide `#gallery`.
+   - Guarded `prompts.forEach(...)` to skip card creation and hide `#gallery` when `layout=timeline` is active, cleared/hid `#gallery` inside `activateTimelineEditorLayout()` and `timeline-editor.ts` `boot()`, and added `body.timeline-editor-page #gallery` + `#studio-app.timeline-mode > #gallery` to the `display: none !important` rule in `src/client/styles.ts`.
+
+2. **`Selected Scene` background-media-only inspector (`src/client/markup.ts`, `src/client/timeline-editor.ts`):**
+   - Renamed `<div class="tm-sec-title">Selected element</div>` to `<div class="tm-sec-title">Selected Scene</div>` (and `aria-label="Selected scene controls"`).
+   - Removed the `"Child text & graphics"` subsection (`＋ Child text`, `＋ Child graphic`, `childNote`) from `renderItemControls()` for `media` items so a background scene renders `Timing` + `Background media` only.
+   - Updated `renderInspector()` so whenever a background clip or one of its child text/graphics is active (`backgroundContext()`), the bottom `Selected Scene` inspector resolves to the parent background media clip on `mediaTrack()` and `#timeline-element-selector` renders no child text/graphic pills, while `#timeline-child-panel` (the 30 % column) continues to list and edit the child text/graphics. Free (non-child) timeline clips remain editable when selected.
+
+3. **Media track label (`src/client/timeline-editor.ts`, `src/client/app-js.ts`):**
+   - Updated `MEDIA_TRACK_LABEL` in `src/client/timeline-editor.ts` and the Quick Batch handoff track label in `src/client/app-js.ts` from `Pixabay & uploaded media · background` / `Pixabay & uploaded media` to `Scene's media`.
+
+4. **Dock footer & drag status removal (`src/client/markup.ts`, `src/client/timeline-editor.ts`, `src/client/styles.ts`):**
+   - Removed the `.te-dock-footer` explanatory `<span>` from `src/client/markup.ts`, hid `.te-dock-footer` whenever `#timeline-status` is empty (`.te-dock-footer[hidden] { display: none !important; }` + `setStatus()`), and removed the `Graphic moved - ...` / `Text moved - ...` `setStatus()` call from `endCanvasDrag()`.
+
+5. **Equal-height 70 % / 30 % columns & preview stage (`src/client/styles.ts`):**
+   - Set `.te-stage-row.te-child-open > .te-preview-panel` (`width: 70%; align-self: stretch; max-height: calc(100vh - 70px)`) and `.te-stage-row.te-child-open > .te-child-panel` (`width: 30%; align-self: stretch`) to share identical stretched column bounds, and updated `.te-stage-row.te-child-open .te-preview-stage` from `flex: 0 0 320px` to `flex: 1 1 auto; height: auto; min-height: 320px; max-height: none` so the preview canvas stage expands vertically to match the 30 % column height (resetting back to `100%` width and `320px` stage height inside `@media (max-width: 860px)`).
+
+6. **Bottom scroll-lane label copy removal (`src/client/timeline-editor.ts`):**
+   - Removed `<span class="te-track-scroll-label">SCROLL LAYER<small>empty · drag to pan</small></span>` from `.te-track-label.te-track-scroll`, preserving the empty bottom scroll layer row and horizontal drag-to-pan behavior.
+
+### 19.3 Verification
+
+- `node --import tsx --test tests/timeline-editor.test.mjs`: `28 / 28` pass (including full `createHTML()` + JSDOM `layout=timeline` boot verifying `#gallery` has 0 cards and `display: none`, `Selected Scene` + `Scene's media` labels, background-only `Selected Scene` inspector during child text/graphic selection, removed dock/scroll-layer copy, and equal-height 70 % / 30 % CSS rules).
+- Related suites (`public-entry-points`, `quick-batch-table`, `studio-ui-session-243`, `template-composer`): `45 / 45` pass.
+- `npx wrangler deploy --dry-run`: exit `0` (`3001.47 KiB` / `1360.72 KiB` gzip).

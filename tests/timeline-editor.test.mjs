@@ -889,8 +889,7 @@ test("the dock ends in an empty scroll layer that pans the tracks and reads as o
 	assert.equal(doc.querySelectorAll(".te-lane").length, 2, "the extra layer does not add a track lane");
 	const label = doc.querySelector(".te-track-scroll");
 	assert.ok(label, "the label column has a matching row");
-	assert.match(label.textContent, /SCROLL/i, "the label column names the layer");
-	assert.match(label.textContent, /empty/i, "the label says the layer is empty");
+	assert.equal(label.textContent, "", "SCROLL LAYER and empty · drag to pan text are removed from the label cell");
 
 	/* it looks like a lane instead of a scrollbar widget */
 	const base = APP_CSS.slice(APP_CSS.indexOf(".te-scroll-layer {"), APP_CSS.indexOf(".te-scroll-layer:active"));
@@ -997,7 +996,7 @@ test("a selected text or graphic is dragged on the preview canvas and the drag w
 	pointerEvent(doc, "pointermove", 704, 432, w);
 	pointerEvent(doc, "pointerup", 704, 432, w);
 	assert.equal(canvas.style.cursor, "", "the cursor is released");
-	assert.match(doc.getElementById("timeline-status").textContent, /Graphic moved - x 55%, y 60%/, "the status line reports the new position");
+	assert.doesNotMatch(doc.getElementById("timeline-status").textContent, /Graphic moved/i, "dragging does not emit Graphic moved status text");
 	assert.equal(graphic.size, 72, "dragging never resizes the clip");
 
 	/* the dragged percentages live on the saved element */
@@ -1016,7 +1015,7 @@ test("a selected text or graphic is dragged on the preview canvas and the drag w
 	assert.equal(text.y, 78, "the drag keeps the axis it did not move");
 	assert.equal(xInput().value, "40");
 	pointerEvent(doc, "pointerup", 512, Math.round(720 * 0.78), w);
-	assert.match(doc.getElementById("timeline-status").textContent, /Text moved - x 40%, y 78%/);
+	assert.doesNotMatch(doc.getElementById("timeline-status").textContent, /Text moved/i, "dragging does not emit Text moved status text");
 
 	/* a click on an invisible part of the canvas still re-selects nothing else: media is not draggable */
 	doc.querySelector('[data-clip-id="media-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
@@ -1159,8 +1158,7 @@ test("a selected background clip shrinks the preview to 70 % and opens the 30 % 
 	assert.equal(doc.querySelectorAll("#timeline-child-panel [data-timeline-action=\"add-child-text\"]").length, 1, "the panel offers the add-text button");
 	assert.equal(doc.querySelectorAll("#timeline-child-panel [data-timeline-action=\"add-child-graphic\"]").length, 1, "the panel offers the add-graphic button");
 	const inspectorButtons = Array.from(doc.querySelectorAll("#timeline-inspector .tm-scene-add"), (node) => node.textContent);
-	assert.ok(inspectorButtons.some((label) => /Child text/i.test(label)), "the background clip's inspector also offers a child text button");
-	assert.ok(inspectorButtons.some((label) => /Child graphic/i.test(label)), "the background clip's inspector also offers a child graphic button");
+	assert.equal(inspectorButtons.some((label) => /Child text|Child graphic/i.test(label)), false, "Selected Scene inspector shows background media only and omits child text/graphic buttons");
 
 	/* the child timing is the background window, not the playhead */
 	state.playheadSec = 0;
@@ -1175,7 +1173,9 @@ test("a selected background clip shrinks the preview to 70 % and opens the 30 % 
 	assert.equal(doc.querySelectorAll("#timeline-child-list .te-child-row").length, 1, "the child is listed in the left panel");
 	assert.equal(doc.querySelector("#timeline-child-list .te-child-row").classList.contains("selected"), true);
 	assert.ok(doc.querySelector("#timeline-child-editor .tm-scene-field"), "the left panel edits the selected child");
-	assert.match(doc.querySelector("#timeline-child-editor .te-inspector-note").textContent, /Child of the background clip/i);
+	assert.doesNotMatch(doc.getElementById("timeline-child-editor").textContent, /Child of the background clip/i);
+	assert.match(doc.getElementById("timeline-inspector").textContent, /Background media/, "Selected Scene inspector keeps showing the parent background media when a child clip is selected");
+	assert.doesNotMatch(doc.getElementById("timeline-inspector").textContent, /Text element|Graphic element|Start inside background/i, "Selected Scene inspector never renders child text or child graphic controls");
 	const startLabels = Array.from(doc.querySelectorAll("#timeline-child-editor .tm-scene-field-label"), (node) => node.textContent);
 	assert.ok(startLabels.includes("Start inside background (seconds)"), "the child start is bounded by the background");
 	assert.ok(startLabels.includes("Duration inside background (seconds)"), "the child duration is bounded by the background");
@@ -1216,4 +1216,137 @@ test("a selected background clip shrinks the preview to 70 % and opens the 30 % 
 	assert.match(APP_CSS, /\.te-stage-row\.te-child-open > \.te-preview-panel\s*\{[^}]*flex:\s*0 0 70%/, "the preview shrinks to 70 %");
 	assert.match(APP_CSS, /\.te-stage-row\.te-child-open > \.te-child-panel\s*\{[^}]*flex:\s*0 0 30%/, "the child panel owns 30 %");
 	assert.match(APP_CSS, /\.te-child-panel\[hidden\]\s*\{[^}]*display:\s*none/, "the hidden panel takes no space");
+});
+
+test("timeline editor UI omits the three verbose hint paragraphs and vertically centers the preview video when width is 70%", (t) => {
+	const html = createHTML();
+	assert.doesNotMatch(html, /Select a clip in the timeline to edit its start and duration\./, "selected-element wall-of-text hint is removed from served HTML");
+	assert.doesNotMatch(html, /Child text and graphics are timed by this background clip only:/, "child-panel hint paragraph is removed from served HTML");
+	assert.doesNotMatch(html, /class="te-child-hint"/, "no .te-child-hint node in timeline markup");
+
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const api = w.__TIMELINE_EDITOR__;
+	const timelineView = doc.getElementById("view-timeline");
+
+	assert.equal(timelineView.querySelector(".tm-scene-hint"), null, "timeline inspector has no .tm-scene-hint paragraph");
+	assert.equal(timelineView.querySelector(".te-child-hint"), null, "timeline child panel has no .te-child-hint paragraph");
+
+	/* select a background clip and create both a child text and a child graphic */
+	doc.querySelector('[data-clip-id="media-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	const childText = api.addChildElement("text");
+	assert.ok(childText);
+	assert.doesNotMatch(timelineView.textContent, /Child of the background clip/i, "child text inspector/editor does not render the removed bound-window hint");
+	assert.doesNotMatch(timelineView.textContent, /Select a clip in the timeline to edit its start and duration/i);
+	assert.doesNotMatch(timelineView.textContent, /Child text and graphics are timed by this background clip only/i);
+
+	doc.querySelector('[data-clip-id="media-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	const childGraphic = api.addChildElement("graphic");
+	assert.ok(childGraphic);
+	assert.doesNotMatch(timelineView.textContent, /Child of the background clip/i, "child graphic inspector/editor does not render the removed bound-window hint");
+
+	/* 70% / 30% split keeps both columns equal height and expands the preview stage to match */
+	const preview70Rule = APP_CSS.match(/\.te-stage-row\.te-child-open > \.te-preview-panel\s*\{([^}]*)\}/);
+	assert.ok(preview70Rule, "70% preview panel rule exists");
+	assert.match(preview70Rule[1], /width:\s*70%/);
+	assert.match(preview70Rule[1], /align-self:\s*stretch/, "70% preview panel stretches to the same height as the 30% column");
+	assert.match(preview70Rule[1], /max-height:\s*calc\(100vh - 70px\)/, "70% preview panel matches the 30% child panel max-height cap");
+	assert.match(preview70Rule[1], /justify-content:\s*center/);
+
+	const child30Rule = APP_CSS.match(/\.te-stage-row\.te-child-open > \.te-child-panel\s*\{([^}]*)\}/);
+	assert.ok(child30Rule, "30% child panel rule exists");
+	assert.match(child30Rule[1], /width:\s*30%/);
+	assert.match(child30Rule[1], /align-self:\s*stretch/, "30% child panel stretches to match the 70% preview panel");
+
+	const stage70Rule = APP_CSS.match(/\.te-stage-row\.te-child-open \.te-preview-stage\s*\{([^}]*)\}/);
+	assert.ok(stage70Rule, "70% preview stage rule exists");
+	assert.match(stage70Rule[1], /flex:\s*1 1 auto/, "preview stage grows vertically to match the 30% column height");
+	assert.match(stage70Rule[1], /height:\s*auto/);
+	assert.match(stage70Rule[1], /min-height:\s*320px/);
+	assert.match(stage70Rule[1], /max-height:\s*none/);
+	assert.match(stage70Rule[1], /align-items:\s*center/);
+	assert.match(stage70Rule[1], /justify-content:\s*center/);
+
+	const canvas70Rule = APP_CSS.match(/\.te-stage-row\.te-child-open \.te-preview-stage canvas#timeline-preview-canvas\s*\{([^}]*)\}/);
+	assert.ok(canvas70Rule, "70% preview canvas rule exists");
+	assert.match(canvas70Rule[1], /align-self:\s*center/);
+	assert.match(canvas70Rule[1], /margin:\s*auto/);
+
+	/* below 860px the preview returns to 100% width and resets its stacked stage height */
+	const mobileBlock = APP_CSS.slice(APP_CSS.lastIndexOf("@media (max-width: 860px)"));
+	const mobilePreviewRule = mobileBlock.match(/\.te-stage-row\.te-child-open > \.te-preview-panel\s*\{([^}]*)\}/);
+	assert.ok(mobilePreviewRule, "responsive 100% override exists");
+	assert.match(mobilePreviewRule[1], /width:\s*100%/);
+	assert.match(mobilePreviewRule[1], /max-height:\s*none/);
+	assert.match(mobilePreviewRule[1], /justify-content:\s*flex-start/);
+});
+
+test("timeline editor hides bottom gallery cards, renames Selected Scene and Scene's media, keeps background media only in Selected Scene, and omits dock/scroll-layer copy", async (t) => {
+	const html = createHTML();
+	assert.ok(html.includes('<div class="tm-sec-title">Selected Scene</div>'), "TIMELINE EDITOR section heading is Selected Scene");
+	assert.equal(html.includes('<div class="tm-sec-title">Selected element</div>'), false, "Selected element heading is gone");
+	assert.doesNotMatch(html, /Text and graphics lanes stack above the pinned background layer/, "dock footer explanatory paragraph is removed from markup");
+	assert.doesNotMatch(html, /Pixabay &amp; uploaded media|Pixabay & uploaded media/, "old media track label is absent from markup");
+
+	/* CSS hides #gallery in timeline mode */
+	assert.match(APP_CSS, /body\.timeline-editor-page #gallery[\s\S]*?#studio-app\.timeline-mode > #gallery[\s\S]*?display:\s*none !important/, "CSS hides #gallery on timeline editor page");
+
+	/* Full route boot with APP_JS + TIMELINE_EDITOR_JS confirms no Generating AI Scene cards at bottom */
+	const fullDom = new JSDOM(html, {
+		url: "https://studio.test/free?layout=timeline&project=test-proj",
+		runScripts: "dangerously",
+		pretendToBeVisual: true,
+		beforeParse(w) {
+			const ctx = canvasContext();
+			w.HTMLCanvasElement.prototype.getContext = () => ctx;
+			w.URL.createObjectURL = () => "blob:test";
+			w.URL.revokeObjectURL = () => {};
+			w.fetch = async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+		}
+	});
+	t.after(() => fullDom.window.close());
+
+	const doc = fullDom.window.document;
+	const gallery = doc.getElementById("gallery");
+	assert.ok(gallery, "#gallery node exists in shell");
+	assert.equal(gallery.children.length, 0, "no Generating AI Scene cards are created on layout=timeline");
+	assert.equal(gallery.hidden, true, "#gallery is hidden on layout=timeline");
+	assert.equal(fullDom.window.getComputedStyle(gallery).display, "none", "#gallery computed display is none on layout=timeline");
+	assert.doesNotMatch(doc.getElementById("studio-app").textContent, /Generating AI Scene/i, "no Generating AI Scene text anywhere in #studio-app on timeline editor page");
+
+	/* Media track label is Scene's media */
+	const mediaTrackButton = doc.querySelector('.te-track-background [data-track-select="background-media"]');
+	assert.ok(mediaTrackButton, "background media track label exists");
+	assert.equal(mediaTrackButton.childNodes[0].textContent, "Scene's media", "media track label reads Scene's media");
+	assert.doesNotMatch(doc.getElementById("view-timeline").textContent, /Pixabay &\s*uploaded media/i);
+
+	/* Scroll layer label cell has neither SCROLL LAYER nor empty · drag to pan */
+	const scrollLabel = doc.querySelector(".te-track-scroll");
+	assert.ok(scrollLabel);
+	assert.equal(scrollLabel.textContent, "");
+	assert.doesNotMatch(doc.getElementById("view-timeline").textContent, /SCROLL LAYER/);
+	assert.doesNotMatch(doc.getElementById("view-timeline").textContent, /empty · drag to pan/);
+
+	/* Selected Scene section shows background media only, even when a child text or child graphic is selected */
+	const api = fullDom.window.__TIMELINE_EDITOR__;
+	doc.querySelector('[data-clip-id="scene-media-1"]')?.dispatchEvent(new fullDom.window.MouseEvent("click", { bubbles: true }));
+	const firstMediaId = fullDom.window.__TIMELINE_EDITOR_STATE__.tracks.find((tr) => tr.kind === "media").items[0].id;
+	doc.querySelector('[data-clip-id="' + firstMediaId + '"]').dispatchEvent(new fullDom.window.MouseEvent("click", { bubbles: true }));
+
+	const childText = api.addChildElement("text");
+	assert.ok(childText);
+	assert.equal(doc.querySelector(".te-workspace .tm-sec-title").textContent, "Selected Scene");
+	assert.equal(doc.querySelectorAll("#timeline-element-selector .tm-scene-object").length, 0, "Selected Scene selector lists no child text/graphic pills");
+	assert.match(doc.getElementById("timeline-inspector").textContent, /Background media/, "Selected Scene inspector shows Background media when child text is selected");
+	assert.doesNotMatch(doc.getElementById("timeline-inspector").textContent, /Text element|Child text|Child graphic/i, "Selected Scene inspector omits child text controls");
+	assert.match(doc.getElementById("timeline-child-editor").textContent, /Text element/, "30% child panel still edits the selected child text");
+
+	doc.querySelector('[data-clip-id="' + firstMediaId + '"]').dispatchEvent(new fullDom.window.MouseEvent("click", { bubbles: true }));
+	const childGraphic = api.addChildElement("graphic");
+	assert.ok(childGraphic);
+	assert.equal(doc.querySelectorAll("#timeline-element-selector .tm-scene-object").length, 0, "Selected Scene selector lists no child graphic pills");
+	assert.match(doc.getElementById("timeline-inspector").textContent, /Background media/, "Selected Scene inspector shows Background media when child graphic is selected");
+	assert.doesNotMatch(doc.getElementById("timeline-inspector").textContent, /Graphic element|Child text|Child graphic/i, "Selected Scene inspector omits child graphic controls");
+	assert.match(doc.getElementById("timeline-child-editor").textContent, /Graphic element/, "30% child panel still edits the selected child graphic");
 });
