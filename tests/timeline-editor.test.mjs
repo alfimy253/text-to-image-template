@@ -894,7 +894,7 @@ test("the dock ends in an empty scroll layer that pans the tracks and reads as o
 	/* it looks like a lane instead of a scrollbar widget */
 	const base = APP_CSS.slice(APP_CSS.indexOf(".te-scroll-layer {"), APP_CSS.indexOf(".te-scroll-layer:active"));
 	assert.match(base, /background-color:\s*var\(--te-lane\)/, "the layer reuses the lane background token");
-	assert.match(base, /repeating-linear-gradient/, "the layer paints the same 80px lane grid");
+	assert.doesNotMatch(base, /repeating-linear-gradient/, "the vertical lane grid lines are removed, so the layer paints no stripes");
 	assert.match(base, /cursor:\s*grab/, "the layer advertises the pan gesture with a grab cursor");
 	assert.match(base, /min-height:\s*44px/, "the layer is as tall as a lane band");
 	assert.doesNotMatch(base, /::-webkit-scrollbar|overflow-x:\s*scroll/, "it is not a scrollbar widget");
@@ -935,7 +935,8 @@ test("each ＋ Text and ＋ Graphic click opens a new lane on top of the lanes a
 	assert.equal(firstLane.items.length, firstLaneItems, "the existing lane is left alone");
 	assert.equal(dockOrder()[0], textLane.id, "the new lane is listed on top of the existing layer");
 	assert.equal(dockOrder()[dockOrder().length - 1], "background-media", "the pinned background stays the last track lane");
-	assert.equal(doc.getElementById("timeline-layer-count").textContent.trim(), "2 / 4");
+	assert.equal(doc.getElementById("timeline-layer-count"), null, "the ＋ Lane / n-of-4 button was removed from the dock toolbar");
+	assert.equal(doc.querySelector('[data-timeline-action="add-layer"]'), null, "no + Lane button next to the zoom control");
 	assert.equal(state.selectedItemId, textLane.items[0].id, "the new element is selected");
 
 	doc.querySelector('[data-timeline-action="add-graphic"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
@@ -943,7 +944,7 @@ test("each ＋ Text and ＋ Graphic click opens a new lane on top of the lanes a
 	const graphicLane = visuals()[2];
 	assert.equal(graphicLane.items[0].kind, "graphic");
 	assert.equal(dockOrder()[0], graphicLane.id, "the newest lane is the topmost row");
-	assert.equal(doc.getElementById("timeline-layer-count").textContent.trim(), "3 / 4");
+
 
 	/* state order is the paint order: the newest lane paints last, i.e. on top */
 	assert.ok(state.tracks.indexOf(graphicLane) > state.tracks.indexOf(textLane), "the newest lane sits above the previous one in state order");
@@ -952,7 +953,7 @@ test("each ＋ Text and ＋ Graphic click opens a new lane on top of the lanes a
 	assert.ok(api.addVisualTrack(), "a manual lane brings the count to four");
 	assert.equal(visuals().length, 4);
 	const topLane = visuals()[3];
-	assert.equal(doc.getElementById("timeline-layer-count").textContent.trim(), "4 / 4");
+
 	doc.getElementById("timeline-add-graphic").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
 	assert.equal(visuals().length, 4, "the four-lane cap still holds");
 	assert.equal(topLane.items.length, 1, "at the cap the new element lands in the current top layer");
@@ -980,7 +981,7 @@ test("a selected text or graphic is dragged on the preview canvas and the drag w
 	assert.ok(xInput() && yInput(), "the inspector X and Y controls are tagged for the drag");
 	assert.equal(xInput().value, "50");
 	assert.equal(yInput().value, "50");
-	assert.ok(doc.querySelector("#timeline-inspector .te-inspector-note"), "the inspector tells the user the clip is draggable");
+	assert.equal(doc.querySelector("#timeline-inspector .te-inspector-note"), null, "the drag tip paragraph is removed from the text/graphic inspector");
 
 	/* grab the graphic where it is painted: 50% of 1280 by 50% of 720 */
 	pointerEvent(canvas, "pointerdown", 640, 360, w);
@@ -1349,4 +1350,113 @@ test("timeline editor hides bottom gallery cards, renames Selected Scene and Sce
 	assert.match(doc.getElementById("timeline-inspector").textContent, /Background media/, "Selected Scene inspector shows Background media when child graphic is selected");
 	assert.doesNotMatch(doc.getElementById("timeline-inspector").textContent, /Graphic element|Child text|Child graphic/i, "Selected Scene inspector omits child graphic controls");
 	assert.match(doc.getElementById("timeline-child-editor").textContent, /Graphic element/, "30% child panel still edits the selected child graphic");
+});
+
+test("timeline editor undo/redo steps through edits, the copy clean-up, sticky add buttons, 80 s timing sliders and 7.5 px child panel type", (t) => {
+	const html = createHTML();
+	/* ---- removed copy ---- */
+	assert.doesNotMatch(html, /drag this text clip directly on the preview canvas/i, "the text drag tip is gone from the served markup");
+	assert.doesNotMatch(html, /without the sliders/i, "the 'without the sliders' drag tip is gone");
+	assert.doesNotMatch(html, /<div class="tm-scene-kicker">TIMELINE EDITOR<\/div>/, "the TIMELINE EDITOR eyebrow above Selected Scene is removed");
+	assert.ok(html.includes('<div class="tm-sec-title">Selected Scene</div>'), "Selected Scene keeps its title");
+	assert.equal(html.includes('data-timeline-action="add-layer"'), false, "the ＋ Lane / n of 4 dock button is removed");
+	assert.equal(html.includes("timeline-layer-count"), false, "no layer counter markup remains");
+	assert.equal(html.includes(">SCROLL<"), false, "the SCROLL corner label is removed");
+	assert.ok(html.includes('class="te-grid-corner te-grid-corner-scroll"'), "the corner cell stays, copy-free");
+
+	/* ---- undo / redo buttons ---- */
+	assert.ok(html.includes('id="timeline-undo"') && html.includes('id="timeline-redo"'), "the page ships an undo and a redo button");
+	assert.ok(html.includes('data-timeline-action="undo"') && html.includes('data-timeline-action="redo"'));
+	assert.match(APP_CSS, /\.te-history\s*\{[^}]*padding:/, "the history pair is styled");
+
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const api = w.__TIMELINE_EDITOR__;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const undoButton = doc.getElementById("timeline-undo");
+	const redoButton = doc.getElementById("timeline-redo");
+
+	/* a fresh project offers nothing to undo */
+	assert.equal(undoButton.disabled, true, "undo starts disabled");
+	assert.equal(redoButton.disabled, true, "redo starts disabled");
+
+	/* one edit -> one undo step, and redo is enabled after stepping back */
+	const text = api.addTextElement("Undo me");
+	api.setItemTiming(text.id, 3, 4);
+	api.save();
+	const historyAfterEdit = api.getHistory();
+	assert.ok(historyAfterEdit.undo >= 1, "the edits are recorded");
+	assert.equal(undoButton.disabled, false, "undo becomes available");
+
+	api.undo();
+	assert.equal(state.tracks.flatMap((track) => track.items).some((item) => item.id === text.id), false, "undo removes the element that was added");
+	assert.equal(redoButton.disabled, false, "redo becomes available");
+	api.redo();
+	assert.ok(state.tracks.flatMap((track) => track.items).some((item) => item.id === text.id), "redo restores the element");
+	assert.equal(state.tracks.flatMap((track) => track.items).find((item) => item.id === text.id).startSec, 3, "redo restores the edited timing");
+
+	/* shortcuts: Ctrl+Z / Ctrl+Shift+Z */
+	const press = (key, shift) => doc.dispatchEvent(new w.KeyboardEvent("keydown", { key, shiftKey: Boolean(shift), ctrlKey: true, bubbles: true, cancelable: true }));
+	press("z", false);
+	assert.equal(state.tracks.flatMap((track) => track.items).some((item) => item.id === text.id), false, "Ctrl+Z undoes");
+	press("z", true);
+	assert.ok(state.tracks.flatMap((track) => track.items).some((item) => item.id === text.id), "Ctrl+Shift+Z redoes");
+
+	/* ---- Selected Scene: no eyebrow, clip name inline with the title ---- */
+	assert.equal(doc.querySelector(".te-workspace .tm-scene-kicker"), null, "no eyebrow text inside the Selected Scene panel");
+	assert.equal(doc.querySelector("#timeline-element-selector .tm-scene-inspector-title"), null, "the clip name is no longer a separate row inside the element selector");
+	assert.ok(doc.getElementById("timeline-selected-name"), "the clip name lives inline next to Selected Scene");
+	assert.match(APP_CSS, /\.te-inspector-panel \.te-scene-heading\s*\{/, "the inline heading rule exists");
+
+	/* ---- background media note: clip name only ---- */
+	doc.querySelector('[data-clip-id="media-1"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	const inspectorText = doc.getElementById("timeline-inspector").textContent;
+	assert.doesNotMatch(inspectorText, /background layer/, "the provider / background-layer suffix is gone from the selected scene note");
+
+	/* ---- timing sliders stop at 80 seconds ---- */
+	const timingMaxes = Array.from(doc.querySelectorAll("#timeline-inspector input[max]"), (input) => Number(input.max));
+	assert.ok(timingMaxes.includes(80), "the Start / Duration sliders are capped at 80 s");
+	assert.equal(timingMaxes.includes(60), false, "the old 60 s cap is gone");
+	const startField = doc.querySelector("#timeline-inspector .tm-scene-field input[max]");
+	assert.equal(startField.max, "80", "the first timing control stops at 80 s");
+	assert.match(TIMELINE_EDITOR_JS, /var MAX_TIMING_SEC = 80;/, "the 80 s cap is a named constant");
+
+	/* ---- scene boxes never overlap in the dock ---- */
+	const mediaLane = doc.querySelector('[data-lane-track="background-media"]');
+	const boxes = Array.from(mediaLane.querySelectorAll(".te-clip"), (clip) => ({ left: parseFloat(clip.style.left), width: parseFloat(clip.style.width) }));
+	assert.ok(boxes.length > 1, "the background lane paints its scene boxes");
+	for (let index = 0; index < boxes.length - 1; index++) {
+		const end = boxes[index].left + boxes[index].width;
+		assert.ok(end <= boxes[index + 1].left + 0.001, "background scene box " + index + " ends before box " + (index + 1) + " starts");
+	}
+	assert.match(TIMELINE_EDITOR_JS, /function clampClipBox\(track, item\)/, "the neighbour-safe box helper exists");
+
+	/* ---- vertical lane grid lines removed ---- */
+	const laneRule = APP_CSS.match(/\n\t\t\.te-lane \{\n([^}]*)\}/);
+	assert.ok(laneRule, "the lane rule exists");
+	assert.match(laneRule[1], /background-image:\s*none/, "the lane paints no vertical grid stripes");
+	const tickRule = APP_CSS.match(/\.te-ruler-tick\s*\{([^}]*)\}/);
+	assert.ok(tickRule, "the ruler tick rule exists");
+	assert.match(tickRule[1], /border-left:\s*0/, "the ruler tick hangs no vertical line through the tracks");
+	const backgroundLaneRule = APP_CSS.match(/\.te-lane\.te-background-lane\s*\{([^}]*)\}/);
+	assert.ok(backgroundLaneRule);
+	assert.doesNotMatch(backgroundLaneRule[1], /repeating-linear-gradient/, "the background lane lost its stripe grid");
+
+	/* ---- the ＋ Text / ＋ Graphic pair is sticky-left and front-most ---- */
+	const stickyRule = APP_CSS.match(/\.te-visual-actions-sticky\s*\{([^}]*)\}/);
+	assert.ok(stickyRule, "the sticky action wrapper is styled");
+	assert.match(stickyRule[1], /position:\s*sticky/, "the add buttons are pinned");
+	assert.match(stickyRule[1], /left:\s*156px/, "they pin to the left edge of the tracks area, right of the lane labels");
+	assert.match(stickyRule[1], /z-index:\s*30/, "the buttons sit above every lane, clip and the ruler");
+	const actionsCell = APP_CSS.match(/\.te-group-fill\.te-visual-actions\s*\{([^}]*)\}/g).pop();
+	assert.match(actionsCell, /overflow:\s*visible/, "the filler cell stops clipping so the sticky buttons can move");
+	const stickyNode = doc.querySelector(".te-visual-actions-sticky");
+	assert.ok(stickyNode, "the two buttons are wrapped in the sticky node");
+	assert.deepEqual(Array.from(stickyNode.querySelectorAll(".te-add-inline"), (node) => node.getAttribute("data-timeline-action")), ["add-text", "add-graphic"]);
+
+	/* ---- 7.5 px typography in the BACKGROUND ELEMENT panel ---- */
+	const childTypeRule = APP_CSS.match(/#timeline-child-panel[\s\S]*?#timeline-child-panel \.te-inspector-note\s*\{([^}]*)\}/);
+	assert.ok(childTypeRule, "the child panel typography rule exists");
+	assert.match(childTypeRule[1], /font-size:\s*7\.5px !important/, "every text node in the 30 % panel is 7.5 px");
 });
