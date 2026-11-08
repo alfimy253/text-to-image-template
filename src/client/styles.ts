@@ -4227,10 +4227,96 @@ export const APP_CSS = `
 		html[data-theme="neo"] .view-switch-btn.active {
 			border-width: 2px;
 			border-color: #111111;
-			border-radius: 2px;
+			/* Session 332: square, not "nearly square" — see the sweep below. */
+			border-radius: 0;
 			text-transform: uppercase;
 			letter-spacing: 0.02em;
 			transform: none;
+		}
+
+		/*
+		 * =====================================================================
+		 * NEO BRUTALIST IS SQUARE — every button, and everything button-like
+		 * =====================================================================
+		 * Session 332: in this theme no button keeps a round corner, and
+		 * neither does any control that is button-like — a tab, a pill, a chip,
+		 * a badge, a toggle, an icon ✕, a clickable card or row, a file-drop
+		 * label, a timeline clip. Three kinds of selector do the work:
+		 *
+		 *   · elements that ARE buttons (button, summary, [role="button"],
+		 *     [role="tab"], the three clickable input types, the file picker's
+		 *     own button);
+		 *   · attributes that mean "this is clickable" ([onclick] and the
+		 *     studio's own delegation hooks: [data-layout],
+		 *     [data-timeline-action], [data-batch-action], [data-track-select],
+		 *     [data-track-toggle], [data-child-id]);
+		 *   · the class patterns the studio names its controls with
+		 *     (*-btn, btn-*, *-toggle, *-chip, *-pill, *-badge, *-link, *-cta,
+		 *     *-action, and the children of any *-actions row), plus an
+		 *     explicit list of the controls whose class does not follow a
+		 *     pattern (.bulk-toggle, .tm-gallery-tab, .tm-scene-object,
+		 *     .tpl-file, .te-add-inline, .te-clip, .credit-pill …).
+		 *
+		 * !important is deliberate, not lazy: the studio's controls are painted
+		 * by id-scoped rules (#studio-app .heading-actions .bulk-toggle,
+		 * #tpl-modal .tm-scene-add, .te-inspector-panel .tm-scene-add,
+		 * #video-accordions … input) that out-specificity any theme selector,
+		 * so a theme override that only wins where nothing else is declared
+		 * would leave most of the app round.
+		 *
+		 * Deliberately NOT squared: panels, cards, modals, inputs, textareas,
+		 * selects and the preview canvas. The request is buttons and
+		 * button-like designs, not every surface — so --t-radius / --t-radius-sm
+		 * keep their 3px / 2px for the neo skin and only the controls above are
+		 * forced to 0.
+		 */
+		html[data-theme="neo"] button,
+		html[data-theme="neo"] summary,
+		html[data-theme="neo"] [role="button"],
+		html[data-theme="neo"] [role="tab"],
+		html[data-theme="neo"] [role="menuitem"],
+		html[data-theme="neo"] [role="option"],
+		html[data-theme="neo"] input[type="button"],
+		html[data-theme="neo"] input[type="submit"],
+		html[data-theme="neo"] input[type="reset"],
+		html[data-theme="neo"] input[type="file"]::file-selector-button,
+		html[data-theme="neo"] [onclick],
+		html[data-theme="neo"] [data-layout],
+		html[data-theme="neo"] [data-timeline-action],
+		html[data-theme="neo"] [data-batch-action],
+		html[data-theme="neo"] [data-track-select],
+		html[data-theme="neo"] [data-track-toggle],
+		html[data-theme="neo"] [data-child-id],
+		html[data-theme="neo"] [class*="-btn"],
+		html[data-theme="neo"] [class*="btn-"],
+		html[data-theme="neo"] [class*="-toggle"],
+		html[data-theme="neo"] [class*="-chip"],
+		html[data-theme="neo"] [class*="-pill"],
+		html[data-theme="neo"] [class*="-badge"],
+		html[data-theme="neo"] [class*="-link"],
+		html[data-theme="neo"] [class*="-cta"],
+		html[data-theme="neo"] [class*="-action"],
+		html[data-theme="neo"] [class*="-actions"] > *,
+		html[data-theme="neo"] .bulk-toggle,
+		html[data-theme="neo"] .upload-btn,
+		html[data-theme="neo"] .app-generate,
+		html[data-theme="neo"] .view-switch,
+		html[data-theme="neo"] .view-switch-btn,
+		html[data-theme="neo"] .tm-gallery-tab,
+		html[data-theme="neo"] .tm-scene-object,
+		html[data-theme="neo"] .tm-scene-add,
+		html[data-theme="neo"] .tm-scene-delete,
+		html[data-theme="neo"] .tm-scene-upload,
+		html[data-theme="neo"] .tpl-file,
+		html[data-theme="neo"] .tpl-primary,
+		html[data-theme="neo"] .te-add-inline,
+		html[data-theme="neo"] .te-clip,
+		html[data-theme="neo"] .te-lane-empty,
+		html[data-theme="neo"] .te-history,
+		html[data-theme="neo"] .te-track-badge,
+		html[data-theme="neo"] .badge,
+		html[data-theme="neo"] .credit-pill {
+			border-radius: 0 !important;
 		}
 
 		html[data-theme="neo"] .upload-btn:active,
@@ -7534,7 +7620,21 @@ export const APP_CSS = `
 			padding: 22px 18px 40px;
 		}
 
-		/* ---- heading ---------------------------------------- */
+		/* ---- heading ----------------------------------------
+		 *
+		 * Session 332 cut this block down to the ＋ Add Video button:
+		 * the VIDEO WORKSPACE kicker, the "🎬 YouTube Vibe Studio" h1 and the
+		 * "Generates AI scenes, adds your MP3 soundtrack, and exports a
+		 * cinematic MP4." paragraph are removed from the markup of EVERY
+		 * layout, so their rules (.kicker, .heading h1, .heading p and the two
+		 * themed variants) went with them. The brand still lives in the sticky
+		 * top bar, in <title> and in the meta description.
+		 *
+		 * What is left is editor-layout-only: setStudioLayout() sets
+		 * #studio-heading hidden on the Quick Batch table and
+		 * activateTimelineEditorLayout() sets it hidden on the timeline page,
+		 * and [hidden] has to beat the display:flex below.
+		 */
 
 		#studio-app .heading {
 			display: flex;
@@ -7546,39 +7646,13 @@ export const APP_CSS = `
 			padding: 0;
 		}
 
+		#studio-app .heading[hidden] {
+			display: none;
+		}
+
 		#studio-app .heading::after {
 			display: none;
 			content: none;
-		}
-
-		#studio-app .kicker {
-			color: var(--accent);
-			font-size: 0.62rem;
-			font-weight: 900;
-			letter-spacing: 0.16em;
-			text-transform: uppercase;
-			margin-bottom: 8px;
-		}
-
-		#studio-app .heading h1 {
-			margin: 0;
-			font-family: 'Oswald', sans-serif;
-			font-size: clamp(1.6rem, 2.6vw, 2.2rem);
-			line-height: 1.05;
-			letter-spacing: -0.02em;
-			color: var(--t-heading-out, var(--accent));
-			border: 0;
-			padding: 0;
-			text-shadow: none;
-		}
-
-		#studio-app .heading p {
-			margin: 8px 0 0;
-			color: var(--t-muted-out, #9ca3af);
-			font-size: 0.9rem;
-			letter-spacing: 0;
-			text-transform: none;
-			line-height: 1.5;
 		}
 
 		#studio-app .heading-actions {
@@ -7588,6 +7662,19 @@ export const APP_CSS = `
 			flex-wrap: wrap;
 		}
 
+		/*
+		 * ＋ Add Video, unpressed (Session 332)
+		 * ------------------------------------
+		 * The button used to inherit \`box-shadow: var(--t-shadow)\` from
+		 * \`html[data-theme] .bulk-toggle\` — a hard 4px 4px 0 ink offset under a
+		 * transparent, 1px-bordered button, which reads as a block that has
+		 * already been pushed down. It now paints flat: no offset shadow, no
+		 * transform, no inset, in every theme and in every state except a real
+		 * :active press, which keeps the short 1px offset the neo skin gives
+		 * its other buttons. Nothing in APP_JS ever puts an .active /
+		 * aria-expanded="true" / pressed class on it either, so the accordion
+		 * that now opens with the page is never reflected on the button.
+		 */
 		#studio-app .heading-actions .bulk-toggle {
 			position: static;
 			width: auto;
@@ -7599,11 +7686,20 @@ export const APP_CSS = `
 			background: transparent;
 			color: var(--t-ink, var(--text));
 			border: 1px solid var(--t-line, #2e3440);
+			box-shadow: none;
+			transform: none;
 		}
 
 		#studio-app .heading-actions .bulk-toggle:hover {
 			border-color: var(--accent);
 			color: var(--accent);
+			box-shadow: none;
+			transform: none;
+		}
+
+		#studio-app .heading-actions .bulk-toggle:active {
+			box-shadow: 1px 1px 0 var(--t-line, #2e3440);
+			transform: translate(1px, 1px);
 		}
 
 		/* ---- views + cards ---------------------------------- */
@@ -7841,7 +7937,7 @@ export const APP_CSS = `
 
 		#studio-app .batch-action-btn:disabled {
 			opacity: 0.45;
-			cursor: default;
+			cursor: not-allowed;
 		}
 
 		#studio-app .batch-script-input,
@@ -7913,20 +8009,12 @@ export const APP_CSS = `
 		}
 
 		/*
-		 * Preview + Export live in their own cells and are NOT inputs:
-		 * while the row works the cell only holds plain text, and the
-		 * button appears the moment the row is finished - both at once.
+		 * Session 332: the Actions cell holds NO text any more. All three icons
+		 * are rendered for every row from the first paint, and a row that is not
+		 * finished yet simply has them disabled — so the .batch-pending
+		 * placeholder ("Preview Here · Export Video") and its dashed pill are
+		 * gone, and .batch-live is what a ready row's icons keep.
 		 */
-		#studio-app .batch-pending {
-			display: inline-block;
-			padding: 9px 12px;
-			border: 1px dashed var(--t-line, #2e3440);
-			border-radius: var(--t-radius-sm, 8px);
-			color: var(--t-muted, #6b7280);
-			font-size: 0.74rem;
-			white-space: nowrap;
-		}
-
 		#studio-app .batch-live {
 			cursor: pointer;
 			white-space: nowrap;
@@ -8089,14 +8177,11 @@ export const APP_CSS = `
 			color: var(--t-ink);
 		}
 
-		html[data-theme] #studio-app .heading h1 {
-			color: var(--t-heading-out);
-			font-weight: 700;
-		}
-
-		html[data-theme] #studio-app .heading p {
-			color: var(--t-muted-out);
-		}
+		/*
+		 * Session 332: the themed \`.heading h1\` / \`.heading p\` variants are
+		 * gone with the heading copy they painted (VIDEO WORKSPACE / 🎬 YouTube
+		 * Vibe Studio / "Generates AI scenes…").
+		 */
 
 		html[data-theme] #studio-app .studio-card {
 			background: var(--t-panel);
@@ -9070,6 +9155,7 @@ export const APP_CSS = `
 		body.timeline-editor-page #landing-page,
 		body.timeline-editor-page #gallery,
 		#studio-app.timeline-mode .app-top,
+		#studio-app.timeline-mode .heading,
 		#studio-app.timeline-mode > #gallery,
 		#studio-app.timeline-mode > #pipeline-storage-alert,
 		#studio-app.timeline-mode > #cms-studio-top-links {
@@ -10129,10 +10215,14 @@ export const APP_CSS = `
 		 * The corner cell above the drag-to-pan scroll handle carries no copy
 		 * any more (the "SCROLL" word was removed), it only keeps the cell so
 		 * the grid stays aligned with the label column. It is painted white
-		 * with the handle so the top scroll layer reads as one white strip.
+		 * with the handle so the top scroll layer reads as one white strip —
+		 * and Session 332 takes its borders away, so that strip is a plain
+		 * white band with no line under it and no line down its right edge
+		 * (both came from the shared .te-grid-corner rule).
 		 */
 		.te-grid-corner-scroll {
 			padding: 0;
+			border: 0;
 			background: #ffffff;
 		}
 
@@ -10152,11 +10242,14 @@ export const APP_CSS = `
 
 		/*
 		 * The TOP scroll layer — the drag-to-pan handle that runs above the
-		 * ruler — is a plain white strip. (The empty layer at the bottom of the
-		 * dock keeps the lane look; only this one was asked for.)
+		 * ruler — is a plain white strip with NO border of its own (Session
+		 * 332): the white band ends where the ruler begins, with nothing drawn
+		 * between them. (The empty layer at the bottom of the dock keeps the
+		 * lane look; only this one was asked for.)
 		 */
 		.te-scroll-lane {
 			height: 26px;
+			border: 0;
 			background: #ffffff;
 			cursor: grab;
 			touch-action: pan-x;
@@ -10361,26 +10454,49 @@ export const APP_CSS = `
 		.te-group-background,
 		.te-group-fill-background {
 			background: var(--t-panel-2, #191d15);
-		}
-
-		.te-group-background {
 			border-top: 1px solid var(--t-line, #3a4430);
-			/*
-			 * The caption that used to sit beside ＋ Add media ("pinned lowest ·
-			 * Pixabay, GIF, image or MP4") is gone. The cell now wraps: the
-			 * BACKGROUND LAYER label owns the first line (it is width:100%) and
-			 * the two add buttons share the second, each starting 5 px in.
-			 */
-			flex-wrap: wrap;
-			row-gap: 4px;
 		}
 
 		.te-group-background .te-group-label {
 			color: var(--t-accent-ink, #bcd79a);
 		}
 
-		.te-group-background .te-add-inline {
-			margin-left: 5px;
+		/*
+		 * ＋ Add media / ＋ Add Clips on the background layer row
+		 * ------------------------------------------------------
+		 * Session 332 moved the pair OUT of the 156 px label cell — where the
+		 * cell had to wrap them onto a second line under the BACKGROUND LAYER
+		 * words — and into the layer row on the RIGHT of that text, copying the
+		 * ＋ Text / ＋ Graphic positioning exactly: the filler cell stops
+		 * clipping (a hidden overflow would make it its own scroll container and
+		 * sticky would never move), the wrapper is position: sticky at the left
+		 * edge of the tracks area (156 px, 132 px under 560 px) on the dock's
+		 * front-most layer (z-index: 30, above the sticky label column at 5, the
+		 * ruler at 12, the playhead at 6 and every clip at 2-4), and both
+		 * buttons stay on ONE line: flex-wrap: nowrap + white-space: nowrap.
+		 */
+		.te-group-fill.te-background-actions {
+			display: flex;
+			align-items: center;
+			justify-content: flex-start;
+			gap: 6px;
+			padding: 3px 8px;
+			overflow: visible;
+		}
+
+		.te-background-actions-sticky {
+			position: sticky;
+			left: 156px;
+			z-index: 30;
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			flex: 0 0 auto;
+			flex-wrap: nowrap;
+			white-space: nowrap;
+			padding: 3px 8px;
+			border-right: 1px solid var(--t-line-2, #282b33);
+			background: var(--t-panel-2, #191d15);
 		}
 
 		.te-track-label.te-track-background {
@@ -10783,6 +10899,10 @@ export const APP_CSS = `
 			.te-visual-actions-sticky {
 				left: 132px;
 			}
+			/* The background layer's add buttons follow the narrower column too. */
+			.te-background-actions-sticky {
+				left: 132px;
+			}
 			.te-ruler {
 				left: auto;
 			}
@@ -10810,275 +10930,14 @@ export const APP_CSS = `
 
 		/*
 		 * =====================================================================
-		 * ＋ Add Clips — the Scene Media clip picker
+		 * ＋ Add Clips — no CSS of its own any more (Session 332)
 		 * =====================================================================
-		 * The composer's "Add video from template" modal is scoped to
-		 * #tpl-modal (its .tpl-* and .tm-* rules all start with that id), so
-		 * none of them can be re-used from another node. This block re-declares
-		 * the same shell — dark box, head with a close ✕, subtitle, card grid,
-		 * status line and a sticky action row with the yellow primary button —
-		 * under its own .te-clips-* vocabulary, and it is placed inside
-		 * #timeline-editor so the editor's [data-timeline-action] delegation
-		 * drives its buttons.
+		 * The .te-clips-* picker this block used to style is gone: ＋ Add Clips
+		 * now opens #tpl-modal, the very modal the editor layout's "Add video
+		 * from template" link opens, and that modal brings its own #tpl-modal /
+		 * .tpl-* / .tm-* rules with it. Keeping a second, unused shell here would
+		 * only be dead weight in the served CSS.
 		 */
-		.te-clips-overlay {
-			position: fixed;
-			inset: 0;
-			z-index: 120;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			padding: 16px;
-			background: rgba(0, 0, 0, 0.6);
-		}
-
-		/* The shell is [hidden] until ＋ Add Clips is clicked; the overlay's own
-		 * display must not win over that. */
-		.te-clips-overlay[hidden] {
-			display: none;
-		}
-
-		.te-clips-box {
-			display: flex;
-			flex-direction: column;
-			gap: 12px;
-			background: #0d0d0f;
-			border: 1px solid #2e3440;
-			border-radius: 14px;
-			padding: 18px;
-			width: min(1100px, 96vw);
-			max-height: 92vh;
-			overflow-y: auto;
-			color: #fff;
-			box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
-		}
-
-		.te-clips-head {
-			display: flex;
-			align-items: flex-start;
-			justify-content: space-between;
-			gap: 10px;
-		}
-
-		.te-clips-head .tm-sec-title {
-			margin: 0 0 4px;
-			font-size: 0.95rem;
-			font-weight: 800;
-			letter-spacing: 0.04em;
-			color: #fff;
-		}
-
-		.te-clips-sub {
-			margin: 0;
-			color: #a8a8b0;
-			font-size: 0.85rem;
-			line-height: 1.45;
-		}
-
-		.te-clips-x {
-			flex: 0 0 auto;
-			background: #303037;
-			border: 0;
-			border-radius: 8px;
-			color: #fff;
-			font-size: 0.9rem;
-			padding: 7px 11px;
-			cursor: pointer;
-		}
-
-		.te-clips-x:hover {
-			background: #3d3d46;
-		}
-
-		.te-clips-bar {
-			display: flex;
-			flex-wrap: wrap;
-			align-items: center;
-			gap: 9px;
-			background: #1b1b20;
-			border-radius: 12px;
-			padding: 10px 12px;
-		}
-
-		.te-clips-file {
-			position: relative;
-			display: inline-flex;
-			align-items: center;
-			gap: 6px;
-			background: #26262c;
-			border: 1px solid #2e3440;
-			border-radius: 10px;
-			padding: 9px 13px;
-			font-size: 0.78rem;
-			font-weight: 700;
-			color: #fff;
-			cursor: pointer;
-		}
-
-		.te-clips-file:hover {
-			border-color: #f59e0b;
-		}
-
-		.te-clips-count {
-			color: #a8a8b0;
-			font-size: 0.78rem;
-			font-variant-numeric: tabular-nums;
-		}
-
-		.te-clips-grid {
-			display: grid;
-			grid-template-columns: repeat(4, minmax(0, 1fr));
-			gap: 12px;
-		}
-
-		.te-clips-none {
-			grid-column: 1 / -1;
-			margin: 0;
-			color: #9ca3af;
-			font-size: 0.8rem;
-			line-height: 1.5;
-		}
-
-		.te-clips-card {
-			display: block;
-			padding: 8px;
-			background: #141418;
-			border: 2px solid #2e3440;
-			border-radius: 12px;
-			cursor: pointer;
-			color: #fff;
-			text-align: left;
-			transition: border-color 0.15s ease, transform 0.15s ease;
-		}
-
-		.te-clips-card:hover {
-			border-color: #f59e0b;
-			transform: translateY(-2px);
-		}
-
-		.te-clips-card.queued {
-			border-color: #ffd83d;
-			background: #1d1c12;
-		}
-
-		.te-clips-frame {
-			position: relative;
-			display: block;
-			aspect-ratio: 16 / 9;
-			border-radius: 8px;
-			overflow: hidden;
-			background: #000;
-		}
-
-		.te-clips-frame img,
-		.te-clips-frame video {
-			display: block;
-			width: 100%;
-			height: 100%;
-			object-fit: cover;
-		}
-
-		.te-clips-kind,
-		.te-clips-sec {
-			position: absolute;
-			right: 5px;
-			bottom: 5px;
-			padding: 1px 5px;
-			border-radius: 5px;
-			background: rgba(0, 0, 0, 0.65);
-			color: #e5e7eb;
-			font-size: 0.6rem;
-			font-weight: 800;
-			letter-spacing: 0.06em;
-		}
-
-		.te-clips-sec {
-			left: 5px;
-			right: auto;
-		}
-
-		.te-clips-name,
-		.te-clips-meta,
-		.te-clips-pick {
-			display: block;
-			margin-top: 6px;
-			font-size: 0.72rem;
-			color: #fff;
-			overflow: hidden;
-			text-overflow: ellipsis;
-			white-space: nowrap;
-		}
-
-		.te-clips-meta {
-			color: #9ca3af;
-			font-size: 0.62rem;
-			text-transform: uppercase;
-			letter-spacing: 0.08em;
-		}
-
-		.te-clips-pick {
-			color: #ffd83d;
-			font-size: 0.7rem;
-			font-weight: 800;
-		}
-
-		.te-clips-status {
-			min-height: 18px;
-			color: #a8a8b0;
-			font-size: 0.76rem;
-			line-height: 1.35;
-		}
-
-		.te-clips-status.is-bad {
-			color: #fca5a5;
-		}
-
-		.te-clips-actions {
-			position: sticky;
-			bottom: 0;
-			display: flex;
-			flex-wrap: wrap;
-			align-items: center;
-			gap: 9px;
-			margin-top: 2px;
-			padding: 10px 0 2px;
-			background: #0d0d0f;
-		}
-
-		.te-clips-actions button {
-			border: 0;
-			border-radius: 10px;
-			padding: 11px 15px;
-			font-size: 0.8rem;
-			font-weight: 700;
-			cursor: pointer;
-			background: #303037;
-			color: #fff;
-		}
-
-		/* Higher specificity than ".te-clips-actions button" above, so the
-		 * primary really does take the composer's yellow treatment. */
-		.te-clips-actions .te-clips-primary {
-			background: #f59e0b;
-			color: #111;
-		}
-
-		.te-clips-actions .te-clips-primary:hover {
-			background: #ffd83d;
-		}
-
-		.te-clips-actions .te-clips-primary:disabled {
-			background: #3a3a42;
-			color: #8b8b95;
-			cursor: not-allowed;
-		}
-
-		@media (max-width: 900px) {
-			.te-clips-grid {
-				grid-template-columns: repeat(2, minmax(0, 1fr));
-				gap: 8px;
-			}
-		}
 
 
 `;

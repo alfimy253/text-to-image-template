@@ -316,22 +316,25 @@ export const PAGE_MARKUP = `
 
 	<main class="app-main">
 
-	<div class="header heading">
+	<!-- ======================================================
+	     HEADING (Session 332)
+	     The heading copy — the VIDEO WORKSPACE kicker, the
+	     "\ud83c\udfac YouTube Vibe Studio" title and the "Generates AI scenes,
+	     adds your MP3 soundtrack, and exports a cinematic MP4."
+	     line — is removed from EVERY layout (Quick Batch table,
+	     editor and timeline editor page). What is left is the
+	     ＋ Add Video button, and that belongs to the EDITOR
+	     layout only: setStudioLayout() hides this whole block on
+	     the table layout and activateTimelineEditorLayout() hides
+	     it on the timeline page. The brand still lives in the
+	     sticky top bar (VIBE STUDIO), in <title> and in the meta
+	     description, so nothing else repeats it here.
+	     ====================================================== -->
 
-		<div class="heading-copy">
-
-			<div class="kicker">VIDEO WORKSPACE</div>
-
-			<h1>
-				\ud83c\udfac YouTube Vibe Studio
-			</h1>
-
-			<p>
-				Generates AI scenes, adds your MP3
-				soundtrack, and exports a cinematic MP4.
-			</p>
-
-		</div>
+	<div
+		class="header heading"
+		id="studio-heading"
+	>
 
 		<div class="heading-actions">
 
@@ -386,20 +389,13 @@ export const PAGE_MARKUP = `
 
 			</div>
 
-			<p class="va-note batch-hint">
-				Type or paste a script in the first box, pick the video image
-				style, the stock image resolution and the frame
-				orientation, then press
-				<strong>\u2726 Generate</strong> at the top right of the table.
-				Every row that has a script is spoken (MP3), illustrated with
-				Pixabay images and animated; a row that is empty is skipped, and so is
-				a row that is already finished (its Preview and Export buttons are
-				live \u2014 it is never generated or billed twice). Three rows render at the same time.
-				The last <strong>Actions</strong> cell has Preview, Process Export and
-				Edit icons. Until a row is finished it reads <strong>Preview Here</strong>
-				and <strong>Export Video</strong>; the first two icons unlock at the same
-				moment, Edit opens the timeline editor in a new page, and the export is built in this browser.
-			</p>
+			<!--
+				Session 332: the long "Type or paste a script in the first
+				box…" explainer is removed. The table keeps its one-line
+				#batch-note counter ("One row — one video", rewritten live as
+				"N rows · M with a script · K ready") and the per-control
+				title attributes, which is where the same facts now live.
+			-->
 
 			<p class="va-note">Stock photos and clips from <a href="https://pixabay.com/" target="_blank" rel="noopener noreferrer">Pixabay</a> · 12 results per search: 8 distinct photos and 4 clips for every script. Source dimensions vary; resolution controls the output frame.</p>
 			<div class="table-scroll">
@@ -893,8 +889,16 @@ export const PAGE_MARKUP = `
 					<div class="tm-scene-panel">
 						<div class="tm-scene-panel-head">
 							<div class="te-scene-heading"><div class="tm-sec-title" id="timeline-selected-title">Selected Scene</div><span id="timeline-selected-name" class="te-selected-name"></span></div>
+							<!--
+								Session 332: renderInspector() re-titles this heading
+								"Selected Element" (capital E) for every selection that is
+								not a box of the Scene Media layer, and the ＋ Text button
+								that wrapped onto the line below the heading is removed.
+								＋ Text lives on the TEXT & GRAPHICS row of the dock, next
+								to ＋ Graphic there; this header keeps ＋ Graphic, Duplicate
+								and Delete.
+							-->
 							<div class="tm-scene-panel-actions">
-								<button type="button" id="timeline-add-text" class="tm-scene-add" data-timeline-action="add-text">\uff0b Text</button>
 								<button type="button" id="timeline-add-graphic" class="tm-scene-add" data-timeline-action="add-graphic">\uff0b Graphic</button>
 								<button type="button" id="timeline-duplicate-element" class="tm-scene-add" data-timeline-action="duplicate" title="Duplicate the selected clip into the slot right after the original" hidden disabled>\u29c9 Duplicate</button>
 								<button type="button" id="timeline-delete-element" class="tm-scene-delete" data-timeline-action="delete" hidden disabled>Delete</button>
@@ -926,35 +930,16 @@ export const PAGE_MARKUP = `
 			<input type="file" id="timeline-media-upload" accept="image/*,image/gif,video/mp4,.mp4,.gif" multiple hidden>
 			<input type="file" id="timeline-audio-upload" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg" hidden>
 			<!--
-				＋ Add Clips modal. It borrows the shell language of the studio's
-				"Add video from template" composer (overlay, dark box, head with a
-				close ✕, subtitle, card grid, status line, sticky action row) but it
-				lives INSIDE #timeline-editor, because that is the node the editor's
-				[data-timeline-action] delegation is bound to. Its own .te-clips-*
-				classes keep it clear of the #tpl-modal-scoped composer CSS.
+				Session 332: the timeline's own .te-clips-* picker modal is gone.
+				＋ Add Clips now opens the SAME modal the editor's "Add video from
+				template" link opens — #tpl-modal, built and driven by
+				TEMPLATE_COMPOSER_JS (window.openTemplateModal). The composer hands
+				the MP4 it makes back to this editor through
+				window.__TIMELINE_TEMPLATE_CLIP__, and the clip is appended at the
+				right-most end of the Scene Media layer, exactly as the old picker
+				did. Uploads still have their own button (＋ Add media) and its
+				hidden #timeline-media-upload input below.
 			-->
-			<div class="te-clips-overlay" id="timeline-clips-modal" hidden role="dialog" aria-modal="true" aria-labelledby="timeline-clips-title">
-				<div class="te-clips-box">
-					<div class="te-clips-head">
-						<div>
-							<div class="tm-sec-title" id="timeline-clips-title">Add Clips \u2014 Scene Media</div>
-							<p class="te-clips-sub">Queue the clips to append. Each one lands after the right-most clip of the Scene Media layer, one scene per clip. Nothing leaves this browser.</p>
-						</div>
-						<button type="button" class="te-clips-x" data-timeline-action="clips-close" title="Close">\u2715</button>
-					</div>
-					<div class="te-clips-bar">
-						<label class="te-clips-file">\uff0b Upload image, GIF or MP4<input type="file" id="timeline-clips-files" accept="image/*,image/gif,video/mp4,.mp4,.gif" multiple hidden></label>
-						<span class="te-clips-count" id="timeline-clips-count">Nothing queued yet</span>
-					</div>
-					<div class="te-clips-grid" id="timeline-clips-grid"></div>
-					<div class="te-clips-status" id="timeline-clips-status" role="status" aria-live="polite"></div>
-					<div class="te-clips-actions">
-						<button type="button" class="te-clips-primary" id="timeline-clips-commit" data-timeline-action="clips-add" disabled>\uff0b Add 0 clips to the end</button>
-						<button type="button" class="te-clips-ghost" data-timeline-action="clips-clear">Clear queue</button>
-						<button type="button" class="te-clips-ghost" data-timeline-action="clips-close">Close</button>
-					</div>
-				</div>
-			</div>
 		</div>
 	</section>
 

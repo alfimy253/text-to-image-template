@@ -454,10 +454,22 @@ test("H5: a quick-batch row writes its script through the note pipeline", async 
 	assert.equal(w.getBatchRow(clicked.id).script, scriptText, "the note pipeline wrote the script into the row");
 	assert.equal(requests.length, before + 1);
 	assert.equal(requests[before].body.topic, "evening yoga wind down");
-	/* Remove and Edit are the row's two action buttons; no AI enhancer. */
+	/*
+	 * Remove, Preview, Process export and Edit are the row's four action buttons;
+	 * no AI enhancer. Session 332 draws all three icons for every row — locked
+	 * until the row is generated — where the cell used to print a sentence.
+	 */
+	assert.deepEqual(
+		Array.from(
+			w.document.querySelectorAll('[data-batch-row="' + clicked.id + '"] button[data-batch-action]'),
+			(button) => button.dataset.batchAction
+		),
+		["remove", "preview", "export", "edit"]
+	);
 	assert.equal(
-		w.document.querySelectorAll('[data-batch-row="' + clicked.id + '"] button[data-batch-action]').length,
-		2
+		w.document.querySelector('[data-batch-row="' + clicked.id + '"] [data-batch-action="preview"]').disabled,
+		true,
+		"a row that only has a script is not ready, so its icons stay locked"
 	);
 });
 

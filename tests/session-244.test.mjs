@@ -221,7 +221,19 @@ test("abort wording ('signal is aborted without reason') never reaches the table
 	assert.doesNotMatch(text, /\u26a0/, "no warning glyph");
 	assert.equal(row.error, "");
 	assert.equal(w.batchRowFinished(row), false);
-	assert.equal(w.document.querySelectorAll('[data-batch-action="preview"]').length, 0, "no dead buttons");
+	/*
+	 * Session 332: the icons are drawn for every row, so "no dead buttons" now
+	 * means no button a press could reach — an unfinished row keeps all three
+	 * disabled and its cell prints no words.
+	 */
+	const lockedIcons = Array.from(w.document.querySelectorAll('[data-batch-slot="actions"] [data-batch-action]'));
+	assert.ok(lockedIcons.length > 0, "the row still draws its action icons");
+	assert.ok(lockedIcons.every((button) => button.disabled), "and every one of them is disabled");
+	assert.equal(
+		Array.from(w.document.querySelectorAll('[data-batch-slot="actions"]')).some((cell) => /[A-Za-z]{2,}/.test(cell.textContent)),
+		false,
+		"no Actions cell prints a word"
+	);
 	/* and the row is simply pending again */
 	assert.equal(row.stage, "ready");
 });

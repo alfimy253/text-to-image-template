@@ -32,7 +32,7 @@ export const TIMELINE_EDITOR_JS = `
 		/*
 		 * Session 331: the layer used to be announced as "Scene's media" in the
 		 * track header. The copy is now the plain "Scene Media" — the same words
-		 * the ＋ Add Clips modal and the dock use for this lane.
+		 * the dock and the ＋ Add Clips status line use for this lane.
 		 */
 		var MEDIA_TRACK_LABEL = "Scene Media";
 		var MEDIA_TRACK_NAME = "BACKGROUND";
@@ -1112,12 +1112,20 @@ export const TIMELINE_EDITOR_JS = `
 			}
 			/*
 			 * The background header used to carry a "pinned lowest · Pixabay,
-			 * GIF, image or MP4" caption. The caption is gone (the layer is
-			 * described by its own name), and the cell now holds the two add
-			 * buttons: ＋ Add media keeps the hidden file input, ＋ Add Clips
-			 * opens the clip picker that appends to the right-most end.
+			 * GIF, image or MP4" caption, and Session 331 §21 parked the two add
+			 * buttons in that same 156 px label cell (which forced them onto a
+			 * second line under the BACKGROUND LAYER words). Session 332 moves
+			 * them OUT of the label cell and into the layer row on the right of
+			 * the BACKGROUND LAYER text, copying the ＋ Text / ＋ Graphic
+			 * positioning exactly: one .te-background-actions-sticky wrapper,
+			 * position: sticky at the left edge of the tracks area (156 px, 132 px
+			 * under 560 px), z-index 30, and both buttons on ONE line that never
+			 * wraps and never scrolls away with the pan.
+			 * ＋ Add media keeps the hidden file input; ＋ Add Clips opens the
+			 * studio's "Add video from template" composer modal.
 			 */
-			html += '<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER</span><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button><button type="button" class="te-add-inline" data-timeline-action="add-clips">＋ Add Clips</button></div><div class="te-group-fill te-group-fill-background">' + playheadHtml(playheadLeft, false) + '</div>';
+			html += '<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER</span></div>';
+			html += '<div class="te-group-fill te-group-fill-background te-background-actions"><span class="te-background-actions-sticky"><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button><button type="button" class="te-add-inline" data-timeline-action="add-clips">＋ Add Clips</button></span>' + playheadHtml(playheadLeft, false) + '</div>';
 			var backgroundTrack = mediaTrack();
 			html += '<div class="te-track-label te-track-background' + (String(state.selectedTrackId) === MEDIA_TRACK_ID ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(MEDIA_TRACK_ID) + '">' + esc(backgroundTrack && backgroundTrack.label || MEDIA_TRACK_LABEL) + '<small><span class="te-track-badge">BG</span> ' + (backgroundTrack ? backgroundTrack.items.length + " scenes" : "empty") + '</small></button></div>';
 			html += '<div class="te-lane te-media-lane te-background-lane" data-lane-track="' + esc(MEDIA_TRACK_ID) + '" style="width:' + width + 'px">';
@@ -1158,15 +1166,11 @@ export const TIMELINE_EDITOR_JS = `
 			if (zoomValue) zoomValue.textContent = zoom.toFixed(1).replace(/\\.0$/, "") + "×";
 			updateReadout();
 			/*
-			 * The ＋ Add Clips picker lists the media this project holds, so an
-			 * open modal is re-listed whenever the dock repaints (an upload from
-			 * ＋ Add media, a deleted clip, a queue change). Nothing is built
-			 * while it is closed, and an export never pays for the extra pass.
+			 * The dock no longer repaints a clip picker of its own: ＋ Add Clips
+			 * opens the studio's "Add video from template" composer (#tpl-modal),
+			 * which TEMPLATE_COMPOSER_JS owns and re-renders itself. Nothing here
+			 * has to follow the modal's state any more.
 			 */
-			if (!isExporting && !recorder) {
-				var clipsModal = document.getElementById("timeline-clips-modal");
-				if (clipsModal && !clipsModal.hidden) renderClipsModal();
-			}
 		}
 
 		function updateReadout() {
@@ -1481,17 +1485,19 @@ export const TIMELINE_EDITOR_JS = `
 			 * The section above the tracks is only a "scene" while it edits a
 			 * box of the Scene Media layer — a scene IS that box. Anything else
 			 * (a text clip, a graphic, an audio clip, a bare track) is an
-			 * element, so the heading reads "Selected element". A child text or
-			 * graphic re-resolves to its parent background box, which keeps the
-			 * scene wording the background section is known for.
+			 * element, so the heading reads "Selected Element" — both words
+			 * capitalised, Session 332, matching the "Selected Scene" wording it
+			 * replaces. A child text or graphic re-resolves to its parent
+			 * background box, which keeps the scene wording the background
+			 * section is known for.
 			 */
 			var selectedTitle = document.getElementById("timeline-selected-title");
 			if (selectedTitle) {
 				var onMediaLayer = Boolean(inspectorItem) && String(inspectorItem.kind) === "media";
 				var mediaTrackOnly = !inspectorItem && Boolean(inspectorTrack) && String(inspectorTrack.kind) === "media";
-				selectedTitle.textContent = onMediaLayer || mediaTrackOnly ? "Selected Scene" : "Selected element";
+				selectedTitle.textContent = onMediaLayer || mediaTrackOnly ? "Selected Scene" : "Selected Element";
 				var inspectorPanel = selectedTitle.closest ? selectedTitle.closest(".te-inspector-panel") : null;
-				if (inspectorPanel) inspectorPanel.setAttribute("aria-label", onMediaLayer || mediaTrackOnly ? "Selected scene controls" : "Selected element controls");
+				if (inspectorPanel) inspectorPanel.setAttribute("aria-label", onMediaLayer || mediaTrackOnly ? "Selected scene controls" : "Selected Element controls");
 			}
 			if (selectedScene && (!inspectorItem || inspectorItem.kind !== "media")) {
 				sceneElementEntries(selectedScene.id).forEach(function (candidate) {
@@ -1600,6 +1606,79 @@ export const TIMELINE_EDITOR_JS = `
 			}
 		}
 
+		/*
+		 * Session 332 — a new text/graphic never shares timed space
+		 * ---------------------------------------------------------
+		 * ＋ Text / ＋ Graphic used to drop the element at the playhead with a
+		 * fixed 4 s length, which happily landed on top of a clip that was
+		 * already there. The placement is now computed in JS from the timeline
+		 * itself:
+		 *
+		 *   · the taken windows are EVERY clip of EVERY TEXT & GRAPHICS lane
+		 *     plus EVERY clip of the Scene Media layer — the two layer families
+		 *     the request names. Audio lanes are deliberately outside the
+		 *     search: a soundtrack is supposed to run under a caption.
+		 *   · the element keeps its 4 s length and takes the FIRST gap that
+		 *     fits it. The playhead's own window is tried first (so an empty
+		 *     timeline still behaves the way it always did), then the gaps are
+		 *     scanned from 0 s upward.
+		 *   · when the timeline is wall to wall — a Quick Batch row hands over
+		 *     12 back-to-back scenes, so this is the common case — the element
+		 *     is appended after the right-most clip and ensureTimelineEnd()
+		 *     grows the project to hold it.
+		 *   · the playhead follows the element into its new window, so the
+		 *     thing that was just added is the thing on screen (and draggable
+		 *     on the canvas) instead of sitting one scroll-width away.
+		 *
+		 * A CHILD text/graphic is exempt: living inside its background clip's
+		 * window is its whole contract (§19), so it is placed by
+		 * childWindow() and never by this search.
+		 */
+		var TIMING_EPSILON_SEC = 0.001;
+		function occupiedVisualWindows() {
+			var lanes = visualTracks();
+			var media = mediaTrack();
+			if (media) lanes = lanes.concat([media]);
+			var windows = [];
+			lanes.forEach(function (track) {
+				(track.items || []).forEach(function (item) {
+					/*
+					 * The seeded dummy text clip counts: it is a real, editable
+					 * clip of a text lane, so its window is taken space like any
+					 * other. Subtitle cues are not in state.tracks at all, so
+					 * they never enter this list.
+					 */
+					if (!item) return;
+					var start = clamp(number(item.startSec, 0), 0, MAX_DURATION_SEC);
+					var end = start + clamp(number(item.durationSec, MIN_CLIP_SEC), MIN_CLIP_SEC, MAX_DURATION_SEC);
+					windows.push({ start: start, end: end });
+				});
+			});
+			return windows.sort(function (a, b) { return a.start - b.start || a.end - b.end; });
+		}
+		function visualWindowIsFree(start, duration) {
+			var end = start + duration;
+			return !occupiedVisualWindows().some(function (window) {
+				return start < window.end - TIMING_EPSILON_SEC && window.start < end - TIMING_EPSILON_SEC;
+			});
+		}
+		function freeVisualWindow(duration) {
+			var wanted = clamp(duration, MIN_CLIP_SEC, MAX_DURATION_SEC);
+			var busy = occupiedVisualWindows();
+			/* 1. the playhead's own window, when nothing is in the way there */
+			var atPlayhead = clamp(number(state && state.playheadSec, 0), 0, MAX_DURATION_SEC);
+			if (visualWindowIsFree(atPlayhead, wanted)) return { start: atPlayhead, durationSec: wanted, appended: false, atPlayhead: true };
+			/* 2. the first gap, scanning the merged busy intervals from 0 s */
+			var cursor = 0;
+			for (var index = 0; index < busy.length; index++) {
+				var entry = busy[index];
+				if (entry.start - cursor >= wanted - TIMING_EPSILON_SEC) return { start: cursor, durationSec: wanted, appended: false, atPlayhead: false };
+				if (entry.end > cursor) cursor = entry.end;
+			}
+			/* 3. wall to wall: append after the right-most clip of any layer */
+			return { start: clamp(cursor, 0, MAX_DURATION_SEC), durationSec: wanted, appended: true, atPlayhead: false };
+		}
+
 		function addVisualTrack() {
 			if (visualTracks().length >= MAX_VISUAL_TRACKS) {
 				setStatus("Text and graphics are limited to four lanes.", true);
@@ -1619,15 +1698,26 @@ export const TIMELINE_EDITOR_JS = `
 		 * or graphic is created as that clip's CHILD. Its timing is the
 		 * background clip's own window (never the playhead) and it stores the
 		 * clip id in parentId, which is what binds the two together.
+		 *
+		 * A FREE element (no parentItem — the ＋ Text / ＋ Graphic buttons)
+		 * takes the first timed window that no other text, graphic or Scene
+		 * Media clip occupies: see freeVisualWindow() above.
 		 */
 		function addVisualElement(kind, targetTrack, parentItem) {
 			var track = targetTrack && targetTrack.kind === "visual" ? targetTrack : findTrack(state.selectedTrackId);
 			if (!track || track.kind !== "visual") track = visualTracks()[0] || addVisualTrack();
 			if (!track) return null;
 			var parent = parentItem && parentItem.kind === "media" ? parentItem : null;
-			var scene = parent ? sceneById(parent.sceneId) : activeSceneAt(state.playheadSec) || state.scenes[0];
-			var start = parent ? clamp(parent.startSec, 0, MAX_DURATION_SEC) : clamp(state.playheadSec, 0, MAX_DURATION_SEC);
-			var duration = parent ? clamp(parent.durationSec, MIN_CLIP_SEC, MAX_DURATION_SEC) : 4;
+			var placement = parent ? null : freeVisualWindow(4);
+			var start = parent ? clamp(parent.startSec, 0, MAX_DURATION_SEC) : placement.start;
+			var duration = parent ? clamp(parent.durationSec, MIN_CLIP_SEC, MAX_DURATION_SEC) : placement.durationSec;
+			/*
+			 * The scene the element belongs to is resolved from where it
+			 * actually landed, then from the playhead it was added at, then
+			 * from the first scene — a window appended past the last scene has
+			 * no scene of its own.
+			 */
+			var scene = parent ? sceneById(parent.sceneId) : activeSceneAt(start) || activeSceneAt(state.playheadSec) || state.scenes[0];
 			var sceneId = parent && parent.sceneId ? String(parent.sceneId) : (scene && scene.id || "");
 			var id = makeId(kind);
 			var item = kind === "graphic" ? {
@@ -1649,6 +1739,15 @@ export const TIMELINE_EDITOR_JS = `
 			if (parent) {
 				var parentLimits = childWindow(parent);
 				if (state.playheadSec < parentLimits.start || state.playheadSec >= parentLimits.end) state.playheadSec = parentLimits.start;
+			}
+			/*
+			 * A free element can land far from where the playhead was (a wall
+			 * to wall timeline sends it to the right-most end), so the playhead
+			 * follows it: the element that was just added is the element on
+			 * screen, ready to be dragged into place on the canvas.
+			 */
+			else if (state.playheadSec < start || state.playheadSec >= start + item.durationSec) {
+				state.playheadSec = clamp(start, 0, MAX_DURATION_SEC);
 			}
 			ensureTimelineEnd(start + item.durationSec);
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
@@ -1955,133 +2054,74 @@ export const TIMELINE_EDITOR_JS = `
 			setStatus(valid.length + (valid.length === 1 ? " media file added" : " media files added") + " to the background layer.", false);
 		}
 		/*
-		 * ＋ Add Clips — the Scene Media clip picker
-		 * -----------------------------------------
-		 * The button next to ＋ Add media opens a modal laid out like the
-		 * studio's "Add video from template" composer: an overlay, a dark box
-		 * with a head (title + close ✕), a subtitle, a card grid, a status line
-		 * and a sticky action row. The cards are the clips this browser already
-		 * holds for the row — the image / GIF / MP4 files the Quick Batch handoff
-		 * pushed into IndexedDB, plus anything uploaded here — and the ＋ Upload
-		 * control adds more.
+		 * ＋ Add Clips — the studio's "Add video from template" composer
+		 * -------------------------------------------------------------
+		 * Session 332 replaced the timeline's own look-alike picker (the
+		 * .te-clips-* modal of §21) with the REAL thing: this button opens
+		 * #tpl-modal, the very modal the editor layout's "Add video from
+		 * template" link opens, built and driven by TEMPLATE_COMPOSER_JS.
 		 *
-		 * Nothing is dropped into a pending placeholder: every clip confirmed in
-		 * this modal is APPENDED after the right-most clip of the Scene Media
-		 * layer, one scene per clip, back to back.
+		 * APP_JS owns videoProjects and addVideoAccordion(), so it is APP_JS
+		 * that makes sure a Video N exists for the composer to target and then
+		 * calls window.openTemplateModal(n): window.openTemplateModalForTimeline().
+		 * On this page that accordion lives inside #view-editor, which is not
+		 * the active view, so the composer is the only thing on screen.
+		 *
+		 * The composer hands the MP4 it renders back through
+		 * window.__TIMELINE_TEMPLATE_CLIP__ — registered below, and only here:
+		 * this bundle returns early when layout != timeline, so the editor
+		 * layout's "add to the gallery" behaviour is untouched. The clip is
+		 * appended after the right-most clip of the Scene Media layer, one
+		 * scene per clip, which is the §21 landing rule unchanged.
+		 *
+		 * clipsQueue stays as the pending list appendQueuedClips() drains, so
+		 * "append at the right-most end" still has exactly one implementation.
+		 * Uploads keep their own button: ＋ Add media fills the first pending
+		 * scene placeholder and, once every placeholder is filled, appends at
+		 * the right-most end too.
 		 */
 		var clipsQueue = [];
-		function clipsAssetUsed(assetId) {
-			var wanted = String(assetId);
-			return state && state.tracks ? state.tracks.some(function (candidateTrack) {
-				return (candidateTrack.items || []).some(function (candidate) { return String(candidate.assetId) === wanted; });
-			}) : false;
-		}
-		function clipsAvailable() {
-			var list = [];
-			Object.keys(assetMap).forEach(function (id) {
-				var asset = assetMap[id];
-				if (!asset || !asset.blob) return;
-				var type = String(asset.type || (asset.blob && asset.blob.type) || "");
-				if (type.indexOf("image/") !== 0 && type !== "video/mp4") return;
-				list.push({
-					id: String(id),
-					name: String(asset.name || id),
-					type: type,
-					url: String(asset.url || ""),
-					durationSec: number(asset.durationSec, 0),
-					used: clipsAssetUsed(id)
-				});
-			});
-			return list.sort(function (a, b) { return a.name.localeCompare(b.name); });
-		}
-		function clipsStatus(message, warn) {
-			var node = document.getElementById("timeline-clips-status");
-			if (!node) return;
-			node.textContent = message || "";
-			node.className = "te-clips-status" + (warn ? " is-bad" : "");
-		}
 		function clipsQueued(assetId) { return clipsQueue.indexOf(String(assetId)) !== -1; }
-		function toggleClipQueue(assetId) {
-			var id = String(assetId || "");
-			if (!id || !assetMap[id]) return;
-			var index = clipsQueue.indexOf(id);
-			if (index === -1) {
-				if (clipsQueue.length >= MAX_MEDIA_FILES) { clipsStatus("A single timeline holds at most " + MAX_MEDIA_FILES + " clips.", true); return; }
-				clipsQueue.push(id);
-				clipsStatus(String((assetMap[id] && assetMap[id].name) || id) + " is queued for the right-most end of Scene Media.", false);
-			} else {
-				clipsQueue.splice(index, 1);
+		function openTemplateClipsModal() {
+			if (!state) return false;
+			if (isExporting || recorder) { setStatus("Wait for the export to finish before adding a clip.", true); return false; }
+			var opener = window.openTemplateModalForTimeline;
+			if (typeof opener !== "function") opener = window.openTemplateModal;
+			if (typeof opener !== "function") {
+				setStatus("The Add video from template composer is not available on this page.", true);
+				return false;
 			}
-			renderClipsModal();
+			var opened = false;
+			try { opened = opener() !== false; } catch (error) { opened = false; }
+			if (!opened) { setStatus("The Add video from template modal could not be opened.", true); return false; }
+			setStatus("Compose the clip in the Add video from template modal \u2014 its \u2795 Add button appends the MP4 to the right-most end of Scene Media.", false);
+			return true;
 		}
-		function clearClipQueue() {
-			clipsQueue = [];
-			renderClipsModal();
-			clipsStatus("Queue cleared.", false);
-		}
-		function renderClipsModal() {
-			var grid = document.getElementById("timeline-clips-grid");
-			var commit = document.getElementById("timeline-clips-commit");
-			var counter = document.getElementById("timeline-clips-count");
-			if (!grid) return;
-			var cards = "";
-			clipsAvailable().forEach(function (entry) {
-				var queued = clipsQueued(entry.id);
-				var media = entry.type === "video/mp4"
-					? '<video src="' + esc(entry.url) + '" preload="metadata" muted playsinline aria-hidden="true"></video><span class="te-clips-kind">MP4</span>'
-					: '<img src="' + esc(entry.url) + '" alt="" loading="lazy">';
-				cards += '<button type="button" class="te-clips-card' + (queued ? " queued" : "") + '" data-clips-card="' + esc(entry.id) + '" aria-pressed="' + (queued ? "true" : "false") + '" title="' + esc(entry.name) + '">' +
-					'<span class="te-clips-frame">' + media + (entry.durationSec ? '<span class="te-clips-sec">' + entry.durationSec.toFixed(1) + "s</span>" : "") + '</span>' +
-					'<span class="te-clips-name">' + esc(entry.name) + '</span>' +
-					'<span class="te-clips-meta">' + (entry.used ? "already on the layer · adds a copy" : esc(entry.type)) + '</span>' +
-					'<span class="te-clips-pick">' + (queued ? "✓ Queued" : "＋ Queue") + '</span>' +
-					'</button>';
-			});
-			if (!cards) cards = '<p class="te-clips-none">This row has no image, GIF or MP4 stored in this browser yet. Use ＋ Upload below to queue some.</p>';
-			grid.innerHTML = cards;
-			if (counter) counter.textContent = clipsQueue.length ? clipsQueue.length + (clipsQueue.length === 1 ? " clip queued" : " clips queued") : "Nothing queued yet";
-			if (commit) {
-				commit.disabled = !clipsQueue.length;
-				commit.textContent = "＋ Add " + clipsQueue.length + (clipsQueue.length === 1 ? " clip to the end" : " clips to the end");
-			}
-		}
-		function openClipsModal() {
-			var modal = document.getElementById("timeline-clips-modal");
-			if (!modal) return;
-			modal.hidden = false;
-			renderClipsModal();
-			clipsStatus("Pick the clips to append at the right-most end of the Scene Media layer.", false);
-		}
-		function closeClipsModal() {
-			var modal = document.getElementById("timeline-clips-modal");
-			if (modal) modal.hidden = true;
-		}
-		async function addClipsFiles(files) {
-			var valid = (Array.prototype.slice.call(files || [])).filter(fileIsMedia).slice(0, MAX_MEDIA_FILES);
-			if (!valid.length) { clipsStatus("Choose an image, GIF or MP4 file.", true); return 0; }
-			for (var i = 0; i < valid.length; i++) {
-				var file = valid[i];
-				var kind = fileType(file);
-				var duration = kind === "video" ? await probeDuration(file, "video") : 5;
-				var assetId = makeId("clip");
-				var record = registerAsset(assetId, file, {
-					name: String(file.name || "Clip"),
-					type: String(file.type || (kind === "video" ? "video/mp4" : kind === "gif" ? "image/gif" : "image/jpeg")),
-					source: "clips modal",
-					durationSec: duration
-				});
-				if (record) record.durationSec = duration;
-				api.storeAsset(pageId, assetId, file, { name: file.name, type: file.type, source: "clips modal" }).then(function (result) { if (!result || !result.ok) clipsStatus("Uploads work now but could not be kept for reloads in this browser.", true); });
-				if (!clipsQueued(assetId) && clipsQueue.length < MAX_MEDIA_FILES) clipsQueue.push(assetId);
-			}
-			renderClipsModal();
-			clipsStatus(valid.length + (valid.length === 1 ? " upload queued" : " uploads queued") + " — press Add to append " + (valid.length === 1 ? "it" : "them") + " to Scene Media.", false);
-			return valid.length;
+		/*
+		 * The composer's callback. It is deliberately synchronous: the composer
+		 * already probed the MP4, so the length needs no second probe, and the
+		 * composer reads the return value as "how many clips landed".
+		 */
+		function appendTemplateClip(clip) {
+			if (!state || !clip) return 0;
+			var blob = clip.blob || clip.file || null;
+			if (!blob) { setStatus("The composed clip arrived without any media bytes.", true); return 0; }
+			if (isExporting || recorder) { setStatus("Wait for the export to finish before adding a clip.", true); return 0; }
+			if (!mediaTrack()) { setStatus("The Scene Media layer is missing from this project.", true); return 0; }
+			if (clipsQueue.length >= MAX_MEDIA_FILES) { setStatus("A single timeline holds at most " + MAX_MEDIA_FILES + " clips.", true); return 0; }
+			var name = String(clip.name || "Template clip").slice(0, 80);
+			var file = clip.file && typeof clip.file === "object" && clip.file.name ? clip.file : new File([blob], name, { type: "video/mp4" });
+			var duration = clamp(number(clip.durationSec, 0) || 5, MIN_CLIP_SEC, MAX_DURATION_SEC);
+			var assetId = makeId("template");
+			registerAsset(assetId, file, { name: name, type: "video/mp4", source: "template composer", durationSec: duration });
+			api.storeAsset(pageId, assetId, file, { name: name, type: "video/mp4", source: "template composer" }).then(function (result) { if (!result || !result.ok) setStatus("The composed clip works now but could not be kept for reloads in this browser.", true); });
+			if (!clipsQueued(assetId)) clipsQueue.push(assetId);
+			return appendQueuedClips();
 		}
 		function appendQueuedClips() {
 			var track = mediaTrack();
-			if (!track) { clipsStatus("The Scene Media layer is missing from this project.", true); return 0; }
-			if (!clipsQueue.length) { clipsStatus("Queue at least one clip first.", true); return 0; }
+			if (!track) { setStatus("The Scene Media layer is missing from this project.", true); return 0; }
+			if (!clipsQueue.length) { setStatus("Queue at least one clip first.", true); return 0; }
 			/* The right-most end of the lane is the only landing spot. */
 			var nextStart = track.items.reduce(function (end, item) { return Math.max(end, item.startSec + item.durationSec); }, 0);
 			var startAt = nextStart;
@@ -2103,7 +2143,7 @@ export const TIMELINE_EDITOR_JS = `
 				var duration = clamp(number(asset.durationSec, 0) || probed || 5, MIN_CLIP_SEC, MAX_DURATION_SEC);
 				var sceneId = makeId("scene");
 				var itemId = makeId("media");
-				var source = String(asset.source || "clips modal");
+				var source = String(asset.source || "template composer");
 				var scene = { id: sceneId, index: state.scenes.length, name: "Scene " + (state.scenes.length + 1) + " · " + name, startSec: nextStart, durationSec: duration, mediaType: kind, mediaAssetId: String(assetId), mediaName: name, mediaSource: source, prompt: "", effects: (state.videoStyleEffects || []).slice(), videoStyle: state.videoStyle, elements: [] };
 				var item = { id: itemId, kind: "media", sceneId: sceneId, assetId: String(assetId), label: name, mediaType: kind, mediaSource: source, startSec: nextStart, durationSec: duration, trimStartSec: 0, fit: "cover", visible: true };
 				state.scenes.push(scene);
@@ -2113,7 +2153,7 @@ export const TIMELINE_EDITOR_JS = `
 				lastItem = item;
 				lastSceneId = sceneId;
 			});
-			if (!added) { clipsStatus("None of the queued clips could be read.", true); return 0; }
+			if (!added) { setStatus("None of the queued clips could be read.", true); return 0; }
 			clipsQueue = [];
 			ensureTimelineEnd(nextStart);
 			state.selectedTrackId = MEDIA_TRACK_ID;
@@ -2121,8 +2161,6 @@ export const TIMELINE_EDITOR_JS = `
 			if (lastSceneId) selectedSceneId = lastSceneId;
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
 			setStatus("Queued " + added + (added === 1 ? " clip" : " clips") + " at the right-most end of Scene Media (from " + formatTime(startAt) + " to " + formatTime(nextStart) + ").", false);
-			renderClipsModal();
-			closeClipsModal();
 			return added;
 		}
 		async function addAudioFile(trackId, file) {
@@ -2158,15 +2196,23 @@ export const TIMELINE_EDITOR_JS = `
 			 * opens itself again rather than adding a lane nobody can see. */
 			if (state.visualsExpanded === false) state.visualsExpanded = true;
 			var lanes = visualTracks();
-			if (lanes.length >= MAX_VISUAL_TRACKS) {
-				var top = lanes[lanes.length - 1] || null;
-				if (!top) return null;
-				setStatus("Four text and graphics lanes are already open - the element is added to the top layer.", true);
-				return addVisualElement(kind, top);
+			var capped = lanes.length >= MAX_VISUAL_TRACKS;
+			var track = capped ? (lanes[lanes.length - 1] || null) : addVisualTrack();
+			if (!track) return null;
+			var item = addVisualElement(kind, track);
+			/*
+			 * The status line names the window the element took, so a placement
+			 * at the right-most end (the usual answer on a wall-to-wall Quick
+			 * Batch timeline) is never a silent surprise.
+			 */
+			if (item) {
+				var window = formatTime(item.startSec) + " \u2013 " + formatTime(item.startSec + item.durationSec);
+				var reason = "the first timed space no other text, graphic or Scene Media clip occupies";
+				setStatus((capped
+					? "Four text and graphics lanes are already open - the element is added to the top layer at "
+					: (kind === "graphic" ? "Graphic" : "Text") + " added in its own lane at ") + window + " \u2014 " + reason + ".", capped);
 			}
-			var created = addVisualTrack();
-			if (!created) return null;
-			return addVisualElement(kind, created);
+			return item;
 		}
 		function getSelectedMediaScene() {
 			var item = activeMediaAt(state.playheadSec);
@@ -2677,10 +2723,14 @@ export const TIMELINE_EDITOR_JS = `
 			/* TEXT & GRAPHICS folds its lanes exactly like the Soundtrack group does. */
 			if (action === "toggle-visuals") { state.visualsExpanded = state.visualsExpanded === false; renderTimeline(); scheduleSave(); return; }
 			if (action === "add-media") { var mediaInput = document.getElementById("timeline-media-upload"); if (mediaInput) mediaInput.click(); return; }
-			if (action === "add-clips") { openClipsModal(); return; }
-			if (action === "clips-close") { closeClipsModal(); return; }
-			if (action === "clips-clear") { clearClipQueue(); return; }
-			if (action === "clips-add") { appendQueuedClips(); return; }
+			/*
+			 * ＋ Add Clips opens the SAME modal as the editor layout's "Add video
+			 * from template" link. The picker's own clips-close / clips-clear /
+			 * clips-add actions went away with it: #tpl-modal is closed and driven
+			 * by TEMPLATE_COMPOSER_JS, and its \u2795 Add button is what appends a
+			 * clip here (through window.__TIMELINE_TEMPLATE_CLIP__).
+			 */
+			if (action === "add-clips") { openTemplateClipsModal(); return; }
 			if (action === "toggle-track") {
 				var track = findTrack(target.getAttribute("data-track-toggle"));
 				if (track) { track.expanded = track.expanded === false; renderTimeline(); scheduleSave(); }
@@ -3192,13 +3242,10 @@ export const TIMELINE_EDITOR_JS = `
 				var actionNode = event.target && event.target.closest ? event.target.closest("[data-timeline-action]") : null;
 				if (actionNode) { handleAction(actionNode.getAttribute("data-timeline-action"), actionNode); return; }
 				/*
-				 * ＋ Add Clips modal: a card toggles its clip in and out of the
-				 * queue, and a click on the dark backdrop (never inside the box)
-				 * dismisses the modal, mirroring the studio's template composer.
+				 * The clip picker's own card / backdrop dismissal is gone with the
+				 * picker: #tpl-modal handles its cards, its backdrop click and its
+				 * Escape key inside TEMPLATE_COMPOSER_JS.
 				 */
-				var clipsCard = event.target && event.target.closest ? event.target.closest("[data-clips-card]") : null;
-				if (clipsCard) { toggleClipQueue(clipsCard.getAttribute("data-clips-card")); return; }
-				if (event.target && event.target.id === "timeline-clips-modal") { closeClipsModal(); return; }
 				var trackToggle = event.target && event.target.closest ? event.target.closest("[data-track-toggle]") : null;
 				if (trackToggle) { handleAction("toggle-track", trackToggle); return; }
 				var trackNode = event.target && event.target.closest ? event.target.closest("[data-track-select]") : null;
@@ -3341,23 +3388,16 @@ export const TIMELINE_EDITOR_JS = `
 			if (mediaInput) mediaInput.addEventListener("change", function () { var files = mediaInput.files ? Array.from(mediaInput.files) : []; mediaInput.value = ""; addMediaFiles(files); });
 			var audioInput = document.getElementById("timeline-audio-upload");
 			if (audioInput) audioInput.addEventListener("change", function () { var file = audioInput.files && audioInput.files[0]; audioInput.value = ""; if (file) addAudioFile(pendingAudioTrackId || "sound-fx", file); });
-			/* The ＋ Add Clips modal keeps its own upload control, so an upload
-			 * never competes with the ＋ Add media button's placeholder logic. */
-			var clipsInput = document.getElementById("timeline-clips-files");
-			if (clipsInput) clipsInput.addEventListener("change", function () { var files = clipsInput.files ? Array.from(clipsInput.files) : []; clipsInput.value = ""; addClipsFiles(files); });
 			/*
-			 * Escape closes the picker. The listener sits on document (not on the
-			 * modal) because focus is usually still on the ＋ Add Clips button in
-			 * the dock when the overlay opens, so a modal-scoped keydown would
-			 * never fire.
+			 * Session 332: the picker's own upload control and Escape handler
+			 * went away with the picker. In their place this page registers the
+			 * sink the "Add video from template" composer calls when its
+			 * \u2795 Add button renders an MP4, so the composed clip lands at the
+			 * right-most end of the Scene Media layer. The registration happens
+			 * inside bindEvents(), which only runs on layout=timeline, so the
+			 * editor layout's composer keeps adding to its Video N gallery.
 			 */
-			document.addEventListener("keydown", function (event) {
-				if (String(event.key || "") !== "Escape") return;
-				var openModal = document.getElementById("timeline-clips-modal");
-				if (!openModal || openModal.hidden) return;
-				event.preventDefault();
-				closeClipsModal();
-			});
+			window.__TIMELINE_TEMPLATE_CLIP__ = function (clip) { return appendTemplateClip(clip); };
 			var back = document.getElementById("timeline-back");
 			if (back) back.addEventListener("click", function () {
 				persistNow();
@@ -3507,18 +3547,17 @@ export const TIMELINE_EDITOR_JS = `
 		api.addMediaFiles = addMediaFiles;
 		api.addAudioFile = addAudioFile;
 		/*
-		 * ＋ Add Clips — the Scene Media clip picker. The queue lives outside
-		 * state (it is a pending modal selection, not an edit), so every entry
-		 * below is a plain helper the modal — and a test — can drive.
+		 * ＋ Add Clips — the "Add video from template" composer. The queue lives
+		 * outside state (it is a pending hand-off, not an edit), so every entry
+		 * below is a plain helper the composer — and a test — can drive.
 		 */
-		api.openClipsModal = function () { if (!state) return false; openClipsModal(); return true; };
-		api.closeClipsModal = function () { closeClipsModal(); return true; };
-		api.clipsLibrary = function () { return state ? clipsAvailable() : []; };
+		api.openClipsModal = function () { return openTemplateClipsModal(); };
+		api.appendTemplateClip = function (clip) { return appendTemplateClip(clip); };
 		api.getClipsQueue = function () { return clipsQueue.slice(); };
-		api.toggleClipQueue = function (assetId) { toggleClipQueue(assetId); return clipsQueue.slice(); };
-		api.clearClipsQueue = function () { clearClipQueue(); return clipsQueue.slice(); };
-		api.addClipsFiles = function (files) { return addClipsFiles(files); };
 		api.appendQueuedClips = function () { return state ? appendQueuedClips() : 0; };
+		/* Placement of a new text/graphic: the first window nothing else occupies. */
+		api.freeVisualWindow = function (duration) { return state ? freeVisualWindow(duration == null ? 4 : duration) : null; };
+		api.occupiedVisualWindows = function () { return state ? occupiedVisualWindows() : []; };
 		api.exportTimeline = exportTimeline;
 		api.booted = true;
 
