@@ -29,7 +29,12 @@ export const TIMELINE_EDITOR_JS = `
 		 * placed below it, so the media track never needs a z-order of its own.
 		 */
 		var MEDIA_TRACK_ID = "background-media";
-		var MEDIA_TRACK_LABEL = "Scene's media";
+		/*
+		 * Session 331: the layer used to be announced as "Scene's media" in the
+		 * track header. The copy is now the plain "Scene Media" — the same words
+		 * the ＋ Add Clips modal and the dock use for this lane.
+		 */
+		var MEDIA_TRACK_LABEL = "Scene Media";
 		var MEDIA_TRACK_NAME = "BACKGROUND";
 		/*
 		 * Every timeline that has no text and no graphic of its own starts with
@@ -387,6 +392,12 @@ export const TIMELINE_EDITOR_JS = `
 				subtitles: [],
 				playheadSec: 0,
 				soundExpanded: false,
+				/*
+				 * Session 331: the TEXT & GRAPHICS group collapses like the
+				 * Soundtrack group does. It opens expanded so a fresh timeline
+				 * still shows every visual lane.
+				 */
+				visualsExpanded: true,
 				zoom: 1,
 				scenes: scenes,
 				tracks: [
@@ -641,6 +652,12 @@ export const TIMELINE_EDITOR_JS = `
 				durationSec: duration,
 				playheadSec: clamp(base.playheadSec, 0, duration),
 				soundExpanded: number(base.version, 1) >= 2 && base.soundExpanded === true,
+				/*
+				 * The visual group is expanded unless a saved project explicitly
+				 * collapsed it — unlike Soundtrack, which starts folded so the
+				 * lanes do not crowd a fresh timeline.
+				 */
+				visualsExpanded: base.visualsExpanded !== false,
 				zoom: clamp(base.zoom, 0.5, 2),
 				scenes: scenes,
 				tracks: tracks,
@@ -1039,7 +1056,15 @@ export const TIMELINE_EDITOR_JS = `
 			 * removed on request; the count was also duplicated by the dock's
 			 * lane button that has since been dropped.
 			 */
-			html += '<div class="te-group-title te-group-visuals"><span class="te-group-label">TEXT &amp; GRAPHICS</span></div>';
+			/*
+			 * The header is a real collapse toggle now - the same
+			 * .te-group-toggle button (chevron + label + <small> count) the
+			 * Soundtrack group uses, so the two group heads share one font,
+			 * size and behaviour. Clicking it folds every visual lane away;
+			 * the ＋ Text / ＋ Graphic buttons stay in the filler cell so a
+			 * folded group can still receive a new element.
+			 */
+			html += '<div class="te-group-title te-group-visuals"><button type="button" class="te-group-toggle" data-timeline-action="toggle-visuals" aria-expanded="' + (state.visualsExpanded ? "true" : "false") + '"><span class="te-chevron">' + (state.visualsExpanded ? "▾" : "▸") + '</span> TEXT &amp; GRAPHICS <small>' + visuals.length + (visuals.length === 1 ? " track" : " tracks") + '</small></button></div>';
 			/*
 			 * The two add buttons live in this filler cell but are pinned with
 			 * position: sticky at the left edge of the tracks area, on the
@@ -1048,13 +1073,23 @@ export const TIMELINE_EDITOR_JS = `
 			 * and they are never painted under a lane, a clip or the playhead.
 			 */
 			html += '<div class="te-group-fill te-visual-actions"><span class="te-visual-actions-sticky"><button type="button" class="te-add-inline" data-timeline-action="add-text">＋ Text</button><button type="button" class="te-add-inline" data-timeline-action="add-graphic">＋ Graphic</button></span>' + playheadHtml(playheadLeft, false) + '</div>';
-			dockVisuals.forEach(function (track) {
-				html += '<div class="te-track-label' + (String(state.selectedTrackId) === String(track.id) ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(track.id) + '">' + esc(track.label) + '<small>' + (track.items.length ? track.items.length + (track.items.length === 1 ? " clip" : " clips") : "empty") + '</small></button></div>';
-				html += '<div class="te-lane te-visual-lane" data-lane-track="' + esc(track.id) + '" style="width:' + width + 'px">';
-				if (!track.items.length) html += '<span class="te-lane-empty-static">Use + Text or + Graphic to add an element</span>';
-				track.items.forEach(function (item) { html += htmlTrackItem(track, item, pps); });
-				html += playheadHtml(playheadLeft, false) + '</div>';
-			});
+			if (state.visualsExpanded) {
+				dockVisuals.forEach(function (track) {
+					/*
+					 * Every visual lane also carries the per-lane chevron the
+					 * audio lanes use, so a single "Text & graphics 2" lane can
+					 * be folded without touching its siblings.
+					 */
+					var laneCollapsed = track.expanded === false;
+					html += '<div class="te-track-label' + (String(state.selectedTrackId) === String(track.id) ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(track.id) + '">' + esc(track.label) + '<small>' + (track.items.length ? track.items.length + (track.items.length === 1 ? " clip" : " clips") : "empty") + '</small></button><button type="button" class="te-track-toggle" data-track-toggle="' + esc(track.id) + '" aria-expanded="' + (!laneCollapsed ? "true" : "false") + '" title="Expand or collapse ' + esc(track.label) + '">' + (laneCollapsed ? "▸" : "▾") + '</button></div>';
+					html += '<div class="te-lane te-visual-lane' + (laneCollapsed ? ' collapsed' : '') + '" data-lane-track="' + esc(track.id) + '" style="width:' + width + 'px">';
+					if (!laneCollapsed) {
+						if (!track.items.length) html += '<span class="te-lane-empty-static">Use + Text or + Graphic to add an element</span>';
+						track.items.forEach(function (item) { html += htmlTrackItem(track, item, pps); });
+					}
+					html += playheadHtml(playheadLeft, false) + '</div>';
+				});
+			}
 			/*
 			 * Subtitle layer. The row's cues are present in the tracks area so
 			 * the layer exists as a real row, but every row ships with a
@@ -1075,7 +1110,14 @@ export const TIMELINE_EDITOR_JS = `
 				});
 				html += playheadHtml(playheadLeft, false) + '</div>';
 			}
-			html += '<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER <small>pinned lowest · Pixabay, GIF, image or MP4</small></span><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button></div><div class="te-group-fill te-group-fill-background">' + playheadHtml(playheadLeft, false) + '</div>';
+			/*
+			 * The background header used to carry a "pinned lowest · Pixabay,
+			 * GIF, image or MP4" caption. The caption is gone (the layer is
+			 * described by its own name), and the cell now holds the two add
+			 * buttons: ＋ Add media keeps the hidden file input, ＋ Add Clips
+			 * opens the clip picker that appends to the right-most end.
+			 */
+			html += '<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER</span><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button><button type="button" class="te-add-inline" data-timeline-action="add-clips">＋ Add Clips</button></div><div class="te-group-fill te-group-fill-background">' + playheadHtml(playheadLeft, false) + '</div>';
 			var backgroundTrack = mediaTrack();
 			html += '<div class="te-track-label te-track-background' + (String(state.selectedTrackId) === MEDIA_TRACK_ID ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(MEDIA_TRACK_ID) + '">' + esc(backgroundTrack && backgroundTrack.label || MEDIA_TRACK_LABEL) + '<small><span class="te-track-badge">BG</span> ' + (backgroundTrack ? backgroundTrack.items.length + " scenes" : "empty") + '</small></button></div>';
 			html += '<div class="te-lane te-media-lane te-background-lane" data-lane-track="' + esc(MEDIA_TRACK_ID) + '" style="width:' + width + 'px">';
@@ -1115,6 +1157,16 @@ export const TIMELINE_EDITOR_JS = `
 			if (zoomInput) zoomInput.value = String(zoom);
 			if (zoomValue) zoomValue.textContent = zoom.toFixed(1).replace(/\\.0$/, "") + "×";
 			updateReadout();
+			/*
+			 * The ＋ Add Clips picker lists the media this project holds, so an
+			 * open modal is re-listed whenever the dock repaints (an upload from
+			 * ＋ Add media, a deleted clip, a queue change). Nothing is built
+			 * while it is closed, and an export never pays for the extra pass.
+			 */
+			if (!isExporting && !recorder) {
+				var clipsModal = document.getElementById("timeline-clips-modal");
+				if (clipsModal && !clipsModal.hidden) renderClipsModal();
+			}
 		}
 
 		function updateReadout() {
@@ -1425,6 +1477,22 @@ export const TIMELINE_EDITOR_JS = `
 			if (selectedName) {
 				selectedName.textContent = inspectorItem ? String(inspectorItem.label || inspectorItem.name || (inspectorItem.kind === "text" ? "Text" : inspectorItem.kind)) : inspectorTrack ? inspectorTrack.label : "";
 			}
+			/*
+			 * The section above the tracks is only a "scene" while it edits a
+			 * box of the Scene Media layer — a scene IS that box. Anything else
+			 * (a text clip, a graphic, an audio clip, a bare track) is an
+			 * element, so the heading reads "Selected element". A child text or
+			 * graphic re-resolves to its parent background box, which keeps the
+			 * scene wording the background section is known for.
+			 */
+			var selectedTitle = document.getElementById("timeline-selected-title");
+			if (selectedTitle) {
+				var onMediaLayer = Boolean(inspectorItem) && String(inspectorItem.kind) === "media";
+				var mediaTrackOnly = !inspectorItem && Boolean(inspectorTrack) && String(inspectorTrack.kind) === "media";
+				selectedTitle.textContent = onMediaLayer || mediaTrackOnly ? "Selected Scene" : "Selected element";
+				var inspectorPanel = selectedTitle.closest ? selectedTitle.closest(".te-inspector-panel") : null;
+				if (inspectorPanel) inspectorPanel.setAttribute("aria-label", onMediaLayer || mediaTrackOnly ? "Selected scene controls" : "Selected element controls");
+			}
 			if (selectedScene && (!inspectorItem || inspectorItem.kind !== "media")) {
 				sceneElementEntries(selectedScene.id).forEach(function (candidate) {
 					if (candidate.item && candidate.item.parentId) return;
@@ -1599,6 +1667,8 @@ export const TIMELINE_EDITOR_JS = `
 				setStatus("Select a background clip (Pixabay image, GIF or MP4) before adding a child text or graphic.", true);
 				return null;
 			}
+			/* The child lives on a visual lane, so a folded group is reopened. */
+			if (state.visualsExpanded === false) state.visualsExpanded = true;
 			var lanes = visualTracks();
 			var track = null;
 			var capped = false;
@@ -1816,7 +1886,7 @@ export const TIMELINE_EDITOR_JS = `
 			try { url = URL.createObjectURL(blob); } catch (error) {}
 			var info = metadata || {};
 			var type = String(info.type || blob.type || "");
-			var record = { id: String(id), blob: blob, url: url, name: String(info.name || blob.name || ""), type: type, source: info.source || null, image: null, video: null };
+			var record = { id: String(id), blob: blob, url: url, name: String(info.name || blob.name || ""), type: type, source: info.source || null, durationSec: number(info.durationSec, 0), image: null, video: null };
 			if (type.indexOf("image/") === 0 && url) {
 				var image = new Image();
 				image.onload = function () { drawPreview(); };
@@ -1884,6 +1954,177 @@ export const TIMELINE_EDITOR_JS = `
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
 			setStatus(valid.length + (valid.length === 1 ? " media file added" : " media files added") + " to the background layer.", false);
 		}
+		/*
+		 * ＋ Add Clips — the Scene Media clip picker
+		 * -----------------------------------------
+		 * The button next to ＋ Add media opens a modal laid out like the
+		 * studio's "Add video from template" composer: an overlay, a dark box
+		 * with a head (title + close ✕), a subtitle, a card grid, a status line
+		 * and a sticky action row. The cards are the clips this browser already
+		 * holds for the row — the image / GIF / MP4 files the Quick Batch handoff
+		 * pushed into IndexedDB, plus anything uploaded here — and the ＋ Upload
+		 * control adds more.
+		 *
+		 * Nothing is dropped into a pending placeholder: every clip confirmed in
+		 * this modal is APPENDED after the right-most clip of the Scene Media
+		 * layer, one scene per clip, back to back.
+		 */
+		var clipsQueue = [];
+		function clipsAssetUsed(assetId) {
+			var wanted = String(assetId);
+			return state && state.tracks ? state.tracks.some(function (candidateTrack) {
+				return (candidateTrack.items || []).some(function (candidate) { return String(candidate.assetId) === wanted; });
+			}) : false;
+		}
+		function clipsAvailable() {
+			var list = [];
+			Object.keys(assetMap).forEach(function (id) {
+				var asset = assetMap[id];
+				if (!asset || !asset.blob) return;
+				var type = String(asset.type || (asset.blob && asset.blob.type) || "");
+				if (type.indexOf("image/") !== 0 && type !== "video/mp4") return;
+				list.push({
+					id: String(id),
+					name: String(asset.name || id),
+					type: type,
+					url: String(asset.url || ""),
+					durationSec: number(asset.durationSec, 0),
+					used: clipsAssetUsed(id)
+				});
+			});
+			return list.sort(function (a, b) { return a.name.localeCompare(b.name); });
+		}
+		function clipsStatus(message, warn) {
+			var node = document.getElementById("timeline-clips-status");
+			if (!node) return;
+			node.textContent = message || "";
+			node.className = "te-clips-status" + (warn ? " is-bad" : "");
+		}
+		function clipsQueued(assetId) { return clipsQueue.indexOf(String(assetId)) !== -1; }
+		function toggleClipQueue(assetId) {
+			var id = String(assetId || "");
+			if (!id || !assetMap[id]) return;
+			var index = clipsQueue.indexOf(id);
+			if (index === -1) {
+				if (clipsQueue.length >= MAX_MEDIA_FILES) { clipsStatus("A single timeline holds at most " + MAX_MEDIA_FILES + " clips.", true); return; }
+				clipsQueue.push(id);
+				clipsStatus(String((assetMap[id] && assetMap[id].name) || id) + " is queued for the right-most end of Scene Media.", false);
+			} else {
+				clipsQueue.splice(index, 1);
+			}
+			renderClipsModal();
+		}
+		function clearClipQueue() {
+			clipsQueue = [];
+			renderClipsModal();
+			clipsStatus("Queue cleared.", false);
+		}
+		function renderClipsModal() {
+			var grid = document.getElementById("timeline-clips-grid");
+			var commit = document.getElementById("timeline-clips-commit");
+			var counter = document.getElementById("timeline-clips-count");
+			if (!grid) return;
+			var cards = "";
+			clipsAvailable().forEach(function (entry) {
+				var queued = clipsQueued(entry.id);
+				var media = entry.type === "video/mp4"
+					? '<video src="' + esc(entry.url) + '" preload="metadata" muted playsinline aria-hidden="true"></video><span class="te-clips-kind">MP4</span>'
+					: '<img src="' + esc(entry.url) + '" alt="" loading="lazy">';
+				cards += '<button type="button" class="te-clips-card' + (queued ? " queued" : "") + '" data-clips-card="' + esc(entry.id) + '" aria-pressed="' + (queued ? "true" : "false") + '" title="' + esc(entry.name) + '">' +
+					'<span class="te-clips-frame">' + media + (entry.durationSec ? '<span class="te-clips-sec">' + entry.durationSec.toFixed(1) + "s</span>" : "") + '</span>' +
+					'<span class="te-clips-name">' + esc(entry.name) + '</span>' +
+					'<span class="te-clips-meta">' + (entry.used ? "already on the layer · adds a copy" : esc(entry.type)) + '</span>' +
+					'<span class="te-clips-pick">' + (queued ? "✓ Queued" : "＋ Queue") + '</span>' +
+					'</button>';
+			});
+			if (!cards) cards = '<p class="te-clips-none">This row has no image, GIF or MP4 stored in this browser yet. Use ＋ Upload below to queue some.</p>';
+			grid.innerHTML = cards;
+			if (counter) counter.textContent = clipsQueue.length ? clipsQueue.length + (clipsQueue.length === 1 ? " clip queued" : " clips queued") : "Nothing queued yet";
+			if (commit) {
+				commit.disabled = !clipsQueue.length;
+				commit.textContent = "＋ Add " + clipsQueue.length + (clipsQueue.length === 1 ? " clip to the end" : " clips to the end");
+			}
+		}
+		function openClipsModal() {
+			var modal = document.getElementById("timeline-clips-modal");
+			if (!modal) return;
+			modal.hidden = false;
+			renderClipsModal();
+			clipsStatus("Pick the clips to append at the right-most end of the Scene Media layer.", false);
+		}
+		function closeClipsModal() {
+			var modal = document.getElementById("timeline-clips-modal");
+			if (modal) modal.hidden = true;
+		}
+		async function addClipsFiles(files) {
+			var valid = (Array.prototype.slice.call(files || [])).filter(fileIsMedia).slice(0, MAX_MEDIA_FILES);
+			if (!valid.length) { clipsStatus("Choose an image, GIF or MP4 file.", true); return 0; }
+			for (var i = 0; i < valid.length; i++) {
+				var file = valid[i];
+				var kind = fileType(file);
+				var duration = kind === "video" ? await probeDuration(file, "video") : 5;
+				var assetId = makeId("clip");
+				var record = registerAsset(assetId, file, {
+					name: String(file.name || "Clip"),
+					type: String(file.type || (kind === "video" ? "video/mp4" : kind === "gif" ? "image/gif" : "image/jpeg")),
+					source: "clips modal",
+					durationSec: duration
+				});
+				if (record) record.durationSec = duration;
+				api.storeAsset(pageId, assetId, file, { name: file.name, type: file.type, source: "clips modal" }).then(function (result) { if (!result || !result.ok) clipsStatus("Uploads work now but could not be kept for reloads in this browser.", true); });
+				if (!clipsQueued(assetId) && clipsQueue.length < MAX_MEDIA_FILES) clipsQueue.push(assetId);
+			}
+			renderClipsModal();
+			clipsStatus(valid.length + (valid.length === 1 ? " upload queued" : " uploads queued") + " — press Add to append " + (valid.length === 1 ? "it" : "them") + " to Scene Media.", false);
+			return valid.length;
+		}
+		function appendQueuedClips() {
+			var track = mediaTrack();
+			if (!track) { clipsStatus("The Scene Media layer is missing from this project.", true); return 0; }
+			if (!clipsQueue.length) { clipsStatus("Queue at least one clip first.", true); return 0; }
+			/* The right-most end of the lane is the only landing spot. */
+			var nextStart = track.items.reduce(function (end, item) { return Math.max(end, item.startSec + item.durationSec); }, 0);
+			var startAt = nextStart;
+			var added = 0;
+			var lastItem = null;
+			var lastSceneId = "";
+			clipsQueue.forEach(function (assetId) {
+				var asset = assetMap[assetId];
+				if (!asset || !asset.blob) return;
+				var type = String(asset.type || (asset.blob && asset.blob.type) || "");
+				var kind = type === "video/mp4" ? "video" : type === "image/gif" ? "gif" : "image";
+				var name = String(asset.name || "Clip").slice(0, 80);
+				/*
+				 * The probed length wins, then the duration the media element
+				 * already knows (a hand-off MP4 is decoded by boot()), then the
+				 * five-second default every other clip gets.
+				 */
+				var probed = number(asset.video && asset.video.duration, 0);
+				var duration = clamp(number(asset.durationSec, 0) || probed || 5, MIN_CLIP_SEC, MAX_DURATION_SEC);
+				var sceneId = makeId("scene");
+				var itemId = makeId("media");
+				var source = String(asset.source || "clips modal");
+				var scene = { id: sceneId, index: state.scenes.length, name: "Scene " + (state.scenes.length + 1) + " · " + name, startSec: nextStart, durationSec: duration, mediaType: kind, mediaAssetId: String(assetId), mediaName: name, mediaSource: source, prompt: "", effects: (state.videoStyleEffects || []).slice(), videoStyle: state.videoStyle, elements: [] };
+				var item = { id: itemId, kind: "media", sceneId: sceneId, assetId: String(assetId), label: name, mediaType: kind, mediaSource: source, startSec: nextStart, durationSec: duration, trimStartSec: 0, fit: "cover", visible: true };
+				state.scenes.push(scene);
+				track.items.push(item);
+				nextStart += duration;
+				added += 1;
+				lastItem = item;
+				lastSceneId = sceneId;
+			});
+			if (!added) { clipsStatus("None of the queued clips could be read.", true); return 0; }
+			clipsQueue = [];
+			ensureTimelineEnd(nextStart);
+			state.selectedTrackId = MEDIA_TRACK_ID;
+			state.selectedItemId = lastItem ? lastItem.id : "";
+			if (lastSceneId) selectedSceneId = lastSceneId;
+			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
+			setStatus("Queued " + added + (added === 1 ? " clip" : " clips") + " at the right-most end of Scene Media (from " + formatTime(startAt) + " to " + formatTime(nextStart) + ").", false);
+			renderClipsModal();
+			closeClipsModal();
+			return added;
+		}
 		async function addAudioFile(trackId, file) {
 			if (!file || !fileIsAudio(file)) { setStatus("Choose an audio file such as MP3, WAV or M4A.", true); return; }
 			var track = findTrack(trackId);
@@ -1913,6 +2154,9 @@ export const TIMELINE_EDITOR_JS = `
 		 * current top layer instead, and the status line says so.
 		 */
 		function addVisualElementFromAction(kind) {
+			/* ＋ Text / ＋ Graphic stay reachable on a folded group, so the group
+			 * opens itself again rather than adding a lane nobody can see. */
+			if (state.visualsExpanded === false) state.visualsExpanded = true;
 			var lanes = visualTracks();
 			if (lanes.length >= MAX_VISUAL_TRACKS) {
 				var top = lanes[lanes.length - 1] || null;
@@ -2430,7 +2674,13 @@ export const TIMELINE_EDITOR_JS = `
 			if (action === "duplicate") { duplicateSelectedItem(); return; }
 			if (action === "delete") { deleteSelectedItem(); return; }
 			if (action === "toggle-sound") { state.soundExpanded = !state.soundExpanded; renderTimeline(); scheduleSave(); return; }
+			/* TEXT & GRAPHICS folds its lanes exactly like the Soundtrack group does. */
+			if (action === "toggle-visuals") { state.visualsExpanded = state.visualsExpanded === false; renderTimeline(); scheduleSave(); return; }
 			if (action === "add-media") { var mediaInput = document.getElementById("timeline-media-upload"); if (mediaInput) mediaInput.click(); return; }
+			if (action === "add-clips") { openClipsModal(); return; }
+			if (action === "clips-close") { closeClipsModal(); return; }
+			if (action === "clips-clear") { clearClipQueue(); return; }
+			if (action === "clips-add") { appendQueuedClips(); return; }
 			if (action === "toggle-track") {
 				var track = findTrack(target.getAttribute("data-track-toggle"));
 				if (track) { track.expanded = track.expanded === false; renderTimeline(); scheduleSave(); }
@@ -2941,6 +3191,14 @@ export const TIMELINE_EDITOR_JS = `
 			root.addEventListener("click", function (event) {
 				var actionNode = event.target && event.target.closest ? event.target.closest("[data-timeline-action]") : null;
 				if (actionNode) { handleAction(actionNode.getAttribute("data-timeline-action"), actionNode); return; }
+				/*
+				 * ＋ Add Clips modal: a card toggles its clip in and out of the
+				 * queue, and a click on the dark backdrop (never inside the box)
+				 * dismisses the modal, mirroring the studio's template composer.
+				 */
+				var clipsCard = event.target && event.target.closest ? event.target.closest("[data-clips-card]") : null;
+				if (clipsCard) { toggleClipQueue(clipsCard.getAttribute("data-clips-card")); return; }
+				if (event.target && event.target.id === "timeline-clips-modal") { closeClipsModal(); return; }
 				var trackToggle = event.target && event.target.closest ? event.target.closest("[data-track-toggle]") : null;
 				if (trackToggle) { handleAction("toggle-track", trackToggle); return; }
 				var trackNode = event.target && event.target.closest ? event.target.closest("[data-track-select]") : null;
@@ -3083,6 +3341,23 @@ export const TIMELINE_EDITOR_JS = `
 			if (mediaInput) mediaInput.addEventListener("change", function () { var files = mediaInput.files ? Array.from(mediaInput.files) : []; mediaInput.value = ""; addMediaFiles(files); });
 			var audioInput = document.getElementById("timeline-audio-upload");
 			if (audioInput) audioInput.addEventListener("change", function () { var file = audioInput.files && audioInput.files[0]; audioInput.value = ""; if (file) addAudioFile(pendingAudioTrackId || "sound-fx", file); });
+			/* The ＋ Add Clips modal keeps its own upload control, so an upload
+			 * never competes with the ＋ Add media button's placeholder logic. */
+			var clipsInput = document.getElementById("timeline-clips-files");
+			if (clipsInput) clipsInput.addEventListener("change", function () { var files = clipsInput.files ? Array.from(clipsInput.files) : []; clipsInput.value = ""; addClipsFiles(files); });
+			/*
+			 * Escape closes the picker. The listener sits on document (not on the
+			 * modal) because focus is usually still on the ＋ Add Clips button in
+			 * the dock when the overlay opens, so a modal-scoped keydown would
+			 * never fire.
+			 */
+			document.addEventListener("keydown", function (event) {
+				if (String(event.key || "") !== "Escape") return;
+				var openModal = document.getElementById("timeline-clips-modal");
+				if (!openModal || openModal.hidden) return;
+				event.preventDefault();
+				closeClipsModal();
+			});
 			var back = document.getElementById("timeline-back");
 			if (back) back.addEventListener("click", function () {
 				persistNow();
@@ -3231,6 +3506,19 @@ export const TIMELINE_EDITOR_JS = `
 		api.save = persistNow;
 		api.addMediaFiles = addMediaFiles;
 		api.addAudioFile = addAudioFile;
+		/*
+		 * ＋ Add Clips — the Scene Media clip picker. The queue lives outside
+		 * state (it is a pending modal selection, not an edit), so every entry
+		 * below is a plain helper the modal — and a test — can drive.
+		 */
+		api.openClipsModal = function () { if (!state) return false; openClipsModal(); return true; };
+		api.closeClipsModal = function () { closeClipsModal(); return true; };
+		api.clipsLibrary = function () { return state ? clipsAvailable() : []; };
+		api.getClipsQueue = function () { return clipsQueue.slice(); };
+		api.toggleClipQueue = function (assetId) { toggleClipQueue(assetId); return clipsQueue.slice(); };
+		api.clearClipsQueue = function () { clearClipQueue(); return clipsQueue.slice(); };
+		api.addClipsFiles = function (files) { return addClipsFiles(files); };
+		api.appendQueuedClips = function () { return state ? appendQueuedClips() : 0; };
 		api.exportTimeline = exportTimeline;
 		api.booted = true;
 

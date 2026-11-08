@@ -170,7 +170,35 @@ test("Quick Batch timeline route is isolated, starts with one media lane and one
 	assert.deepEqual(Array.from(w.document.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track")), ["visual-1", "background-media"], "text/graphics lanes stack above the pinned background layer, which is the last lane in the dock");
 	assert.equal(state.tracks.find((track) => track.id === "visual-1").items[0].id, "dummy-text-1", "the saved caption clip is dropped and the dummy text takes its place");
 	assert.equal(w.document.querySelectorAll(".te-lane").length, 2, "Soundtrack is collapsed and there is no separate overlay lane");
-	assert.ok(Array.from(w.document.querySelectorAll(".te-group-title .te-group-label")).some((label) => /TEXT & GRAPHICS/i.test(label.textContent)));
+	/*
+	 * TEXT & GRAPHICS is a real collapse toggle now: the same
+	 * .te-group-toggle button (chevron + copy + lane count) the Soundtrack
+	 * group uses, so the two group heads share one font and behaviour.
+	 */
+	const visualsToggle = w.document.querySelector('[data-timeline-action="toggle-visuals"]');
+	assert.ok(visualsToggle, "the TEXT & GRAPHICS header is a toggle button");
+	assert.equal(visualsToggle.classList.contains("te-group-toggle"), true, "it reuses the Soundtrack group-toggle style");
+	assert.equal(visualsToggle.closest(".te-group-title").classList.contains("te-group-visuals"), true);
+	assert.equal(visualsToggle.getAttribute("aria-expanded"), "true", "a fresh timeline shows its visual lanes");
+	assert.match(visualsToggle.textContent, /TEXT & GRAPHICS/);
+	assert.match(visualsToggle.textContent, /1 track/, "the header counts the open lanes, like Soundtrack's \"3 tracks\"");
+	assert.equal(w.document.querySelectorAll('[data-lane-track="visual-1"]').length, 1);
+	w.document.querySelector('[data-timeline-action="toggle-visuals"]').click();
+	assert.equal(state.visualsExpanded, false, "the click folds the TEXT & GRAPHICS group");
+	assert.equal(w.document.querySelectorAll(".te-lane").length, 1, "a folded group hides every visual lane and leaves only the background layer");
+	assert.equal(w.document.querySelector('[data-lane-track="background-media"]') !== null, true, "the background lane is never part of the group");
+	assert.equal(w.document.querySelectorAll(".te-visual-actions-sticky .te-add-inline").length, 2, "a folded group can still receive ＋ Text / ＋ Graphic");
+	w.document.querySelector('[data-timeline-action="toggle-visuals"]').click();
+	assert.equal(state.visualsExpanded, true, "and it opens again");
+	assert.equal(w.document.querySelectorAll(".te-lane").length, 2);
+	const laneChevron = w.document.querySelector('[data-track-toggle="visual-1"]');
+	assert.ok(laneChevron, "each visual lane carries the per-lane chevron the audio lanes use");
+	laneChevron.click();
+	assert.equal(state.tracks.find((track) => track.id === "visual-1").expanded, false, "the lane folds on its own");
+	assert.equal(w.document.querySelector('[data-lane-track="visual-1"]').classList.contains("collapsed"), true, "and renders with the shared collapsed lane look");
+	assert.equal(w.document.querySelectorAll('[data-lane-track="visual-1"] .te-clip').length, 0, "a folded lane paints no clips");
+	w.document.querySelector('[data-track-toggle="visual-1"]').click();
+	assert.equal(w.document.querySelectorAll('[data-lane-track="visual-1"] .te-clip').length, 1, "expanding it brings the clips back");
 	assert.equal(w.document.querySelectorAll(".te-clip").length, 15, "12 scene clips, the dummy text clip and the two hidden subtitle cue clips are in the DOM");
 	/*
 	 * Subtitles are back as cue data: the cue text exists only inside the
@@ -426,7 +454,12 @@ test("Pixabay media is the one pinned background layer and every stray media lan
 	assert.equal(w.document.querySelector('[data-lane-track="background-media"]').classList.contains("te-background-lane"), true);
 	const heading = Array.from(w.document.querySelectorAll(".te-group-background .te-group-label")).map((node) => node.textContent).join(" ");
 	assert.match(heading, /BACKGROUND/i);
-	assert.match(heading, /pinned lowest/i);
+	assert.equal(heading.trim(), "BACKGROUND LAYER", "the caption that followed the layer name is gone");
+	assert.doesNotMatch(heading, /pinned lowest/i, "\"pinned lowest\" was removed from the background group title");
+	assert.doesNotMatch(heading, /Pixabay/i, "and so is the \"· Pixabay, GIF, image or MP4\" tail");
+	const backgroundButtons = Array.from(w.document.querySelectorAll(".te-group-background .te-add-inline"), (node) => node.getAttribute("data-timeline-action"));
+	assert.deepEqual(backgroundButtons, ["add-media", "add-clips"], "＋ Add media keeps its slot and ＋ Add Clips sits next to it");
+	assert.match(APP_CSS, /\.te-group-background \.te-add-inline\s*\{[^}]*margin-left:\s*5px/, "both background buttons start 5 px inside the cell");
 	assert.equal(w.document.querySelectorAll(".te-track-badge").length, 1, "the background lane carries a BG badge");
 });
 
@@ -1283,10 +1316,10 @@ test("timeline editor UI omits the three verbose hint paragraphs and vertically 
 	assert.match(mobilePreviewRule[1], /justify-content:\s*flex-start/);
 });
 
-test("timeline editor hides bottom gallery cards, renames Selected Scene and Scene's media, keeps background media only in Selected Scene, and omits dock/scroll-layer copy", async (t) => {
+test("timeline editor hides bottom gallery cards, renames the selected heading and the Scene Media label, keeps background media only in Selected Scene, and omits dock/scroll-layer copy", async (t) => {
 	const html = createHTML();
-	assert.ok(html.includes('<div class="tm-sec-title">Selected Scene</div>'), "TIMELINE EDITOR section heading is Selected Scene");
-	assert.equal(html.includes('<div class="tm-sec-title">Selected element</div>'), false, "Selected element heading is gone");
+	assert.ok(html.includes('<div class="tm-sec-title" id="timeline-selected-title">Selected Scene</div>'), "TIMELINE EDITOR section heading ships as Selected Scene");
+	assert.equal(html.includes('>Selected element<'), false, "the element wording is applied at runtime, never baked into the markup");
 	assert.doesNotMatch(html, /Text and graphics lanes stack above the pinned background layer/, "dock footer explanatory paragraph is removed from markup");
 	assert.doesNotMatch(html, /Pixabay &amp; uploaded media|Pixabay & uploaded media/, "old media track label is absent from markup");
 
@@ -1316,10 +1349,13 @@ test("timeline editor hides bottom gallery cards, renames Selected Scene and Sce
 	assert.equal(fullDom.window.getComputedStyle(gallery).display, "none", "#gallery computed display is none on layout=timeline");
 	assert.doesNotMatch(doc.getElementById("studio-app").textContent, /Generating AI Scene/i, "no Generating AI Scene text anywhere in #studio-app on timeline editor page");
 
-	/* Media track label is Scene's media */
+	/* Media track label is Scene Media (the "Scene's media" wording is retired) */
 	const mediaTrackButton = doc.querySelector('.te-track-background [data-track-select="background-media"]');
 	assert.ok(mediaTrackButton, "background media track label exists");
-	assert.equal(mediaTrackButton.childNodes[0].textContent, "Scene's media", "media track label reads Scene's media");
+	assert.equal(mediaTrackButton.childNodes[0].textContent, "Scene Media", "media track label reads Scene Media");
+	assert.equal(doc.getElementById("view-timeline").textContent.includes("Scene's media"), false, "no apostrophe wording survives anywhere in the editor");
+	assert.doesNotMatch(APP_JS, /label:\s*"Scene's media"/, "the Quick Batch handoff labels the lane Scene Media too");
+	assert.match(APP_JS, /\{ id: "background-media", kind: "media", label: "Scene Media", expanded: true, items: mediaItems \}/, "the handoff state is what the dock renders");
 	assert.doesNotMatch(doc.getElementById("view-timeline").textContent, /Pixabay &\s*uploaded media/i);
 
 	/* Scroll layer label cell has neither SCROLL LAYER nor empty · drag to pan */
@@ -1352,13 +1388,13 @@ test("timeline editor hides bottom gallery cards, renames Selected Scene and Sce
 	assert.match(doc.getElementById("timeline-child-editor").textContent, /Graphic element/, "30% child panel still edits the selected child graphic");
 });
 
-test("timeline editor undo/redo steps through edits, the copy clean-up, sticky add buttons, 80 s timing sliders and 7.5 px child panel type", (t) => {
+test("timeline editor undo/redo steps through edits, the copy clean-up, sticky add buttons, 80 s timing sliders and 10 px child panel type", (t) => {
 	const html = createHTML();
 	/* ---- removed copy ---- */
 	assert.doesNotMatch(html, /drag this text clip directly on the preview canvas/i, "the text drag tip is gone from the served markup");
 	assert.doesNotMatch(html, /without the sliders/i, "the 'without the sliders' drag tip is gone");
 	assert.doesNotMatch(html, /<div class="tm-scene-kicker">TIMELINE EDITOR<\/div>/, "the TIMELINE EDITOR eyebrow above Selected Scene is removed");
-	assert.ok(html.includes('<div class="tm-sec-title">Selected Scene</div>'), "Selected Scene keeps its title");
+	assert.ok(html.includes('<div class="tm-sec-title" id="timeline-selected-title">Selected Scene</div>'), "Selected Scene keeps its title, and the id is what renderInspector re-titles");
 	assert.equal(html.includes('data-timeline-action="add-layer"'), false, "the ＋ Lane / n of 4 dock button is removed");
 	assert.equal(html.includes("timeline-layer-count"), false, "no layer counter markup remains");
 	assert.equal(html.includes(">SCROLL<"), false, "the SCROLL corner label is removed");
@@ -1455,8 +1491,178 @@ test("timeline editor undo/redo steps through edits, the copy clean-up, sticky a
 	assert.ok(stickyNode, "the two buttons are wrapped in the sticky node");
 	assert.deepEqual(Array.from(stickyNode.querySelectorAll(".te-add-inline"), (node) => node.getAttribute("data-timeline-action")), ["add-text", "add-graphic"]);
 
-	/* ---- 7.5 px typography in the BACKGROUND ELEMENT panel ---- */
+	/* ---- 10 px typography in the BACKGROUND ELEMENT panel ---- */
 	const childTypeRule = APP_CSS.match(/#timeline-child-panel[\s\S]*?#timeline-child-panel \.te-inspector-note\s*\{([^}]*)\}/);
 	assert.ok(childTypeRule, "the child panel typography rule exists");
-	assert.match(childTypeRule[1], /font-size:\s*7\.5px !important/, "every text node in the 30 % panel is 7.5 px");
+	assert.match(childTypeRule[1], /font-size:\s*10px !important/, "every text node in the 30 % panel is 10 px");
+	assert.doesNotMatch(APP_CSS, /font-size:\s*7(\.5)?px/, "no 7 px or 7.5 px type survives anywhere in the stylesheet");
+	const childInputRule = APP_CSS.match(/#timeline-child-panel \.tm-scene-field input:not\(\[type="range"\]\):not\(\[type="checkbox"\]\),[\s\S]*?\{([^}]*)\}/);
+	assert.ok(childInputRule, "the panel's inputs, selects and buttons are typed too");
+	assert.match(childInputRule[1], /font-size:\s*10px !important/);
+	const childCatchAll = APP_CSS.match(/#timeline-child-panel \*\s*\{([^}]*)\}/);
+	assert.ok(childCatchAll, "a catch-all rule covers the classes the shared control builders emit");
+	assert.match(childCatchAll[1], /font-size:\s*10px !important/);
+});
+
+test("the section above the tracks says Selected Scene only for a Scene Media box", (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const api = w.__TIMELINE_EDITOR__;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const heading = () => doc.getElementById("timeline-selected-title").textContent;
+	const click = (node) => node.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+	const mediaTrack = state.tracks.find((track) => track.kind === "media");
+	const mediaId = mediaTrack.items[0].id;
+
+	click(doc.querySelector('[data-clip-id="' + mediaId + '"]'));
+	assert.equal(heading(), "Selected Scene", "a box of the Scene Media layer is a scene");
+
+	const text = api.addTextElement("Layer copy");
+	click(doc.querySelector('[data-clip-id="' + text.id + '"]'));
+	assert.equal(heading(), "Selected element", "a text clip on a visual lane is an element, not a scene");
+
+	const graphic = api.addGraphicElement();
+	click(doc.querySelector('[data-clip-id="' + graphic.id + '"]'));
+	assert.equal(heading(), "Selected element", "the same is true for a graphic clip");
+
+	click(doc.querySelector('[data-clip-id="' + mediaId + '"]'));
+	const child = api.addChildElement("text");
+	assert.ok(child, "the child was created inside the background clip");
+	assert.equal(heading(), "Selected Scene", "a child re-resolves to its background box, which is what the panel edits");
+
+	click(doc.querySelector('[data-track-select="visual-1"]'));
+	assert.equal(heading(), "Selected element", "a bare visual lane is not a scene");
+	click(doc.querySelector('[data-track-select="background-media"]'));
+	assert.equal(heading(), "Selected Scene", "the Scene Media lane itself keeps the scene wording");
+	assert.equal(doc.querySelector(".te-inspector-panel").getAttribute("aria-label"), "Selected scene controls", "the panel's label follows the heading");
+});
+
+test("the top scroll layer is white and the clip picker borrows the composer's shell", (t) => {
+	const laneRule = APP_CSS.match(/\.te-scroll-lane\s*\{([^}]*)\}/);
+	assert.ok(laneRule, "the top scroll layer is styled");
+	assert.match(laneRule[1], /background:\s*#ffffff/, "the top scroll layer is white");
+	assert.match(laneRule[1], /cursor:\s*grab/, "and it still drags to pan");
+	const cornerRule = APP_CSS.match(/\.te-grid-corner-scroll\s*\{([^}]*)\}/);
+	assert.ok(cornerRule, "its corner cell is styled");
+	assert.match(cornerRule[1], /background:\s*#ffffff/, "the corner is white too, so the strip reads as one bar");
+	const bottomRule = APP_CSS.match(/\.te-scroll-layer\s*\{([^}]*)\}/);
+	assert.doesNotMatch(bottomRule[1], /#ffffff/, "the bottom scroll layer keeps the lane look — only the top one was asked for");
+
+	const html = createHTML();
+	assert.ok(html.includes('id="timeline-clips-modal"'), "the picker ships inside the editor shell so [data-timeline-action] reaches it");
+	assert.ok(html.includes('id="timeline-editor"'), "the shell that owns the click delegation is the same subtree");
+	const overlayRule = APP_CSS.match(/\.te-clips-overlay\s*\{([^}]*)\}/);
+	assert.match(overlayRule[1], /position:\s*fixed/, "it is a real overlay, like #tpl-modal");
+	assert.ok(/\.te-clips-overlay\[hidden\]\s*\{[^}]*display:\s*none\s*;/.test(APP_CSS), "and [hidden] still hides it, overlay display or not");
+	const boxRule = APP_CSS.match(/\.te-clips-box\s*\{([^}]*)\}/);
+	assert.match(boxRule[1], /background:\s*#0d0d0f/, "same dark box as the template composer");
+	assert.match(boxRule[1], /border:\s*1px solid #2e3440/);
+	assert.match(boxRule[1], /border-radius:\s*14px/);
+	assert.match(boxRule[1], /width:\s*min\(1100px, 96vw\)/);
+	assert.match(boxRule[1], /max-height:\s*92vh/, "with the composer's scrollable body");
+	const actionsRule = APP_CSS.match(/\.te-clips-actions\s*\{([^}]*)\}/);
+	assert.match(actionsRule[1], /position:\s*sticky/, "its action row sticks to the bottom like .tpl-actions");
+	const primaryRule = APP_CSS.match(/\.te-clips-actions \.te-clips-primary\s*\{([^}]*)\}/);
+	assert.match(primaryRule[1], /background:\s*#f59e0b/, "and the primary button is the composer's yellow");
+});
+
+test("＋ Add Clips queues every chosen clip at the right-most end of the Scene Media layer", async (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const api = w.__TIMELINE_EDITOR__;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const track = state.tracks.find((candidate) => candidate.kind === "media");
+	const modal = doc.getElementById("timeline-clips-modal");
+	const grid = doc.getElementById("timeline-clips-grid");
+	const commit = doc.getElementById("timeline-clips-commit");
+	const click = (node) => node.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+
+	assert.equal(modal.hidden, true, "the picker starts closed");
+	assert.equal(commit.disabled, true, "with nothing queued its action is disabled");
+	click(doc.querySelector('[data-timeline-action="add-clips"]'));
+	assert.equal(modal.hidden, false, "＋ Add Clips opens it");
+	assert.match(grid.textContent, /no image, GIF or MP4 stored in this browser/i, "an empty project says so instead of listing cards");
+
+	/* ＋ Add media still feeds the same lane, so its upload shows up as a card. */
+	await api.addMediaFiles([new w.File([new Uint8Array([1, 2, 3])], "clip-a.png", { type: "image/png" })]);
+	const before = track.items.slice();
+	const rightMostEnd = before.reduce((end, item) => Math.max(end, item.startSec + item.durationSec), 0);
+	const library = api.clipsLibrary();
+	assert.equal(library.length, 1, "the stored clip is offered as a card");
+	assert.equal(doc.querySelectorAll(".te-clips-card").length, 1, "an open modal re-lists itself whenever the dock re-renders");
+
+	click(doc.querySelector("[data-clips-card]"));
+	assert.deepEqual(Array.from(api.getClipsQueue()), [library[0].id], "clicking a card queues the clip");
+	assert.equal(doc.querySelector(".te-clips-card").getAttribute("aria-pressed"), "true");
+	assert.match(commit.textContent, /Add 1 clip to the end/, "the action counts the queue");
+	assert.equal(commit.disabled, false);
+
+	click(doc.querySelector("[data-clips-card]"));
+	assert.deepEqual(Array.from(api.getClipsQueue()), [], "and a second click takes it back out");
+	click(doc.querySelector("[data-clips-card]"));
+
+	assert.equal(api.appendQueuedClips(), 1, "confirming appends the queue");
+	assert.equal(track.items.length, before.length + 1, "the Scene Media layer grew by exactly one clip");
+	const fresh = track.items[track.items.length - 1];
+	assert.equal(fresh.assetId, library[0].id, "the queued clip is the one that landed");
+	assert.equal(fresh.startSec, rightMostEnd, "it starts at the right-most end, never on a pending placeholder");
+	assert.equal(fresh.kind, "media");
+	assert.equal(state.durationSec >= rightMostEnd + fresh.durationSec, true, "the timeline grew to hold it");
+	assert.equal(modal.hidden, true, "the picker closes once the queue is committed");
+	assert.deepEqual(Array.from(api.getClipsQueue()), [], "and the queue empties");
+	assert.match(doc.getElementById("timeline-status").textContent, /right-most end of Scene Media/i, "the dock reports where it landed");
+	assert.equal(doc.querySelectorAll('[data-lane-track="background-media"] .te-clip').length, track.items.length);
+	const scene = state.scenes.find((candidate) => candidate.id === fresh.sceneId);
+	assert.ok(scene, "one scene per clip");
+	assert.equal(scene.mediaAssetId, library[0].id);
+
+	/* Dismissal: the head ✕, the backdrop and Escape all close it. */
+	api.openClipsModal();
+	assert.equal(modal.hidden, false, "the modal re-opens for the next batch");
+	click(doc.querySelector(".te-clips-x"));
+	assert.equal(modal.hidden, true, "the head ✕ closes it");
+	api.openClipsModal();
+	click(grid);
+	assert.equal(modal.hidden, false, "a click inside the box is not a dismissal");
+	click(modal);
+	assert.equal(modal.hidden, true, "a click on the backdrop is");
+	api.openClipsModal();
+	doc.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+	assert.equal(modal.hidden, true, "and so is Escape");
+});
+
+test("the clips modal uploads on its own and never steals a pending placeholder", async (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const doc = w.document;
+	const api = w.__TIMELINE_EDITOR__;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const track = state.tracks.find((candidate) => candidate.kind === "media");
+	/* Force a pending placeholder: the modal must never steal it. */
+	track.items[0].assetId = "";
+	track.items[0].label = "Scene 1 · media pending";
+	const pendingBefore = track.items.filter((item) => !item.assetId).length;
+	assert.equal(pendingBefore, 1, "the row now holds one unfilled scene placeholder");
+
+	api.openClipsModal();
+	const before = track.items.slice();
+	const rightMostEnd = before.reduce((end, item) => Math.max(end, item.startSec + item.durationSec), 0);
+	assert.equal(await api.addClipsFiles([
+		new w.File([new Uint8Array([1])], "one.png", { type: "image/png" }),
+		new w.File([new Uint8Array([2])], "two.png", { type: "image/png" }),
+		new w.File([new Uint8Array([3])], "notes.txt", { type: "text/plain" })
+	]), 2, "images are queued and a text file is refused");
+	assert.deepEqual(Array.from(api.clipsLibrary().map((entry) => entry.name)), ["one.png", "two.png"], "both uploads are listed, by name");
+	assert.equal(api.appendQueuedClips(), 2);
+	assert.equal(track.items.length, 12 + 2, "both uploads became new clips");
+	assert.equal(track.items.filter((item) => !item.assetId).length, pendingBefore, "no placeholder was consumed by the modal");
+	const appended = track.items.slice(12);
+	assert.equal(appended[0].startSec, rightMostEnd, "the first lands at the old right-most end");
+	assert.ok(appended[1].startSec > appended[0].startSec, "the second lands after it, back to back");
+	assert.equal(appended[0].durationSec, 5, "an image clip starts at the default five seconds");
+	assert.equal(state.selectedItemId, appended[1].id, "the last clip added is the one the panel edits");
+	assert.equal(api.appendQueuedClips(), 0, "an empty queue adds nothing");
+	assert.match(doc.getElementById("timeline-clips-status").textContent, /Queue at least one clip/i, "and says so in the modal");
 });
