@@ -664,6 +664,8 @@ The full suite remains non-green. Its failure/cancellation totals match the Sect
 
 ## 10. Background-layer timeline and Min-column removal (active request)
 
+> **Partly superseded by §21.3 and §21.9 (2026-11-08):** the `pinned lowest · Pixabay, GIF, image or MP4` caption no longer exists, that cell now also carries `＋ Add Clips`, and the lane label is `Scene Media`.
+
 This section records the newest request on branch `arena/16e873bd-text-to-image-template`. It supersedes Section 9.3 for lane order and layer ownership, and it supersedes Section 9.1 / the Quick Batch column list wherever a "Min" column is still described. **The current code in this workspace is the source of truth**; older prose is only history.
 
 The request, verbatim:
@@ -2027,6 +2029,8 @@ The three Section 17 tests are the executable specification of 17.3 / 17.4 / 17.
 
 ## 19. Timeline editor bottom gallery cleanup, Selected Scene background-only inspector, Scene's media label, dock/scroll copy removal, and equal-height 70/30 columns (2026-11-08)
 
+> **Partly superseded by §21.5 and §21.9 (2026-11-08):** the lane label is now `Scene Media`, and `Selected Scene` became a *runtime* label — the heading reads `Selected element` for every selection that is not a Scene Media box.
+
 ### 19.1 Request & authority order
 
 - **Primary source of truth:** current workspace code (`src/client/app-js.ts`, `src/client/markup.ts`, `src/client/timeline-editor.ts`, `src/client/styles.ts`, `tests/timeline-editor.test.mjs`).
@@ -2197,6 +2201,8 @@ Two measurement facts came out of the audit and decided the implementation:
 
 ### 20.13 Change 13 — 7.5 px type in the `BACKGROUND ELEMENT` panel (`src/client/styles.ts`)
 
+> **Superseded by §21.6 (2026-11-08):** the panel is `10px !important` now, with an extra `#timeline-child-panel *` catch-all — no `7px` / `7.5px` declaration is left in `APP_CSS`.
+
 - One rule set, scoped to `#timeline-child-panel` (the 30 % column shown while a background clip or one of its children is selected, i.e. the panel that sits next to the 70 % preview canvas):
   - the panel root, `.tm-scene-kicker`, `.te-child-head strong`, `.te-child-head small`, `.te-child-actions .tm-scene-add`, `.te-child-empty`, `.te-child-row-label`, `.te-child-row-time`, `.te-child-row-delete`, `.te-child-editor-title`, `.tm-scene-subtitle`, `.tm-scene-field`, `.tm-scene-field-label`, `.tm-scene-range-value`, `.tm-scene-note` and `.te-inspector-note` all get `font-size: 7.5px !important; line-height: 1.4`.
   - the inputs and buttons the panel re-uses (`.tm-scene-field input:not([type=range]):not([type=checkbox])`, `.tm-scene-field select`, `.tm-scene-add`, `.tm-scene-upload`) get `font-size: 7.5px !important` as well, while keeping their `min-height` so the tap target stays usable.
@@ -2250,3 +2256,145 @@ Two measurement facts came out of the audit and decided the implementation:
 
 - All 14 requested items are implemented in code, covered by assertions, and documented above.
 - Test state: `tests/timeline-editor.test.mjs` **29 / 29**; related suites unchanged against the base commit; `wrangler deploy --dry-run` green.
+
+## 21. Background header cleanup, collapsible TEXT & GRAPHICS lanes, `Selected element`, 10 px child panel, white top scroll layer, the ＋ Add Clips modal and the `Scene Media` label (2026-11-08)
+
+### 21.1 Request & authority order
+
+- **Primary source of truth:** the workspace code — `src/client/timeline-editor.ts` (the whole editor bundle), `src/client/markup.ts` (the served shell), `src/client/styles.ts` (`APP_CSS`), `src/client/app-js.ts` (the Quick Batch handoff that produces the state) and `tests/timeline-editor.test.mjs`. Every item below was located in that code **first**; this file was used only as the history of record.
+- **Secondary source of truth:** sections 11–20 of this file. Where an older line no longer matches the code, the code wins and the stale line is listed in **21.13 Superseded copy in this file** instead of being rewritten — the older sections stay as written at the time.
+- **Changes requested on `layout=timeline`:**
+  1. Remove the text `pinned lowest` from the group title `BACKGROUND LAYER / pinned lowest`.
+  2. Make the **TEXT & GRAPHICS** layer tracks collapsible, with the same style and font as the Soundtrack tracks.
+  3. In the section above the tracks, the `Selected Scene` title must read `Selected element` whenever the selection is **not** a box from the scene media track.
+  4. Once the preview canvas is at the **70 / 30** split, every text size in the right-hand (30 %) panel must be **10 px** — not 7 px, not 7.5 px.
+  5. The scroll layer at the **top** must be white.
+  6. `＋ Add media` on the track layer gets `margin-left: 5px`; the text next to it is removed; a **`＋ Add Clips`** button sits next to it and opens a modal in the editor layout like **Add video from template** — every video added from that modal is queued at the **right-most end** of the time track in the scene media layer.
+  7. The label `Scene's Media` becomes `Scene Media`.
+  8. Document all of it here.
+
+### 21.2 Code study that drove the changes (pre-change audit)
+
+| # | Where the thing actually lived before this section |
+|---|---|
+| 1 | `renderTimeline()` emitted the background header as `'<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER <small>pinned lowest · Pixabay, GIF, image or MP4</small></span><button … data-timeline-action="add-media">＋ Add media</button></div>'` — one `<small>` carried both the `pinned lowest` copy (item 1) and the "text next to" the button (item 6). |
+| 2 | The group head was a dead `<span class="te-group-label">TEXT & GRAPHICS</span>` (0.56 rem / 900 weight / `letter-spacing: .08em`) while the lanes below it rendered unconditionally. The collapse pattern already existed twice in the same function: the `Soundtrack` head (`<button class="te-group-toggle" data-timeline-action="toggle-sound" aria-expanded> ▾ Soundtrack <small>3 tracks</small></button>` + `if (state.soundExpanded)`) and the per-lane `<button class="te-track-toggle" data-track-toggle>` with `track.expanded === false` → `.te-lane.collapsed`. |
+| 3 | `src/client/markup.ts` `.tm-scene-panel-head` shipped a **static** `<div class="tm-sec-title">Selected Scene</div>`; `renderInspector()` only ever updated the sibling `#timeline-selected-name`. `renderInspector()` already computes `bgParent = backgroundContext()`, `inspectorTrack = bgParent ? mediaTrack() : track` and `inspectorItem = bgParent \|\| item`, so the panel's real subject was available at exactly the right place. |
+| 4 | `src/client/styles.ts` had the panel's whole typography in one selector list capped at `font-size: 7.5px !important`, plus a second list for inputs/selects/`.tm-scene-add`/`.tm-scene-upload`. Those two `7.5px` declarations were the **only** `7px` / `7.5px` rules in `APP_CSS` (`grep -n "font-size: 7px\|font-size: 7\.5px"`), and `template-scene-editor.ts` — whose `__REEL_SCENE_CONTROL_UI__` builders fill `#timeline-child-editor` — emits more classes than the list named. |
+| 5 | The top of the grid is `<div class="te-grid-corner te-grid-corner-scroll" aria-hidden="true"></div><div class="te-scroll-lane" data-scroll-lane …>` (timeline-editor.ts) with `.te-scroll-lane { background: var(--te-lane) }` and `.te-grid-corner-scroll { padding: 0 }`. The bottom strip is a different pair of rules (`.te-track-scroll` / `.te-scroll-layer`) and was left alone. |
+| 6 | `#timeline-media-upload` is a hidden `<input>` in `markup.ts` that `handleAction("add-media")` clicks, and `addMediaFiles()` **prefers to reuse a pending placeholder** (`track.items.find(item => !item.assetId)`), which is the opposite of "always the right-most end". The composer modal the copy had to match (`#tpl-modal .tpl-box / .tpl-head / .tpl-x / .tpl-sub / .tm-gallery-grid / .tm-gcard / .tpl-actions`) is scoped to `#tpl-modal`, and its logic lives in `TEMPLATE_COMPOSER_JS` targeting studio accordions — not reusable from the timeline bundle. |
+| 7 | `MEDIA_TRACK_LABEL = "Scene's media"` (timeline-editor.ts) and `label: "Scene's media"` in `batchTimelineState()` (app-js.ts). `normalizeState()` builds the media track from `DEFAULT_TRACK_SPECS`, whose `label` is `MEDIA_TRACK_LABEL`, so the constant — not the saved JSON — is what the dock renders. |
+
+Two measurement facts came out of the audit and decided the implementation:
+
+- `.te-group-title` is `width: 156px`, `position: sticky`, `z-index: 5`, and its sibling `.te-group-fill` is `overflow: hidden`. Content in the label cell can therefore wrap and can paint over the filler cell, but never the reverse — that is where the two background buttons had to live.
+- `snapshotProject()` serialises only `durationSec`, `scenes` and `tracks`; `persistNow()` writes the **whole** state. A UI flag such as `soundExpanded` is saved for free and is invisible to Undo — the new `visualsExpanded` flag is deliberately built the same way.
+
+### 21.3 Changes 1 + 6a — the background header loses its caption and gains ＋ Add Clips (`src/client/timeline-editor.ts`, `src/client/styles.ts`)
+
+- The emitted header is now
+  `<div class="te-group-title te-group-background"><span class="te-group-label">BACKGROUND LAYER</span><button class="te-add-inline" data-timeline-action="add-media">＋ Add media</button><button class="te-add-inline" data-timeline-action="add-clips">＋ Add Clips</button></div>`
+  — the entire `<small>pinned lowest · Pixabay, GIF, image or MP4</small>` node is gone, which satisfies both "remove the text `pinned lowest`" and "the text next to ＋ Add media must be removed".
+- CSS, in the existing `.te-group-background` block: `flex-wrap: wrap; row-gap: 4px` plus the new `.te-group-background .te-add-inline { margin-left: 5px }`. `.te-group-label` is `width: 100%`, so the caption keeps the first line and the two buttons share the second, each starting 5 px inside the cell; the row grows past its `min-height: 31px` on its own (grid rows are `minmax(44px, auto)`-sized by content) and the cell's `z-index: 5` keeps it painting above the neighbouring `overflow: hidden` filler.
+- `＋ Add media` keeps its behaviour untouched (it still clicks `#timeline-media-upload`); only its sibling is new.
+
+### 21.4 Change 2 — TEXT & GRAPHICS is a collapsible group, in the Soundtrack's own style (`src/client/timeline-editor.ts`, `src/client/styles.ts`)
+
+- New state flag `visualsExpanded`: `true` in `defaultTimeline()`, `base.visualsExpanded !== false` in `normalizeState()` (so it persists through `persistNow()` and an older saved project simply opens expanded), and `true` in the `batchTimelineState()` handoff in `app-js.ts`. It is **not** added to `snapshotProject()`, so folding a group is never an undo step.
+- The header is now the Soundtrack's own markup: `<button type="button" class="te-group-toggle" data-timeline-action="toggle-visuals" aria-expanded="…"><span class="te-chevron">▾ / ▸</span> TEXT & GRAPHICS <small>n track(s)</small></button>`. Because it is `.te-group-toggle`, it inherits that class's font (0.69 rem / 850 weight) verbatim — the two group heads now render with one style — and the `<small>` lane count re-uses `.te-group-toggle small`.
+- `handleAction()` gained `toggle-visuals` next to `toggle-sound`, with the same body: flip, `renderTimeline()`, `scheduleSave()`.
+- The lane rows are emitted only while expanded (`if (state.visualsExpanded) { dockVisuals.forEach(…) }`), and each lane label gained the per-lane chevron the audio lanes use (`<button class="te-track-toggle" data-track-toggle="…" aria-expanded title="Expand or collapse …">`), with the lane itself getting `.te-lane.collapsed` and skipping its empty hint and its clips. **No new lane CSS was needed**: `.te-lane` / `.te-lane.collapsed` are generic, `.te-visual-lane` has no rule of its own, and the existing `toggle-track` action already flips `track.expanded` for any track id.
+- Two small rules keep the longer copy honest: `.te-group-visuals .te-group-toggle { row-gap: 2px }` and `.te-group-visuals .te-group-toggle small { margin-left: 4px }` (the count follows the words instead of pushing itself to the edge of the 156 px cell).
+- The `＋ Text` / `＋ Graphic` pair deliberately stays in the sticky filler cell while the group is folded, so an element can still be added; `addVisualElementFromAction()` and `addChildVisualElement()` set `state.visualsExpanded = true` first, so a new element is never added into a lane the user cannot see.
+
+### 21.5 Change 3 — `Selected Scene` only for a Scene Media box, `Selected element` for everything else (`src/client/markup.ts`, `src/client/timeline-editor.ts`)
+
+- The static heading became addressable: `<div class="tm-sec-title" id="timeline-selected-title">Selected Scene</div>`. The default copy is unchanged, so the panel reads "Selected Scene" before the editor boots.
+- `renderInspector()` re-titles it right after it writes `#timeline-selected-name`:
+  `onMediaLayer = inspectorItem && inspectorItem.kind === "media"`, `mediaTrackOnly = !inspectorItem && inspectorTrack && inspectorTrack.kind === "media"`, then `"Selected Scene"` for either and `"Selected element"` otherwise. The panel's `aria-label` follows the same split (`Selected scene controls` / `Selected element controls`).
+- The rule keys off **what the section is actually editing**, not off the raw click: `bgParent = backgroundContext()` already re-resolves a selected child text/graphic to its parent background box, so a child selection keeps `Selected Scene` — which is also what the §19 requirement ("the Selected Scene section holds the background media only") asks the panel to show. A text clip, a graphic, an audio clip or a bare visual lane are elements.
+
+### 21.6 Change 4 — 10 px through the 30 % panel (`src/client/styles.ts`)
+
+- Both declarations of the existing `#timeline-child-panel` typography block moved from `font-size: 7.5px !important` to `font-size: 10px !important` (the selector list and its `line-height: 1.4` are unchanged), and the block's comment no longer promises 7.5 px.
+- New catch-all immediately after it: `#timeline-child-panel * { font-size: 10px !important; }`. `renderItemControls()` fills the panel through `__REEL_SCENE_CONTROL_UI__` (`template-scene-editor.ts`), which emits `.tm-scene-checkbox`, `.tm-scene-range-row`, `.tm-scene-photo-*` and the colour-popover classes; none of those are in the explicit list, so the wildcard is what makes "all 10 px" literal. The explicit list still wins the tie (`#timeline-child-panel .x` is more specific than `#timeline-child-panel *`) and keeps its line-height, and the inputs keep their `min-height` so the tap targets do not shrink.
+- These were the only `7px` / `7.5px` declarations in `APP_CSS`; the new test asserts `assert.doesNotMatch(APP_CSS, /font-size:\s*7(\.5)?px/)`, i.e. none survive anywhere.
+
+### 21.7 Change 5 — the top scroll layer is white (`src/client/styles.ts`)
+
+- `.te-scroll-lane { background: #ffffff }` (was `var(--te-lane)`) and `.te-grid-corner-scroll { padding: 0; background: #ffffff }`, so the handle and the label-side cell above it read as one continuous white strip.
+- The bottom strip (`.te-track-scroll`, `.te-scroll-layer`, `.te-scroll-hint`) keeps the lane look: only the top layer was asked for, and §16's "reads as one more layer" behaviour is untouched. The drag-to-pan pointer handling in `bindEvents()` was not modified.
+
+### 21.8 Change 6b — the ＋ Add Clips modal (`src/client/markup.ts`, `src/client/timeline-editor.ts`, `src/client/styles.ts`)
+
+- **Where it lives:** a `#timeline-clips-modal` overlay inside `#timeline-editor`, right after the two hidden file inputs. Inside that root is deliberate — the editor's click delegation (`[data-timeline-action]`) is bound to `#timeline-editor`, so a body-level node would never see its buttons; `.timeline-editor-shell` is `overflow: visible`, so a `position: fixed` overlay is not clipped.
+- **How it looks:** its own `.te-clips-*` block at the end of `APP_CSS` mirrors the composer shell rather than re-using it, because every composer rule is scoped to `#tpl-modal` (`.tpl-box`, `.tpl-head`, `.tpl-x`, `.tpl-sub`, `.tm-gallery-grid`, `.tm-gcard`, `.tpl-actions`): overlay `position: fixed; inset: 0; z-index: 120` + `.te-clips-overlay[hidden] { display: none }`, box `#0d0d0f` / `1px solid #2e3440` / `border-radius: 14px` / `padding: 18px` / `width: min(1100px, 96vw)` / `max-height: 92vh` / `overflow-y: auto`, a head with the title and a `✕`, a muted subtitle, a 4-column card grid, a status line (`role="status"`) and a `position: sticky; bottom: 0` action row whose primary button is the composer's `#f59e0b` → `#ffd83d` yellow; `.te-clips-grid` drops to two columns under 900 px, like the composer gallery.
+- **What it lists:** `clipsAvailable()` walks `assetMap` and keeps every `image/*` / `video/mp4` blob — that is exactly the Quick Batch handoff's `scene-<n>` media (which arrives through `registerStoredAssets()` → `registerAsset()`, so it already has an object URL) plus anything uploaded here. Each card shows a real thumbnail (`<img>` for stills, `<video preload="metadata" muted>` for MP4 — `assetMap[id].image` is intentionally left detached because the canvas owns that element), the file name, the type or an `already on the layer · adds a copy` tag for a clip that is already placed, and `＋ Queue` / `✓ Queued`. A project with nothing stored gets an honest empty state instead of a blank grid.
+- **How it queues:** `clipsQueue` is a module-level array of asset ids — deliberately **not** part of `state`, because a pending modal selection is not an edit and must not appear in the saved project or in Undo. Clicking a card toggles membership (`aria-pressed`), `Clear queue` empties it, the primary button reads `＋ Add n clip(s) to the end` and is disabled at zero, and `addClipsFiles()` (the modal's own `＋ Upload` input) registers + persists each accepted file (`api.storeAsset`), probes an MP4's length with `probeDuration(file, "video")`, and auto-queues it. `registerAsset()` gained a `durationSec` field for that purpose.
+- **Where it lands:** `appendQueuedClips()` computes `nextStart = max(item.startSec + item.durationSec)` over the media track and **appends** each queued clip there, one new scene per clip, back to back (`nextStart += duration`), with `mediaType` derived from the mime type, the row's `videoStyle` / `videoStyleEffects` copied onto the scene, duration clamped into `MIN_CLIP_SEC … MAX_DURATION_SEC`. It never looks for a placeholder, so unlike `addMediaFiles()` it cannot overwrite a pending scene. Afterwards: `ensureTimelineEnd(nextStart)`, select the last clip, `renderTimeline(); renderInspector(); drawPreview(); scheduleSave()`, a `Queued n clips at the right-most end of Scene Media (from m:ss to m:ss).` status, and the modal closes with an empty queue.
+- **Kept in sync:** `renderTimeline()` re-lists the grid when (and only when) the modal is open — guarded by `if (!isExporting && !recorder)` so an export never pays for the extra pass — which is what makes an upload through ＋ Add media appear as a card immediately. `Escape` (a document keydown that checks `!modal.hidden`) and a click on the backdrop both close it; a click inside the box never does.
+- **Reachable for tests and console work:** `api.openClipsModal` / `api.closeClipsModal` / `api.clipsLibrary` / `api.getClipsQueue` / `api.toggleClipQueue` / `api.clearClipsQueue` / `api.addClipsFiles` / `api.appendQueuedClips`.
+
+### 21.9 Change 7 — `Scene's media` → `Scene Media` (`src/client/timeline-editor.ts`, `src/client/app-js.ts`)
+
+- `MEDIA_TRACK_LABEL = "Scene Media"`, and the `batchTimelineState()` handoff track literal is `{ id: "background-media", kind: "media", label: "Scene Media", expanded: true, items: mediaItems }`.
+- Because `normalizeState()` rebuilds the media track from `DEFAULT_TRACK_SPECS` (which uses `MEDIA_TRACK_LABEL`) rather than trusting the saved label, **already-saved projects re-label themselves on the next load** — no migration was needed. The lane still shows its `BG` badge and `n scenes` count.
+
+### 21.10 Files touched in this section
+
+| File | What changed |
+|---|---|
+| `src/client/timeline-editor.ts` | `MEDIA_TRACK_LABEL = "Scene Media"`; `visualsExpanded` in `defaultTimeline()` and `normalizeState()`; the `TEXT & GRAPHICS` head became a `te-group-toggle` (`toggle-visuals`) and its lanes render only while expanded, each with the audio lanes' `te-track-toggle` + `.te-lane.collapsed`; the background header dropped its `<small>` and gained `＋ Add Clips`; `handleAction()` + `toggle-visuals` / `add-clips` / `clips-close` / `clips-clear` / `clips-add`; `renderTimeline()` refreshes an open clips modal; `renderInspector()` re-titles `#timeline-selected-title` and the panel `aria-label`; `addVisualElementFromAction()` / `addChildVisualElement()` re-open a folded group; `registerAsset()` records `durationSec`; the ＋ Add Clips module (`clipsQueue`, `clipsAvailable`, `clipsStatus`, `clipsQueued`, `toggleClipQueue`, `clearClipQueue`, `renderClipsModal`, `openClipsModal`, `closeClipsModal`, `addClipsFiles`, `appendQueuedClips`); the modal's card/backdrop clicks and the Escape handler in `bindEvents()`; eight new `api.*` entries. |
+| `src/client/markup.ts` | `id="timeline-selected-title"` on the heading; the `#timeline-clips-modal` overlay (head + `✕`, subtitle, `＋ Upload` label with `#timeline-clips-files`, `#timeline-clips-count`, `#timeline-clips-grid`, `#timeline-clips-status`, `#timeline-clips-commit` / `clips-clear` / `clips-close`) after the two hidden file inputs, inside `#timeline-editor`. |
+| `src/client/styles.ts` | `.te-group-background { flex-wrap: wrap; row-gap: 4px }` + `.te-group-background .te-add-inline { margin-left: 5px }`; `.te-group-visuals .te-group-toggle` (`row-gap`, `small { margin-left: 4px }`); `#timeline-child-panel` 7.5 px → **10 px** in both blocks + the `#timeline-child-panel *` 10 px catch-all; `.te-scroll-lane` and `.te-grid-corner-scroll` → `#ffffff`; the whole `.te-clips-*` modal block (+ its 900 px grid breakpoint) at the end of the stylesheet. |
+| `src/client/app-js.ts` | `batchTimelineState()` gained `visualsExpanded: true` and the media track's `label: "Scene Media"`. |
+| `tests/timeline-editor.test.mjs` | 33 tests (29 → 33): five assertions that encoded the old copy re-targeted (`pinned lowest` → gone, `Scene's media` → `Scene Media`, `7.5px` → `10px`, the two `.tm-sec-title` markup strings, `TEXT & GRAPHICS` now asserted on the toggle) and four new tests — see 21.11. |
+
+### 21.11 Verification
+
+- `node --import tsx --test tests/timeline-editor.test.mjs` → **33 / 33 pass** (40 s).
+- The new tests, all of which boot the real page in JSDOM (`createHTML()` + `APP_JS` + `TIMELINE_EDITOR_JS`):
+  1. *route isolation / lanes* (extended): the visuals header is a `.te-group-toggle` carrying `TEXT & GRAPHICS` and `1 track`; clicking `toggle-visuals` folds the group (`.te-lane` count 2 → 1, only `background-media` survives, the sticky `＋ Text` / `＋ Graphic` pair stays) and re-opens it; `[data-track-toggle="visual-1"]` folds one lane (`expanded === false`, `.te-lane.collapsed`, its clips unpainted) and re-opens it.
+  2. *`the section above the tracks says Selected Scene only for a Scene Media box`*: media clip → `Selected Scene`; added text clip → `Selected element`; graphic → `Selected element`; background clip + `addChildElement("text")` → `Selected Scene`; `visual-1` track selected → `Selected element`; `background-media` track selected → `Selected Scene` + `aria-label="Selected scene controls"`.
+  3. *`the top scroll layer is white and the clip picker borrows the composer's shell`*: `.te-scroll-lane` and `.te-grid-corner-scroll` are `#ffffff`, `.te-scroll-layer` is not; the modal ships inside the editor shell, is `position: fixed`, `[hidden]` really hides it, and its box/actions/primary button carry the composer's `#0d0d0f` / sticky / `#f59e0b` treatment.
+  4. *`＋ Add Clips queues every chosen clip at the right-most end of the Scene Media layer`* + *`the clips modal uploads on its own and never steals a pending placeholder`*: the modal starts closed with a disabled action; ＋ Add Clips opens it and states the empty case; an ＋ Add media upload appears as a card (the open modal re-lists on `renderTimeline()`); a card click queues (`aria-pressed="true"`, `＋ Add 1 clip to the end`, enabled), a second click de-queues, the commit adds exactly one clip whose `startSec === max(end of the existing clips)`, one scene per clip, the last clip becomes the selected one, the queue empties, the modal closes and `#timeline-status` reports the right-most end; a direct `addClipsFiles()` of two PNGs plus a `text/plain` file queues only the two images, appends both **after** the right-most end, and leaves a deliberately forced pending placeholder untouched (12 → 14 items, still 1 pending); an empty queue adds nothing and says `Queue at least one clip first.`; dismissal is covered too — the head `✕`, a click on the backdrop and an `Escape` keydown all close the modal, while a click inside the box (on the grid) does not
+- Updated assertions: `assert.doesNotMatch(heading, /pinned lowest/i)` + `assert.doesNotMatch(heading, /Pixabay/i)` + `assert.equal(heading.trim(), "BACKGROUND LAYER")` + `.te-group-background .te-add-inline { margin-left: 5px }` + the `["add-media", "add-clips"]` button order; the media lane's first text node is `"Scene Media"` and `Scene's media` appears nowhere in `#view-timeline` or in `APP_JS`'s track literal; the child panel's rule, its inputs rule and the new catch-all all resolve to `10px !important` and `APP_CSS` matches no `font-size: 7px` / `7.5px` at all.
+- Computed-style spot check in JSDOM (throwaway script, deleted after use): `.te-scroll-lane` and `.te-grid-corner-scroll` → `rgb(255, 255, 255)`, the bottom `.te-scroll-layer` still `var(--te-lane)`; `#timeline-child-panel` and every node inside it (`.te-child-head strong/small`, `.tm-scene-kicker`, `.tm-scene-add`, `.te-child-row-label`, plus an injected `.tm-scene-field` and its checkbox) → `10px`, while `.tm-sec-title` outside the panel is untouched; the visuals toggle and the Soundtrack toggle resolve to the same computed font; `margin-left: 5px`; `.te-group-background` `flex-wrap: wrap`; the modal's `[hidden]` overlay computes `display: none`, opens to `display: flex`, its box computes `rgb(13, 13, 15)`, and the disabled primary button computes the disabled grey.
+- `npx tsc --noEmit`: 31 error lines, **byte-identical to the same command at `e783116`** (all of them pre-existing `src/index.ts` diagnostics; none in a file this section touched).
+- `npx wrangler deploy --dry-run`: exit `0`, `Total Upload: 3038.08 KiB / gzip: 1370.99 KiB`.
+- Whole suite `node --import tsx --test --test-concurrency=4 tests/*.test.mjs`: `550 tests, 504 pass, 40 fail, 6 cancelled`. The 40 failures sit in eight files (`api-relay`, `session-261-browser-offload`, `session-262-load-balancing`, `session-250-batch-pipeline`, `seo-walkthrough`, `deep-debug-regressions`, `session-244`, `llm-openrouter`). Those eight were re-run as a group with the changes applied **and** on a stashed (pristine `e783116`) tree: **`141 tests / 95 pass / 40 fail` in both cases**, i.e. identical. They are the pre-existing Worker/relay/image-batch groups already recorded in sections 8.6 and 20.15 — no regression from this section, and no new failure was introduced in any file.
+
+### 21.12 Notes, gotchas and deliberate decisions
+
+- **Both readings of "remove the text" are satisfied by one removal.** Item 1 named `pinned lowest` and item 6 named "the text next to ＋ Add media"; both are the same `<small>` node, so it is deleted whole rather than half-edited into `· Pixabay, GIF, image or MP4`.
+- **The buttons stay in the 156 px label cell and wrap.** They could not be pushed onto the caption's line: `.te-group-title` is 156 px (132 px under 560 px) and the pair is ~140 px wide, so `flex-wrap` (with the label's `width: 100%`) puts them on a second line. The alternative — moving them into `.te-group-fill-background` — would have left the background row without a header at all.
+- **`visualsExpanded` is saved but not undoable, on purpose.** `persistNow()` writes the whole state, so the fold survives a reload; `snapshotProject()` covers `durationSec` / `scenes` / `tracks`, so Undo never fights the flag. The per-lane `track.expanded` **is** inside `tracks` and therefore undoable — exactly as the audio lanes already behaved, and consistency with Soundtrack was the request.
+- **No new lane CSS for the fold.** `.te-lane.collapsed`, `.te-track-toggle` and the `toggle-track` action were already generic; the visual lanes were wired to them rather than given a parallel vocabulary, which is why "same style and font as the soundtrack" holds for both the group head and the individual lanes.
+- **The modal re-uses the composer's *look*, not its classes.** Every `#tpl-modal` rule is id-scoped and `openTemplateModal()` in `TEMPLATE_COMPOSER_JS` drives studio accordions, so `.te-clips-*` re-declares the same shell (same hexes, radii, widths and the sticky yellow action row) under names the timeline bundle owns.
+- **No stock search inside the modal.** The timeline bundle deliberately makes no Worker call (it is the editor's standing rule), and `src/client/pixabay-direct.ts` needs `/api/media/config`, `/claim` and `/settle`. The picker is therefore the row's own media (IndexedDB handoff + uploads) — the honest superset of "the videos this row already has". If a stock browser is wanted later, it has to arrive as a Worker-backed endpoint, not as another `fetch` from this bundle.
+- **The queue is transient by design.** `clipsQueue` is a module-level array, so a reload with the modal open starts empty. Committing is the only step that touches `state` — which keeps a half-built queue out of both the saved JSON and the history stack.
+- **Append-only, never in-place.** `addMediaFiles()` still fills the first pending scene placeholder (that is what the ＋ Add media flow is for); `appendQueuedClips()` explicitly does not. A test forces a placeholder to exist and asserts it survives, because "queued to the right-most end" and "reused slot" are contradictory and the second is the existing behaviour of the other button.
+- **`Selected element` follows the panel, not the click.** A child text/graphic is re-resolved to its background box (`backgroundContext()`), so the heading stays `Selected Scene` there; that is the §19 contract ("the section shows the background media only") and re-titling it would have contradicted the panel below it.
+- **10 px is applied with the panel's own `!important`, and now with a wildcard.** The wildcard is the load-bearing part: without it the shared control builders keep their own sizes. If a future control renders text through a nested element with an inline `style="font-size:…"`, inline styles beat even `!important` on a selector, so such a control would need the panel list extended.
+- **Only the top strip turned white.** `.te-scroll-lane` also carries `cursor: grab` and `touch-action: pan-x`, both untouched, and the bottom `.te-scroll-layer` keeps the lane tokens on purpose.
+
+### 21.13 Superseded copy in this file
+
+The older sections are kept as they were written; each of the three headings below now carries a one-line pointer to this section. These are the specific lines that no longer describe the code:
+
+- §10 (*Background-layer timeline and Min-column removal*) — its dock-order note, its `GROUP: BACKGROUND LAYER pinned lowest · Pixabay, GIF, image or MP4 + Add media` transcript and its `Pixabay & uploaded media · background` lane label. The caption is gone (21.3) and the lane label is `Scene Media` (21.9).
+- §19's "renames `Selected element` → `Selected Scene`" outcome: the static default is still `Selected Scene`, but `Selected element` is back as a **runtime** label for every non-scene selection (21.5).
+- §20.13's 7.5 px `#timeline-child-panel` typography, including its "7.5 px is intentional" note in 20.16 — the panel is 10 px now, with a wildcard (21.6).
+
+### 21.14 Still open
+
+- The clips modal has no trimming, reordering or per-clip duration control; a queued MP4 keeps its probed length (5 s for stills and for anything that cannot be probed).
+- The queue is not persisted, so an open modal with pending picks loses them on reload (21.12).
+- A commit while an export is running is not blocked (the grid refresh is). If that ever matters, guard `appendQueuedClips()` with the same `if (isExporting || recorder) return;` the transport actions use.
+- A folded `TEXT & GRAPHICS` group still hides its lanes from drag-on-canvas selection, because the clip is not in the DOM; auto-opening the group on add was chosen over keeping the selection working while folded.
+- `＋ Add Clips` and `＋ Add media` overlap in source (both can add the same uploaded file); they differ only in where the clip lands. Merging them means giving `addMediaFiles()` an append mode, which would change the §12 placeholder-reuse behaviour this section deliberately left alone.
+
+### 21.15 Status
+
+- All 7 code changes are implemented, and this section documents each of them (item 8).
+- Test state: `tests/timeline-editor.test.mjs` **33 / 33**; the eight failing files of the wider suite fail with **identical counts** on a pristine `e783116` (141 / 95 / 40 both ways); `tsc --noEmit` unchanged; `wrangler deploy --dry-run` green.

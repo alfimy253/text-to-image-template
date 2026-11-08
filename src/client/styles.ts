@@ -9486,13 +9486,13 @@ export const APP_CSS = `
 		/*
 		 * BACKGROUND ELEMENT typography
 		 * -----------------------------
-		 * The 30 % panel next to the 70 % preview is narrow, so every text
-		 * node inside it is capped at 7.5 px (0.469rem): the kicker, the clip
-		 * title, the pinned-window line, the ＋ Child text / ＋ Child graphic
-		 * buttons, the child rows, the empty-state copy and every inspector
-		 * label, readout, input and button the panel re-uses from the shared
-		 * .tm-scene-* vocabulary. Inputs keep a usable tap target: the font
-		 * shrinks, the 32 px min-height does not.
+		 * The 30 % panel next to the 70 % preview is narrow, but its type is
+		 * never allowed to fall to 7 or 7.5 px: every text node inside it is
+		 * fixed at 10 px — the kicker, the clip title, the pinned-window line,
+		 * the ＋ Child text / ＋ Child graphic buttons, the child rows, the
+		 * empty-state copy and every inspector label, readout, input and button
+		 * the panel re-uses from the shared .tm-scene-* vocabulary. Inputs keep
+		 * a usable tap target: the font is capped, the 32 px min-height is not.
 		 */
 		#timeline-child-panel,
 		#timeline-child-panel .tm-scene-kicker,
@@ -9510,7 +9510,7 @@ export const APP_CSS = `
 		#timeline-child-panel .tm-scene-range-value,
 		#timeline-child-panel .tm-scene-note,
 		#timeline-child-panel .te-inspector-note {
-			font-size: 7.5px !important;
+			font-size: 10px !important;
 			line-height: 1.4;
 		}
 
@@ -9518,7 +9518,21 @@ export const APP_CSS = `
 		#timeline-child-panel .tm-scene-field select,
 		#timeline-child-panel .tm-scene-add,
 		#timeline-child-panel .tm-scene-upload {
-			font-size: 7.5px !important;
+			font-size: 10px !important;
+		}
+
+		/*
+		 * The list above names what the panel itself renders. The control
+		 * builders of the shared element inspector (template-scene-editor.ts)
+		 * emit more than that — .tm-scene-checkbox, .tm-scene-range-row,
+		 * .tm-scene-photo-*, the colour popover — and none of those carry a
+		 * size of their own here, so they inherited 7 px-ish studio values.
+		 * This catch-all is what makes "10 px through the panel" literal; the
+		 * explicit rules above still win the tie (same value, higher
+		 * specificity) and keep their line-height.
+		 */
+		#timeline-child-panel * {
+			font-size: 10px !important;
 		}
 
 		/*
@@ -10114,10 +10128,12 @@ export const APP_CSS = `
 		/*
 		 * The corner cell above the drag-to-pan scroll handle carries no copy
 		 * any more (the "SCROLL" word was removed), it only keeps the cell so
-		 * the grid stays aligned with the label column.
+		 * the grid stays aligned with the label column. It is painted white
+		 * with the handle so the top scroll layer reads as one white strip.
 		 */
 		.te-grid-corner-scroll {
 			padding: 0;
+			background: #ffffff;
 		}
 
 		.te-ruler {
@@ -10134,9 +10150,14 @@ export const APP_CSS = `
 			z-index: 8;
 		}
 
+		/*
+		 * The TOP scroll layer — the drag-to-pan handle that runs above the
+		 * ruler — is a plain white strip. (The empty layer at the bottom of the
+		 * dock keeps the lane look; only this one was asked for.)
+		 */
 		.te-scroll-lane {
 			height: 26px;
-			background: var(--te-lane);
+			background: #ffffff;
 			cursor: grab;
 			touch-action: pan-x;
 		}
@@ -10344,10 +10365,22 @@ export const APP_CSS = `
 
 		.te-group-background {
 			border-top: 1px solid var(--t-line, #3a4430);
+			/*
+			 * The caption that used to sit beside ＋ Add media ("pinned lowest ·
+			 * Pixabay, GIF, image or MP4") is gone. The cell now wraps: the
+			 * BACKGROUND LAYER label owns the first line (it is width:100%) and
+			 * the two add buttons share the second, each starting 5 px in.
+			 */
+			flex-wrap: wrap;
+			row-gap: 4px;
 		}
 
 		.te-group-background .te-group-label {
 			color: var(--t-accent-ink, #bcd79a);
+		}
+
+		.te-group-background .te-add-inline {
+			margin-left: 5px;
 		}
 
 		.te-track-label.te-track-background {
@@ -10396,6 +10429,21 @@ export const APP_CSS = `
 			width: 11px;
 			color: var(--t-accent-ink, #a6d85b);
 			font-size: 0.85rem;
+		}
+
+		/*
+		 * TEXT & GRAPHICS is now a real collapse toggle, so it inherits the
+		 * Soundtrack button's font (0.69rem / 850 weight). Its copy is longer
+		 * than "Soundtrack", so the words wrap inside the 156 px cell and the
+		 * lane count sits next to them instead of pushing itself to the far
+		 * edge with margin-left:auto.
+		 */
+		.te-group-visuals .te-group-toggle {
+			row-gap: 2px;
+		}
+
+		.te-group-visuals .te-group-toggle small {
+			margin-left: 4px;
 		}
 
 		.te-group-label {
@@ -10757,6 +10805,278 @@ export const APP_CSS = `
 			}
 			.te-dock-footer {
 				font-size: 0.54rem;
+			}
+		}
+
+		/*
+		 * =====================================================================
+		 * ＋ Add Clips — the Scene Media clip picker
+		 * =====================================================================
+		 * The composer's "Add video from template" modal is scoped to
+		 * #tpl-modal (its .tpl-* and .tm-* rules all start with that id), so
+		 * none of them can be re-used from another node. This block re-declares
+		 * the same shell — dark box, head with a close ✕, subtitle, card grid,
+		 * status line and a sticky action row with the yellow primary button —
+		 * under its own .te-clips-* vocabulary, and it is placed inside
+		 * #timeline-editor so the editor's [data-timeline-action] delegation
+		 * drives its buttons.
+		 */
+		.te-clips-overlay {
+			position: fixed;
+			inset: 0;
+			z-index: 120;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 16px;
+			background: rgba(0, 0, 0, 0.6);
+		}
+
+		/* The shell is [hidden] until ＋ Add Clips is clicked; the overlay's own
+		 * display must not win over that. */
+		.te-clips-overlay[hidden] {
+			display: none;
+		}
+
+		.te-clips-box {
+			display: flex;
+			flex-direction: column;
+			gap: 12px;
+			background: #0d0d0f;
+			border: 1px solid #2e3440;
+			border-radius: 14px;
+			padding: 18px;
+			width: min(1100px, 96vw);
+			max-height: 92vh;
+			overflow-y: auto;
+			color: #fff;
+			box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+		}
+
+		.te-clips-head {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 10px;
+		}
+
+		.te-clips-head .tm-sec-title {
+			margin: 0 0 4px;
+			font-size: 0.95rem;
+			font-weight: 800;
+			letter-spacing: 0.04em;
+			color: #fff;
+		}
+
+		.te-clips-sub {
+			margin: 0;
+			color: #a8a8b0;
+			font-size: 0.85rem;
+			line-height: 1.45;
+		}
+
+		.te-clips-x {
+			flex: 0 0 auto;
+			background: #303037;
+			border: 0;
+			border-radius: 8px;
+			color: #fff;
+			font-size: 0.9rem;
+			padding: 7px 11px;
+			cursor: pointer;
+		}
+
+		.te-clips-x:hover {
+			background: #3d3d46;
+		}
+
+		.te-clips-bar {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 9px;
+			background: #1b1b20;
+			border-radius: 12px;
+			padding: 10px 12px;
+		}
+
+		.te-clips-file {
+			position: relative;
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			background: #26262c;
+			border: 1px solid #2e3440;
+			border-radius: 10px;
+			padding: 9px 13px;
+			font-size: 0.78rem;
+			font-weight: 700;
+			color: #fff;
+			cursor: pointer;
+		}
+
+		.te-clips-file:hover {
+			border-color: #f59e0b;
+		}
+
+		.te-clips-count {
+			color: #a8a8b0;
+			font-size: 0.78rem;
+			font-variant-numeric: tabular-nums;
+		}
+
+		.te-clips-grid {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 12px;
+		}
+
+		.te-clips-none {
+			grid-column: 1 / -1;
+			margin: 0;
+			color: #9ca3af;
+			font-size: 0.8rem;
+			line-height: 1.5;
+		}
+
+		.te-clips-card {
+			display: block;
+			padding: 8px;
+			background: #141418;
+			border: 2px solid #2e3440;
+			border-radius: 12px;
+			cursor: pointer;
+			color: #fff;
+			text-align: left;
+			transition: border-color 0.15s ease, transform 0.15s ease;
+		}
+
+		.te-clips-card:hover {
+			border-color: #f59e0b;
+			transform: translateY(-2px);
+		}
+
+		.te-clips-card.queued {
+			border-color: #ffd83d;
+			background: #1d1c12;
+		}
+
+		.te-clips-frame {
+			position: relative;
+			display: block;
+			aspect-ratio: 16 / 9;
+			border-radius: 8px;
+			overflow: hidden;
+			background: #000;
+		}
+
+		.te-clips-frame img,
+		.te-clips-frame video {
+			display: block;
+			width: 100%;
+			height: 100%;
+			object-fit: cover;
+		}
+
+		.te-clips-kind,
+		.te-clips-sec {
+			position: absolute;
+			right: 5px;
+			bottom: 5px;
+			padding: 1px 5px;
+			border-radius: 5px;
+			background: rgba(0, 0, 0, 0.65);
+			color: #e5e7eb;
+			font-size: 0.6rem;
+			font-weight: 800;
+			letter-spacing: 0.06em;
+		}
+
+		.te-clips-sec {
+			left: 5px;
+			right: auto;
+		}
+
+		.te-clips-name,
+		.te-clips-meta,
+		.te-clips-pick {
+			display: block;
+			margin-top: 6px;
+			font-size: 0.72rem;
+			color: #fff;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.te-clips-meta {
+			color: #9ca3af;
+			font-size: 0.62rem;
+			text-transform: uppercase;
+			letter-spacing: 0.08em;
+		}
+
+		.te-clips-pick {
+			color: #ffd83d;
+			font-size: 0.7rem;
+			font-weight: 800;
+		}
+
+		.te-clips-status {
+			min-height: 18px;
+			color: #a8a8b0;
+			font-size: 0.76rem;
+			line-height: 1.35;
+		}
+
+		.te-clips-status.is-bad {
+			color: #fca5a5;
+		}
+
+		.te-clips-actions {
+			position: sticky;
+			bottom: 0;
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 9px;
+			margin-top: 2px;
+			padding: 10px 0 2px;
+			background: #0d0d0f;
+		}
+
+		.te-clips-actions button {
+			border: 0;
+			border-radius: 10px;
+			padding: 11px 15px;
+			font-size: 0.8rem;
+			font-weight: 700;
+			cursor: pointer;
+			background: #303037;
+			color: #fff;
+		}
+
+		/* Higher specificity than ".te-clips-actions button" above, so the
+		 * primary really does take the composer's yellow treatment. */
+		.te-clips-actions .te-clips-primary {
+			background: #f59e0b;
+			color: #111;
+		}
+
+		.te-clips-actions .te-clips-primary:hover {
+			background: #ffd83d;
+		}
+
+		.te-clips-actions .te-clips-primary:disabled {
+			background: #3a3a42;
+			color: #8b8b95;
+			cursor: not-allowed;
+		}
+
+		@media (max-width: 900px) {
+			.te-clips-grid {
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+				gap: 8px;
 			}
 		}
 

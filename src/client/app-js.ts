@@ -9453,6 +9453,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			durationSec: Math.min(3600, durationSec),
 			playheadSec: 0,
 			soundExpanded: false,
+			visualsExpanded: true,
 			scenes: scenes,
 			tracks: [
 				{
@@ -9461,7 +9462,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				},
 				{ id: "sound-fx", kind: "audio", label: "Sound effects", expanded: true, items: [] },
 				{ id: "background-music", kind: "audio", label: "Background music", expanded: true, items: [] },
-				{ id: "background-media", kind: "media", label: "Scene's media", expanded: true, items: mediaItems },
+				{ id: "background-media", kind: "media", label: "Scene Media", expanded: true, items: mediaItems },
 				{ id: "visual-1", kind: "visual", label: "Text & graphics 1", expanded: true, items: visualItems }
 			],
 			selectedTrackId: "background-media",

@@ -892,7 +892,7 @@ export const PAGE_MARKUP = `
 				<aside class="te-inspector-panel" aria-label="Selected scene controls">
 					<div class="tm-scene-panel">
 						<div class="tm-scene-panel-head">
-							<div class="te-scene-heading"><div class="tm-sec-title">Selected Scene</div><span id="timeline-selected-name" class="te-selected-name"></span></div>
+							<div class="te-scene-heading"><div class="tm-sec-title" id="timeline-selected-title">Selected Scene</div><span id="timeline-selected-name" class="te-selected-name"></span></div>
 							<div class="tm-scene-panel-actions">
 								<button type="button" id="timeline-add-text" class="tm-scene-add" data-timeline-action="add-text">\uff0b Text</button>
 								<button type="button" id="timeline-add-graphic" class="tm-scene-add" data-timeline-action="add-graphic">\uff0b Graphic</button>
@@ -925,6 +925,36 @@ export const PAGE_MARKUP = `
 			</section>
 			<input type="file" id="timeline-media-upload" accept="image/*,image/gif,video/mp4,.mp4,.gif" multiple hidden>
 			<input type="file" id="timeline-audio-upload" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg" hidden>
+			<!--
+				＋ Add Clips modal. It borrows the shell language of the studio's
+				"Add video from template" composer (overlay, dark box, head with a
+				close ✕, subtitle, card grid, status line, sticky action row) but it
+				lives INSIDE #timeline-editor, because that is the node the editor's
+				[data-timeline-action] delegation is bound to. Its own .te-clips-*
+				classes keep it clear of the #tpl-modal-scoped composer CSS.
+			-->
+			<div class="te-clips-overlay" id="timeline-clips-modal" hidden role="dialog" aria-modal="true" aria-labelledby="timeline-clips-title">
+				<div class="te-clips-box">
+					<div class="te-clips-head">
+						<div>
+							<div class="tm-sec-title" id="timeline-clips-title">Add Clips \u2014 Scene Media</div>
+							<p class="te-clips-sub">Queue the clips to append. Each one lands after the right-most clip of the Scene Media layer, one scene per clip. Nothing leaves this browser.</p>
+						</div>
+						<button type="button" class="te-clips-x" data-timeline-action="clips-close" title="Close">\u2715</button>
+					</div>
+					<div class="te-clips-bar">
+						<label class="te-clips-file">\uff0b Upload image, GIF or MP4<input type="file" id="timeline-clips-files" accept="image/*,image/gif,video/mp4,.mp4,.gif" multiple hidden></label>
+						<span class="te-clips-count" id="timeline-clips-count">Nothing queued yet</span>
+					</div>
+					<div class="te-clips-grid" id="timeline-clips-grid"></div>
+					<div class="te-clips-status" id="timeline-clips-status" role="status" aria-live="polite"></div>
+					<div class="te-clips-actions">
+						<button type="button" class="te-clips-primary" id="timeline-clips-commit" data-timeline-action="clips-add" disabled>\uff0b Add 0 clips to the end</button>
+						<button type="button" class="te-clips-ghost" data-timeline-action="clips-clear">Clear queue</button>
+						<button type="button" class="te-clips-ghost" data-timeline-action="clips-close">Close</button>
+					</div>
+				</div>
+			</div>
 		</div>
 	</section>
 
