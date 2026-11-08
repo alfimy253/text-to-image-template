@@ -2417,6 +2417,11 @@ export const TIMELINE_EDITOR_JS = `
 			if (action === "restart") { if (recorder || isExporting) return; setPlaying(false); setPlayhead(0, true); return; }
 			if (action === "step-back") { if (recorder || isExporting) return; moveScene(-1); return; }
 			if (action === "step-forward") { if (recorder || isExporting) return; moveScene(1); return; }
+			/*
+			 * No toolbar "＋ Lane" button any more: the lane is opened implicitly by
+			 * ＋ Text / ＋ Graphic. The action stays wired for older bookmarks and for
+			 * window.__TIMELINE_EDITOR__.addVisualTrack().
+			 */
 			if (action === "add-layer") { addVisualTrack(); return; }
 			if (action === "add-text") { addVisualElementFromAction("text"); return; }
 			if (action === "add-graphic") { addVisualElementFromAction("graphic"); return; }
