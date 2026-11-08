@@ -9147,10 +9147,10 @@ export const APP_CSS = `
 		}
 
 		.te-back,
+		.te-history,
 		.te-play,
 		.te-export,
 		.te-preview-controls button,
-		.te-secondary,
 		.te-add-inline,
 		.te-track-toggle,
 		.te-track-select,
@@ -9165,6 +9165,24 @@ export const APP_CSS = `
 		.te-back {
 			padding: 8px 11px;
 			white-space: nowrap;
+		}
+
+		/*
+		 * Undo / redo pair in the top bar. They are two small icon+label
+		 * buttons sitting next to the project heading, and they grey out
+		 * (but stay in place, so the bar never reflows) while the matching
+		 * history stack is empty.
+		 */
+		.te-history {
+			padding: 8px 11px;
+			white-space: nowrap;
+			font-size: 0.74rem;
+			font-weight: 800;
+		}
+
+		.te-history:disabled {
+			cursor: default;
+			opacity: 0.38;
 		}
 
 		.te-project-heading {
@@ -9466,6 +9484,44 @@ export const APP_CSS = `
 		}
 
 		/*
+		 * BACKGROUND ELEMENT typography
+		 * -----------------------------
+		 * The 30 % panel next to the 70 % preview is narrow, so every text
+		 * node inside it is capped at 7.5 px (0.469rem): the kicker, the clip
+		 * title, the pinned-window line, the ＋ Child text / ＋ Child graphic
+		 * buttons, the child rows, the empty-state copy and every inspector
+		 * label, readout, input and button the panel re-uses from the shared
+		 * .tm-scene-* vocabulary. Inputs keep a usable tap target: the font
+		 * shrinks, the 32 px min-height does not.
+		 */
+		#timeline-child-panel,
+		#timeline-child-panel .tm-scene-kicker,
+		#timeline-child-panel .te-child-head strong,
+		#timeline-child-panel .te-child-head small,
+		#timeline-child-panel .te-child-actions .tm-scene-add,
+		#timeline-child-panel .te-child-empty,
+		#timeline-child-panel .te-child-row-label,
+		#timeline-child-panel .te-child-row-time,
+		#timeline-child-panel .te-child-row-delete,
+		#timeline-child-panel .te-child-editor-title,
+		#timeline-child-panel .tm-scene-subtitle,
+		#timeline-child-panel .tm-scene-field,
+		#timeline-child-panel .tm-scene-field-label,
+		#timeline-child-panel .tm-scene-range-value,
+		#timeline-child-panel .tm-scene-note,
+		#timeline-child-panel .te-inspector-note {
+			font-size: 7.5px !important;
+			line-height: 1.4;
+		}
+
+		#timeline-child-panel .tm-scene-field input:not([type="range"]):not([type="checkbox"]),
+		#timeline-child-panel .tm-scene-field select,
+		#timeline-child-panel .tm-scene-add,
+		#timeline-child-panel .tm-scene-upload {
+			font-size: 7.5px !important;
+		}
+
+		/*
 		 * Narrow screens stack the 70 / 30 split back into one column. The
 		 * row stops being the sticky box there (a pinned box taller than the
 		 * viewport would hide the bottom of the child panel), so the preview
@@ -9688,6 +9744,30 @@ export const APP_CSS = `
 			font-weight: 800;
 			letter-spacing: -.01em;
 			text-transform: none;
+		}
+
+		/*
+		 * "Selected Scene" and the selected clip's name share ONE line: the
+		 * clip name is inline right after the section title (there is no
+		 * newline between the media label and "Selected Scene"), truncated
+		 * with an ellipsis instead of wrapping.
+		 */
+		.te-inspector-panel .te-scene-heading {
+			min-width: 0;
+			display: flex;
+			align-items: baseline;
+			gap: 8px;
+			flex-wrap: nowrap;
+		}
+
+		.te-inspector-panel .te-selected-name {
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			color: var(--t-muted, #a1a5b0);
+			font-size: 0.72rem;
+			font-weight: 700;
 		}
 
 		.te-inspector-panel .tm-scene-panel-actions,
@@ -10042,6 +10122,15 @@ export const APP_CSS = `
 			letter-spacing: .12em;
 		}
 
+		/*
+		 * The corner cell above the drag-to-pan scroll handle carries no copy
+		 * any more (the "SCROLL" word was removed), it only keeps the cell so
+		 * the grid stays aligned with the label column.
+		 */
+		.te-grid-corner-scroll {
+			padding: 0;
+		}
+
 		.te-ruler {
 			position: sticky;
 			left: auto;
@@ -10103,7 +10192,7 @@ export const APP_CSS = `
 			min-height: 44px;
 			border-bottom: 1px solid var(--t-line-2, #282b33);
 			background-color: var(--te-lane);
-			background-image: repeating-linear-gradient(90deg, transparent 0, transparent 80px, var(--t-line, rgba(255,255,255,.035)) 81px, var(--t-line, rgba(255,255,255,.035)) 82px);
+			background-image: none;
 			cursor: grab;
 			touch-action: pan-x;
 		}
@@ -10159,12 +10248,18 @@ export const APP_CSS = `
 			height: 24px;
 		}
 
+		/*
+		 * Timing ticks. The vertical grid line that used to hang from every
+		 * tick (border-left) was removed on request, and so was the small
+		 * dash under it - the ruler now reads as times only, with no
+		 * vertical lines running through the tracks below.
+		 */
 		.te-ruler-tick {
 			position: absolute;
 			top: 0;
 			bottom: 0;
 			padding: 8px 0 0 4px;
-			border-left: 1px solid var(--t-line, #454853);
+			border-left: 0;
 			color: var(--t-muted, #aeb2bd);
 			font-size: 0.6rem;
 			font-variant-numeric: tabular-nums;
@@ -10172,12 +10267,7 @@ export const APP_CSS = `
 		}
 
 		.te-ruler-tick i {
-			position: absolute;
-			left: 0;
-			bottom: -4px;
-			width: 1px;
-			height: 5px;
-			background: var(--t-muted, #747986);
+			display: none;
 		}
 
 		.te-group-title,
@@ -10208,7 +10298,7 @@ export const APP_CSS = `
 			overflow: hidden;
 			min-height: 31px;
 			border-bottom: 1px solid var(--t-line-2, #282b33);
-			background: repeating-linear-gradient(90deg, var(--t-panel-2, #191b22) 0, var(--t-panel-2, #191b22) 80px, var(--t-panel, #20222a) 81px, var(--t-panel, #20222a) 82px);
+			background: var(--t-panel-2, #191b22);
 		}
 
 		.te-group-fill.te-visual-actions {
@@ -10217,6 +10307,40 @@ export const APP_CSS = `
 			justify-content: flex-start;
 			gap: 6px;
 			padding: 3px 8px;
+		}
+
+		/*
+		 * ＋ Text / ＋ Graphic on the text & graphics track
+		 * -----------------------------------------------
+		 * The pair is pinned to the LEFT of the tracks and never scrolls away
+		 * with the horizontal pan: the wrapper is position: sticky and its left
+		 * offset is the label column width (156 px), i.e. exactly where the
+		 * tracks area begins, so the buttons stay put right next to the lane
+		 * labels and never cover them. It is painted on the front-most layer of
+		 * the dock (z-index 30, above the sticky label column at 5, the ruler at
+		 * 12, the playhead at 6 and every clip at 2-4), so no lane, no clip and
+		 * no playhead can ever paint over the buttons. The opaque background
+		 * keeps the labels readable while the tracks scroll underneath.
+		 *
+		 * The filler cell has to stop clipping for sticky to work against the
+		 * dock scroller - a hidden overflow would make the cell its own scroll
+		 * container and the buttons would never move.
+		 */
+		.te-group-fill.te-visual-actions {
+			overflow: visible;
+		}
+
+		.te-visual-actions-sticky {
+			position: sticky;
+			left: 156px;
+			z-index: 30;
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			flex: 0 0 auto;
+			padding: 3px 8px;
+			border-right: 1px solid var(--t-line-2, #282b33);
+			background: var(--t-panel-2, #191b22);
 		}
 
 		/*
@@ -10242,7 +10366,7 @@ export const APP_CSS = `
 		}
 
 		.te-lane.te-background-lane {
-			background: repeating-linear-gradient(90deg, var(--t-panel-2, #161a12) 0, var(--t-panel-2, #161a12) 80px, var(--t-panel, #1d2417) 81px, var(--t-panel, #1d2417) 82px);
+			background: var(--t-panel-2, #161a12);
 			border-bottom: 1px solid var(--t-line, #2e3526);
 		}
 
@@ -10346,13 +10470,19 @@ export const APP_CSS = `
 			color: var(--t-ink, #b9bec8);
 		}
 
+		/*
+		 * Lane band. The repeating 80 / 82 px vertical stripe that used to be
+		 * painted here was the "vertical line" grid running through the
+		 * tracks; it is removed on request, so a lane is now a plain band and
+		 * the time ruler above carries the only time reference.
+		 */
 		.te-lane {
 			position: relative;
 			min-height: 48px;
 			overflow: hidden;
 			border-bottom: 1px solid var(--t-line-2, #282b33);
 			background-color: var(--te-lane);
-			background-image: repeating-linear-gradient(90deg, transparent 0, transparent 80px, var(--t-line, rgba(255,255,255,.035)) 81px, var(--t-line, rgba(255,255,255,.035)) 82px);
+			background-image: none;
 		}
 
 		.te-lane.collapsed {
@@ -10610,6 +10740,10 @@ export const APP_CSS = `
 			.te-track-label,
 			.te-grid-corner {
 				width: 132px;
+			}
+			/* The sticky add buttons follow the narrower label column. */
+			.te-visual-actions-sticky {
+				left: 132px;
 			}
 			.te-ruler {
 				left: auto;

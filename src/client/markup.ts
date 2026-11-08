@@ -832,6 +832,9 @@ export const PAGE_MARKUP = `
 	     3. timeline dock: full width, follows the element panel.
 	     The dock is in normal flow, so a tall screen leaves empty
 	     space under the tracks instead of stretching them.
+	     The top bar owns the Undo / Redo history pair, so every
+	     page of the editor can step back and forth through the
+	     timeline edits.
 	     ====================================================== -->
 	<section id="view-timeline" class="view" aria-label="Timeline editor">
 		<div class="timeline-editor-shell" id="timeline-editor">
@@ -842,6 +845,8 @@ export const PAGE_MARKUP = `
 					<span id="timeline-project-subtitle">Adjust scene and element timing</span>
 				</div>
 				<span id="timeline-save-status" class="te-save-status" role="status" aria-live="polite">Local timing edits</span>
+				<button type="button" class="te-history" id="timeline-undo" data-timeline-action="undo" title="Undo the last timeline edit (Ctrl+Z)" aria-label="Undo the last timeline edit" disabled>\u21b6 Undo</button>
+				<button type="button" class="te-history" id="timeline-redo" data-timeline-action="redo" title="Redo the last undone edit (Ctrl+Shift+Z)" aria-label="Redo the last undone edit" disabled>\u21b7 Redo</button>
 				<button type="button" class="te-play" data-timeline-action="play">\u25b6 Play</button>
 				<button type="button" class="te-export te-primary" id="timeline-export-btn" data-timeline-action="export" title="Render and download this timeline as an MP4 video">\u2b07 Export MP4</button>
 			</div>
@@ -887,7 +892,7 @@ export const PAGE_MARKUP = `
 				<aside class="te-inspector-panel" aria-label="Selected scene controls">
 					<div class="tm-scene-panel">
 						<div class="tm-scene-panel-head">
-							<div><div class="tm-scene-kicker">TIMELINE EDITOR</div><div class="tm-sec-title">Selected Scene</div></div>
+							<div class="te-scene-heading"><div class="tm-sec-title">Selected Scene</div><span id="timeline-selected-name" class="te-selected-name"></span></div>
 							<div class="tm-scene-panel-actions">
 								<button type="button" id="timeline-add-text" class="tm-scene-add" data-timeline-action="add-text">\uff0b Text</button>
 								<button type="button" id="timeline-add-graphic" class="tm-scene-add" data-timeline-action="add-graphic">\uff0b Graphic</button>
@@ -907,7 +912,6 @@ export const PAGE_MARKUP = `
 				<div class="te-dock-toolbar">
 					<div><strong>Timeline</strong><span id="timeline-duration-label">1:00</span></div>
 					<div class="te-dock-actions">
-							<button type="button" class="te-secondary" data-timeline-action="add-layer" title="Add a text and graphics lane, up to four">\uff0b Lane <span id="timeline-layer-count">1 / 4</span></button>
 						<label class="te-zoom">Zoom <input id="timeline-zoom" type="range" min="0.5" max="2" step="0.1" value="1"><output id="timeline-zoom-value">1\u00d7</output></label>
 						<button type="button" class="te-export" data-timeline-action="export" title="Render and download this timeline as an MP4 video">\u2b07 Export MP4</button>
 					</div>

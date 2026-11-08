@@ -2067,3 +2067,99 @@ The three Section 17 tests are the executable specification of 17.3 / 17.4 / 17.
 - `node --import tsx --test tests/timeline-editor.test.mjs`: `28 / 28` pass (including full `createHTML()` + JSDOM `layout=timeline` boot verifying `#gallery` has 0 cards and `display: none`, `Selected Scene` + `Scene's media` labels, background-only `Selected Scene` inspector during child text/graphic selection, removed dock/scroll-layer copy, and equal-height 70 % / 30 % CSS rules).
 - Related suites (`public-entry-points`, `quick-batch-table`, `studio-ui-session-243`, `template-composer`): `45 / 45` pass.
 - `npx wrangler deploy --dry-run`: exit `0` (`3001.47 KiB` / `1360.72 KiB` gzip).
+
+## 20. Undo / redo, copy clean-up, no vertical grid lines, non-overlapping background scene boxes, sticky add buttons and 80 s / 7.5 px sliders (2026-11-08)
+
+### 20.1 Request & authority order
+
+- **Primary source of truth:** the current workspace code — `src/client/markup.ts`, `src/client/timeline-editor.ts`, `src/client/styles.ts`, `src/client/app-js.ts`, `tests/timeline-editor.test.mjs`.
+- **Secondary source of truth:** this file, Sections 11–19.
+- **Changes requested on `layout=timeline`:**
+  1. Add **undo / redo** buttons to the timeline editor page.
+  2. Remove the text *"drag this text clip directly on the preview canvas to set X and Y without the sliders"*.
+  3. Remove *"pixabay-1046.mp4 · pixabay · background layer"* from the tracks layer → the media clip note keeps the clip label only.
+  4. Remove the newline between the media clip label and **Selected Scene**.
+  5. Remove the eyebrow text **"TIMELINE EDITOR"** above the Selected Scene title.
+  6. Remove the vertical lines in the timeline tracks and in the per-second timing ruler.
+  7. Fix the background layer so the scene boxes never overlap.
+  8. Remove *"3 / 4 lanes · above the background"*.
+  9. The **＋ Text** / **＋ Graphic** buttons of the text & graphics track must be sticky to the left and on the front-most paint layer, not on the lane's own index layer.
+  10. Remove the copy **"SCROLL"**.
+  11. Remove the **"＋ Lane 3 / 4"** button next to the zoom control.
+  12. Every seconds slider in the selected-element sections must max out at **80 seconds**.
+  13. In the **BACKGROUND ELEMENT** section next to the (70 % wide) preview canvas the font size must be **7.5 px** only.
+
+### 20.2 Root-cause study & implementation
+
+1. **Undo / redo (`src/client/markup.ts`, `src/client/timeline-editor.ts`, `src/client/styles.ts`)**
+   - The editor had no history at all: `persistNow()` was the only funnel, and every mutation went through it (directly or through the 180 ms debounced `scheduleSave()`), so there was nothing to step back to.
+   - Added `#timeline-undo` / `#timeline-redo` (`data-timeline-action="undo|redo"`) to the sticky `.te-topbar`, styled by the new `.te-history` rule and disabled (not hidden) while their stack is empty, so the bar never reflows.
+   - `snapshotProject()` serialises **only the editable project data** — `durationSec`, `scenes`, `tracks` — so selection, playhead and zoom never create a history entry. `recordHistoryEntry()` is called **inside** `persistNow()`, therefore one drag or one slider sweep is one undo step (the debounce collapses the intermediate states) instead of dozens.
+   - Two stacks (`historyUndo` / `historyRedo`, cap `HISTORY_LIMIT = 80`), `lastSnapshot` to skip no-op saves, and a `suppressHistory` latch so an undo never records itself. `restoreSnapshot()` re-renders timeline + inspector + canvas, keeps the selection when it still exists, and re-clamps the playhead. `applyHistorySnapshot()` persists immediately so a reload finds the restored project.
+   - `resetHistory()` runs at the end of `boot()` (after the first `persistNow()`), so opening a project never offers to undo its own normalisation.
+   - Shortcuts: `Ctrl/Cmd+Z` = undo, `Ctrl/Cmd+Shift+Z` and `Ctrl+Y` = redo, bound on `document`, skipped while the focus is inside an `input` / `textarea` / `select` / contenteditable so the browser's text undo keeps working.
+   - Exposed as `window.__TIMELINE_EDITOR__.undo()`, `.redo()`, `.getHistory()` and mirrored in `window.__TIMELINE_EDITOR_HISTORY__`.
+
+2. **Drag-tip copy removal (`src/client/timeline-editor.ts`)**
+   - Deleted both `.te-inspector-note` tips — *"Tip: drag this text clip directly on the preview canvas to set X and Y without the sliders."* and the graphic twin — from `renderItemControls()`. The X/Y sliders stay tagged with `data-te-position` so the canvas drag still writes them.
+
+3. **"pixabay-1046.mp4 · pixabay · background layer" (`src/client/timeline-editor.ts`)**
+   - The note was `item.label + " · " + item.mediaSource + " · background layer"`. It now prints `item.label` only: the provider tail and the "background layer" tail are gone, and the section itself already says *Background media*.
+
+4. **Newline between the media label and "Selected Scene" (`src/client/markup.ts`, `src/client/timeline-editor.ts`, `src/client/styles.ts`)**
+   - The clip name used to be its own `.tm-scene-inspector-title` row inside `#timeline-element-selector`, i.e. a line below the title.
+   - The heading is now `<div class="te-scene-heading"><div class="tm-sec-title">Selected Scene</div><span id="timeline-selected-name"></span></div>`; the name is written into that inline `<span>` with `.te-scene-heading { display:flex; flex-wrap:nowrap }` and an ellipsis, so the clip label sits on the same line as (and after) *Selected Scene*.
+
+5. **"TIMELINE EDITOR" eyebrow (`src/client/markup.ts`)**
+   - Removed `<div class="tm-scene-kicker">TIMELINE EDITOR</div>` from the Selected Scene panel head. The `.tm-scene-kicker` rule stays in the stylesheet because the BACKGROUND ELEMENT panel still uses it.
+
+6. **Vertical lines in the tracks and the ruler (`src/client/styles.ts`, `src/client/timeline-editor.ts`)**
+   - The "vertical line" was painted three times over: `border-left: 1px` on every `.te-ruler-tick`, the `i` dash under it, and a `repeating-linear-gradient(90deg, … 80px/81px/82px)` (the 80 px grid) on `.te-lane`, `.te-lane.te-background-lane`, `.te-group-fill` and `.te-scroll-layer`.
+   - All four lane/fill/scroll gradients are now `background-image: none` / a flat token, the tick lost its `border-left` (`border-left: 0`) and `.te-ruler-tick i { display: none }`. The two-cell stripe effect that made the ticks look like they continued through the lanes is therefore gone; `.te-dock-tail` keeps its horizontal stripes because they are not part of the tracks.
+   - The one-second interval logic (`2 s` ≤ 30 s, `5 s` ≤ 120 s, `10 s` ≤ 360 s, `30 s`, `60 s`) is untouched: only the line art was removed, the tick labels stay.
+
+7. **Overlapping background scene boxes (`src/client/timeline-editor.ts`)**
+   - Each clip box was `left = startSec * pps`, `width = max(12, durationSec * pps)` with **no neighbour awareness**. A saved project (or a clip dragged/resized past its neighbour — the scene ripple only moves the clips that follow the dragged one) therefore produced boxes that ran over each other in the background lane.
+   - Added `clampClipBox(track, item)`: it shortens the **drawn** box to the real gap before the next clip in the same track (`next.startSec - start`), so boxes are butt-joined and can never overlap, while the model keeps the user's timing (the inspector and the dock drag still clamp for real). `htmlTrackItem()` now uses that box for `left` and `width`, so the fix covers the background lane, the text/graphics lanes, the audio lanes and the hidden subtitle lane at once.
+
+8. **"3 / 4 lanes · above the background" (`src/client/timeline-editor.ts`, `src/client/markup.ts`)**
+   - The text was the `<small>` inside the `TEXT & GRAPHICS` group label. It is removed, and the label now reads just `TEXT & GRAPHICS`.
+
+9. **Sticky, front-most ＋ Text / ＋ Graphic (`src/client/timeline-editor.ts`, `src/client/styles.ts`)**
+   - The two buttons used to be plain inline children of `.te-group-fill.te-visual-actions`, i.e. they lived in the lane's own cell and scrolled away with the tracks.
+   - They are now wrapped in `.te-visual-actions-sticky`, which is `position: sticky; left: 156px; z-index: 30`. `left: 156px` is exactly the width of the sticky label column, so the pair pins to the left edge of the **tracks area** (right where the lane labels end) and never covers them; `z-index: 30` puts it above the label column (5), the ruler (12), the playhead (6) and every clip (2–4), so nothing can paint over the buttons — they are on the front-most layer, not on the lane's index layer. The filler cell had to switch to `overflow: visible`, otherwise the cell itself became the sticky scroll container and the buttons never moved. The `@media (max-width: 560px)` block moves the offset to `132px` together with the narrower label column.
+
+10. **"SCROLL" (`src/client/timeline-editor.ts`, `src/client/styles.ts`)**
+    - The corner cell above the drag-to-pan handle was `<div class="te-grid-corner">SCROLL</div>`. It is now `te-grid-corner te-grid-corner-scroll` with `aria-hidden="true"` and no text; `.te-grid-corner-scroll { padding: 0 }` keeps the grid aligned. The `TRACKS` corner and the pan behaviour are unchanged.
+
+11. **"＋ Lane 3 / 4" next to zoom (`src/client/markup.ts`, `src/client/timeline-editor.ts`)**
+    - Removed `<button class="te-secondary" data-timeline-action="add-layer">＋ Lane <span id="timeline-layer-count">…</span></button>` from `.te-dock-actions` and dropped the `#timeline-layer-count` DOM sync from `renderTimeline()`.
+    - The dock toolbar is now `Zoom` + `Export MP4` only. The four-lane cap is untouched — the lane is opened implicitly by ＋ Text / ＋ Graphic (which already call `addVisualTrack()`), and `handleAction("add-layer")` / `api.addVisualTrack()` stay wired.
+
+12. **80-second cap on the seconds sliders (`src/client/timeline-editor.ts`)**
+    - `renderItemControls()` computed `cap = min(MAX_DURATION_SEC, max(60, durationSec*2, start+duration))`. It is now `MAX_TIMING_SEC = 80`, a named constant, so *Start (seconds)* and *Duration (seconds)* of every selected element (background media, text, graphic, audio, and the child's *Start / Duration inside background*) stop at 80 s. `MAX_DURATION_SEC = 3600` still bounds the project itself, and `MIN_CLIP_SEC = 0.25` the shortest clip.
+
+13. **7.5 px typography in the BACKGROUND ELEMENT panel (`src/client/styles.ts`)**
+    - The 30 % `#timeline-child-panel` next to the 70 % preview re-uses the shared `.tm-scene-*` vocabulary, whose sizes are 0.56–0.82 rem. A dedicated block now pins the panel to `font-size: 7.5px !important` for the kicker, the clip title, the pinned-window line, the ＋ Child text / ＋ Child graphic buttons, the child rows, the empty-state copy, the inspector labels/readouts/notes and the panel's inputs and selects. Only the type shrinks: the 32 px min-height of the inputs and buttons (the tap target) is untouched.
+
+### 20.3 Files touched in this section
+
+- `src/client/markup.ts` — undo/redo buttons in `.te-topbar`; `＋ Lane` button removed from `.te-dock-actions`; `TIMELINE EDITOR` kicker removed; clip name moved inline into `.te-scene-heading`; reading-order comment updated.
+- `src/client/timeline-editor.ts` — history stacks, `snapshotProject` / `recordHistoryEntry` / `restoreSnapshot` / `applyHistorySnapshot` / `undo` / `redo` / `resetHistory`, `undo`+`redo` actions and shortcuts, `api.undo/redo/getHistory`; both drag tips removed; media note reduced to the clip label; `MAX_TIMING_SEC = 80`; `clampClipBox()`; `SCROLL` corner, `n / 4 lanes · above the background`, `#timeline-layer-count` sync removed; sticky wrapper around the two add buttons.
+- `src/client/styles.ts` — `.te-history`, `.te-group-fill.te-visual-actions { overflow: visible }`, `.te-visual-actions-sticky`, `.te-grid-corner-scroll`, `.te-scene-heading` / `.te-selected-name`, 7.5 px child-panel block, lane/fill/scroll gradients removed, ruler tick line removed.
+- `tests/timeline-editor.test.mjs` — three assertions updated for the removed copy/grid and one new 29th test covering the whole section.
+
+### 20.4 Verification
+
+- `node --import tsx --test tests/timeline-editor.test.mjs`: **29 / 29** pass (28 before + the new section-20 test; three older assertions updated: the scroll layer must not paint the 80 px stripe, the lane counter is gone, the drag tip is gone).
+- Related suites (`quick-batch-table`, `final-media-cap-actions`, `public-entry-points`, `template-composer`): **53 / 53** pass.
+- `npx wrangler deploy --dry-run`: exit `0` (`3013.80 KiB` / `1364.72 KiB` gzip).
+- `npx tsc --noEmit`: only the 31 pre-existing `src/index.ts` diagnostics, identical to the baseline.
+
+### 20.5 Notes, gotchas and deliberate decisions
+
+- **Undo is model state, not UI state.** Selection, playhead and zoom are intentionally outside the snapshot: clicking around must never fill the history, and an undo must never move the user's playhead somewhere unexpected.
+- **The debounce is the history granularity.** One slider sweep = one entry because `recordHistoryEntry()` sits in `persistNow()`, which only runs after the 180 ms debounce or on an explicit leave/save. A dock drag calls `persistNow()` on `pointerup`, so a drag is one entry too.
+- **`clampClipBox()` clamps the drawing, not the data.** The stored timing is still the user's (clamped by the inspector/drag rules); a saved overlap no longer paints over the next scene box, and the next real timing edit settles the model.
+- **Sticky offsets are tied to the label column width** (`156px`, `132px` below 560 px). If the label column changes again, `.te-visual-actions-sticky { left }` must change with it — this is the one coupling to remember.
+- **The 7.5 px rule is scoped to `#timeline-child-panel`.** The Selected Scene inspector below the preview keeps its own reading-size type; only the narrow BACKGROUND ELEMENT column is condensed.
