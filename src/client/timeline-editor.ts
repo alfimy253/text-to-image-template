@@ -13,6 +13,12 @@ export const TIMELINE_EDITOR_JS = `
 		var DB_STORE = "projects";
 		var STATE_PREFIX = "ytvs.timeline-editor.v1.";
 		var MAX_DURATION_SEC = 3600;
+		/*
+		 * Every seconds slider in the selected-element sections stops at 80 s.
+		 * Shorter values are still allowed (the project duration caps the whole
+		 * timeline), this is only the upper bound of the range control.
+		 */
+		var MAX_TIMING_SEC = 80;
 		var MIN_CLIP_SEC = 0.25;
 		var MAX_VISUAL_TRACKS = 4;
 		var MAX_MEDIA_FILES = 100;
@@ -189,6 +195,22 @@ export const TIMELINE_EDITOR_JS = `
 		var isExporting = false;
 		var exportAudioContext = null;
 		var audioSources = Object.create(null);
+		/*
+		 * Undo / redo history
+		 * -------------------
+		 * Two stacks of JSON snapshots of the editable project data only
+		 * (durationSec + scenes + tracks). Selection, playhead and zoom are
+		 * deliberately excluded, so merely clicking a clip never creates a
+		 * history entry. A snapshot is recorded inside persistNow(), which is
+		 * the single funnel every mutation already ends in (directly, or via
+		 * the debounced scheduleSave), so one drag or one slider sweep is one
+		 * undo step instead of dozens.
+		 */
+		var historyUndo = [];
+		var historyRedo = [];
+		var HISTORY_LIMIT = 80;
+		var lastSnapshot = "";
+		var suppressHistory = false;
 		var canvas = document.getElementById("timeline-preview-canvas");
 		var canvasContext = canvas && typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
 
@@ -768,11 +790,107 @@ export const TIMELINE_EDITOR_JS = `
 			if (clamped > state.durationSec) state.durationSec = Math.min(MAX_DURATION_SEC, Math.ceil(clamped / 5) * 5);
 		}
 
+		/*
+		 * History helpers
+		 * ---------------
+		 * snapshotProject() serialises only what the user edits. trackExpanded
+		 * and the audio mix are part of tracks, so they are covered too.
+		 */
+		function snapshotProject() {
+			if (!state) return "";
+			try {
+				return JSON.stringify({ durationSec: state.durationSec, scenes: state.scenes, tracks: state.tracks });
+			} catch (error) { return ""; }
+		}
+		function updateHistoryButtons() {
+			var undo = document.getElementById("timeline-undo");
+			var redo = document.getElementById("timeline-redo");
+			if (undo) {
+				undo.disabled = !historyUndo.length;
+				undo.setAttribute("aria-disabled", historyUndo.length ? "false" : "true");
+				undo.title = historyUndo.length ? "Undo the last timeline edit (Ctrl+Z)" : "Nothing to undo";
+			}
+			if (redo) {
+				redo.disabled = !historyRedo.length;
+				redo.setAttribute("aria-disabled", historyRedo.length ? "false" : "true");
+				redo.title = historyRedo.length ? "Redo the last undone edit (Ctrl+Shift+Z)" : "Nothing to redo";
+			}
+			window.__TIMELINE_EDITOR_HISTORY__ = { undo: historyUndo.length, redo: historyRedo.length };
+		}
+		function resetHistory() {
+			historyUndo = [];
+			historyRedo = [];
+			lastSnapshot = snapshotProject();
+			updateHistoryButtons();
+		}
+		/* Called from persistNow(): pushes the snapshot BEFORE the last edit. */
+		function recordHistoryEntry() {
+			var next = snapshotProject();
+			if (!next) return;
+			if (!lastSnapshot) { lastSnapshot = next; return; }
+			if (next === lastSnapshot) return;
+			historyUndo.push(lastSnapshot);
+			if (historyUndo.length > HISTORY_LIMIT) historyUndo.shift();
+			historyRedo = [];
+			lastSnapshot = next;
+			updateHistoryButtons();
+		}
+		function restoreSnapshot(json) {
+			var parsed = null;
+			try { parsed = JSON.parse(json || "null"); } catch (error) { parsed = null; }
+			if (!parsed || !Array.isArray(parsed.tracks)) return false;
+			var selectedTrack = String(state && state.selectedTrackId || "");
+			var selectedItem = String(state && state.selectedItemId || "");
+			var playhead = number(state && state.playheadSec, 0);
+			state.durationSec = clamp(parsed.durationSec, 1, MAX_DURATION_SEC);
+			state.scenes = parsed.scenes || state.scenes;
+			state.tracks = parsed.tracks;
+			state.playheadSec = clamp(playhead, 0, state.durationSec);
+			state.selectedTrackId = findTrack(selectedTrack) ? selectedTrack : (mediaTrack() ? mediaTrack().id : selectedTrack);
+			state.selectedItemId = findItem(selectedItem) ? selectedItem : "";
+			renderTimeline();
+			renderInspector();
+			drawPreview();
+			updateReadout();
+			return true;
+		}
+		function applyHistorySnapshot(json) {
+			suppressHistory = true;
+			try {
+				if (!restoreSnapshot(json)) return false;
+				/* Persist immediately so the restored project is what a reload finds. */
+				persistNow();
+				lastSnapshot = snapshotProject();
+				return true;
+			} finally { suppressHistory = false; }
+		}
+		function undo() {
+			if (!historyUndo.length) { setStatus("Nothing to undo yet.", true); return false; }
+			var current = snapshotProject();
+			var previous = historyUndo.pop();
+			historyRedo.push(current);
+			applyHistorySnapshot(previous);
+			updateHistoryButtons();
+			setSaveStatus("Undo · " + historyUndo.length + " step" + (historyUndo.length === 1 ? "" : "s") + " left", false);
+			return true;
+		}
+		function redo() {
+			if (!historyRedo.length) { setStatus("Nothing to redo yet.", true); return false; }
+			var current = snapshotProject();
+			var next = historyRedo.pop();
+			historyUndo.push(current);
+			applyHistorySnapshot(next);
+			updateHistoryButtons();
+			setSaveStatus("Redo · " + historyRedo.length + " step" + (historyRedo.length === 1 ? "" : "s") + " left", false);
+			return true;
+		}
+
 		function persistNow() {
 			if (!state) return false;
 			syncScenesFromTracks();
 			state.durationSec = Math.max(state.durationSec, maxTimelineEnd());
 			state.updatedAt = Date.now();
+			if (!suppressHistory) recordHistoryEntry();
 			try {
 				window.localStorage.setItem(storageKey, JSON.stringify(state));
 				setSaveStatus("Timing saved in this browser", false);
@@ -835,9 +953,34 @@ export const TIMELINE_EDITOR_JS = `
 			scheduleSave();
 		}
 
+		/*
+		 * Neighbour-safe box.
+		 * -------------------
+		 * Clips inside one track must never paint over each other. A background
+		 * scene box is drawn from its own start for its own duration, but a
+		 * saved or dragged clip can still run past the next clip's start (the
+		 * scene ripple only moves the clips that follow, never the dragged one).
+		 * clampClipBox() therefore shortens the DRAWN box to the gap that is
+		 * really left before the next clip, so the lane shows butt-joined scene
+		 * boxes instead of overlapping ones. The model is untouched: timing is
+		 * still edited through the inspector / dock drag, which clamps for real.
+		 */
+		function clampClipBox(track, item) {
+			var start = Math.max(0, number(item.startSec, 0));
+			var duration = Math.max(MIN_CLIP_SEC, number(item.durationSec, MIN_CLIP_SEC));
+			var items = track && track.items ? track.items : [];
+			items.forEach(function (other) {
+				if (!other || other === item) return;
+				var otherStart = number(other.startSec, 0);
+				if (otherStart <= start + 0.001) return;
+				if (otherStart - start < duration) duration = Math.max(0, otherStart - start);
+			});
+			return { startSec: start, durationSec: duration };
+		}
 		function htmlTrackItem(track, item, pixelsPerSecond) {
-			var left = Math.max(0, item.startSec * pixelsPerSecond);
-			var width = Math.max(12, item.durationSec * pixelsPerSecond);
+			var box = clampClipBox(track, item);
+			var left = Math.max(0, box.startSec * pixelsPerSecond);
+			var width = Math.max(12, box.durationSec * pixelsPerSecond);
 			var selected = String(item.id) === String(state.selectedItemId) ? " selected" : "";
 			var empty = item.kind === "media" && !item.assetId ? " placeholder" : "";
 			var name = String(item.label || item.name || item.kind);
@@ -865,7 +1008,12 @@ export const TIMELINE_EDITOR_JS = `
 				grid.style.setProperty("--te-content-width", width + "px");
 				grid.style.gridTemplateColumns = "156px var(--te-content-width)";
 			var interval = state.durationSec <= 30 ? 2 : state.durationSec <= 120 ? 5 : state.durationSec <= 360 ? 10 : state.durationSec <= 900 ? 30 : 60;
-			var html = '<div class="te-grid-corner">SCROLL</div><div class="te-scroll-lane" data-scroll-lane style="width:' + width + 'px"></div><div class="te-grid-corner">TRACKS</div><div class="te-ruler" style="width:' + width + 'px">';
+			/*
+			 * The corner above the scroll handle is intentionally empty: the lane
+			 * below it is a drag-to-pan handle, and the word "SCROLL" was removed
+			 * from the UI on request.
+			 */
+			var html = '<div class="te-grid-corner te-grid-corner-scroll" aria-hidden="true"></div><div class="te-scroll-lane" data-scroll-lane style="width:' + width + 'px"></div><div class="te-grid-corner">TRACKS</div><div class="te-ruler" style="width:' + width + 'px">';
 			for (var tick = 0; tick <= state.durationSec; tick += interval) {
 				html += '<span class="te-ruler-tick" style="left:' + (tick * pps).toFixed(1) + 'px"><i></i>' + esc(formatTime(tick)) + '</span>';
 			}
@@ -886,8 +1034,20 @@ export const TIMELINE_EDITOR_JS = `
 			 * top of the existing ones.
 			 */
 			var dockVisuals = visuals.slice().reverse();
-			html += '<div class="te-group-title te-group-visuals"><span class="te-group-label">TEXT &amp; GRAPHICS <small>' + visuals.length + ' / ' + MAX_VISUAL_TRACKS + ' lanes · above the background</small></span></div>';
-			html += '<div class="te-group-fill te-visual-actions"><button type="button" class="te-add-inline" data-timeline-action="add-text">＋ Text</button><button type="button" class="te-add-inline" data-timeline-action="add-graphic">＋ Graphic</button>' + playheadHtml(playheadLeft, false) + '</div>';
+			/*
+			 * The lane count readout ("n / 4 lanes · above the background") was
+			 * removed on request; the count was also duplicated by the dock's
+			 * lane button that has since been dropped.
+			 */
+			html += '<div class="te-group-title te-group-visuals"><span class="te-group-label">TEXT &amp; GRAPHICS</span></div>';
+			/*
+			 * The two add buttons live in this filler cell but are pinned with
+			 * position: sticky at the left edge of the tracks area, on the
+			 * front-most layer of the dock (z-index: 30), so they keep their place
+			 * next to the lane labels instead of scrolling away with the tracks -
+			 * and they are never painted under a lane, a clip or the playhead.
+			 */
+			html += '<div class="te-group-fill te-visual-actions"><span class="te-visual-actions-sticky"><button type="button" class="te-add-inline" data-timeline-action="add-text">＋ Text</button><button type="button" class="te-add-inline" data-timeline-action="add-graphic">＋ Graphic</button></span>' + playheadHtml(playheadLeft, false) + '</div>';
 			dockVisuals.forEach(function (track) {
 				html += '<div class="te-track-label' + (String(state.selectedTrackId) === String(track.id) ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(track.id) + '">' + esc(track.label) + '<small>' + (track.items.length ? track.items.length + (track.items.length === 1 ? " clip" : " clips") : "empty") + '</small></button></div>';
 				html += '<div class="te-lane te-visual-lane" data-lane-track="' + esc(track.id) + '" style="width:' + width + 'px">';
@@ -950,8 +1110,6 @@ export const TIMELINE_EDITOR_JS = `
 			grid.innerHTML = html;
 			var duration = document.getElementById("timeline-duration-label");
 			if (duration) duration.textContent = formatTime(state.durationSec);
-			var layerCount = document.getElementById("timeline-layer-count");
-			if (layerCount) layerCount.textContent = visuals.length + " / " + MAX_VISUAL_TRACKS;
 			var zoomInput = document.getElementById("timeline-zoom");
 			var zoomValue = document.getElementById("timeline-zoom-value");
 			if (zoomInput) zoomInput.value = String(zoom);
@@ -1163,7 +1321,13 @@ export const TIMELINE_EDITOR_JS = `
 		}
 
 		function renderItemControls(inspector, track, item) {
-			var cap = Math.min(MAX_DURATION_SEC, Math.max(60, state.durationSec * 2, item.startSec + item.durationSec));
+			/*
+			 * The seconds sliders of every selected-element section (Start,
+			 * Duration, and the background's Trim in) are capped at
+			 * MAX_TIMING_SEC (80 s) instead of the old 60 s / 600 s bounds, so a
+			 * scene or a clip can always be authored up to 80 s.
+			 */
+			var cap = MAX_TIMING_SEC;
 			var parentEntry = item.parentId ? findItem(item.parentId) : null;
 			var parentItem = parentEntry && parentEntry.item && parentEntry.item.kind === "media" ? parentEntry.item : null;
 			addSectionTitle(inspector, "Timing");
@@ -1185,10 +1349,19 @@ export const TIMELINE_EDITOR_JS = `
 				addSectionTitle(inspector, "Background media");
 				var info = document.createElement("div");
 				info.className = "te-inspector-note";
-				info.textContent = item.assetId ? (item.label + (item.mediaSource ? " · " + item.mediaSource : "") + " · background layer") : "No media file is attached to this scene yet. Add a local image, GIF or MP4 to the single background layer.";
+				/*
+				 * The clip name alone. The provider/provider-dot suffixes and the
+				 * "background layer" tail were noise: the section already is the
+				 * background media, so the label never repeats it.
+				 */
+				info.textContent = item.assetId ? String(item.label || item.name || "Media") : "No media file is attached to this scene yet. Add a local image, GIF or MP4 to the single background layer.";
 				inspector.appendChild(info);
 				addSelect(inspector, "Fit", [["Fill frame", "cover"], ["Fit inside", "contain"]], item.fit || "cover", function (value) { item.fit = value; drawPreview(); scheduleSave(); });
-				addRange(inspector, "Trim in (seconds)", item.trimStartSec || 0, 0, 600, 0.25, function (value) { item.trimStartSec = value; drawPreview(); scheduleSave(); }, "s");
+				/*
+				 * "Trim in" is the last seconds-based slider of the section, so it
+				 * follows the same 80 s ceiling instead of the old 600 s one.
+				 */
+				addRange(inspector, "Trim in (seconds)", clamp(item.trimStartSec || 0, 0, MAX_TIMING_SEC), 0, MAX_TIMING_SEC, 0.25, function (value) { item.trimStartSec = value; drawPreview(); scheduleSave(); }, "s");
 				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { item.visible = value; drawPreview(); scheduleSave(); });
 				return;
 			}
@@ -1211,10 +1384,6 @@ export const TIMELINE_EDITOR_JS = `
 				addSelect(inspector, "Alignment", [["Left", "left"], ["Center", "center"], ["Right", "right"]], item.align || "center", function (value) { item.align = value; drawPreview(); scheduleSave(); });
 				tagPositionControl(addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { item.x = value; drawPreview(); scheduleSave(); }, "%"), "x");
 				tagPositionControl(addRange(inspector, "Y position", item.y == null ? 78 : item.y, 0, 100, 1, function (value) { item.y = value; drawPreview(); scheduleSave(); }, "%"), "y");
-				var textDragNote = document.createElement("div");
-				textDragNote.className = "te-inspector-note";
-				textDragNote.textContent = "Tip: drag this text clip directly on the preview canvas to set X and Y without the sliders.";
-				inspector.appendChild(textDragNote);
 				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { item.visible = value; drawPreview(); scheduleSave(); });
 				return;
 			}
@@ -1225,10 +1394,6 @@ export const TIMELINE_EDITOR_JS = `
 				addColor(inspector, "Color", item.color || "#7aac2b", function (value) { item.color = value; drawPreview(); scheduleSave(); });
 				tagPositionControl(addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { item.x = value; drawPreview(); scheduleSave(); }, "%"), "x");
 				tagPositionControl(addRange(inspector, "Y position", item.y == null ? 50 : item.y, 0, 100, 1, function (value) { item.y = value; drawPreview(); scheduleSave(); }, "%"), "y");
-				var graphicDragNote = document.createElement("div");
-				graphicDragNote.className = "te-inspector-note";
-				graphicDragNote.textContent = "Tip: drag this graphic directly on the preview canvas to set X and Y without the sliders.";
-				inspector.appendChild(graphicDragNote);
 				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { item.visible = value; drawPreview(); scheduleSave(); });
 			}
 		}
@@ -1251,10 +1416,15 @@ export const TIMELINE_EDITOR_JS = `
 			var inspectorItem = bgParent || item;
 			var selectedScene = inspectorItem && inspectorItem.sceneId ? sceneById(inspectorItem.sceneId) : activeSceneAt(state.playheadSec);
 			selectedSceneId = selectedScene && selectedScene.id || selectedSceneId;
-			var selectedLabel = document.createElement("div");
-			selectedLabel.className = "tm-scene-inspector-title";
-			selectedLabel.textContent = inspectorItem ? String(inspectorItem.label || inspectorItem.name || (inspectorItem.kind === "text" ? "Text" : inspectorItem.kind)) : inspectorTrack ? inspectorTrack.label : "Nothing selected";
-			selector.appendChild(selectedLabel);
+			/*
+			 * The selected clip's name is painted INLINE next to "Selected Scene"
+			 * (one line, no newline between the clip label and the section title)
+			 * instead of as a separate title row above the element pills.
+			 */
+			var selectedName = document.getElementById("timeline-selected-name");
+			if (selectedName) {
+				selectedName.textContent = inspectorItem ? String(inspectorItem.label || inspectorItem.name || (inspectorItem.kind === "text" ? "Text" : inspectorItem.kind)) : inspectorTrack ? inspectorTrack.label : "";
+			}
 			if (selectedScene && (!inspectorItem || inspectorItem.kind !== "media")) {
 				sceneElementEntries(selectedScene.id).forEach(function (candidate) {
 					if (candidate.item && candidate.item.parentId) return;
@@ -2240,6 +2410,8 @@ export const TIMELINE_EDITOR_JS = `
 		}
 
 		function handleAction(action, target) {
+			if (action === "undo") { undo(); return; }
+			if (action === "redo") { redo(); return; }
 			if (action === "export") { exportTimeline(); return; }
 			if (action === "play") { if (recorder || isExporting) return; if (!isPlaying && state.playheadSec >= state.durationSec) setPlayhead(0, false); setPlaying(!isPlaying); return; }
 			if (action === "restart") { if (recorder || isExporting) return; setPlaying(false); setPlayhead(0, true); return; }
@@ -2804,6 +2976,24 @@ export const TIMELINE_EDITOR_JS = `
 				if (event.preventDefault) event.preventDefault();
 				chooseItem(foundChild.track, foundChild.item);
 			});
+			/*
+			 * Undo / redo keyboard shortcuts. Ctrl/Cmd+Z steps back,
+			 * Ctrl/Cmd+Shift+Z (and Ctrl+Y) steps forward. A shortcut typed
+			 * inside a text field keeps the browser's native text undo.
+			 */
+			document.addEventListener("keydown", function (event) {
+				if (!state || isExporting || recorder) return;
+				var key = String(event.key || "").toLowerCase();
+				if (key !== "z" && key !== "y") return;
+				if (!(event.ctrlKey || event.metaKey)) return;
+				var target = event.target;
+				var tag = String(target && target.tagName || "").toLowerCase();
+				if (tag === "input" || tag === "textarea" || tag === "select" || target && target.isContentEditable) return;
+				if (event.preventDefault) event.preventDefault();
+				if (key === "y") redo();
+				else if (event.shiftKey) redo();
+				else undo();
+			});
 			var scrollEl = document.getElementById("timeline-scroll");
 			if (scrollEl) {
 				scrollEl.addEventListener("scroll", function () {
@@ -2996,6 +3186,12 @@ export const TIMELINE_EDITOR_JS = `
 			renderInspector();
 			drawPreview();
 			persistNow();
+			/*
+			 * The loaded (and just normalised) project is the first history
+			 * state, so opening a project never offers an undo of its own
+			 * normalisation.
+			 */
+			resetHistory();
 			if (isPlaying || shouldAnimatePreview()) schedulePreviewFrame();
 			waitForStoredAssets();
 		}
@@ -3020,6 +3216,10 @@ export const TIMELINE_EDITOR_JS = `
 			return parentItem ? childItemsFor(parentItem).map(function (entry) { return entry.item; }) : [];
 		};
 		api.setItemTiming = setItemTiming;
+		/* Undo / redo of the editable project data, exposed for tests and tooling. */
+		api.undo = function () { return state ? undo() : false; };
+		api.redo = function () { return state ? redo() : false; };
+		api.getHistory = function () { return { undo: historyUndo.length, redo: historyRedo.length }; };
 		/* The row's project detail (style + template-modal effects) is inspectable. */
 		api.getProjectDetail = function () { return state ? state.projectDetail : null; };
 		api.getStyleEffects = function (style) { return styleEffectsFor(style); };
