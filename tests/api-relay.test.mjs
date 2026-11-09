@@ -28,9 +28,11 @@ import test from "node:test";
 import vm from "node:vm";
 
 import {
+	MAX_RELAY_WORKERS,
 	RELAY_AI_PATH,
 	RELAY_AI_PATHS,
 	RELAY_DEFAULT_CONFIG,
+	RELAY_ENDPOINT_PATH,
 	RELAY_MAX_BODY_BYTES,
 	RELAY_PING_PATH,
 	RELAY_RESULT_HEADER,
@@ -183,7 +185,7 @@ test("RELAY_WORKERS env and options.envWorkers are merged into the pool", async 
 /* 2. Strategy + health                                               */
 /* ------------------------------------------------------------------ */
 
-test("round-robin rotates the starting member, least-pending prefers idle members", () => {
+test("round robin walks the weighted ring: each backup gets 3 turns, the UI Worker 1", () => {
 	resetIsolate();
 	const pool = [
 		{ id: "local", url: SELF, local: true, label: "local" },
@@ -191,22 +193,26 @@ test("round-robin rotates the starting member, least-pending prefers idle member
 		{ id: "b", url: "https://b.test", local: false, label: "b" }
 	];
 	const rotation = config({ strategy: "round-robin" });
-	const seen = new Set();
-	for (let i = 0; i < 6; i++) {
-		seen.add(orderRelayCandidates(pool, rotation)[0].id);
-	}
-	assert.deepEqual(Array.from(seen).sort(), ["a", "b", "local"]);
 
-	noteRelaySuccess("local", 2_000);
-	noteRelaySuccess("a", 10);
-	noteRelaySuccess("b", 900);
-	noteRelaySuccess("b", 900);
-	const least = orderRelayCandidates(pool, config({ strategy: "least-pending" }));
-	assert.equal(least[0].id, "a", "the member with the lowest moving latency goes first");
+	/*
+	 * Ring = local x1 + a x3 + b x3 (RELAY_BACKUP_RING_WEIGHT). Seven picks
+	 * walk every slot once, which is the whole point of Session 331: the
+	 * UI-serving Worker gets the smaller share of the API work.
+	 */
+	const picks = [];
+	for (let i = 0; i < 7; i++) picks.push(orderRelayCandidates(pool, rotation)[0].id);
+	assert.equal(picks.filter((id) => id === "local").length, 1, "the UI Worker is one slot in seven");
+	assert.equal(picks.filter((id) => id === "a").length, 3);
+	assert.equal(picks.filter((id) => id === "b").length, 3);
 
-	/* A weighted candidate list still contains every member exactly once. */
-	const weighted = orderRelayCandidates(pool, config({ strategy: "weighted", localWeight: 3 }));
-	assert.deepEqual(weighted.map((entry) => entry.id).sort(), ["a", "b", "local"]);
+	/* Round robin is the ONLY scheme: an old value is dropped. */
+	assert.equal(normalizeRelayConfig({ strategy: "least-pending" }).strategy, "round-robin");
+	assert.equal(normalizeRelayConfig({ strategy: "weighted", localWeight: 4 }).strategy, "round-robin");
+
+	/* Weight 0 keeps this Worker out of the ring, never out of the pool. */
+	const off = orderRelayCandidates(pool, config({ localWeight: 0 }));
+	assert.equal(off[0].local, false, "the first pick is a backup");
+	assert.equal(off[off.length - 1].id, "local", "but this Worker is still the last resort");
 });
 
 test("a failing backup is circuit-broken, cooling members move to the end, success heals it", () => {
@@ -594,7 +600,7 @@ test("the rotation policy is password-gated and stored in KV", async () => {
 		requestFor("/api/relay/config", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ pw: "wrong", strategy: "least-pending" })
+			body: JSON.stringify({ pw: "wrong", strategy: "weighted" })
 		}),
 		new URL(SELF + "/api/relay/config"),
 		env,
@@ -614,13 +620,13 @@ test("the rotation policy is password-gated and stored in KV", async () => {
 	);
 	assert.equal(saved.status, 200);
 	const savedBody = await saved.json();
-	assert.equal(savedBody.config.strategy, "least-pending");
+	/* Session 331: a posted scheme no longer survives — round robin only. */
+	assert.equal(savedBody.config.strategy, "round-robin");
 	assert.equal(savedBody.config.localWeight, 2);
-	assert.equal(savedBody.config.clientRotation, false);
 	assert.ok(env.KV_BINDING.store.has("config:relay"));
 
 	const readBack = await readRelayConfig(env);
-	assert.equal(readBack.strategy, "least-pending");
+	assert.equal(readBack.strategy, "round-robin");
 
 	/* Clamping: nonsense values never escape the documented ranges. */
 	const clamped = normalizeRelayConfig({ strategy: "nope", maxAttempts: 99, timeoutMs: 1, localWeight: 42 });
@@ -930,10 +936,9 @@ test("the Worker serves /api/relay/ping and answers a preflight before routing",
 /* 9. Browser rotation script                                         */
 /* ------------------------------------------------------------------ */
 
-function browserRuntime(handler, poolBody) {
+function browserRuntime(handler, answer) {
 	const calls = [];
-	const poolCalls = [];
-	const responses = { pool: poolBody };
+	const asks = [];
 	const win = {
 		location: { href: SELF + "/studio", origin: SELF },
 		navigator: { onLine: true },
@@ -944,119 +949,96 @@ function browserRuntime(handler, poolBody) {
 		Headers,
 		fetch: async (input, init) => {
 			const url = typeof input === "string" ? input : input.url;
-			if (url === "/api/relay/pool") {
-				poolCalls.push({ url, init });
-				return json(responses.pool);
+			if (url.indexOf("/api/relay/endpoint") === 0) {
+				const parsed = new URL(url, SELF);
+				const path = parsed.searchParams.get("path") || "";
+				const failed = parsed.searchParams.get("failed") || "";
+				asksPush(asks, { url, path, failed, init });
+				const body = typeof answer === "function" ? answer(path, failed) : answer;
+				return json(body || { success: false });
 			}
 			calls.push({ url, init });
 			return handler(url, init);
 		}
 	};
+	function asksPush(list, entry) { list.push(entry); }
 	win.fetch = win.fetch.bind(win);
-	const context = vm.createContext({ window: win, URL, Headers, AbortController, console, setTimeout, clearTimeout, Promise });
+	const context = vm.createContext({ window: win, URL, Headers, AbortController, console, setTimeout, clearTimeout, Promise, Blob, FormData, URLSearchParams });
 	vm.runInContext(API_ROTATION_JS, context);
-	return { win, calls, poolCalls };
+	return { win, calls, asks };
 }
 
-test("the browser rotates an AI path to a verified backup with the ticket header", async () => {
+test("the browser asks the Worker for the URL of an AI path and calls exactly that URL", async () => {
 	const ticket = "ticket-value";
-	const { win, calls } = browserRuntime(
+	const { win, calls, asks } = browserRuntime(
 		(url) => json({ ok: true, servedBy: url }),
-		{
+		(path) => ({
 			success: true,
-			enabled: true,
-			clientRotation: true,
-			endpoints: [
-				{ id: "local", url: "", local: true, verified: true },
-				{ id: "w1", url: "https://backup.test", local: false, verified: true }
-			],
+			path,
+			url: "https://backup.test" + path,
+			local: false,
+			endpointId: "worker:https://backup.test",
 			ticket,
 			expiresAt: Date.now() + 60_000
-		}
+		})
 	);
-	await win.__yvsApiRotation.refresh();
 
-	const seen = [];
-	for (let i = 0; i < 4; i++) {
-		await win.fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-	}
-	const targets = calls.map((call) => call.url);
-	assert.ok(targets.includes("/api/image"), "some requests stay on this Worker");
-	assert.ok(targets.includes("https://backup.test/api/image"), "some requests rotate to the backup");
-	const remote = calls.find((call) => call.url.startsWith("https://backup.test"));
-	assert.equal(remote.init.headers[RELAY_TICKET_HEADER], ticket);
-	assert.equal(remote.init.credentials, "omit");
-	const local = calls.find((call) => call.url === "/api/image");
-	assert.equal(local.init.credentials, undefined, "local requests keep their cookies");
-	assert.equal(win.__yvsApiRotation.stats().rotated, 2);
+	await win.fetch("/api/script", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+
+	/* One ask — the browser never picks the endpoint itself. */
+	assert.deepEqual(asks.map((ask) => ask.path), ["/api/script"]);
+	assert.equal(asks[0].url, "/api/relay/endpoint?path=%2Fapi%2Fscript", "the ask is a same-origin GET");
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0].url, "https://backup.test/api/script", "exactly the URL the server handed out");
+	assert.equal(calls[0].init.headers[RELAY_TICKET_HEADER], ticket);
+	assert.equal(calls[0].init.credentials, "omit", "a backup never receives this origin's cookies");
+	assert.equal(win.__yvsApiRotation.stats().rotated, 1);
 });
 
-test("a failing backup falls back to the local Worker inside the wrapped fetch", async () => {
-	const { win, calls } = browserRuntime(
-		(url) => {
-			if (url.startsWith("https://backup.test")) return json({ error: "no" }, 503);
-			return json({ ok: true });
-		},
-		{
-			success: true,
-			enabled: true,
-			clientRotation: true,
-			endpoints: [
-				{ id: "w1", url: "https://backup.test", local: false, verified: true }
-			],
-			ticket: "t",
-			expiresAt: Date.now() + 60_000
-		}
+test("a failing backup is reported to the server, which hands out the next URL", async () => {
+	const { win, calls, asks } = browserRuntime(
+		(url) => (url.indexOf("https://backup.test") === 0 ? json({ error: "no" }, 503) : json({ ok: true })),
+		(path, failed) => (failed
+			? { success: true, path, url: path, local: true, endpointId: "local" }
+			: { success: true, path, url: "https://backup.test" + path, local: false, endpointId: "worker:https://backup.test", ticket: "t", expiresAt: Date.now() + 60_000 })
 	);
-	await win.__yvsApiRotation.refresh();
-	/* Round-robin starts at local, so the second request is the backup's turn. */
-	const first = await win.fetch("/api/voiceover", { method: "POST", body: "{}" });
-	assert.equal(first.status, 200);
-	const second = await win.fetch("/api/voiceover", { method: "POST", body: "{}" });
-	assert.equal(second.status, 200);
-	assert.ok(calls.some((call) => call.url.startsWith("https://backup.test")), "the backup was tried");
-	assert.ok(calls.some((call) => call.url === "/api/voiceover"), "the local Worker answered");
+
+	const response = await win.fetch("/api/voiceover", { method: "POST", body: "{}" });
+	assert.equal(response.status, 200);
+	assert.equal(asks.length, 2, "the browser asks again instead of rotating on its own");
+	assert.equal(asks[1].failed, "worker:https://backup.test", "the failed endpoint id travels back to the server");
+	assert.ok(calls.some((call) => call.url.indexOf("https://backup.test") === 0), "the backup was tried");
+	assert.ok(calls.some((call) => call.url === "/api/voiceover"), "the UI Worker answered the retry");
 	assert.equal(win.__yvsApiRotation.stats().failovers, 1);
 });
 
-test("non-AI paths and pool routes are never rewritten", async () => {
-	const { win, calls } = browserRuntime(
+test("non-AI paths and relay routes never ask the server and are never rewritten", async () => {
+	const { win, calls, asks } = browserRuntime(
 		() => json({ ok: true }),
-		{
-			success: true,
-			enabled: true,
-			clientRotation: true,
-			endpoints: [{ id: "w1", url: "https://backup.test", local: false, verified: true }],
-			ticket: "t",
-			expiresAt: Date.now() + 60_000
-		}
+		() => ({ success: false, error: "must not be asked" })
 	);
-	await win.__yvsApiRotation.refresh();
 	const before = calls.length;
 	await win.fetch("/api/config/workers");
 	await win.fetch("/api/payments/my");
 	await win.fetch("/account");
+	await win.fetch("/api/relay/status");
+	assert.equal(asks.length, 0, "no allow-listed path, no ask");
 	assert.deepEqual(
 		calls.slice(before).map((call) => call.url),
-		["/api/config/workers", "/api/payments/my", "/account"]
+		["/api/config/workers", "/api/payments/my", "/account", "/api/relay/status"]
 	);
 });
 
-test("without a ticket the browser never leaves the primary origin", async () => {
-	const { win, calls } = browserRuntime(
+test("when the server answers with this Worker's own URL the request keeps its cookies", async () => {
+	const { win, calls, asks } = browserRuntime(
 		() => json({ ok: true }),
-		{
-			success: true,
-			enabled: true,
-			clientRotation: false,
-			endpoints: [{ id: "w1", url: "https://backup.test", local: false, verified: true }],
-			ticket: null,
-			expiresAt: 0
-		}
+		(path) => ({ success: true, path, url: path, local: true, endpointId: "local" })
 	);
-	await win.__yvsApiRotation.refresh();
 	await win.fetch("/api/image", { method: "POST", body: "{}" });
+	assert.equal(asks.length, 1);
 	assert.deepEqual(calls.map((call) => call.url), ["/api/image"]);
+	assert.equal(calls[0].init.credentials, undefined, "the same-origin request is untouched");
+	assert.equal(win.__yvsApiRotation.stats().local, 1);
 });
 
 /* ------------------------------------------------------------------ */
@@ -1200,9 +1182,8 @@ test("the settings page renders the rotation panel, loads the policy and saves i
 				success: true,
 				config: {
 					enabled: true,
-					strategy: "least-pending",
+					strategy: "round-robin",
 					localWeight: 2,
-					clientRotation: true,
 					maxAttempts: 3,
 					timeoutMs: 100000
 				},
@@ -1233,7 +1214,13 @@ test("the settings page renders the rotation panel, loads the policy and saves i
 
 		assert.ok(calls.some((call) => call.url === "/api/relay/config"), "the policy is read after unlock");
 		assert.ok(calls.some((call) => call.url === "/api/relay/status"), "the pool status is read after unlock");
-		assert.equal(w.document.getElementById("cfg-relay-strategy").value, "least-pending");
+		/*
+		 * Session 331: no scheme dropdown and no browser-rotation switch exist
+		 * any more — the scheme is fixed to round robin on the server.
+		 */
+		assert.equal(w.document.getElementById("cfg-relay-strategy"), null, "the strategy dropdown is gone");
+		assert.equal(w.document.getElementById("cfg-relay-client"), null, "the browser-rotation checkbox is gone");
+		assert.match(w.document.getElementById("cfg-relay-scheme").textContent, /Round robin/);
 		assert.equal(w.document.getElementById("cfg-relay-weight").value, "2");
 		const statusHtml = w.document.getElementById("cfg-relay-status").innerHTML;
 		assert.match(statusHtml, /backup\.test/);
@@ -1241,7 +1228,6 @@ test("the settings page renders the rotation panel, loads the policy and saves i
 		assert.match(statusHtml, /RELAY_SECRET is not set/, "the default-secret warning is shown");
 
 		/* Save posts the password with the policy. */
-		w.document.getElementById("cfg-relay-strategy").value = "weighted";
 		w.document.getElementById("cfg-relay-weight").value = "3";
 		w.document.getElementById("cfg-relay-save").click();
 		await new Promise((resolve) => setTimeout(resolve, 50));
@@ -1249,7 +1235,8 @@ test("the settings page renders the rotation panel, loads the policy and saves i
 		assert.ok(saveCall, "Save Rotation posts to /api/relay/config");
 		const saved = JSON.parse(saveCall.body);
 		assert.equal(saved.pw, "#123admin%");
-		assert.equal(saved.strategy, "weighted");
+		assert.equal("strategy" in saved, false, "the scheme is not even sent: round robin is fixed");
+		assert.equal("clientRotation" in saved, false);
 		assert.equal(saved.localWeight, 3);
 		assert.equal(saved.timeoutMs, 100000);
 
@@ -1299,24 +1286,120 @@ test("a request that was rotated here runs its inference locally", async () => {
 	assert.equal(runtime.stats().relayed, 0);
 });
 
-test("a rotated GET keeps its query string", async () => {
+test("a handed-out URL keeps the original query string", async () => {
 	const { win, calls } = browserRuntime(
 		() => json({ ok: true }),
-		{
+		(path) => ({
 			success: true,
-			enabled: true,
-			clientRotation: true,
-			endpoints: [{ id: "w1", url: "https://backup.test", local: false, verified: true }],
+			path,
+			url: "https://backup.test" + path,
+			local: false,
+			endpointId: "worker:https://backup.test",
 			ticket: "t",
 			expiresAt: Date.now() + 60_000
-		}
+		})
 	);
-	await win.__yvsApiRotation.refresh();
-	/* First request goes local, second rotates: both must keep the query. */
 	await win.fetch("/image/gen?prompt=a%20cat&variant=2", { method: "GET" });
-	await win.fetch("/image/gen?prompt=a%20cat&variant=2", { method: "GET" });
-	assert.deepEqual(calls.map((call) => call.url).sort(), [
-		"/image/gen?prompt=a%20cat&variant=2",
+	assert.deepEqual(calls.map((call) => call.url), [
 		"https://backup.test/image/gen?prompt=a%20cat&variant=2"
 	]);
+});
+
+/* ------------------------------------------------------------------ */
+/* 11. Server-side rotation hand-out (Session 331)                    */
+/* ------------------------------------------------------------------ */
+
+test("GET /api/relay/endpoint hands out the server's round-robin URL for one AI path", async () => {
+	resetIsolate();
+	const env = {
+		RELAY_SECRET: "endpoint-test",
+		KV_BINDING: cloudflareOnly(makeKv({ "config:workers": JSON.stringify(["https://backup.test"]) }))
+	};
+	const options = {
+		selfOrigin: SELF,
+		identity: async () => ({ username: "bob", email: "bob@example.com", usertype: "paid_user" }),
+		guest: () => false
+	};
+	const ask = () => handleRelayRoutes(
+		requestFor(RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fscript"),
+		new URL(SELF + RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fscript"),
+		env,
+		options
+	);
+
+	/* Ring = this Worker once + the backup three times: four asks cover it. */
+	const answers = [];
+	for (let index = 0; index < 4; index++) {
+		const response = await ask();
+		assert.equal(response.status, 200);
+		answers.push(await response.json());
+	}
+	const urls = answers.map((answer) => answer.url);
+	assert.equal(urls.filter((url) => url === "/api/script").length, 1, "the UI Worker is one slot in four");
+	assert.equal(urls.filter((url) => url === "https://backup.test/api/script").length, 3, "the backup is three");
+
+	const remote = answers.find((answer) => answer.local === false);
+	assert.equal(remote.path, "/api/script");
+	assert.equal(remote.endpointId, "worker:https://backup.test");
+	assert.equal(remote.strategy, "round-robin");
+	const ticket = await verifyRelayToken(env, remote.ticket, "client");
+	assert.equal(ticket.u, "bob", "the ticket carries the signed-in identity");
+	assert.deepEqual(Array.from(ticket.paths), RELAY_AI_PATHS, "and is scoped to the AI paths");
+
+	const local = answers.find((answer) => answer.local === true);
+	assert.equal(local.ticket, null, "this Worker's own URL needs no ticket");
+
+	/* Any path outside the AI list is refused, and the route is GET only. */
+	const refused = await handleRelayRoutes(
+		requestFor(RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fconfig%2Fworkers"),
+		new URL(SELF + RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fconfig%2Fworkers"),
+		env,
+		options
+	);
+	assert.equal(refused.status, 400);
+	const posted = await handleRelayRoutes(
+		requestFor(RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fscript", { method: "POST" }),
+		new URL(SELF + RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fscript"),
+		env,
+		options
+	);
+	assert.equal(posted.status, 405);
+
+	/* Anonymous callers are answered by the UI Worker: rotation never breaks them. */
+	resetIsolate();
+	let fellBack = 0;
+	for (let index = 0; index < 4; index++) {
+		const anonymous = await handleRelayRoutes(
+			requestFor(RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fscript"),
+			new URL(SELF + RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fscript"),
+			env,
+			{ selfOrigin: SELF, identity: async () => null, guest: () => false }
+		);
+		const anonymousBody = await anonymous.json();
+		assert.equal(anonymousBody.local, true, "an anonymous visitor never leaves this origin");
+		assert.equal(anonymousBody.ticket, null);
+		if (anonymousBody.reason === "no client ticket") fellBack += 1;
+	}
+	assert.equal(fellBack, 3, "the three backup slots of the ring fall back to the UI Worker");
+});
+
+test("the admin page accepts five backup Worker URLs and the pool keeps all five", async () => {
+	resetIsolate();
+	const urls = ["https://w1.test", "https://w2.test", "https://w3.test", "https://w4.test", "https://w5.test", "https://w6.test"];
+	const env = { KV_BINDING: cloudflareOnly(makeKv()) };
+	const saved = await worker.fetch(
+		new Request(SELF + "/api/config/workers", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ pw: "#123admin%", urls })
+		}),
+		env,
+		{}
+	);
+	const savedBody = await saved.json();
+	assert.deepEqual(savedBody.urls, urls.slice(0, MAX_RELAY_WORKERS), "five URLs are stored, the sixth is dropped");
+	invalidateRelayCache();
+	const pool = await resolveRelayPool(env, SELF);
+	assert.equal(pool.length, MAX_RELAY_WORKERS + 1, "this Worker + five backups");
+	assert.equal(MAX_RELAY_WORKERS, 5);
 });

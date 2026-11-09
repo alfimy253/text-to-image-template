@@ -895,7 +895,7 @@ async function handleRequest(request: any, env: any, ctx: any) {
 		//                             then write the script around
 		//                             them (minimum-only rule)
 		// POST /api/voiceover         MeloTTS voice -> MP3
-		// GET/POST /api/config/workers  up to 3 worker URLs
+		// GET/POST /api/config/workers  up to 5 worker URLs
 		// GET/POST /api/config/theme  studio theme (default /
 		//                             strata / stellar)
 		// GET  /{current-day}/config/uvxyz settings page (Asia/Taipei)
@@ -917,7 +917,8 @@ async function handleRequest(request: any, env: any, ctx: any) {
 		/* =====================================================
 		 * API ROTATION ROUTES (src/modules/api-relay.ts)
 		 *
-		 * GET  /api/relay/pool     pool + short-lived client ticket (studio)
+		 * GET  /api/relay/endpoint the server's pick for one AI path (studio)
+		 * GET  /api/relay/pool     pool + short-lived client ticket (diagnostics)
 		 * GET  /api/relay/status   pool, health and probe results (admin)
 		 * GET/POST /api/relay/config  rotation policy (POST = password)
 		 * POST /api/relay/test     force a fresh probe of every backup
@@ -2808,7 +2809,8 @@ async function handleRequest(request: any, env: any, ctx: any) {
 						(u) =>
 							u.length > 0
 					)
-					.slice(0, 3);
+					/* Session 331: the admin page accepts five backup Workers. */
+					.slice(0, 5);
 
 				for (
 					const u of urls

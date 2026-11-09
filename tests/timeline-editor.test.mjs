@@ -319,7 +319,12 @@ test("scene and element timing changes persist; shared text/graphics lanes cap a
 	assert.equal(saved.scenes.length, 12);
 	assert.equal(saved.scenes[0].startSec, 2);
 	assert.equal(saved.scenes[0].durationSec, 8);
-	assert.equal(saved.scenes[1].startSec, 8, "extending a scene ripples the following scene timing");
+	/*
+	 * Session 331: the ripple alone left scene 2 at 8 s, under scene 1's new
+	 * 2-10 s window - two boxes over each other. The overlap resolver moves it
+	 * clear of the previous clip, so the lane has no overlapping box at all.
+	 */
+	assert.equal(saved.scenes[1].startSec, 10, "the overlap resolver moves the next scene clear");
 	const elements = saved.scenes[0].elements;
 	assert.equal(elements.length, 2, "existing and newly-added elements are stored on their scene");
 	assert.equal(elements.find((item) => item.id === "dummy-text-1").startSec, 2, "moving a scene carries its timed elements");
@@ -514,12 +519,21 @@ test("frame details, ruler seeking, gap preview and controls survive timeline ed
  assert.equal(w.document.querySelectorAll('[data-timeline-action="export"]').length, 3);
  assert.equal(w.document.querySelectorAll('[data-timeline-action="play"]').length, 2);
  assert.ok(w.document.querySelector('[data-scroll-lane]'));
- w.__TIMELINE_EDITOR__.setItemTiming("media-1", 10, 5);
  const ruler = w.document.querySelector('.te-ruler');
  ruler.getBoundingClientRect = () => ({ left: 0 });
  ruler.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, clientX: 36 }));
  w.document.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true }));
  assert.equal(state.playheadSec, 2);
+ assert.equal(w.document.getElementById('timeline-current-scene').textContent, 'Scene 1');
+ /*
+  * Session 331: the moved clip (and the overlap resolver behind it) pushes
+  * the scene away from 2 s, so the same ruler column is now a gap. The pixel
+  * scale may have changed with the longer timeline, so only the label is
+  * asserted here - the seek itself is checked above.
+  */
+ w.__TIMELINE_EDITOR__.setItemTiming("media-1", 10, 5);
+ ruler.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, clientX: 36 }));
+ w.document.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true }));
  assert.equal(w.document.getElementById('timeline-current-scene').textContent, 'No scene selected');
  w.__TIMELINE_EDITOR__.save();
  assert.equal(JSON.parse(w.localStorage.getItem('ytvs.timeline-editor.v1.' + state.projectId)).frame.orientation, 'portrait');
@@ -1803,4 +1817,56 @@ test("a composed clip is the last Scene Media scene and the timeline MP4 export 
 	assert.equal(encodedFrames, 300, "10 s at 30 fps: the exported MP4 covers the appended scene's window");
 	assert.ok(drawnVideos.length >= 20, "frames inside the appended scene draw its composed MP4, not a placeholder");
 	assert.equal(state.durationSec, 10);
+});
+
+test("overlapping boxes are moved clear, and every element or scene addition re-runs the pass", (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const api = w.__TIMELINE_EDITOR__;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const media = state.tracks.find((track) => track.kind === "media");
+
+	/*
+	 * Session 331 - the overlap rule. Before this pass a clip could be dropped
+	 * on top of its neighbour (a drag, a duplicate, an imported scene) and the
+	 * lane drew two boxes over the same seconds. clampClipBox() only shortened
+	 * the drawing; the model kept the overlap. The resolver moves the later
+	 * clip to the end of the previous one, on every track, every time.
+	 */
+	const assertNoOverlaps = (label) => {
+		for (const track of state.tracks) {
+			const ordered = track.items.slice().sort((a, b) => a.startSec - b.startSec);
+			for (let index = 1; index < ordered.length; index++) {
+				const previousEnd = ordered[index - 1].startSec + ordered[index - 1].durationSec;
+				assert.ok(
+					ordered[index].startSec + 0.001 >= previousEnd,
+					label + ": " + track.label + " has no overlapping boxes (" + ordered[index].id + " starts at " + ordered[index].startSec + ", previous ends at " + previousEnd + ")"
+				);
+			}
+		}
+	};
+
+	/* 1. A drag that lands on the clip before it is moved back out. */
+	api.setItemTiming("media-2", 2, 5);
+	const moved = media.items.find((item) => item.id === "media-2");
+	assert.equal(moved.startSec, 5, "the overlapping Scene Media clip is moved to the end of the clip before it");
+	assertNoOverlaps("after a timing edit");
+
+	/* 2. A new scene (the composer hand-off) never lands on top of another. */
+	assert.equal(w.__TIMELINE_TEMPLATE_CLIP__({ blob: new w.Blob(["composed"], { type: "video/mp4" }), name: "overlap-probe.mp4", durationSec: 4 }), 1);
+	assertNoOverlaps("after a scene was added");
+
+	/* 3. A new text/graphic is placed clear of the boxes already in its lane. */
+	for (let index = 0; index < 5; index++) {
+		const element = api.addTextElement("overlap text " + index);
+		assert.ok(element, "text " + index + " was added");
+	}
+	assert.ok(state.tracks.filter((track) => track.kind === "visual").length <= 4, "the four-lane cap still holds");
+	assertNoOverlaps("after five text elements were added");
+
+	/* 4. A duplicate never overlaps the clip it was copied from. */
+	api.setItemTiming("media-3", 0, 5);
+	const copy = api.duplicateSelectedItem();
+	assert.ok(copy, "the selection was duplicated");
+	assertNoOverlaps("after a duplicate");
 });

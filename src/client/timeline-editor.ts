@@ -808,6 +808,92 @@ export const TIMELINE_EDITOR_JS = `
 		}
 
 		/*
+		 * Overlap resolver (Session 331)
+		 * -----------------------------
+		 * No two clips of the SAME lane may cover the same second. Before this
+		 * pass a duplicated clip, a dragged clip or an imported scene could be
+		 * dropped on top of its neighbour and the lane drew two boxes over each
+		 * other (clampClipBox() only shortened the DRAWING, the model kept the
+		 * overlap). The resolver walks a lane left to right and MOVES the later
+		 * clip to the end of the previous one, keeping its length, so the lane
+		 * itself has no overlapping boxes at all.
+		 *
+		 * A child text/graphic is pinned to its background clip, so it can only
+		 * move inside that clip's window; when there is no room left it is
+		 * shortened to the rest of the window instead of being pushed outside.
+		 *
+		 * resolveTimelineOverlaps() runs on EVERY addition (media, composed clip,
+		 * text, graphic, audio, duplicate), on every timing edit, on undo/redo and
+		 * on load, so an overlapping box never survives a change to the timeline.
+		 */
+		function resolveTrackOverlaps(track) {
+			if (!track || !Array.isArray(track.items) || track.items.length < 2) return 0;
+			var media = mediaTrack();
+			var parents = Object.create(null);
+			if (media) media.items.forEach(function (item) { if (item) parents[String(item.id)] = item; });
+			var ordered = track.items.slice().sort(function (a, b) {
+				var diff = number(a.startSec, 0) - number(b.startSec, 0);
+				if (Math.abs(diff) > TIMING_EPSILON_SEC) return diff;
+				/* Same start: the clip that already existed keeps its place. */
+				return track.items.indexOf(a) - track.items.indexOf(b);
+			});
+			var cursor = 0;
+			var moved = 0;
+			ordered.forEach(function (item) {
+				if (!item) return;
+				var oldStart = number(item.startSec, 0);
+				var oldDuration = Math.max(MIN_CLIP_SEC, number(item.durationSec, MIN_CLIP_SEC));
+				var parent = item.parentId ? parents[String(item.parentId)] : null;
+				var floor = cursor;
+				var ceiling = MAX_DURATION_SEC;
+				if (parent) {
+					floor = Math.max(floor, number(parent.startSec, 0));
+					ceiling = number(parent.startSec, 0) + Math.max(MIN_CLIP_SEC, number(parent.durationSec, MIN_CLIP_SEC));
+				}
+				var start = Math.max(oldStart, floor);
+				var duration = oldDuration;
+				if (start + duration > ceiling) duration = Math.max(MIN_CLIP_SEC, ceiling - start);
+				if (start + duration > MAX_DURATION_SEC) duration = Math.max(MIN_CLIP_SEC, MAX_DURATION_SEC - start);
+				if (Math.abs(start - oldStart) > TIMING_EPSILON_SEC || Math.abs(duration - oldDuration) > TIMING_EPSILON_SEC) {
+					item.startSec = start;
+					item.durationSec = duration;
+					moved += 1;
+				}
+				cursor = item.startSec + item.durationSec;
+			});
+			return moved;
+		}
+		/*
+		 * Every lane, plus the two things that depend on a lane's timing: the
+		 * children of a moved background clip follow it by the same delta, and the
+		 * scene list is re-read from the media lane so the dock, the inspector and
+		 * the saved project always describe the adjusted timeline.
+		 */
+		function resolveTimelineOverlaps() {
+			if (!state || !Array.isArray(state.tracks)) return 0;
+			var media = mediaTrack();
+			var before = Object.create(null);
+			if (media) media.items.forEach(function (item) { if (item) before[String(item.id)] = number(item.startSec, 0); });
+			var moved = 0;
+			state.tracks.forEach(function (track) { moved += resolveTrackOverlaps(track); });
+			if (!moved) return 0;
+			if (media) {
+				media.items.forEach(function (item) {
+					var delta = number(item.startSec, 0) - number(before[String(item.id)], 0);
+					if (Math.abs(delta) <= TIMING_EPSILON_SEC) return;
+					childItemsFor(item).forEach(function (entry) {
+						entry.item.startSec = clamp(number(entry.item.startSec, 0) + delta, 0, MAX_DURATION_SEC);
+						clampChildToParent(entry.item);
+					});
+				});
+			}
+			try { syncScenesFromTracks(); } catch (sceneError) { }
+			ensureTimelineEnd(maxTimelineEnd());
+			state.playheadSec = clamp(state.playheadSec, 0, state.durationSec);
+			return moved;
+		}
+
+		/*
 		 * History helpers
 		 * ---------------
 		 * snapshotProject() serialises only what the user edits. trackExpanded
@@ -875,6 +961,9 @@ export const TIMELINE_EDITOR_JS = `
 			suppressHistory = true;
 			try {
 				if (!restoreSnapshot(json)) return false;
+				/* Overlap rule: an undone/redone project is re-checked as well. */
+				resolveTimelineOverlaps();
+				renderTimeline();
 				/* Persist immediately so the restored project is what a reload finds. */
 				persistNow();
 				lastSnapshot = snapshotProject();
@@ -1253,6 +1342,8 @@ export const TIMELINE_EDITOR_JS = `
 			 * when the clip was shortened or lengthened.
 			 */
 			if (track.kind === "media") syncChildrenToParent(item);
+			/* Overlap rule: dragging or resizing a clip clears any overlap it made. */
+			resolveTimelineOverlaps();
 			ensureTimelineEnd(item.startSec + item.durationSec);
 			state.playheadSec = clamp(state.playheadSec, 0, state.durationSec);
 			renderTimeline();
@@ -1749,6 +1840,8 @@ export const TIMELINE_EDITOR_JS = `
 			else if (state.playheadSec < start || state.playheadSec >= start + item.durationSec) {
 				state.playheadSec = clamp(start, 0, MAX_DURATION_SEC);
 			}
+			/* Overlap rule: a new text/graphic never covers another box of its lane. */
+			resolveTimelineOverlaps();
 			ensureTimelineEnd(start + item.durationSec);
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
 			return item;
@@ -1889,6 +1982,8 @@ export const TIMELINE_EDITOR_JS = `
 			state.selectedTrackId = track.id;
 			state.selectedItemId = copy.id;
 			if (copy.sceneId) selectedSceneId = copy.sceneId;
+			/* Overlap rule: a duplicate is moved clear of the clip it was copied from. */
+			resolveTimelineOverlaps();
 			ensureTimelineEnd(copy.startSec + copy.durationSec);
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
 			var message = 'Duplicated "' + String(source.label || source.name || source.kind) + '" at ' + formatTime(copy.startSec) + ' - right after the original ends.';
@@ -2049,6 +2144,8 @@ export const TIMELINE_EDITOR_JS = `
 				api.storeAsset(pageId, assetId, file, { name: file.name, type: file.type, source: "user upload" }).then(function (result) { if (!result || !result.ok) setStatus("Media is usable now but could not be kept for reloads in this browser.", true); });
 				state.selectedTrackId = track.id; state.selectedItemId = item.id; selectedSceneId = sceneId;
 			}
+			/* Overlap rule: an added media file can never sit on top of another. */
+			resolveTimelineOverlaps();
 			ensureTimelineEnd(nextStart);
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
 			setStatus(valid.length + (valid.length === 1 ? " media file added" : " media files added") + " to the background layer.", false);
@@ -2165,6 +2262,8 @@ export const TIMELINE_EDITOR_JS = `
 			 * state.durationSec past the new scene's end - which is what makes
 			 * the timeline's own Export MP4 render it as the last scene.
 			 */
+			/* Overlap rule: the composed clips are laid out end to end, no overlap. */
+			resolveTimelineOverlaps();
 			ensureTimelineEnd(nextStart);
 			state.selectedTrackId = MEDIA_TRACK_ID;
 			state.selectedItemId = lastItem ? lastItem.id : "";
@@ -2189,6 +2288,8 @@ export const TIMELINE_EDITOR_JS = `
 			var metadata = track.id === "voiceover" ? { voiceover: file, assets: [] } : { assets: [{ id: assetId, blob: file, name: file.name, type: file.type, source: "user upload" }] };
 			api.storeProjectAssets(pageId, metadata).then(function (result) { if (!result || !result.ok) setStatus("Audio is usable now but could not be kept for reloads in this browser.", true); });
 			state.selectedTrackId = track.id; state.selectedItemId = itemId;
+			/* Overlap rule: an added audio clip never covers one in its lane. */
+			resolveTimelineOverlaps();
 			ensureTimelineEnd(start + duration);
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
 			setStatus("Added " + (file.name || track.label) + " to " + track.label + ".", false);
@@ -3492,6 +3593,11 @@ export const TIMELINE_EDITOR_JS = `
 			try { saved = JSON.parse(window.localStorage.getItem(storageKey) || "null"); } catch (error) {}
 			var initial = saved && saved.projectId === pageId ? saved : transition && transition.timelineState || null;
 			state = normalizeState(initial || defaultTimeline());
+			/*
+			 * Session 331: a project saved before the overlap rule existed is
+			 * cleaned on load, so nobody opens a timeline full of stacked boxes.
+			 */
+			try { resolveTimelineOverlaps(); } catch (overlapError) { }
 			if (transition) {
 				state.sourcePageId = String(transition.sourcePageId || state.sourcePageId || "");
 				state.sourceRowId = String(transition.basicSettings && transition.basicSettings.id || state.sourceRowId || "");

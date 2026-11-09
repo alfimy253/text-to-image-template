@@ -5,16 +5,16 @@
  * ------------------------------------------------------------------
  * WHY
  * ------------------------------------------------------------------
- * The settings page (/{day}/config/uvxyz) has always been able to store up to
- * three backup Worker URLs (`config:workers`), but until now nothing in the
- * codebase ever contacted them: they were documented as "stored only". Every
- * image, prompt, script and voiceover therefore burned the *primary* Worker's
- * Workers AI neurons (the free plan is 10,000 neurons/day per account), and all
- * of the inference load sat on one deployment.
+ * The settings page (/{day}/config/uvxyz) can store up to FIVE backup Worker
+ * URLs (`config:workers`), but until Session 331 nothing in the codebase ever
+ * contacted them: they were documented as "stored only". Every image, prompt,
+ * script and voiceover therefore burned the *primary* Worker's Workers AI
+ * neurons (the free plan is 10,000 neurons/day per account), and all of the
+ * inference load sat on one deployment.
  *
  * This module turns that list into a live pool:
  *
- *   local Worker  +  up to 3 registered backup Workers  =  one API pool
+ *   local Worker  +  up to 5 registered backup Workers  =  one API pool
  *
  * Every route that would call `env.AI.run(...)` can now run that call on
  * whichever pool member the rotation policy picks, with health tracking,
@@ -39,12 +39,17 @@
  *      restricted to Workers AI model slugs, size-capped, and it NEVER relays
  *      again — that is what makes worker -> worker -> worker loops impossible.
  *
- * 3. Browser rotation (`/api/relay/pool` + `src/client/api-rotation.ts`)
- *      Optionally the studio itself rotates the *whole* AI request across the
- *      pool (not just the model hop) using a signed, short-lived ticket. The
- *      ticket carries only the identity needed to authorize the AI routes and
- *      is scoped to those paths, so `/api/config/*`, `/api/payments/*` and
- *      account routes always stay on the primary Worker.
+ * 3. Browser hand-out (`/api/relay/endpoint` + `src/client/api-rotation.ts`)
+ *      Session 331 moved the *whole-request* rotation to this server: the
+ *      studio asks `GET /api/relay/endpoint?path=/api/script`, waits for the
+ *      answer and then calls exactly the URL it was given. The browser never
+ *      picks, ranks or fail-overs an endpoint itself any more — the pool, the
+ *      round-robin cursor and the health state all live here.
+ *
+ *      The endpoint answer carries a signed, short-lived ticket when the pick
+ *      is a backup. The ticket carries only the identity needed to authorize
+ *      the AI routes and is scoped to those paths, so `/api/config/*`,
+ *      `/api/payments/*` and account routes always stay on the primary Worker.
  *
  * ------------------------------------------------------------------
  * INVARIANTS
@@ -83,9 +88,14 @@ export const RELAY_WORKERS_KEY = "config:workers";
 export const RELAY_AI_PATH = "/api/relay/ai";
 export const RELAY_PING_PATH = "/api/relay/ping";
 export const RELAY_POOL_PATH = "/api/relay/pool";
+/** Session 331: server-side pick — "give me the URL for this AI path". */
+export const RELAY_ENDPOINT_PATH = "/api/relay/endpoint";
 export const RELAY_STATUS_PATH = "/api/relay/status";
 export const RELAY_CONFIG_PATH = "/api/relay/config";
 export const RELAY_TEST_PATH = "/api/relay/test";
+
+/** How many backup Worker URLs the settings page accepts (was 3). */
+export const MAX_RELAY_WORKERS = 5;
 
 export const RELAY_TOKEN_HEADER = "x-yvs-relay-token";
 export const RELAY_TICKET_HEADER = "x-yvs-relay-ticket";
@@ -114,7 +124,14 @@ export const RELAY_AI_PATHS = [
 	"/api/script",
 	"/api/seo-plan",
 	"/api/voiceover",
-	"/tts"
+	"/tts",
+	/* Session 331: the image routes are the heaviest pipeline calls, so they
+	 * rotate exactly like the text and voice routes. They are still billed AI
+	 * work, never account/settings traffic. */
+	"/api/image",
+	"/api/image-batch",
+	"/api/image-prompts",
+	"/image/gen"
 ];
 
 export const RELAY_CORS_EXPOSE_HEADERS = [
@@ -141,6 +158,15 @@ export const RELAY_TICKET_TTL_MS = 180_000;
 /** How long the resolved pool / config stays cached inside one isolate. */
 export const RELAY_POOL_CACHE_MS = 20_000;
 export const RELAY_CONFIG_CACHE_MS = 15_000;
+/**
+ * Round-robin ring weight of every backup Worker. The local (UI) Worker is
+ * entered into the ring `config.localWeight` times and every backup
+ * `RELAY_BACKUP_RING_WEIGHT` times, so with the default localWeight of 1 and
+ * one backup the UI Worker answers 1 request in 4 (25%), with five backups
+ * 1 in 16 (~6%). That is the "less API work on the UI CF server" rule.
+ */
+export const RELAY_BACKUP_RING_WEIGHT = 3;
+
 /** Circuit breaker: first cooldown, doubling, and the ceiling. */
 export const RELAY_COOLDOWN_BASE_MS = 30_000;
 export const RELAY_COOLDOWN_MAX_MS = 300_000;
@@ -161,16 +187,30 @@ const RELAY_MODEL_PATTERN = /^@[a-z0-9-]+\/[A-Za-z0-9._/-]{2,120}$/;
  * TYPES
  * ============================================================= */
 
-export type RelayStrategy = "round-robin" | "least-pending" | "weighted";
+/**
+ * Rotation is round robin and only round robin (Session 331): the admin page
+ * no longer offers a scheme dropdown and a stored policy can no longer select
+ * one. The field stays in the shape so old `config:relay` documents still
+ * parse, and it always normalizes back to `"round-robin"`.
+ */
+export type RelayStrategy = "round-robin";
 
 export interface RelayConfig {
 	/** Master switch for worker->worker inference rotation. */
 	enabled: boolean;
-	/** How the next endpoint is chosen for each model call. */
+	/** Always `"round-robin"` — the only scheme the server uses. */
 	strategy: RelayStrategy;
-	/** Relative weight of the local Worker in the `weighted` strategy. */
+	/**
+	 * How many times the local (UI) Worker is entered into the round-robin
+	 * ring. `0` removes it from the browser hand-out entirely; every backup is
+	 * entered `RELAY_BACKUP_RING_WEIGHT` times, so the UI Worker always gets
+	 * the smaller share.
+	 */
 	localWeight: number;
-	/** Let the studio rotate whole AI requests across the pool. */
+	/**
+	 * Kept for old documents. Whole-request rotation is always done by this
+	 * server now, so the flag no longer switches anything off.
+	 */
 	clientRotation: boolean;
 	/** Maximum pool members tried for one model call (including local). */
 	maxAttempts: number;
@@ -228,7 +268,7 @@ export const RELAY_DEFAULT_CONFIG: RelayConfig = {
 	cooldownMs: RELAY_COOLDOWN_BASE_MS
 };
 
-const RELAY_STRATEGIES: RelayStrategy[] = ["round-robin", "least-pending", "weighted"];
+const RELAY_STRATEGIES: RelayStrategy[] = ["round-robin"];
 
 /* =============================================================
  * SMALL HELPERS
@@ -322,6 +362,7 @@ export function normalizeRelayConfig(raw: unknown): RelayConfig {
 	const strategy = String(source.strategy || "").trim().toLowerCase() as RelayStrategy;
 	return {
 		enabled: source.enabled === undefined ? RELAY_DEFAULT_CONFIG.enabled : Boolean(source.enabled),
+		/* One scheme only: an old `least-pending` / `weighted` value is dropped. */
 		strategy: RELAY_STRATEGIES.indexOf(strategy) === -1 ? RELAY_DEFAULT_CONFIG.strategy : strategy,
 		localWeight: clampInt(source.localWeight, 0, 10, RELAY_DEFAULT_CONFIG.localWeight),
 		clientRotation:
@@ -400,6 +441,11 @@ function readWorkerUrls(env: any): Promise<string[]> {
 		.then((raw: string | null) => {
 			if (!raw) return [];
 			const parsed = JSON.parse(raw);
+			/*
+			 * The VALID members are capped at MAX_RELAY_WORKERS in
+			 * resolveRelayPool(), after duplicates and junk are dropped — capping
+			 * the raw list here would let five bad entries hide a good sixth.
+			 */
 			return Array.isArray(parsed) ? parsed : [];
 		})
 		.catch(() => []);
@@ -435,6 +481,8 @@ export async function resolveRelayPool(
 	if (localOrigin) seen.add(localOrigin);
 
 	for (const candidate of candidates) {
+		/* local + at most MAX_RELAY_WORKERS backups (Session 331). */
+		if (pool.length - 1 >= MAX_RELAY_WORKERS) break;
 		const url = normalizeUrl(candidate);
 		if (!url) continue;
 		const origin = normalizedOrigin(url);
@@ -548,16 +596,32 @@ function isTransientRelayFailure(error: unknown): boolean {
 let roundRobinCursor = 0;
 
 /**
- * Orders the pool for one call.
+ * Builds the round-robin RING for the healthy members.
  *
- * - `round-robin` rotates the starting point so consecutive calls hit
- *   different Workers.
- * - `least-pending` prefers the member with the fewest in-flight calls, then
- *   the lowest moving latency.
- * - `weighted` picks at random with `localWeight` for local and 1 per backup.
+ * The local (UI) Worker is entered `config.localWeight` times and every backup
+ * `RELAY_BACKUP_RING_WEIGHT` times. Walking the ring with one shared cursor is
+ * therefore a true round robin that hands the UI-serving Worker the smaller,
+ * fixed share of the API work (Session 331).
+ */
+function relayRing(healthy: RelayPoolEntry[], config: RelayConfig): RelayPoolEntry[] {
+	const ring: RelayPoolEntry[] = [];
+	for (const entry of healthy) {
+		const weight = entry.local
+			? Math.max(0, Math.min(10, Math.round(Number(config.localWeight))))
+			: RELAY_BACKUP_RING_WEIGHT;
+		for (let i = 0; i < weight; i++) ring.push(entry);
+	}
+	return ring;
+}
+
+/**
+ * Orders the pool for one call. Round robin is the only scheme (Session 331):
  *
- * Cooling members are pushed to the end (never removed) so a fully cooled
- * pool still answers instead of failing the request.
+ * - the healthy members are laid out on a weighted ring (see `relayRing`),
+ * - the cursor advances by one slot per call, so consecutive calls hit
+ *   different Workers and the UI Worker is hit less often than a backup,
+ * - cooling members are pushed to the end (never removed) so a fully cooled
+ *   pool still answers instead of failing the request.
  */
 export function orderRelayCandidates(
 	pool: RelayPoolEntry[],
@@ -579,42 +643,53 @@ export function orderRelayCandidates(
 			});
 	}
 
-	let ordered: RelayPoolEntry[];
-	if (config.strategy === "least-pending") {
-		ordered = healthy.slice().sort((a, b) => {
-			const ha = healthFor(a.id);
-			const hb = healthFor(b.id);
-			if (ha.inFlight !== hb.inFlight) return ha.inFlight - hb.inFlight;
-			return (ha.ewmaMs || 0) - (hb.ewmaMs || 0);
-		});
-	} else if (config.strategy === "weighted") {
-		const remaining = healthy.slice();
-		ordered = [];
-		while (remaining.length) {
-			const weights = remaining.map((entry) => (entry.local ? Math.max(0, config.localWeight) : 1));
-			const total = weights.reduce((sum, weight) => sum + weight, 0);
-			if (total <= 0) {
-				ordered.push(...remaining);
-				break;
-			}
-			let roll = Math.random() * total;
-			let picked = remaining.length - 1;
-			for (let i = 0; i < remaining.length; i++) {
-				roll -= weights[i];
-				if (roll <= 0) {
-					picked = i;
-					break;
-				}
-			}
-			ordered.push(remaining.splice(picked, 1)[0]);
-		}
-	} else {
-		const start = roundRobinCursor % healthy.length;
-		roundRobinCursor = (roundRobinCursor + 1) % 1_000_003;
-		ordered = healthy.slice(start).concat(healthy.slice(0, start));
+	let ring = relayRing(healthy, config);
+	if (!ring.length) {
+		/* localWeight 0 without a healthy backup: local is still the fallback. */
+		ring = healthy.filter((entry) => entry.local);
+		if (!ring.length) ring = healthy.slice();
+	}
+	const start = roundRobinCursor % ring.length;
+	roundRobinCursor = (roundRobinCursor + 1) % 1_000_003;
+
+	/* Rotate the ring at the cursor, then keep each member at its first slot. */
+	const ordered: RelayPoolEntry[] = [];
+	const seen = new Set<string>();
+	for (let i = 0; i < ring.length; i++) {
+		const entry = ring[(start + i) % ring.length];
+		if (seen.has(entry.id)) continue;
+		seen.add(entry.id);
+		ordered.push(entry);
+	}
+
+	/*
+	 * A healthy member that is not in the ring (the UI Worker at weight 0)
+	 * stays in the list as the LAST resort: rotation may keep work off it,
+	 * but a pool of backups that all fail must still land somewhere.
+	 */
+	for (const entry of healthy) {
+		if (seen.has(entry.id)) continue;
+		seen.add(entry.id);
+		ordered.push(entry);
 	}
 
 	return ordered.concat(cooling);
+}
+
+/**
+ * The server-side pick behind `GET /api/relay/endpoint` (Session 331): the
+ * first healthy member the round-robin ring points at. `null` means the pool
+ * is empty (no local origin available), which the route answers with the
+ * relative path so the browser calls the UI Worker it is already on.
+ */
+export function pickRelayEndpoint(
+	pool: RelayPoolEntry[],
+	config: RelayConfig,
+	now = Date.now()
+): RelayPoolEntry | null {
+	const ordered = orderRelayCandidates(pool, config, now);
+	if (!ordered.length) return null;
+	return ordered.find((entry) => healthFor(entry.id).openedUntil <= now) || ordered[0];
 }
 
 /* =============================================================
@@ -1498,9 +1573,52 @@ function isRelayPath(pathname: string): boolean {
 	return pathname === RELAY_AI_PATH ||
 		pathname === RELAY_PING_PATH ||
 		pathname === RELAY_POOL_PATH ||
+		pathname === RELAY_ENDPOINT_PATH ||
 		pathname === RELAY_STATUS_PATH ||
 		pathname === RELAY_CONFIG_PATH ||
 		pathname === RELAY_TEST_PATH;
+}
+
+/**
+ * Mints the short-lived ticket a browser carries when a *backup* executes one
+ * of its AI calls. Only a signed-in user or an allowed guest gets one, and the
+ * ticket is scoped to `paths`.
+ */
+async function mintRelayClientTicket(
+	env: any,
+	options: RelayRouteOptions,
+	paths: string[]
+): Promise<{ ticket: string | null; expiresAt: number }> {
+	if (typeof options.identity !== "function" && typeof options.guest !== "function") {
+		return { ticket: null, expiresAt: 0 };
+	}
+	const user = typeof options.identity === "function" ? await options.identity().catch(() => null) : null;
+	if (user && user.username) {
+		const exp = Date.now() + RELAY_TICKET_TTL_MS;
+		const ticket = await signRelayToken(env, {
+			v: RELAY_VERSION,
+			k: "client",
+			exp,
+			u: String(user.username),
+			e: String(user.email || ""),
+			p: String(user.usertype || "free_user"),
+			g: false,
+			paths: paths.slice()
+		});
+		return { ticket, expiresAt: exp };
+	}
+	if (typeof options.guest === "function" && options.guest()) {
+		const exp = Date.now() + RELAY_TICKET_TTL_MS;
+		const ticket = await signRelayToken(env, {
+			v: RELAY_VERSION,
+			k: "client",
+			exp,
+			g: true,
+			paths: paths.slice()
+		});
+		return { ticket, expiresAt: exp };
+	}
+	return { ticket: null, expiresAt: 0 };
 }
 
 /**
@@ -1523,6 +1641,91 @@ export async function handleRelayRoutes(
 
 	if (pathname === RELAY_PING_PATH) {
 		return handleRelayPing(request);
+	}
+
+	/* ------------------------------------------------------------------
+	 * GET /api/relay/endpoint?path=/api/script — THE ROTATION (Session 331).
+	 *
+	 * The browser asks which URL should run this one pipeline call and then
+	 * calls exactly that URL. The pick is made HERE, with the same weighted
+	 * round-robin the server uses for its own model calls, so the UI-serving
+	 * Worker receives the smaller share and the studio never chooses, ranks or
+	 * fails over an endpoint by itself.
+	 *
+	 * `&failed=<endpoint id>`, sent with the ticket of the previous answer,
+	 * reports that the given URL did not answer: the member is put on the
+	 * circuit-breaker cooldown and the next pick avoids it.
+	 * ------------------------------------------------------------------ */
+	if (pathname === RELAY_ENDPOINT_PATH) {
+		if (request.method !== "GET") {
+			return jsonResponse({ success: false, error: "GET only" }, 405, { Allow: "GET" });
+		}
+		const rawPath = String(url.searchParams.get("path") || "").trim();
+		const cleanPath = rawPath.split("?")[0].split("#")[0];
+		const pipelinePath = cleanPath.charAt(0) === "/" ? cleanPath : "/" + cleanPath;
+		if (RELAY_AI_PATHS.indexOf(pipelinePath) === -1) {
+			return jsonResponse(
+				{ success: false, error: "Unsupported pipeline path", paths: RELAY_AI_PATHS.slice() },
+				400
+			);
+		}
+
+		const config = await readRelayConfig(env, options);
+		const pool = await resolveRelayPool(env, options.selfOrigin || url.origin, options);
+
+		/*
+		 * A browser-reported failure is only trusted when it carries a ticket
+		 * this Worker signed (a stranger cannot cool the pool with a URL).
+		 */
+		const failedId = String(url.searchParams.get("failed") || "").trim().slice(0, 300);
+		if (failedId && config.enabled) {
+			const reporter = await readRelayTicket(request, env === undefined ? {} : env).catch(() => null);
+			if (reporter) {
+				noteRelayFailure(failedId, new Error("browser reported a failed call"), config.cooldownMs);
+			}
+		}
+
+		const picked = config.enabled ? pickRelayEndpoint(pool, config) : null;
+		const backup = picked && !picked.local ? picked : null;
+		let ticket: string | null = null;
+		let expiresAt = 0;
+		if (backup) {
+			const minted = await mintRelayClientTicket(env, options, RELAY_AI_PATHS);
+			ticket = minted.ticket;
+			expiresAt = minted.expiresAt;
+			/*
+			 * No ticket (anonymous rate-limited visitor): the UI Worker runs the
+			 * call. Rotation never breaks a request that used to work.
+			 */
+			if (!ticket) {
+				return jsonResponse({
+					success: true,
+					path: pipelinePath,
+					url: pipelinePath,
+					local: true,
+					endpointId: "local",
+					label: "This Worker",
+					ticket: null,
+					expiresAt: 0,
+					strategy: "round-robin",
+					pool: { total: pool.length, backups: Math.max(0, pool.length - 1) },
+					reason: "no client ticket"
+				});
+			}
+		}
+
+		return jsonResponse({
+			success: true,
+			path: pipelinePath,
+			url: backup ? backup.url + pipelinePath : pipelinePath,
+			local: !backup,
+			endpointId: backup ? backup.id : "local",
+			label: backup ? backup.label : "This Worker",
+			ticket,
+			expiresAt,
+			strategy: "round-robin",
+			pool: { total: pool.length, backups: Math.max(0, pool.length - 1) }
+		});
 	}
 
 	/* ------------------------------------------------------------------
@@ -1561,7 +1764,12 @@ export async function handleRelayRoutes(
 
 		let ticket: string | null = null;
 		let expiresAt = 0;
-		const wantsTicket = config.enabled && config.clientRotation;
+		/*
+		 * Session 331: whole-request rotation is server-side, so a ticket is
+		 * issued whenever rotation is enabled (the old per-browser switch is
+		 * gone). This route is kept for diagnostics and old clients only.
+		 */
+		const wantsTicket = config.enabled;
 		if (wantsTicket && typeof options.identity === "function") {
 			const user = await options.identity().catch(() => null);
 			if (user && user.username) {

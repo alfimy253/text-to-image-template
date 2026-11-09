@@ -753,3 +753,51 @@ test("Quick Batch Stop aborts both the image stream and concurrent prompt reques
 	assert.equal(imageAborted, true);
 	assert.equal(w.batchRowFinished(row), false);
 });
+
+test("a finished row survives a reload, five rows per page, and the browser deletes it after 24 hours", async (t) => {
+	const { dom, w } = makeApp();
+	t.after(() => dom.window.close());
+	const key = "ytvs.quick-batch-completed.v1";
+
+	const rows = [];
+	for (let index = 0; index < 7; index++) {
+		rows.push(w.addBatchRow({ script: "Archived row " + index + " narration.", style: "Neon Night" }));
+	}
+
+	/* 1. A successful render or export archives the row with its script. */
+	rows.forEach((row, index) => w.recordCompletedBatchRow(row, index % 2 ? "export" : "render"));
+	const stored = JSON.parse(w.localStorage.getItem(key));
+	assert.equal(stored.rows.length, 7, "every finished row is archived");
+	assert.equal(stored.rows.filter((entry) => entry.kind === "export").length, 3);
+	assert.equal(stored.rows.filter((entry) => entry.kind === "render").length, 4);
+	assert.ok(stored.rows[0].completedAt > Date.now() - 60_000, "the completion time is stamped");
+
+	/* 2. A reload puts them back: the record survives, the media bytes do not. */
+	w.__BATCH_ROWS.length = 0;
+	w.restoreCompletedBatchRows();
+	assert.equal(w.__BATCH_ROWS.length, 7, "the completed rows are back on the page");
+	assert.ok(w.__BATCH_ROWS.every((row) => row._archived === true));
+	assert.ok(w.__BATCH_ROWS.every((row) => row.stage === "done"));
+	assert.match(w.__BATCH_ROWS[0].detail, /(Rendered|Exported) .* kept 24 h/);
+
+	/* 3. Five rows per page. */
+	const body = w.document.getElementById("batch-rows");
+	const pager = w.document.getElementById("batch-pager");
+	assert.equal(body.querySelectorAll("tr[data-batch-row]").length, 5, "page 1 holds five rows");
+	assert.equal(pager.hidden, false, "the pager appears as soon as there is a second page");
+	assert.equal(w.document.getElementById("batch-page-label").textContent, "Page 1 of 2");
+	w.document.getElementById("batch-page-next").click();
+	assert.equal(body.querySelectorAll("tr[data-batch-row]").length, 2, "page 2 holds the rest");
+	assert.equal(w.document.getElementById("batch-page-label").textContent, "Page 2 of 2");
+	w.document.getElementById("batch-page-prev").click();
+	assert.equal(body.querySelectorAll("tr[data-batch-row]").length, 5);
+
+	/* 4. After 24 hours the client deletes them - no server involved. */
+	const expired = Date.now() - 24 * 60 * 60 * 1000 - 1000;
+	stored.rows.forEach((entry) => { entry.completedAt = expired; });
+	w.localStorage.setItem(key, JSON.stringify(stored));
+	assert.equal(w.readCompletedBatchRows().length, 0, "a row older than 24 h is never read back");
+	assert.equal(w.purgeCompletedBatchRows(), true, "the purge reports that it removed rows");
+	assert.equal(w.__BATCH_ROWS.filter((row) => row._archived).length, 0, "the browser deleted the completed rows");
+	assert.equal(JSON.parse(w.localStorage.getItem(key)).rows.length, 0, "and their archive entries");
+});
