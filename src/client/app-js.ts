@@ -105,6 +105,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					images: (row.images || []).length,
 					slides: (row.slides || []).length,
 					mediaFilenames: (row.mediaFilenames || []).length,
+					/*
+					 * Session 331 follow-up: the compact timeline hand-back travels with
+					 * the row, so a table save keeps the edit in localStorage and in
+					 * the four cookie chunks.
+					 */
+					timeline: row.timeline && typeof row.timeline === "object" ? row.timeline : undefined,
+					timelineKey: row.timeline ? String(row.timeline.key || "") : "",
 					mp3: Boolean(row.mp3),
 					animated: Boolean(row.animated),
 					finished: Boolean(row.animated && (row.slides || []).length)
@@ -224,7 +231,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		return result;
 	}
 	window.resetPipelineManagementState = resetPipelineManagementState;
+	window.restorePipelineManagementState = restorePipelineManagementState;
 	window.__PIPELINE_MANAGEMENT_STORE__ = pipelineManagementStore;
+	/* Session 331 follow-up: the timeline tab writes through this factory. */
+	window.__PIPELINE_MANAGEMENT_STORE_FACTORY__ = createPipelineManagementStore;
 
 	function persistPipelineManagementState(reason) {
 		if (pipelineManagementSaving || pipelineManagementRestoring) return null;
@@ -315,6 +325,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				row.retrying = false;
 				row.running = false;
 				row.stopRequested = false;
+				/*
+				 * Session 331 follow-up: the row's own timeline edit comes back with
+				 * it - the scene order and timing the user saved in the editor are
+				 * applied to this row's slides, so Preview and Export paint the edit.
+				 */
+				row.timeline = stored.timeline && typeof stored.timeline === "object" ? stored.timeline : null;
+				row.timelineKey = String(stored.timelineKey || "");
+				applyTimelineEditToBatchRow(row);
 			}
 			const storedProjects = ((snapshot.editor && snapshot.editor.projects) || []).slice(0, 8);
 			for (const stored of storedProjects) {
@@ -344,6 +362,215 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			pipelineManagementRestoring = false;
 		}
 	}
+
+	/*
+	 * Session 331 follow-up — the timeline edit hand-back
+	 * ---------------------------------------------------
+	 * The timeline editor runs in its own tab and its own page store, but the
+	 * Quick Batch table that opened it keeps its rows in a DIFFERENT page store
+	 * (the tab's own page id). Pressing "← Quick Batch" now publishes a compact
+	 * summary of the edit into that table page's store, which is the same
+	 * verified write the table itself performs: ONE localStorage entry plus the
+	 * FOUR cookie chunks. The table tab picks it up from its storage event (or
+	 * its next restore) and applies it to the row.
+	 *
+	 * The summary is deliberately small - one entry per background scene,
+	 * [mediaIndex, durationSec, typeCode] - because it shares the cookie budget
+	 * with every row's script. Media is addressed by the row's own image index
+	 * (scene-N -> N-1), never by a blob or an object URL.
+	 */
+	function timelineEditStoreFor(sourcePageId) {
+		const id = String(sourcePageId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
+		if (!id) return null;
+		if (id === pipelineManagementStore.pageId) return pipelineManagementStore;
+		const factory = window.__PIPELINE_MANAGEMENT_STORE_FACTORY__;
+		if (typeof factory !== "function") return null;
+		try { return factory(window, id); } catch (error) { return null; }
+	}
+
+	/*
+	 * Apply a saved edit to the row in memory: scene order first, then the
+	 * per-scene length (through the slide's own duration override), so both the
+	 * table Preview and the Export paint the timeline exactly as it was saved.
+	 */
+	/* The digits a slide id ends with ("batch-7-img-3" -> 3), parsed by hand. */
+	function trailingDigits(value) {
+		const text = String(value || "");
+		let digits = "";
+		for (let index = text.length - 1; index >= 0; index--) {
+			const code = text.charCodeAt(index);
+			if (code < 48 || code > 57) break;
+			digits = text.charAt(index) + digits;
+		}
+		return digits ? Number(digits) : -1;
+	}
+
+	function applyTimelineEditToBatchRow(row) {
+		if (!row) return false;
+		const edit = row.timeline && typeof row.timeline === "object" ? row.timeline : null;
+		row.timelineEdited = Boolean(edit);
+		if (!edit) {
+			row.timelineDurationSec = 0;
+			row.timelineSceneCount = 0;
+			return false;
+		}
+		row.timelineDurationSec = Math.max(0, Number(edit.durationSec) || 0);
+		const entries = Array.isArray(edit.scenes) ? edit.scenes : [];
+		row.timelineSceneCount = entries.length;
+		const slides = Array.isArray(row.slides) ? row.slides.slice() : [];
+		if (!slides.length || !entries.length) return true;
+		const byMedia = new Map();
+		slides.forEach(function (slide, position) {
+			const id = String(slide && slide.id || "");
+			const named = id.indexOf("-img-") >= 0 || id.indexOf("-clip-") >= 0 || id.indexOf("-gif-") >= 0;
+			/*
+			 * buildBatchSlides() names a slide after the image it paints
+			 * (batch-7-img-3 -> image 3). A slide without that name keeps its
+			 * position, which is the same image order for every finished row.
+			 */
+			const mediaIndex = named ? trailingDigits(id) : position;
+			if (mediaIndex >= 0 && !byMedia.has(mediaIndex)) byMedia.set(mediaIndex, slide);
+		});
+		const ordered = [];
+		entries.forEach(function (entry) {
+			if (!Array.isArray(entry)) return;
+			const mediaIndex = Number(entry[0]);
+			const seconds = Number(entry[1]);
+			const slide = byMedia.get(mediaIndex);
+			if (!slide || ordered.indexOf(slide) !== -1) return;
+			if (Number.isFinite(seconds) && seconds > 0) {
+				/*
+				 * slideDurationSec() prefers this override, in the preview and in the
+				 * export. SLIDE_SECONDS_MIN is the 9-second default for an untimed
+				 * slide, NOT a floor for an edited one: clamping to it would flatten
+				 * every hand-back scene to 9 s and lose the edit.
+				 */
+				slide._partialSec = Math.min(MP4_MAX_DURATION_S, Math.max(0.1, seconds));
+			}
+			ordered.push(slide);
+		});
+		if (!ordered.length) return true;
+		/* A slide the edit no longer places stays at the end rather than vanishing. */
+		row.slides = ordered.concat(slides.filter(function (slide) { return ordered.indexOf(slide) === -1; }));
+		return true;
+	}
+
+	/*
+	 * Write the edit into the table page's store (localStorage + four cookies).
+	 * Called from the timeline tab; harmless on the table tab itself.
+	 */
+	function publishTimelineEdit(payload) {
+		const result = { ok: false, reason: "", source: "none", pageId: "", rows: 0, cookies: 0, timestampMatched: false, updatedAt: 0 };
+		const edit = payload && payload.summary && typeof payload.summary === "object" ? payload.summary : null;
+		if (!edit) {
+			result.reason = "no timeline summary";
+			window.__TIMELINE_EDIT_PUBLISH__ = result;
+			return result;
+		}
+		const store = timelineEditStoreFor(payload.sourcePageId);
+		if (!store) {
+			result.reason = "the table page store is unavailable";
+			window.__TIMELINE_EDIT_PUBLISH__ = result;
+			return result;
+		}
+		const loaded = store.load();
+		const snapshot = loaded && loaded.snapshot ? loaded.snapshot : {
+			version: 1, pageId: store.pageId, updatedAt: Date.now(), layout: "table",
+			quickBatch: { runBusy: false, queued: [], finishedCount: 0, rows: [] },
+			editor: { projects: [] }, videoIds: []
+		};
+		const quickBatch = snapshot.quickBatch && typeof snapshot.quickBatch === "object" ? snapshot.quickBatch : null;
+		if (!quickBatch) {
+			result.reason = "the table page snapshot is not shape-compatible";
+			window.__TIMELINE_EDIT_PUBLISH__ = result;
+			return result;
+		}
+		if (!Array.isArray(quickBatch.rows)) quickBatch.rows = [];
+		if (!snapshot.editor || typeof snapshot.editor !== "object") snapshot.editor = { projects: [] };
+		const rowId = String(payload.rowId || "").trim();
+		const vid = String(payload.vid || "").trim();
+		let row = quickBatch.rows.find(function (candidate) {
+			if (!candidate || typeof candidate !== "object") return false;
+			if (rowId && String(candidate.id) === rowId) return true;
+			return Boolean(vid && String(candidate.vid) === vid);
+		}) || null;
+		if (!row) {
+			if (!rowId) {
+				result.reason = "the hand-off carries no row id";
+				window.__TIMELINE_EDIT_PUBLISH__ = result;
+				return result;
+			}
+			row = { id: rowId, vid: vid || store.pageId + "-row-" + rowId, stage: "ready" };
+			quickBatch.rows.push(row);
+		}
+		row.timeline = edit;
+		row.timelineKey = String(edit.key || payload.key || "");
+		row.timelineUpdatedAt = Number(edit.updatedAt) || Date.now();
+		if (vid && !row.vid) row.vid = vid;
+		snapshot.updatedAt = Date.now();
+		const saved = store.save(snapshot);
+		result.ok = Boolean(saved && saved.ok);
+		result.reason = result.ok ? "saved" : String(saved && (saved.reason || "the store did not verify the write"));
+		result.source = String(loaded && loaded.source || "none");
+		result.pageId = store.pageId;
+		result.rows = quickBatch.rows.length;
+		result.cookies = Number(saved && saved.cookies) || 0;
+		result.timestampMatched = Boolean(saved && saved.timestampMatched);
+		result.updatedAt = snapshot.updatedAt;
+		window.__TIMELINE_EDIT_PUBLISH__ = result;
+		/*
+		 * A table tab publishing (the editor was opened in the same page) also
+		 * updates the row it can see, so the table never shows the old timing.
+		 */
+		if (store === pipelineManagementStore) {
+			const live = batchRows.find(function (candidate) { return String(candidate.id) === String(row.id); });
+			if (live) {
+				live.timeline = row.timeline;
+				live.timelineKey = row.timelineKey;
+				applyTimelineEditToBatchRow(live);
+				try { paintBatchRowStatus(live); } catch (paintError) { }
+			}
+		}
+		return result;
+	}
+
+	/*
+	 * Pick up an edit published by another tab without re-reading the whole
+	 * table: only rows whose stored timeline is newer than the one in memory are
+	 * touched, so typing in a row is never reverted.
+	 */
+	function reconcileTimelineEdits() {
+		let changed = 0;
+		let loaded = null;
+		try { loaded = pipelineManagementStore.load(); } catch (loadError) { return 0; }
+		const snapshot = loaded && loaded.snapshot;
+		const storedRows = snapshot && snapshot.quickBatch && Array.isArray(snapshot.quickBatch.rows) ? snapshot.quickBatch.rows : [];
+		storedRows.forEach(function (stored) {
+			if (!stored || typeof stored !== "object") return;
+			const row = batchRows.find(function (candidate) { return String(candidate.id) === String(stored.id); });
+			if (!row) return;
+			const incoming = stored.timeline && typeof stored.timeline === "object" ? stored.timeline : null;
+			const incomingAt = Number(stored.timelineUpdatedAt) || Number(incoming && incoming.updatedAt) || 0;
+			const currentAt = Number(row.timeline && row.timeline.updatedAt) || 0;
+			if (!incoming || incomingAt <= currentAt) return;
+			row.timeline = incoming;
+			row.timelineKey = String(stored.timelineKey || incoming.key || "");
+			applyTimelineEditToBatchRow(row);
+			try { paintBatchRowStatus(row); } catch (paintError) { }
+			changed += 1;
+		});
+		if (changed) {
+			try { renderBatchTable(); } catch (renderError) { }
+		}
+		window.__TIMELINE_EDIT_RECONCILE__ = { changed: changed, source: String(loaded && loaded.source || "none"), at: Date.now() };
+		return changed;
+	}
+
+	window.publishTimelineEdit = publishTimelineEdit;
+	/* The name the timeline editor calls; it runs before this file's body ends. */
+	window.__PUBLISH_TIMELINE_EDIT__ = publishTimelineEdit;
+	window.applyTimelineEditToBatchRow = applyTimelineEditToBatchRow;
+	window.reconcileTimelineEdits = reconcileTimelineEdits;
 
 	// =========================================================
 	// DATA
@@ -7245,7 +7472,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				'</div>' +
 				'</div>' +
 				'<div class="va-section">' +
-				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div><a href="https://pixabay.com/" target="_blank" rel="noopener noreferrer">Stock media from Pixabay</a>' +
+				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
 				'<button type="button" class="upload-btn" id="va-upload-btn-' + n + '" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
 				'<span class="va-note">Max 5 GIF \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
 				'<a href="#" class="va-template-link" onclick="openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
@@ -9416,9 +9643,22 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			BATCH_STAGE_LABELS[row.stage] ||
 			row.stage;
 
-		return row.detail
+		/*
+		 * Session 331 follow-up: a row that was edited in the timeline says so,
+		 * with the edited length, so the table shows the change it will preview
+		 * and export.
+		 */
+		const timelineNote =
+			row.timelineEdited
+				? " \u00b7 timeline edit" +
+					(Number(row.timelineDurationSec) > 0
+						? " " + Math.round(Number(row.timelineDurationSec)) + "s"
+						: "")
+				: "";
+
+		return (row.detail
 			? label + " \u00b7 " + row.detail
-			: label;
+			: label) + timelineNote;
 
 	}
 
@@ -10628,6 +10868,21 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
+	/*
+	 * Session 331: the length the scene windows are cut from. The verified
+	 * voiceover wins, then the worker's measured script span, then the minutes
+	 * the project was created with.
+	 */
+	function editorScenePlanDuration(project) {
+		const audio = Number(project && project.audio && project.audio.duration);
+		if (Number.isFinite(audio) && audio > 0) return audio;
+		const voice = Number(project && project._voiceoverDurationMs);
+		if (Number.isFinite(voice) && voice > 0) return voice / 1000;
+		const measured = Number(project && project.scriptDurationMs);
+		if (Number.isFinite(measured) && measured > 0) return measured / 1000;
+		return Math.max(1, Number(project && project._seoMinutes) || 1) * 60;
+	}
+
 	/* Step 2: the script + the row's style become the scene prompts. */
 	async function requestBatchPrompts(row, batch) {
 
@@ -10638,7 +10893,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			const response = await studioOffload.jsonRequest("/api/image-prompts", {
 				method: "POST", headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ topic: batchRowTopic(row), minutes: row.minutes, style: row.style, batch: batch,
-					sceneTotal: AUTO_MEDIA_TOTAL, resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value, script: String(row.script || "") })
+					sceneTotal: AUTO_MEDIA_TOTAL, resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value, script: String(row.script || ""),
+					keywordSource: "script", durationSec: batchScenePlanDuration(row) })
 			}, 60000, {
 				isCancelled: function () { return Boolean(row.stopRequested); },
 				setController: function (controller) { owner.controller = controller; },
@@ -10690,7 +10946,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 							orientation:
 								batchOrientation(row.orientation).value,
 						scriptIdea: compact || undefined,
-						script: compact ? undefined : String(row.script || "").trim()
+						script: compact ? undefined : String(row.script || "").trim(),
+						/* Session 331: script-anchored scene keywords (no model). */
+						keywordSource: "script",
+						durationSec: batchScenePlanDuration(row)
 					})
 			},
 			60000,
@@ -10729,6 +10988,16 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			}
 		);
 
+	}
+
+	/*
+	 * Session 331: a quick-batch row's verified voiceover length, else the
+	 * minutes it was planned for. The scene windows follow this.
+	 */
+	function batchScenePlanDuration(row) {
+		const audio = Number(row && row.audio && row.audio.duration);
+		if (Number.isFinite(audio) && audio > 0) return audio;
+		return Math.max(1, Number(row && row.minutes) || 1) * 60;
 	}
 
 	function batchRowTopic(row) {
@@ -10882,11 +11151,34 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		return true;
 	}
 
+	/*
+	 * Session 331: how many duplicate filenames this scene has already been
+	 * handed back. Each duplicate is one Pixabay result page the next retry
+	 * must skip, so the counter - not the retry attempt number - decides how
+	 * far the search moves.
+	 */
+	function mediaDuplicatePages(owner, scene) {
+		if (!owner) return 0;
+		var map = owner._mediaDuplicatePages;
+		if (!map || typeof map !== "object") return 0;
+		return Math.max(0, Number(map["scene-" + String(scene == null ? 0 : scene)]) || 0);
+	}
+
+	function noteMediaDuplicate(owner, scene) {
+		if (!owner) return 0;
+		if (!owner._mediaDuplicatePages || typeof owner._mediaDuplicatePages !== "object") owner._mediaDuplicatePages = {};
+		var key = "scene-" + String(scene == null ? 0 : scene);
+		var next = (Number(owner._mediaDuplicatePages[key]) || 0) + 1;
+		owner._mediaDuplicatePages[key] = next;
+		return next;
+	}
+
 	function acceptMediaBlob(owner, blob, scene) {
 		if (!blob) return false;
 		var filename = mediaFilenameFromBlob(blob, scene);
 		if (!reserveMediaFilename(owner, filename)) {
-			mediaItemRetryLog({ event: "duplicate-filename", stage: "media", scene: scene, filename: filename });
+			noteMediaDuplicate(owner, scene);
+			mediaItemRetryLog({ event: "duplicate-filename", stage: "media", scene: scene, filename: filename, pageSteps: mediaDuplicatePages(owner, scene) });
 			return false;
 		}
 		blob.stockFilename = filename;
@@ -10895,7 +11187,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		return true;
 	}
 
-	function alternateMediaPrompt(prompt, attempt, scene) {
+	function alternateMediaPrompt(prompt, attempt, scene, owner) {
 		if (typeof prompt !== "string" || prompt.indexOf("pixabay:") !== 0) return prompt;
 		var token = null;
 		try { token = JSON.parse(prompt.slice(8)); } catch (error) { return prompt; }
@@ -10906,12 +11198,31 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		var step = Math.max(0, Number(attempt) || 0);
 		var ordinal = (base + step) % limit;
 		var page = 1 + (Math.floor((base + step) / limit) % MEDIA_MAX_PIXABAY_PAGES);
+		/*
+		 * Session 331: a rejected duplicate filename is answered by moving the
+		 * Pixabay result page forward one page per duplicate and taking the
+		 * first hit of that page. Before this, the page only changed after a
+		 * full limit (8 images / 4 videos) index rotation, so a duplicate at
+		 * index 0 re-read the very page that had just refused the asset.
+		 */
+		var duplicates = mediaDuplicatePages(owner, scene);
+		if (duplicates > 0) {
+			var startPage = Math.max(1, Math.floor(Number(token.page) || 1));
+			page = 1 + ((startPage - 1 + duplicates) % MEDIA_MAX_PIXABAY_PAGES);
+			/*
+			 * First hit of the moved page. A second duplicate walks the next
+			 * index instead of landing back on the page/asset that just failed,
+			 * so the pair (page, index) is never repeated.
+			 */
+			ordinal = Math.floor(duplicates / MEDIA_MAX_PIXABAY_PAGES) % limit;
+		}
 		var next = Object.assign({}, token, {
 			type: type,
 			index: ordinal,
 			page: page,
 			scene: scene,
 			retry: step,
+			duplicatePages: duplicates,
 			uniqueFilename: "required"
 		});
 		return "pixabay:" + JSON.stringify(next);
@@ -10984,7 +11295,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			var pendingPrompts = [];
 			var pendingScenes = [];
 			for (var i = 0; i < pending.length; i++) {
-				pendingPrompts.push(alternateMediaPrompt(pending[i].prompt, pending[i].attempt, pending[i].scene));
+				pendingPrompts.push(alternateMediaPrompt(pending[i].prompt, pending[i].attempt, pending[i].scene, owner));
 				pendingScenes.push(pending[i].scene);
 			}
 			var result = null;
@@ -19805,7 +20116,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'<div id="seo-wt-selected-' + n + '"></div>' +
 			'<label class="seo-wt-style-label" for="seo-wt-style-select-' + n + '">Video treatment (Pixabay stock appearance varies)</label>' +
 			'<select id="seo-wt-style-select-' + n + '" aria-describedby="seo-wt-style-note-' + n + '">' + seoImageStyleOptionsHTML(selectedStyle) + '</select>' +
-			'<span class="va-note" id="seo-wt-style-note-' + n + '">Choose one visual style. The model will search Pixabay for broad scenes that fit the script, using the long-tail and short SEO keywords as search terms. Scene count follows the script word count: 6 scenes up to 130 words, 8 up to 240 words, 10 up to 500 words (10 beyond that); every plan includes two Pixabay video scenes and the rest are stock photos.</span>' +
+			'<span class="va-note" id="seo-wt-style-note-' + n + '">Choose one visual style. Every scene search is read from your script inside that scene\u2019s own time window, and words from the selected SEO keyword set win over the rest; articles, adjectives and other short words are skipped. Every video plans 12 scenes: 4 silent Pixabay clips and 8 stock photos.</span>' +
 			'<span class="va-note">Nothing is lost if you close this window after pressing Generate: the script and its images keep running in the background for Video ' + n + '.</span>' +
 			'<div class="seo-wt-actions">' +
 			'<button type="button" class="upload-btn" onclick="confirmSeoStyleAndGenerate(' + n + ')">\\u2728 Generate Script &amp; Images</button>' +
@@ -19939,14 +20250,39 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		}
 
+		/* Session 331: steps behind the open one read as done pills. */
+		const stepOrder = [
+			"plan",
+			"sets",
+			"style",
+			"script"
+		];
+
+		const stepIndex =
+			stepOrder.indexOf(step);
+
 		modal.querySelectorAll(
 			".seo-wt-step"
 		).forEach(
 			(chip) => {
 
+				const chipIndex =
+					stepOrder.indexOf(
+						String(
+							chip.getAttribute("data-step") || ""
+						)
+					);
+
 				chip.classList.toggle(
 					"active",
 					chip.getAttribute("data-step") === step
+				);
+
+				chip.classList.toggle(
+					"done",
+					chipIndex > -1 &&
+						stepIndex > -1 &&
+						chipIndex < stepIndex
 				);
 
 			}
@@ -21104,6 +21440,10 @@ if (flowRetry) flowRetry.style.display = "none";
 						body: JSON.stringify({
 							topic: project._seoTopic || "my video", minutes: project._seoMinutes || 1,
 							style: style, script: project.script || "", sceneTotal: target, keywordSet: project.selectedSeoSet || null,
+							/* Session 331: no model plans the searches; the script and
+							 * the SEO set are read inside each scene's time window. */
+							keywordSource: "script",
+							durationSec: editorScenePlanDuration(project),
 							batch: batch
 						})
 					}, IMAGE_PROMPT_REQUEST_TIMEOUT_MS, project, "_imagePromptCreateController", async function (response) {
@@ -24352,7 +24692,17 @@ async function retryImagePromptFlow(n) {
 		initAuth();
 		persistPipelineManagementState("startup");
 		window.addEventListener("storage", function (event) {
-			if (event && event.key === pipelineManagementStore.localStorageKey) restorePipelineManagementState();
+			if (!event || event.key !== pipelineManagementStore.localStorageKey) return;
+			try { restorePipelineManagementState(); } catch (restoreError) { }
+			/*
+			 * Session 331 follow-up: a timeline tab publishes its edit into THIS
+			 * page's store, so the row is re-timed here as soon as it lands.
+			 */
+			try { reconcileTimelineEdits(); } catch (reconcileError) { }
+		});
+		/* A tab that regains focus also checks, in case the storage event was missed. */
+		window.addEventListener("focus", function () {
+			try { reconcileTimelineEdits(); } catch (focusError) { }
 		});
 		window.addEventListener("beforeunload", function () { persistPipelineManagementState("beforeunload"); });
 	}

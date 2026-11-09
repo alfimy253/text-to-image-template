@@ -191,6 +191,11 @@ export const TIMELINE_EDITOR_JS = `
 		var previewFrame = 0;
 		var previousFrameAt = 0;
 		var saveTimer = 0;
+		/* Session 331 follow-up: the edit hand-back to the Quick Batch table. */
+		var publishReady = false;
+		var publishTimer = 0;
+		var lastPublishAt = 0;
+		var PUBLISH_INTERVAL_MS = 1200;
 		var activeDrag = null;
 		var canvasDrag = null;
 		var suppressClick = false;
@@ -794,17 +799,38 @@ export const TIMELINE_EDITOR_JS = `
 				scene.elements = sceneElementEntries(scene.id).map(function (entry) { return Object.assign({}, entry.item); });
 			});
 		}
-		function maxTimelineEnd() {
-			var end = number(state && state.durationSec, 60);
+		/*
+		 * Session 331 — the video's length is its content, not its canvas.
+		 * ---------------------------------------------------------------
+		 * Two rules used to stretch the project past what was actually placed:
+		 * maxTimelineEnd() seeded itself from state.durationSec (a length that
+		 * was once long could therefore never come back down) and
+		 * ensureTimelineEnd() rounded every growth up to the next 5 s step. Both
+		 * made the rendered MP4 depend on how much room the ruler happened to
+		 * show. The length now ends exactly where the last item on the last lane
+		 * ends - normally the last scene on the background/media lane - and it
+		 * shrinks again when that item is shortened or deleted.
+		 */
+		function timelineContentEnd() {
+			var end = 0;
 			(state && state.tracks || []).forEach(function (track) {
-				(track.items || []).forEach(function (item) { end = Math.max(end, item.startSec + item.durationSec); });
+				(track && track.items || []).forEach(function (item) {
+					if (!item) return;
+					var start = Math.max(0, number(item.startSec, 0));
+					var duration = Math.max(MIN_CLIP_SEC, number(item.durationSec, MIN_CLIP_SEC));
+					end = Math.max(end, start + duration);
+				});
 			});
-			return Math.min(MAX_DURATION_SEC, end);
+			return end;
 		}
-		function ensureTimelineEnd(end) {
+		function maxTimelineEnd() {
+			return clamp(timelineContentEnd(), 1, MAX_DURATION_SEC);
+		}
+		/* The canvas follows the content on every edit; the argument is a hint. */
+		function ensureTimelineEnd(_end) {
 			if (!state) return;
-			var clamped = clamp(end, 1, MAX_DURATION_SEC);
-			if (clamped > state.durationSec) state.durationSec = Math.min(MAX_DURATION_SEC, Math.ceil(clamped / 5) * 5);
+			state.durationSec = maxTimelineEnd();
+			state.playheadSec = clamp(state.playheadSec, 0, state.durationSec);
 		}
 
 		/*
@@ -948,6 +974,8 @@ export const TIMELINE_EDITOR_JS = `
 			state.durationSec = clamp(parsed.durationSec, 1, MAX_DURATION_SEC);
 			state.scenes = parsed.scenes || state.scenes;
 			state.tracks = parsed.tracks;
+			/* Session 331: a restored project is measured from its own items. */
+			state.durationSec = maxTimelineEnd();
 			state.playheadSec = clamp(playhead, 0, state.durationSec);
 			state.selectedTrackId = findTrack(selectedTrack) ? selectedTrack : (mediaTrack() ? mediaTrack().id : selectedTrack);
 			state.selectedItemId = findItem(selectedItem) ? selectedItem : "";
@@ -991,16 +1019,134 @@ export const TIMELINE_EDITOR_JS = `
 			return true;
 		}
 
+		/*
+		 * Session 331 follow-up — the edit hand-back
+		 * -----------------------------------------
+		 * The Quick Batch table keeps its rows in the page store of the tab that
+		 * opened this editor. On every save (throttled) and on the Back button this
+		 * page publishes a compact summary of the edit there, so the change lands in
+		 * that page's localStorage entry and its four cookie chunks, and the row's
+		 * Preview / Export read the edited scene order and timing.
+		 *
+		 * Shape: one entry per background scene, [mediaIndex, durationSec, type].
+		 * mediaIndex is the row's own image index (scene-N -> N-1), so no blob,
+		 * object URL or filename has to travel.
+		 */
+		/*
+		 * The row's media is addressed as scene-N (scene-1 -> image 0). The key may
+		 * wear an asset- wrapper, so the digits are read from the last "scene-"
+		 * marker instead of matching one fixed spelling.
+		 */
+		function sceneNumberOf(value) {
+			var text = String(value || "");
+			var at = text.lastIndexOf("scene-");
+			if (at < 0) return -1;
+			var digits = "";
+			for (var index = at + 6; index < text.length; index++) {
+				var code = text.charCodeAt(index);
+				if (code < 48 || code > 57) break;
+				digits += text.charAt(index);
+			}
+			return digits ? Number(digits) : -1;
+		}
+
+		function timelineEditSummary() {
+			if (!state) return null;
+			var media = mediaTrack();
+			var entries = [];
+			((media && media.items) || []).slice()
+				.sort(function (a, b) { return number(a && a.startSec, 0) - number(b && b.startSec, 0); })
+				.forEach(function (item) {
+					if (!item) return;
+					var mediaIndex = sceneNumberOf(item.sceneId);
+					if (mediaIndex < 0) mediaIndex = sceneNumberOf(item.assetId);
+					/* scene-1 is the row's image 0. */
+					if (mediaIndex > 0) mediaIndex -= 1;
+					else if (mediaIndex === 0) mediaIndex = -1;
+					var scene = mediaIndex >= 0
+						? (state.scenes || []).find(function (entry) { return Number(entry && entry.index) === mediaIndex; })
+						: null;
+					var mediaType = String(item.mediaType || (scene && scene.mediaType) || "image");
+					entries.push([
+						mediaIndex,
+						Math.round(Math.max(0, number(item.durationSec, 0)) * 1000) / 1000,
+						mediaType === "video" ? 1 : mediaType === "gif" ? 2 : 0
+					]);
+				});
+			var visuals = 0;
+			(state.tracks || []).forEach(function (track) {
+				if (track && track.kind === "visual") visuals += (track.items || []).length;
+			});
+			return {
+				v: 1,
+				updatedAt: Date.now(),
+				key: storageKey,
+				pageId: pageId,
+				sourcePageId: String(state.sourcePageId || ""),
+				rowId: String(state.sourceRowId || ""),
+				vid: String(state.sourceVid || ""),
+				durationSec: Math.round(Math.max(0, number(state.durationSec, 0)) * 1000) / 1000,
+				sceneCount: entries.length,
+				clipCount: entries.filter(function (entry) { return entry[2] === 1; }).length,
+				textCount: visuals,
+				videoStyle: String(state.videoStyle || ""),
+				frame: {
+					width: number(state.frame && state.frame.width, 0),
+					height: number(state.frame && state.frame.height, 0)
+				},
+				scenes: entries
+			};
+		}
+		function publishTimelineEdit(force) {
+			if (!publishReady || !state) return null;
+			var publish = window.__PUBLISH_TIMELINE_EDIT__;
+			if (typeof publish !== "function") return null;
+			var summary = timelineEditSummary();
+			if (!summary) return null;
+			var result = null;
+			lastPublishAt = Date.now();
+			try {
+				result = publish({
+					sourcePageId: String(state.sourcePageId || ""),
+					rowId: String(state.sourceRowId || ""),
+					vid: String(state.sourceVid || ""),
+					key: storageKey,
+					summary: summary,
+					reason: force ? "timeline-back" : "timeline-save"
+				});
+			} catch (error) {
+				result = { ok: false, reason: String(error && error.message || error) };
+			}
+			window.__TIMELINE_EDIT_PUBLISH__ = result;
+			try { window.__TIMELINE_HANDOFF__ = { summary: summary, result: result }; } catch (handoffError) { }
+			return result;
+		}
+		function schedulePublish(force) {
+			if (!publishReady) return;
+			if (force) {
+				if (publishTimer) { clearTimeout(publishTimer); publishTimer = 0; }
+				publishTimelineEdit(true);
+				return;
+			}
+			var wait = Math.max(0, PUBLISH_INTERVAL_MS - (Date.now() - lastPublishAt));
+			if (!wait) { publishTimelineEdit(false); return; }
+			if (publishTimer) return;
+			publishTimer = setTimeout(function () { publishTimer = 0; publishTimelineEdit(false); }, wait);
+		}
+
 		function persistNow() {
 			if (!state) return false;
 			syncScenesFromTracks();
-			state.durationSec = Math.max(state.durationSec, maxTimelineEnd());
+			/* Session 331: the saved length is the last placed item's end. */
+			state.durationSec = maxTimelineEnd();
 			state.updatedAt = Date.now();
 			if (!suppressHistory) recordHistoryEntry();
 			try {
 				window.localStorage.setItem(storageKey, JSON.stringify(state));
 				setSaveStatus("Timing saved in this browser", false);
 				window.__TIMELINE_EDITOR_SAVE__ = { ok: true, key: storageKey, updatedAt: state.updatedAt, scenes: state.scenes.length, tracks: state.tracks.length };
+				/* Session 331 follow-up: keep the table's own store in step with the edit. */
+				try { schedulePublish(false); } catch (publishError) { }
 				return true;
 			} catch (error) {
 				setSaveStatus("Timing could not be saved", true);
@@ -3513,17 +3659,31 @@ export const TIMELINE_EDITOR_JS = `
 			var back = document.getElementById("timeline-back");
 			if (back) back.addEventListener("click", function () {
 				persistNow();
+				/*
+				 * Session 331 follow-up: the edit is stored in the TABLE page's own
+				 * store (one localStorage entry + four cookie chunks) before the tab
+				 * closes, so the row's action buttons - Preview, Export, Edit - all
+				 * reopen the edited timeline.
+				 */
+				try { publishTimelineEdit(true); } catch (publishError) { }
 				try { window.close(); } catch (error) {}
 				if (!window.closed) {
 					var url = new URL(window.location.href);
+					var sourcePageId = String(state && state.sourcePageId || "");
 					url.searchParams.delete("projectEdit");
-					url.searchParams.delete("pipelinePage");
+					/*
+					 * Navigate back to the SAME page id the table uses, so the reload
+					 * reads the store the edit was just written into.
+					 */
+					if (sourcePageId) url.searchParams.set("pipelinePage", sourcePageId);
+					else url.searchParams.delete("pipelinePage");
 					url.searchParams.set("layout", "table");
 					window.location.href = url.pathname + url.search + url.hash;
 				}
 			});
 			window.addEventListener("beforeunload", function () {
 				persistNow();
+				try { publishTimelineEdit(true); } catch (publishError) { }
 				if (previewFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(previewFrame);
 				objectUrls.forEach(function (url) { try { URL.revokeObjectURL(url); } catch (error) {} });
 				Object.keys(audioMap).forEach(function (key) { try { audioMap[key].pause(); } catch (error) {} });
@@ -3601,6 +3761,7 @@ export const TIMELINE_EDITOR_JS = `
 			if (transition) {
 				state.sourcePageId = String(transition.sourcePageId || state.sourcePageId || "");
 				state.sourceRowId = String(transition.basicSettings && transition.basicSettings.id || state.sourceRowId || "");
+				state.sourceVid = String(transition.basicSettings && transition.basicSettings.vid || state.sourceVid || "");
 			}
 			if (transition && transition.basicSettings && transition.basicSettings.script && !state.scenes.some(function (scene) { return scene.prompt; })) {
 				/* The scene list remains a timing scaffold; no pipeline or prompt request is run here. */
@@ -3623,6 +3784,11 @@ export const TIMELINE_EDITOR_JS = `
 			renderInspector();
 			drawPreview();
 			persistNow();
+			/*
+			 * Session 331 follow-up: only real edits are handed back to the table -
+			 * opening the project must not rewrite the table's store.
+			 */
+			publishReady = true;
 			/*
 			 * The loaded (and just normalised) project is the first history
 			 * state, so opening a project never offers an undo of its own

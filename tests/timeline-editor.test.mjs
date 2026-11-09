@@ -1780,7 +1780,8 @@ test("a composed clip is the last Scene Media scene and the timeline MP4 export 
 	const fresh = track.items[track.items.length - 1];
 	assert.equal(fresh.startSec, 5, "it starts at the right-most end of the Scene Media layer");
 	assert.equal(fresh.durationSec, 1);
-	assert.equal(state.durationSec, 10, "the timeline grows until the new scene's end (rounded to the 5 s grid)");
+	/* Session 331: the length is the last placed item's end — 5 s + 1 s, no 5 s rounding. */
+	assert.equal(state.durationSec, 6, "the timeline ends exactly at the new scene's end");
 	const scene = state.scenes[state.scenes.length - 1];
 	assert.equal(scene.id, fresh.sceneId, "the clip is a scene of the project, in last position");
 	assert.equal(scene.startSec, 5);
@@ -1814,9 +1815,9 @@ test("a composed clip is the last Scene Media scene and the timeline MP4 export 
 	const result = await w.__TIMELINE_EDITOR__.exportTimeline();
 	assert.equal(result.ok, true);
 	assert.equal(result.format, "mp4");
-	assert.equal(encodedFrames, 300, "10 s at 30 fps: the exported MP4 covers the appended scene's window");
+	assert.equal(encodedFrames, 180, "6 s at 30 fps: the exported MP4 covers the appended scene's window and nothing past it");
 	assert.ok(drawnVideos.length >= 20, "frames inside the appended scene draw its composed MP4, not a placeholder");
-	assert.equal(state.durationSec, 10);
+	assert.equal(state.durationSec, 6);
 });
 
 test("overlapping boxes are moved clear, and every element or scene addition re-runs the pass", (t) => {
@@ -1869,4 +1870,113 @@ test("overlapping boxes are moved clear, and every element or scene addition re-
 	const copy = api.duplicateSelectedItem();
 	assert.ok(copy, "the selection was duplicated");
 	assertNoOverlaps("after a duplicate");
+});
+
+test("the timeline length follows the last placed item, never the stretched ruler (Session 331)", (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const api = w.__TIMELINE_EDITOR__;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const media = state.tracks.find((track) => track.kind === "media");
+
+	/* The loaded project is exactly as long as its last background scene ends. */
+	assert.equal(state.durationSec, 60, "a restored project is measured from its own last scene");
+
+	/* One 7.5 s scene = a 7.5 s video. The old rule rounded this up to 10 s. */
+	state.scenes = state.scenes.slice(0, 1);
+	media.items = media.items.slice(0, 1);
+	api.setItemTiming(media.items[0].id, 0, 7.5);
+	assert.equal(state.durationSec, 7.5, "the length is exact, not rounded up to the next 5 s step");
+
+	/* A text box that runs past the last scene is still on screen: it counts. */
+	const text = api.addTextElement("Last word");
+	assert.ok(text && text.id, "a text element is added");
+	api.setItemTiming(text.id, 8, 1.25);
+	assert.equal(state.durationSec, 9.25, "the last element on any lane sets the end");
+
+	/* Shortening that element shrinks the video again - nothing is stretched. */
+	api.setItemTiming(text.id, 8, 0.5);
+	assert.equal(state.durationSec, 8.5, "the length comes back down with the content");
+
+	/* The saved project stores the same content-derived length. */
+	assert.equal(api.save(), true);
+	const saved = JSON.parse(w.localStorage.getItem(w.__TIMELINE_EDITOR_SAVE__.key));
+	assert.equal(saved.durationSec, 8.5, "the persisted length is the last item's end");
+	assert.equal(saved.durationSec, state.durationSec);
+});
+
+test("the Quick Batch hand-back stores the timeline edit in localStorage and the four cookies (Session 331 follow-up)", (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const api = w.__TIMELINE_EDITOR__;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const factory = w.__PIPELINE_MANAGEMENT_STORE_FACTORY__;
+	assert.equal(typeof factory, "function", "the timeline page can reach the table's store factory");
+
+	/* The table tab's own page store, holding the row this editor was opened from. */
+	const store = factory(w, "p_source_test");
+	const seeded = store.save({
+		version: 1, pageId: "p_source_test", updatedAt: Date.now(), layout: "table",
+		quickBatch: {
+			runBusy: false, queued: [], finishedCount: 0,
+			rows: [{ id: "7", vid: "p_source_test-row-7", script: "A quiet garden story", stage: "ready" }]
+		},
+		editor: { projects: [] }, videoIds: []
+	});
+	assert.equal(seeded.ok, true, "the table page store starts out healthy");
+
+	/* A real edit, made the way a user makes one. */
+	const media = state.tracks.find((track) => track.id === "background-media");
+	api.setItemTiming(media.items[0].id, 0, 7.5);
+	const editedSceneSeconds = media.items[0].durationSec;
+	assert.ok(editedSceneSeconds > 0, "the scene was re-timed");
+
+	w.document.getElementById("timeline-back").click();
+
+	const publish = w.__TIMELINE_EDIT_PUBLISH__;
+	assert.ok(publish, "the Back button published the edit");
+	assert.equal(publish.ok, true, JSON.stringify(publish));
+	assert.equal(publish.pageId, "p_source_test", "it wrote into the TABLE page's store, not the timeline's own");
+	assert.equal(publish.cookies, 4, "all four cookie chunks were written");
+	assert.equal(publish.timestampMatched, true, "localStorage and the cookies agree on the timestamp");
+
+	/* 1) the table page's localStorage entry carries the edit */
+	const localText = w.localStorage.getItem("ytvs.pipeline-management.v1.p_source_test");
+	assert.ok(localText, "the table page's localStorage entry exists");
+	const localSnapshot = JSON.parse(localText);
+	const localRow = localSnapshot.quickBatch.rows.find((row) => String(row.id) === "7");
+	assert.ok(localRow && localRow.timeline, "the row carries the timeline edit");
+	assert.equal(localRow.timeline.durationSec, state.durationSec, "the edited length travelled");
+	assert.equal(localRow.timeline.scenes.length, 12, "all twelve scenes travelled");
+	const sceneEntry = localRow.timeline.scenes.find((entry) => entry[0] === 0);
+	assert.ok(sceneEntry, "the first scene is in the hand-back");
+	assert.equal(sceneEntry[1], editedSceneSeconds, "the first scene keeps its new length");
+	assert.deepEqual(
+		localRow.timeline.scenes.map((entry) => entry[0]).sort((a, b) => a - b),
+		Array.from({ length: 12 }, (_, index) => index),
+		"every one of the row's twelve media slots travelled exactly once"
+	);
+	assert.equal(localRow.timeline.textCount, 1, "the text element count travelled");
+	assert.equal(localRow.timeline.key, w.__TIMELINE_EDITOR_SAVE__.key, "the hand-back points at the full saved state");
+
+	/* 2) the four cookie chunks carry the very same snapshot */
+	const metas = [];
+	for (let index = 1; index <= 4; index++) {
+		const name = "ytvs_pipeline_management_p_source_test_" + index;
+		const part = w.document.cookie.split(";").map((item) => item.trim()).find((item) => item.startsWith(name + "="));
+		assert.ok(part, "cookie chunk " + index + " is present");
+		metas.push(JSON.parse(decodeURIComponent(part.slice(name.length + 1))));
+	}
+	metas.sort((a, b) => a.i - b.i);
+	const cookieSnapshot = JSON.parse(metas.map((meta) => meta.d).join(""));
+	assert.equal(cookieSnapshot.pageId, "p_source_test");
+	const cookieRow = cookieSnapshot.quickBatch.rows.find((row) => String(row.id) === "7");
+	assert.ok(cookieRow && cookieRow.timeline, "the cookie snapshot carries the edit too");
+	assert.deepEqual(cookieRow.timeline.scenes, localRow.timeline.scenes, "cookies and localStorage agree");
+
+	/* 3) the full edited project is still under the timeline's own key, for Edit */
+	const saved = JSON.parse(w.localStorage.getItem(w.__TIMELINE_EDITOR_SAVE__.key));
+	assert.equal(saved.projectId, "timeline-p_source_test-row-7");
+	assert.equal(saved.durationSec, state.durationSec);
+	assert.equal(saved.scenes.length, 12);
 });

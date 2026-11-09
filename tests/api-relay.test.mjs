@@ -48,12 +48,16 @@ import {
 	noteRelaySuccess,
 	normalizeRelayConfig,
 	orderRelayCandidates,
+	pickRelayEndpoint,
 	probeRelayEndpoint,
 	readRelayConfig,
+	readRelayReportTicket,
+	relayHealthSnapshot,
 	relayPreflightResponse,
 	relayTicketIdentity,
 	resetRelayHealth,
 	resolveRelayPool,
+	RELAY_CHAIN_MAX_MS,
 	signRelayToken,
 	verifyRelayToken,
 	withRelayedAi,
@@ -356,7 +360,10 @@ test("binary model results survive the relay as bytes", async () => {
 		new Response(PNG, { status: 200, headers: { [RELAY_RESULT_HEADER]: "binary" } });
 	noteRelayFailure("local", new Error("503 Service Unavailable"), 30_000);
 	const runtime = createRelayRuntime(env, requestFor("/api/image"), { fetchImpl, selfOrigin: SELF });
-	const value = await runtime.ai.run("@cf/stabilityai/stable-diffusion-xl-base-1.0", { prompt: "x" });
+	/* Session 331 removed AI image generation (Pixabay only), so the binary
+	 * relay contract is pinned on a model the policy still runs: MeloTTS
+	 * answers audio bytes and travels the identical `binary` path. */
+	const value = await runtime.ai.run("@cf/myshell-ai/melotts", { prompt: "x" });
 	assert.ok(value instanceof Uint8Array);
 	assert.deepEqual(Array.from(value.slice(0, 4)), [137, 80, 78, 71]);
 });
@@ -519,8 +526,8 @@ test("POST /api/relay/ai requires a valid signed token and executes once", async
 test("the compute endpoint returns raw bytes and 503 when this Worker has no AI binding", async () => {
 	resetIsolate();
 	const env = { RELAY_SECRET: "bytes-secret", AI: { run: async () => PNG } };
-	const body = JSON.stringify({ model: "@cf/stabilityai/stable-diffusion-xl-base-1.0", input: { prompt: "x" } });
-	const token = await signRelayToken(env, { v: 1, k: "ai", exp: Date.now() + 60_000, m: "@cf/stabilityai/stable-diffusion-xl-base-1.0" });
+	const body = JSON.stringify({ model: "@cf/myshell-ai/melotts", input: { prompt: "x" } });
+	const token = await signRelayToken(env, { v: 1, k: "ai", exp: Date.now() + 60_000, m: "@cf/myshell-ai/melotts" });
 	const response = await handleRelayAiCall(
 		requestFor(RELAY_AI_PATH, {
 			method: "POST",
@@ -556,7 +563,7 @@ test("a model failure at the endpoint is reported as a model error", async () =>
 			}
 		}
 	};
-	const body = JSON.stringify({ model: "@cf/retired/model", input: {} });
+	const body = JSON.stringify({ model: "@cf/myshell-ai/melotts", input: {} });
 	const token = await signRelayToken(env, { v: 1, k: "ai", exp: Date.now() + 60_000 });
 	const response = await handleRelayAiCall(
 		requestFor(RELAY_AI_PATH, {
@@ -847,9 +854,33 @@ function imageWorkerEnv() {
 	};
 }
 
-test("the studio can rotate /api/image to a backup with only a ticket (no cookie)", async () => {
+/* A 10-byte MP3 header: enough for the voiceover route to hand back bytes. */
+const MP3 = Uint8Array.from([73, 68, 51, 4, 0, 0, 0, 0, 0, 0]);
+const MP3_DATA_URL = "data:audio/mpeg;base64," + Buffer.from(MP3).toString("base64");
+
+/*
+ * Session 331 replaced AI image generation with the Pixabay importer, so
+ * `/api/image` is no longer a model route and can no longer prove that a
+ * relayed request is authorised by its ticket alone. `/api/voiceover` is the
+ * closest live equivalent: a ticket-only caller gets real model bytes back.
+ */
+function voiceWorkerEnv() {
+	const kv = makeKv();
+	return {
+		kv,
+		env: {
+			AI: {
+				run: async () => ({ audio: MP3_DATA_URL })
+			},
+			KV_BINDING: kv,
+			RELAY_SECRET: "e2e-secret"
+		}
+	};
+}
+
+test("the studio can rotate an AI call to a backup with only a ticket (no cookie)", async () => {
 	resetIsolate();
-	const { env } = imageWorkerEnv();
+	const { env } = voiceWorkerEnv();
 	const ticket = await signRelayToken(env, {
 		v: 1,
 		k: "client",
@@ -860,21 +891,21 @@ test("the studio can rotate /api/image to a backup with only a ticket (no cookie
 		paths: RELAY_AI_PATHS.slice()
 	});
 	const response = await worker.fetch(
-		new Request(SELF + "/api/image", {
+		new Request(SELF + "/api/voiceover", {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 				"CF-Connecting-IP": "203.0.113.9",
 				[RELAY_TICKET_HEADER]: ticket
 			},
-			body: JSON.stringify({ prompt: "a rotated scene", resolution: 1024, orientation: "landscape" })
+			body: JSON.stringify({ text: "A quiet garden story about bees.", voice: "voice-01" })
 		}),
 		env,
 		{}
 	);
 	assert.equal(response.status, 200, await response.clone().text());
-	assert.equal(response.headers.get("Content-Type"), "image/png");
-	assert.deepEqual(Array.from(new Uint8Array(await response.arrayBuffer())), Array.from(PNG));
+	assert.equal(response.headers.get("Content-Type"), "audio/mpeg");
+	assert.deepEqual(Array.from(new Uint8Array(await response.arrayBuffer())), Array.from(MP3));
 });
 
 test("a ticket cannot open account, settings or payment routes on a backup", async () => {
@@ -1045,7 +1076,7 @@ test("when the server answers with this Worker's own URL the request keeps its c
 /* 10. Two real Worker deployments talking to each other              */
 /* ------------------------------------------------------------------ */
 
-test("worker A relays a real /api/image model call to worker B and returns B's bytes", async () => {
+test("worker A relays a real model call to worker B and returns B's bytes", async () => {
 	resetIsolate();
 	let primaryCalls = 0;
 	let backupCalls = 0;
@@ -1064,7 +1095,7 @@ test("worker A relays a real /api/image model call to worker B and returns B's b
 		AI: {
 			run: async () => {
 				backupCalls += 1;
-				return PNG;
+				return { audio: MP3_DATA_URL };
 			}
 		},
 		KV_BINDING: makeKv()
@@ -1084,20 +1115,21 @@ test("worker A relays a real /api/image model call to worker B and returns B's b
 	globalThis.fetch = async (input, init) => worker.fetch(new Request(input, init), envB, {});
 	try {
 		const response = await worker.fetch(
-			new Request(SELF + "/api/image", {
+			new Request(SELF + "/api/voiceover", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 					"CF-Connecting-IP": "203.0.113.20",
 					[RELAY_TICKET_HEADER]: ticket
 				},
-				body: JSON.stringify({ prompt: "a relayed scene", resolution: 1024, orientation: "landscape" })
+				body: JSON.stringify({ text: "A relayed scene, read aloud.", voice: "voice-01" })
 			}),
 			envA,
 			{}
 		);
 		assert.equal(response.status, 200, await response.clone().text());
-		assert.deepEqual(Array.from(new Uint8Array(await response.arrayBuffer())), Array.from(PNG));
+		assert.equal(response.headers.get("Content-Type"), "audio/mpeg");
+		assert.deepEqual(Array.from(new Uint8Array(await response.arrayBuffer())), Array.from(MP3));
 		assert.ok(primaryCalls >= 1, "the cooling primary was tried first");
 		assert.equal(backupCalls, 1, "the backup ran the model exactly once");
 	} finally {
@@ -1402,4 +1434,207 @@ test("the admin page accepts five backup Worker URLs and the pool keeps all five
 	const pool = await resolveRelayPool(env, SELF);
 	assert.equal(pool.length, MAX_RELAY_WORKERS + 1, "this Worker + five backups");
 	assert.equal(MAX_RELAY_WORKERS, 5);
+});
+
+/* ==================================================================
+ * 12. The rotation cannot hang (Session 331 follow-up)
+ * ================================================================== */
+
+test("a backup that never answers times out, is cooled, and the call still lands on the UI Worker", async () => {
+	resetIsolate();
+	const env = {
+		AI: { run: async () => ({ response: "local-answer" }) },
+		RELAY_SECRET: "hang-secret",
+		KV_BINDING: cloudflareOnly(makeKv({
+			"config:workers": JSON.stringify(["https://slow.test"]),
+			/* The shortest timeout the policy accepts, so the test is quick. */
+			"config:relay": JSON.stringify({ timeoutMs: 5_000 })
+		}))
+	};
+	const attempted = [];
+	/* A backup that accepts the connection and never answers: the only way out
+	   is the relay's own deadline firing on the abort signal. */
+	const hangingFetch = (url, init) => new Promise((resolve, reject) => {
+		attempted.push(url);
+		const signal = init && init.signal;
+		const fail = () => reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+		if (!signal || typeof signal.addEventListener !== "function") return;
+		if (signal.aborted) fail();
+		else signal.addEventListener("abort", fail, { once: true });
+	});
+	const runtime = createRelayRuntime(env, requestFor("/api/script"), {
+		fetchImpl: hangingFetch,
+		selfOrigin: SELF
+	});
+	/* Local is cooling first, so the hanging backup is attempted first. */
+	noteRelayFailure("local", new Error("429 Too Many Requests"), 30_000);
+
+	const startedAt = Date.now();
+	const value = await runtime.ai.run("@cf/meta/llama", { prompt: "x" });
+	const elapsed = Date.now() - startedAt;
+
+	assert.deepEqual(value, { response: "local-answer" }, "the UI Worker answered the timed-out call");
+	assert.ok(attempted.some((url) => String(url).startsWith("https://slow.test")), "the hanging backup was tried");
+	assert.ok(elapsed >= 4_000, "the call really waited for the deadline (" + elapsed + " ms)");
+	assert.ok(elapsed < RELAY_CHAIN_MAX_MS, "and the chain budget bounded it (" + elapsed + " ms)");
+	assert.ok(runtime.stats().failedOver >= 1, "the timeout counts as a fail-over");
+
+	const health = relayHealthSnapshot();
+	const backup = health["worker:https://slow.test"];
+	assert.ok(backup, "the hanging member has health state");
+	assert.ok(backup.openedUntil > Date.now(), "a timeout opens the circuit on that backup");
+	assert.match(String(backup.lastError), /timed out|abort/i, "the recorded error says it timed out");
+});
+
+test("a timeout is transient but a cancelled request is not: only the timeout is replayed on another member", async () => {
+	resetIsolate();
+	const env = {
+		AI: { run: async () => ({ response: "local-answer" }) },
+		RELAY_SECRET: "cancel-secret",
+		KV_BINDING: cloudflareOnly(makeKv({ "config:workers": JSON.stringify(["https://backup.test"]) }))
+	};
+	const controller = new AbortController();
+	const cancelled = new Request(SELF + "/api/script", { signal: controller.signal });
+	controller.abort();
+	let remoteCalls = 0;
+	const runtime = createRelayRuntime(env, cancelled, {
+		fetchImpl: async () => {
+			remoteCalls += 1;
+			throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+		},
+		selfOrigin: SELF
+	});
+	noteRelayFailure("local", new Error("429 Too Many Requests"), 30_000);
+
+	await assert.rejects(() => runtime.ai.run("@cf/meta/llama", { prompt: "x" }), (error) => {
+		assert.equal(error.name, "AbortError", "the cancellation surfaces as a cancellation");
+		return true;
+	});
+	assert.equal(remoteCalls, 1, "a cancelled call is never retried on another member");
+});
+
+/* ==================================================================
+ * 13. Browser failure reports actually cool the member they name
+ * ================================================================== */
+
+test("a browser failure report needs a signed ticket and can only cool a backup", async () => {
+	resetIsolate();
+	const env = {
+		RELAY_SECRET: "report-secret",
+		KV_BINDING: cloudflareOnly(makeKv({ "config:workers": JSON.stringify(["https://backup.test"]) }))
+	};
+	const options = {
+		selfOrigin: SELF,
+		identity: async () => ({ username: "bob", usertype: "paid_user" }),
+		guest: () => false
+	};
+	const ask = (query = "", headers = {}) => handleRelayRoutes(
+		requestFor(RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fscript" + query, { headers }),
+		new URL(SELF + RELAY_ENDPOINT_PATH + "?path=%2Fapi%2Fscript" + query),
+		env,
+		options
+	);
+
+	/* The ring is [local, backup x3], so the second ask hands out the backup
+	   together with the ticket that authorises its failure report. */
+	const first = await (await ask()).json();
+	const second = await (await ask()).json();
+	assert.equal(first.local, true, "the UI Worker takes the first slot");
+	assert.equal(second.local, false, "the backup takes the next one");
+	const ticket = second.ticket;
+	assert.ok(ticket, "the backup answer carries a ticket");
+	assert.ok(await readRelayReportTicket(
+		requestFor(RELAY_ENDPOINT_PATH, { headers: { [RELAY_TICKET_HEADER]: ticket } }),
+		env
+	), "the report ticket verifies even though the endpoint is not an AI path");
+
+	const backupKey = "worker:https://backup.test";
+	const cooled = () => (relayHealthSnapshot()[backupKey] || {}).openedUntil || 0;
+
+	/* No ticket: ignored. */
+	await ask("&failed=" + encodeURIComponent(backupKey));
+	assert.equal(cooled(), 0, "an unauthenticated report cools nothing");
+
+	/* A forged ticket: still ignored. */
+	await ask("&failed=" + encodeURIComponent(backupKey), { [RELAY_TICKET_HEADER]: "not.a.ticket" });
+	assert.equal(cooled(), 0, "a forged ticket cools nothing");
+
+	/* The real ticket, but naming the UI Worker: ignored. */
+	await ask("&failed=local", { [RELAY_TICKET_HEADER]: ticket });
+	assert.equal(relayHealthSnapshot().local.openedUntil, 0, "the UI Worker can never be cooled by a report");
+
+	/* The real ticket, naming the backup: cooled, and the next pick avoids it. */
+	await ask("&failed=" + encodeURIComponent(backupKey), { [RELAY_TICKET_HEADER]: ticket });
+	assert.ok(cooled() > Date.now(), "a signed report opens the circuit on that backup");
+	assert.match(
+		String(relayHealthSnapshot()[backupKey].lastError),
+		/browser reported/i,
+		"the reason is recorded"
+	);
+	for (let index = 0; index < 3; index++) {
+		const answer = await (await ask()).json();
+		assert.equal(answer.local, true, "a cooling backup is out of the hand-out");
+		assert.equal(answer.ticket, null);
+	}
+
+	/* A ticket that is scoped to anything beyond the AI paths is refused outright. */
+	const widened = await signRelayToken(env, {
+		v: 1,
+		k: "client",
+		exp: Date.now() + 60_000,
+		u: "bob",
+		paths: ["/api/script", "/api/config/workers"]
+	});
+	assert.equal(
+		await readRelayReportTicket(
+			requestFor(RELAY_ENDPOINT_PATH, { headers: { [RELAY_TICKET_HEADER]: widened } }),
+			env
+		),
+		null,
+		"a ticket scoped past the AI paths cannot report"
+	);
+});
+
+test("the UI Worker's share shrinks as backups are added: 1 slot in (1 + 3 x backups)", () => {
+	const pool = [
+		{ id: "local", url: SELF, local: true, label: "This Worker" },
+		{ id: "worker:https://w1.test", url: "https://w1.test", local: false, label: "w1.test" },
+		{ id: "worker:https://w2.test", url: "https://w2.test", local: false, label: "w2.test" },
+		{ id: "worker:https://w3.test", url: "https://w3.test", local: false, label: "w3.test" },
+		{ id: "worker:https://w4.test", url: "https://w4.test", local: false, label: "w4.test" },
+		{ id: "worker:https://w5.test", url: "https://w5.test", local: false, label: "w5.test" }
+	];
+
+	/* Five backups: ring = 1 local slot + 5 x 3 backup slots = 16. */
+	resetIsolate();
+	const counts = {};
+	for (let index = 0; index < 160; index++) {
+		const picked = pickRelayEndpoint(pool, config(), Date.now());
+		counts[picked.id] = (counts[picked.id] || 0) + 1;
+	}
+	assert.equal(counts.local, 10, "the UI Worker answers 10 of 160 calls (1 in 16)");
+	for (const entry of pool.slice(1)) {
+		assert.equal(counts[entry.id], 30, entry.label + " answers 30 of 160 (3 in 16)");
+	}
+	assert.equal(
+		pool.slice(1).reduce((sum, entry) => sum + counts[entry.id], 0),
+		150,
+		"the backups carry the rest"
+	);
+
+	/* localWeight 0: the browser hand-out never picks the UI Worker while a
+	   backup is healthy... */
+	resetIsolate();
+	const zeroLocal = [];
+	for (let index = 0; index < 16; index++) {
+		zeroLocal.push(pickRelayEndpoint(pool, config({ localWeight: 0 }), Date.now()).id);
+	}
+	assert.equal(zeroLocal.filter((id) => id === "local").length, 0, "weight 0 keeps the UI Worker out of the hand-out");
+	assert.equal(new Set(zeroLocal).size, 5, "all five backups still take their turn");
+
+	/* ...but a pool whose backups all cooled still falls back to it. */
+	resetIsolate();
+	for (const entry of pool.slice(1)) noteRelayFailure(entry.id, new Error("503"), 30_000);
+	const fallback = pickRelayEndpoint(pool, config({ localWeight: 0 }), Date.now());
+	assert.equal(fallback.id, "local", "a fully cooled pool still answers, on the UI Worker");
 });

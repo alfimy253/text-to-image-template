@@ -518,3 +518,139 @@ test("duplicate row media indices still reach the background layer as distinct s
 	assert.deepEqual(keys, ["scene-1", "scene-2"]);
 	assert.equal(transfers[0].id, w.__BATCH_EDIT_PROJECT__.targetPageId, "the transfer is keyed by the stable row project id");
 });
+
+test("a duplicate Pixabay filename moves the search to the next result page (Session 331)", async () => {
+	const { dom, w } = makeApp();
+	test.after(() => dom.window.close());
+	const owner = { mediaFilenames: [] };
+	const scene = 9;
+	const asset = { type: "image/jpeg", stockSource: { id: 481 }, size: 100 };
+	assert.equal(await w.acceptMediaBlob(owner, asset, scene), true);
+	assert.equal(await w.acceptMediaBlob(owner, { ...asset, stockSource: { id: 481 } }, scene), false, "the duplicate is still refused");
+
+	const token = "pixabay:" + JSON.stringify({ q: "rooftop solar panels", type: "image", page: 1, index: 0, scene });
+	const first = JSON.parse(w.alternateMediaPrompt(token, 1, scene, owner).slice(8));
+	assert.equal(first.page, 2, "the retry searches the NEXT Pixabay page, not the page that just refused the asset");
+	assert.equal(first.index, 0, "and takes the first photo of that page");
+	assert.equal(first.duplicatePages, 1, "the token records why the page moved");
+	assert.equal(first.uniqueFilename, "required");
+	assert.equal(first.scene, scene);
+
+	/* A second duplicate must not land back on (page 1, index 0) again. */
+	assert.equal(await w.acceptMediaBlob(owner, { ...asset, stockSource: { id: 481 } }, scene), false);
+	const second = JSON.parse(w.alternateMediaPrompt(token, 1, scene, owner).slice(8));
+	assert.equal(second.page, 1);
+	assert.equal(second.index, 1, "the (page, index) pair is never repeated");
+	assert.equal(second.duplicatePages, 2);
+
+	/* Legacy caller without an owner keeps the old index rotation. */
+	const legacy = JSON.parse(w.alternateMediaPrompt(token, 1, scene).slice(8));
+	assert.equal(legacy.page, 1);
+	assert.equal(legacy.index, 1);
+	assert.equal(legacy.duplicatePages, 0);
+
+	/* A video scene moves the same way, on the video result cap. */
+	const video = "pixabay:" + JSON.stringify({ q: "wind turbines", type: "video", page: 1, index: 0, scene: 2 });
+	assert.equal(await w.acceptMediaBlob(owner, { type: "video/mp4", stockSource: { id: 77 }, size: 10 }, 2), true);
+	assert.equal(await w.acceptMediaBlob(owner, { type: "video/mp4", stockSource: { id: 77 }, size: 10 }, 2), false);
+	const moved = JSON.parse(w.alternateMediaPrompt(video, 1, 2, owner).slice(8));
+	assert.equal(moved.page, 2);
+	assert.equal(moved.index, 0);
+	assert.equal(moved.type, "video");
+});
+
+test("a timeline edit comes back into the table: the row is re-timed and its Preview paints the edit (Session 331 follow-up)", () => {
+	const { dom, w } = makeApp();
+	test.after(() => dom.window.close());
+	const store = w.__PIPELINE_MANAGEMENT_STORE__;
+	assert.ok(store, "the table page has its pipeline store");
+
+	/* Exactly what the timeline tab publishes: a compact per-scene hand-back. */
+	const editedAt = Date.now();
+	const timeline = {
+		v: 1, updatedAt: editedAt, key: "ytvs.timeline-editor.v1.timeline-" + store.pageId + "-row-2",
+		durationSec: 42.5, sceneCount: 12, clipCount: 4, textCount: 3,
+		/* Reversed scene order and an uneven first scene, as a user could leave it. */
+		scenes: [
+			[11, 6.5, 0], [10, 3, 1], [9, 3, 0], [8, 3, 1], [7, 3, 0], [6, 3, 1],
+			[5, 3, 0], [4, 3, 1], [3, 3, 0], [2, 3, 0], [1, 3, 0], [0, 3, 0]
+		]
+	};
+	const saved = store.save({
+		version: 1, pageId: store.pageId, updatedAt: editedAt, layout: "table",
+		quickBatch: {
+			runBusy: false, queued: [], finishedCount: 0,
+			rows: [{
+				id: "2", vid: store.pageId + "-row-2", script: "A quiet garden story",
+				stage: "ready", timeline: timeline, timelineKey: timeline.key,
+				timelineUpdatedAt: editedAt
+			}]
+		},
+		editor: { projects: [] }, videoIds: []
+	});
+	assert.equal(saved.ok, true, "the published edit is stored and verified");
+
+	w.restorePipelineManagementState();
+
+	const row = w.__BATCH_ROWS.find((candidate) => String(candidate.id) === "2");
+	assert.ok(row, "the row came back");
+	assert.equal(row.timelineEdited, true, "the row knows it carries a timeline edit");
+	assert.equal(row.timelineDurationSec, 42.5, "the edited length came back with it");
+	assert.equal(row.timelineSceneCount, 12);
+
+	/* The table layout says so, with the edited length. */
+	const status = w.document.querySelector('[data-batch-row="2"] [data-batch-slot="status"]');
+	assert.ok(status, "the row is painted");
+	assert.match(status.textContent, /timeline edit/);
+	assert.match(status.textContent, /43s|42s/);
+
+	/* The row's own slides are re-ordered and re-timed, so Preview/Export paint the edit. */
+	finishRow(w, row);
+	/* The real slides are named after their image (batch-<row>-img-<n>). */
+	row.slides.forEach((slide, index) => {
+		slide.id = "batch-" + row.id + "-img-" + index;
+		slide.imageIndex = index;
+	});
+	w.applyTimelineEditToBatchRow(row);
+	assert.equal(row.slides.length, 12, "all twelve slides survive the edit");
+	/* Array.from keeps the array in THIS realm, so deepStrictEqual compares values. */
+	assert.deepEqual(
+		Array.from(row.slides, (slide) => slide.imageIndex),
+		[11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+		"the saved scene order is the slide order Preview and Export walk"
+	);
+	assert.equal(row.slides[0]._partialSec, 6.5, "the edited sentence length drives the first slide");
+	assert.equal(row.slides[1]._partialSec, 3, "and the rest follow their own windows");
+	assert.equal(w.slideDurationSec(row.slides[0]), 6.5, "the preview reads the edited duration");
+});
+
+test("a newer edit published while the table is open is picked up without touching the rest of the row (Session 331 follow-up)", () => {
+	const { dom, w } = makeApp();
+	test.after(() => dom.window.close());
+	const row = w.addBatchRow({ script: "A quiet garden story", minutes: 1 });
+	assert.ok(row, "a row exists");
+	const store = w.__PIPELINE_MANAGEMENT_STORE__;
+	const later = Date.now() + 1000;
+	const timeline = {
+		v: 1, updatedAt: later, key: "ytvs.timeline-editor.v1.x", durationSec: 12,
+		scenes: [[0, 1, 0], [1, 1, 0], [2, 1, 0]]
+	};
+	assert.equal(store.save({
+		version: 1, pageId: store.pageId, updatedAt: later, layout: "table",
+		quickBatch: {
+			runBusy: false, queued: [], finishedCount: 0,
+			rows: [{ id: String(row.id), vid: row.vid, script: row.script, stage: "ready",
+				timeline: timeline, timelineKey: timeline.key, timelineUpdatedAt: later }]
+		},
+		editor: { projects: [] }, videoIds: []
+	}).ok, true);
+
+	const changed = w.reconcileTimelineEdits();
+	assert.equal(changed, 1, "one row was reconciled");
+	assert.equal(row.timelineEdited, true);
+	assert.equal(row.timelineDurationSec, 12, "the newer edit won");
+	assert.equal(row.timeline.key, timeline.key);
+	/* The script the user has on screen is untouched by the reconcile. */
+	assert.equal(row.script, "A quiet garden story");
+	assert.equal(w.reconcileTimelineEdits(), 0, "the same edit is not applied twice");
+});

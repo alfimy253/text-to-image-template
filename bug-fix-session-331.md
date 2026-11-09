@@ -1,10 +1,221 @@
 # Bug Fix Session 331 — Browser-owned pipeline management storage
 
-Date: 2026-11-04
-Branch: `arena/2aa7ded8-text-to-image-template` (active Arena task branch)
-Source of truth: the current code in this workspace. This session does **not** use older rules Markdown as authority.
+Date: 2026-11-04 (sections 1–24); claim-verification pass 2026-11-09
+Branch: `arena/1bf21096-text-to-image-template` (active Arena task branch; earlier sections were written on the branches named in their own Status blocks)
+Source of truth: the current code in this workspace. This session does **not** use older rules Markdown as authority. On 2026-11-09 every claim below was re-checked against the code, done items were removed from the open lists and uncertain ones were tagged **DONE** — start with §0.
+
+## 0. System user flow — the whole product in one pass (verified against code, 2026-11-09)
+
+> **Added by the 2026-11-09 claim-verification pass.** Every statement below was checked against the files named in parentheses; nothing is copied from another Markdown file. §0.10 records what was checked, what was removed from the later "Still open" lists because it is already done, what carries a **DONE** tag, and which old claims in this file were corrected.
+
+### 0.1 One-sentence summary
+
+A Cloudflare Worker (`src/index.ts`) serves one cached HTML page (`src/page.ts` → `src/client/markup.ts`) whose browser bundle (`APP_JS` with six inlined client modules, plus `API_ROTATION_JS`, `TEMPLATE_COMPOSER_JS` and `TIMELINE_EDITOR_JS`) turns a plain narration script into a fixed **12-scene** stock-media video (`4` Pixabay videos + `8` Pixabay photos) entirely in the browser, with the Worker supplying scripts, voiceover, Pixabay credentials and API-relay routing.
+
+### 0.2 The three layouts a user can be in
+
+| Layout | How the user gets there | Purpose | Code anchor |
+|---|---|---|---|
+| Quick Batch **table** | `[data-layout="table"]` switch in the studio shell | Many script rows → finished videos, with silent stage progress | `src/client/app-js.ts` `setStudioLayout()`, `renderBatchTable()` |
+| **Editor** | `[data-layout="editor"]` switch | One video per accordion: script → voiceover → Pixabay gallery → preview → MP4 | `initVideoStudio()`, `addVideoAccordion()` |
+| **Timeline** (`?layout=timeline`) | The `✎` Edit icon on a **finished** Quick Batch row (`openBatchEditPage()`) | Timing/element editor for one row: 70/30 preview, tracks, scene media, text/graphics, MP4 export | `src/client/timeline-editor.ts`, `applyTransitionProject()` |
+
+The timeline is a separate page. Its boot branch runs only `applyTransitionProject()`; it never calls `initVideoStudio()`, `bindStudioShell()`, `restorePipelineManagementState()`, the pipeline persistence listeners, `bindLandingActions()` or `initAuth()` (`src/client/app-js.ts`, boot tail). Media bytes travel by IndexedDB (`ytvs-timeline-editor-assets-v1`), timing lives under `ytvs.timeline-editor.v1.<projectId>`.
+
+### 0.3 Quick Batch (table layout) — the end-to-end user flow
+
+1. **Land.** The Worker canonicalises the URL, applies the theme/CMS shell and returns the cached HTML. `/free` opens the studio directly.
+2. **Boot the shell** (table and editor layouts share it), in this order: `initVideoStudio()` → `bindStudioShell()` → `restorePipelineManagementState()` → `purgeCompletedBatchRows()` → `restoreCompletedBatchRows()` → `scheduleCompletedBatchPurge()` → `applyTransitionProject()` → `ensureEditorAccordionOnLoad()` → `bindLandingActions()` → `initAuth()` → `persistPipelineManagementState("startup")` → one `storage` listener and one `beforeunload` listener.
+3. **Add rows.** Up to `VIDEO_MAX_VIDEOS = 10` rows (`BATCH_ROW_LIMIT`); the pipeline store keeps at most 8 (`MAX_ITEMS = 8`).
+4. **Fill a row.** Script, video style, resolution, orientation, quality. `row.minutes` still exists as a silent fallback (1–6) but has **no** rendered control — the `Min` column is gone.
+5. **Press ✦ Generate.** `generateBatchRows()` runs only rows that pass `batchRowReadyForGeneration()` — has a script, stage `ready` or `queued`, not running/retrying/stopped/busy/finished. Staged or unprepared rows are refused with a modal that says so, and the toolbar shows `N rows with a script · R ready`. Concurrency is `BATCH_RUN_CONCURRENCY = 3`, and `startUnprocessedRows()` is reentrancy-guarded so later rows start as early stages free up.
+6. **Watch the stages** (silent): `voice` → `timing` → `prompts` → `images` → `animate` → `done`. Non-media failures are retried in place by `batchRunPipelineStage()` (1 + 7 attempts, 40 s backoff, only the failed stage reset, STOP never retried). Media items run their own 7-attempt ladder and never restart a whole stage.
+7. **Finish gate.** A row is finished only when `batchRowFinished()` is true: MP3 + animation + exactly 12 images + 12 slides + 4 `video/mp4` clips + 12 unique stock filenames.
+8. **Act.** All three Action icons are always drawn — `▶` preview, `⚙` process export, `✎` edit — and all three stay `disabled` until the row is finished. There is no text in the Actions column.
+9. **Export.** Preview and export are client-side WebCodecs/`generateMP4()`; `/api/render*` and `apiRenderVideo()` still exist but have **no active call site**.
+10. **Survive a refresh.** A successful render/export is archived in `ytvs.quick-batch-completed.v1`, shown 5 per page (`BATCH_PAGE_SIZE = 5`), and deleted by the browser after 24 h (`BATCH_COMPLETED_TTL_MS`), with an hourly purge.
+11. **Edit.** `✎` writes a transition-only payload to `MEDIA_TRANSITION_STORAGE_PREFIX + key` with a `ytvs_transition_project_<key>` cookie mirror, moves the media Blobs through IndexedDB and opens `?layout=timeline&pipelinePage=timeline-<pageId>-row-<id>&projectEdit=<key>`. The payload is accepted only when the localStorage `createdAt` equals the cookie mirror's `createdAt`; both entries are consumed on read.
+
+### 0.4 Editor layout — the user flow
+
+1. The editor boots with **one accordion already open** (`ensureEditorAccordionOnLoad()`); the `＋ Add Video` button stays unpressed and is editor-only.
+2. The user sets topic, minutes, style, resolution, orientation and quality, then starts script writing. `/api/script` is called with client-owned retries; the script textbox stays pinned while writing/retrying; the finished note is stored **client-side only** (`script-notes-client.ts`, localStorage + cookie, never KV).
+3. Voiceover: `/api/voiceover` chunks, sanitises and synthesises the MP3.
+4. Planning: `/api/seo-plan` and `/api/image-prompts` return typed Pixabay keyword scenes (never AI images).
+5. Media: `pixabay-direct.ts` reads `/api/media/config`, claims credits (`/api/media/claim`), searches/downloads Pixabay directly, validates bytes and settles unused credits (`/api/media/settle`). When direct mode is unavailable, `browser-offload.ts` uses `/api/image` (binary) or `/api/image-batch` (NDJSON) under capability version 261.
+6. The gallery fills to the fixed 12-scene plan; preview and MP4 export are client-side. State survives a refresh through the same pipeline-management store as the table.
+
+### 0.5 Timeline editor — the user flow
+
+1. Opening Edit builds the 12-scene timeline from the row (`batchTimelineState()`): a pinned **Scene Media** background lane (`layer: 0`, Pixabay images/GIF/MP4), up to **4** text/graphics lanes, a collapsed Soundtrack group with voiceover, sound effects and background music, and a hidden read-only **SUBTITLES** layer built from the row's cues. If no text or graphic exists, one dummy text clip is seeded at `0:00`.
+2. Selection drives a 70/30 stage row: a background clip (or its child) opens the 30 % child panel on the left; anything else keeps the full-width preview.
+3. Editing: seconds sliders stop at `MAX_TIMING_SEC = 80`; clips can be dragged and resized in the dock; text and graphics can be dragged on the preview canvas (X/Y percentages, `item.x` / `item.y`); children are clamped inside their background clip; `⧉ Duplicate` always puts the copy immediately after the original (a background duplicate clones its scene and children).
+4. `resolveTimelineOverlaps()` runs on every addition, duplicate, import, timing change, undo/redo and load, and pushes later boxes clear (1 ms `TIMING_EPSILON_SEC`), with children following their background.
+5. `Ctrl/⌘ + Z` and `Ctrl/⌘ + Shift + Z` undo/redo the timing/element model (not binary media). `＋ Text` / `＋ Graphic` are sticky and never placed in an occupied window at creation time. `＋ Add Clips` opens the template composer's own modal; the appended MP4 becomes the last Scene Media scene. `⬇ Export MP4` renders the open project offline with WebCodecs + `window.Mp4Muxer`.
+6. Everything autosaves to `ytvs.timeline-editor.v1.<projectId>`; closing the tab and re-opening the same row restores the timing.
+7. **Back to the table** publishes the edit (§26): `publishTimelineEdit()` writes a compact per-scene summary into the table page's pipeline store (`ytvs.pipeline-management.v1.<pageId>` + its four cookies) under the row's own `vid`, so the row comes back with `timelineEdited`, the edited length, the edited scene order and the edited per-scene seconds — which is what `▶` Preview and `⚙` Export then render.
+
+### 0.6 Storage, tabs and recovery
+
+- **Page identity.** `?pipelinePage=` wins, otherwise `sessionStorage["ytvs.pipeline-page.v1"]`, otherwise a freshly generated `pageId`. A new tab gets a new id and therefore an empty table and editor; a **duplicated** tab clones `sessionStorage` and therefore shares the id (documented caveat, §8.6 #5).
+- **Pipeline management** (table + editor): full snapshot in `ytvs.pipeline-management.v1.<pageId>`, mirrored in **four** session cookies `ytvs_pipeline_management_<pageId>_1..4` (chunks capped at 3800 encoded chars, no `Max-Age`, `ttl: 0`). A save is trusted only when the localStorage `updatedAt` equals the cookie `t` **and** the FNV digest matches; a mismatch repairs the cookies from localStorage. The store bounds rows/projects to 8 and scripts to 800 chars until all four chunks fit.
+- **Recovery.** A failed or unverified save shows `#pipeline-storage-alert` with a **Reset pipeline state** button (`resetPipelineManagementState()` → `pipelineManagementStore.clear()`), which wipes this page's record, four cookies and the in-memory rows/queue.
+- **No TTL** on pipeline management; stale page ids are not garbage-collected.
+- **Timeline**: separate key, IndexedDB for media bytes; no pipeline-management read or write at all.
+
+### 0.7 AI, relay and media request flow
+
+1. For an allow-listed AI path the browser first calls `GET /api/relay/endpoint?path=…` (`src/client/api-rotation.ts`).
+2. The Worker picks the endpoint (`pickRelayEndpoint()` in `src/modules/api-relay.ts`): a round-robin ring where this UI Worker appears `localWeight` times (default 1) and every backup `RELAY_BACKUP_RING_WEIGHT = 3` times — with one backup the UI Worker answers 1 request in 4, with five (the `MAX_RELAY_WORKERS = 5` cap) 1 in 16.
+3. A local pick returns the relative path and no ticket; a backup pick mints a short-lived 3-minute client ticket scoped to the AI paths. The browser then calls **exactly** the given URL (ticket, `credentials: "omit"`, CORS). If it does not answer, the browser reports once with `&failed=<id>` and calls the new answer, then falls back to its own origin.
+4. Pixabay media never goes through a model: the Worker hands out the key through `/api/media/config`, and the browser fetches `pixabay.com` / `cdn.pixabay.com` directly (12 per page, pages 1–2, photo 8 MiB / clip 16 MiB, magic-byte validation, shared rate limiter).
+
+### 0.8 Export flow
+
+Both user-facing exports are browser-side: Quick Batch row export (`exportBatchRow()` → `generateMP4()`) and timeline export (`⬇ Export MP4` → `window.Mp4Muxer`). The legacy worker-render routes (`/api/render`, `/api/render/<id>`, `/api/worker/poll|deliver|failed`) and the `apiRenderVideo()` / `workerRunJob()` helpers remain in the source but are dormant.
+
+### 0.9 Where each flow lives
+
+| Concern | File |
+|---|---|
+| Worker routes, capabilities, HTML caching | `src/index.ts`, `src/page.ts` |
+| Page markup, storage banner, timeline scaffold | `src/client/markup.ts` |
+| Studio + Quick Batch + editor + pipeline store hooks | `src/client/app-js.ts` |
+| Per-tab localStorage + 4-cookie store | `src/client/pipeline-management-store.ts` |
+| Timeline model, tracks, canvas, export | `src/client/timeline-editor.ts` |
+| Timeline CSS, dock, 70/30, panels | `src/client/styles.ts` |
+| Relay hand-out and ring | `src/modules/api-relay.ts`, `src/client/api-rotation.ts` |
+| Scripts, SEO, prompts, media, voiceover | `src/modules/script-seo.ts`, `image-prompts.ts`, `pixabay.ts`, `image-batch.ts`, `voiceover.ts` |
+| Template composer modal | `src/client/template-composer-js.ts` |
+| Admin/config page | `src/client/config-page-js.ts` |
+
+### 0.10 Claim-verification pass — 2026-11-09
+
+#### 0.10.1 Method and limits
+
+- Static reading of the files named above plus targeted `grep`/`sed` checks for every constant, cookie name, key and function named in this document.
+- `npm install` (78 packages), then `npx tsc --noEmit` and per-file `node --import tsx --test` runs. The single serial `npm test` does not finish inside this sandbox (it was still running at 25 min), so the suite was measured **per file** (43 of the 45 `*.test.mjs` files completed, `-P 6`, 240 s per file; `deep-debug-regressions` and `session-264-editor-render` never finished, `session-250` was re-run separately).
+- `node --import tsx simulations/pipeline-management.mjs` re-run: exit 0 with the same transcript as §6 / §8.7.
+- **Not available:** a real browser, `wrangler dev` (no `CLOUDFLARE_API_TOKEN`), and the `deep-debug-regressions` and `session-264-editor-render` suites (neither finishes in a 240 s / 700 s window). Anything that needs eyes — sticky offsets, gradients, drag feel — remains an open item, as the later sections already say.
+
+#### 0.10.2 Measured state at this pass (baseline commit `407ab86`, clean tree)
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | **30** diagnostics, **all** in `src/index.ts` (unchanged from the documented count) |
+| `tests/timeline-editor.test.mjs` | 35 / 35 pass |
+| `tests/quick-batch-table.test.mjs` | 15 / 15 pass |
+| `tests/final-media-cap-actions.test.mjs` | 11 / 11 pass (61 / 61 with the two above) |
+| `tests/template-composer.test.mjs` | 20 / 20 pass |
+| `tests/api-relay.test.mjs` | 31 / 36 pass (the 5 documented binary/Pixabay cases) |
+| `tests/session-244.test.mjs` | 8 / 10 (the 2 documented retry cases) |
+| `tests/session-250-batch-pipeline.test.mjs` | 8 / 13 (5 failures, one more than the old note) |
+| `tests/seo-walkthrough.test.mjs` | 7 / 17 (10 failures, AI-image-disabled fixtures) |
+| `tests/session-262-load-balancing.test.mjs` | 9 / 14 |
+| `tests/session-261-browser-offload.test.mjs` | 13 / 23, 4 failures + 6 cancellations |
+| `tests/llm-openrouter.test.mjs` | 23 / 24 |
+| Aggregate of the 43 completed test files | **540 tests / 502 pass / 32 fail / 6 cancelled** |
+| Not completed | `deep-debug-regressions` (> 700 s), `session-264-editor-render` (> 240 s) |
+| Simulation | exit 0; four cookie chunks, `timestampMatched: true`, cookie-only restore of rows/projects/scripts/`runBusy`/`queued`, new-tab page id empty |
+| Source inventory | `src/**/*.ts` **38** files / **77,211** lines; `tests/*.mjs` **47** (45 `*.test.mjs`); `bench/` **14** entries; `APP_JS` **386** function declarations; `src/index.ts.original` 21,009 lines |
+
+The suite is therefore still not green, exactly as §8.6 / §10.8 / §20.15 / §21.11 / §22.18 say — but the aggregate failure count is now **32 + the unfinished files**, not "40", and the failure causes are the fixture/provider ones listed in §24.15, not "legacy media-plan mocks".
+
+#### 0.10.3 Claims checked and found correct
+
+| Claim (section) | Verdict | Evidence |
+|---|---|---|
+| Four page-scoped cookie chunks, 3800-char cap, no TTL (§4.1, §4.5, rules 11–12) | correct | `pipeline-management-store.ts`: `COOKIE_COUNT = 4`, `MAX_COOKIE_VALUE = 3800`, `ttl: 0`, `writeCookies()` sets no `Max-Age` |
+| Trust requires `updatedAt` + digest match; mismatch repairs cookies (§4.5) | correct | store `load()` timestamp/digest comparison and `writeCookies()` repair |
+| Cross-tab ping-pong fixed (§4.2) | correct | `pipelineManagementRestoring` guards both `persistPipelineManagementState()` and the restore body; `storage` listener filters on `localStorageKey` |
+| Cookie-only restore is no longer lossy (§4.3) | correct | four cookies carry the bounded full snapshot; `restorePipelineManagementState()` restores scripts, titles, settings, `runBusy`, `queued`, `finishedCount`, vids |
+| Edit handoff is short, timestamp-matched and `noopener` object-free (§4.4, rule 13) | correct | `openBatchEditPage()` + `readTransitionProjectPayload()` (`createdAt` equality, both entries removed) |
+| Storage failure is visible and `clear()` is wired (§3 #10, rule 19) | correct | `#pipeline-storage-alert` / `#pipeline-storage-reset` in `markup.ts`; `showPipelineStorageWarning()` + `resetPipelineManagementState()` |
+| Generate only starts ready/queued rows (§8, rule 20) | correct | `BATCH_GENERATABLE_STAGES = ["ready","queued"]`, `batchRowReadyForGeneration()` |
+| Finished gate 12/12/4 + 12 unique filenames (§2.4, rule 14 first half) | correct | `batchRowFinished()` |
+| Fixed media plan 12 / 4 / 8, `[1,4,7,10]`, `per_page=12`, pages 1–2 (§2.2, rules 4–5) | correct | `AUTO_MEDIA_TOTAL/VIDEO/IMAGE` in `app-js.ts`; `videoScenePositions()`; `PIXABAY_PER_PAGE = 12`; page guard `1 or 2` |
+| 7 retries × 40 s, per-stage reset, media ladder, STOP not retried (§2.3, rule 9) | correct | `BATCH_PIPELINE_MAX_RETRIES = 7`, `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000`, `MediaItemRetryExhausted` bypass |
+| Anti-hang guards 90 s / 15 s / 3 / 3 (§2.3) | correct | `BATCH_STREAM_IDLE_TIMEOUT_MS`, `BATCH_AUDIO_DECODE_MS`, `BATCH_IMAGE_STREAM_CONCURRENCY`, `CLIENT_DECODE_THREAD_POOL_SIZE` |
+| Eleven explicit persistence call sites (§8.6 #4) | correct | 11 quoted `persistPipelineManagementState("<reason>")` calls |
+| Dormant legacy render code (§8.6 #6, rule 16) | correct | `/api/render*`, `/api/worker/*`, `apiRenderVideo()`, `workerRunJob()` present; no active call |
+| `IMAGE_PROMPT_MAX_TOKENS = 3584` vs active `max_tokens: 2048` (§8.6 #7) | correct | `image-prompts.ts` export vs the `env.AI.run` call |
+| Server-side relay hand-out, round robin, UI Worker smaller share, 5 backups, 3-minute ticket (§24.3–24.7) | correct | `RELAY_ENDPOINT_PATH`, `MAX_RELAY_WORKERS = 5`, `RELAY_BACKUP_RING_WEIGHT = 3`, `pickRelayEndpoint()` |
+| Five completed rows per page, 24 h client deletion (§24.9) | correct | `BATCH_PAGE_SIZE = 5`, `BATCH_COMPLETED_TTL_MS = 24 h`, hourly purge |
+| Overlap resolver on every add/timing/duplicate/import/load (§24.10) | correct | `resolveTimelineOverlaps()` call sites (8) + `TIMING_EPSILON_SEC = 0.001` |
+| 80 s slider cap, four visual lanes, hidden subtitle layer, dummy text (§11, §20, §21) | correct | `MAX_TIMING_SEC = 80`, `MAX_VISUAL_TRACKS = 4`, `.te-subtitle-*` aria-hidden lane, `dummyTextItem()` |
+| 10 px child panel, square neo buttons, borderless top scroll layer (§21–§22) | correct | `#timeline-child-panel * { font-size: 10px !important }`; the `html[data-theme="neo"] … { border-radius: 0 !important }` sweep; scroll-lane border rules removed |
+| Red inverted-triangle seeker (§13.4) | correct | `.te-playhead-handle` with `border-top: 13px solid #ef4444` |
+| `＋ Add Clips` opens the composer modal; `＋ Add Video` is editor-only; helper paragraph removed (§22) | correct | `openTemplateClipsModal()` → `window.__TIMELINE_TEMPLATE_CLIP__`; `#bulk-toggle` only in the editor markup; no `batch-hint` paragraph |
+| `apiRenderVideo()` has no active call site (rule 16) | correct | only its definition remains |
+
+#### 0.10.4 Claims that were wrong or stale — corrected in this pass
+
+| # | Old claim | Reality | Where fixed |
+|---|---|---|---|
+| 1 | Page assembly injects `APP_CSS`, `API_ROTATION_JS`, `APP_JS`, `TEMPLATE_COMPOSER_JS` and prompts | It also injects **`TIMELINE_EDITOR_JS`** (`src/page.ts` lines 24 / 54) | "Runtime architecture" #2 |
+| 2 | `src/**/*.ts` 37 files / 70,031 lines; `tests/*.mjs` 46; `bench/*` 12; 355 function declarations in `APP_JS` | **38 / 77,211**; **47** (45 `*.test.mjs`); **14**; **386** | "Study boundary and code surface" |
+| 3 | Boot order is `initVideoStudio` → `bindStudioShell` → `restorePipelineManagementState` → `applyTransitionProject` → `bindLandingActions` → `initAuth` → persist | Completed-row purge/restore/schedule and `ensureEditorAccordionOnLoad()` now sit between restore and `applyTransitionProject()` | "User flow" #2 |
+| 4 | Edit opens a short URL with `layout=editor` and "forces the editor layout" | It opens **`layout=timeline`**; `applyTransitionProject()` activates `#view-timeline` and returns before creating an editor project | "User flow" #12, rule 13 |
+| 5 | Route table has no relay hand-out route | **`GET /api/relay/endpoint`** exists and is the only way the studio learns a backup URL | "Route surface" |
+| 6 | Rule 14: "Preview and Export unlock together" | **Three** icons unlock together (`▶`, `⚙`, `✎`), all disabled until `batchRowFinished()` | rule 14 |
+| 7 | Rule 15: "`api-rotation.ts` rotates … to verified backup Workers with a ticket" | The **Worker** now chooses the endpoint; the browser asks, waits and calls exactly that URL | rule 15 |
+| 8 | §8.6 #9 "legacy mocks still assume older media plans ([2,5,7,10], [1,8])" | No such fixtures exist; every Pixabay/batch test uses `[1,4,7,10]`. The real causes of the red tests are the ones in §24.15 | §8.6 #9 |
+| 9 | §8.6 #8 / §9.6 "40 failures, 6 cancellations, 514–521 tests" | At this pass: **32 failures + 6 cancellations** across 43 completed files (540 tests), plus two suites that do not finish; `tsc` still 30 | §8.6 #8, §8.7, §9.6 |
+| 10 | §2.5 "first implementation": one cookie `ytvs_pipeline_management`, `Max-Age=172800`, compact digest mirror | Superseded: **four page-scoped session cookies**, no `Max-Age`, full bounded snapshot | §2.5 |
+| 11 | §4.2 "Every tab now has a different page key" | True for a newly **opened** tab; a **duplicated** tab clones `sessionStorage` and shares the page id | §4.2, §8.6 #5 |
+| 12 | §21.14 annotation: "the `＋ Add media` overlap note still stands" | It does not: after §22.9 `＋ Add Clips` is the composer and `＋ Add media` is the file/IndexedDB picker | §21.14 |
+| 13 | §10.8 #6 / §17.11 #7 / §22.18 counts (e.g. "timeline-editor 33/33") | Current: timeline-editor **35**, quick-batch-table **15**, final-media-cap-actions **11** | the three status lines |
+
+#### 0.10.5 Items removed from the open lists because they are already done
+
+Removed from the sections named below; each is now evidenced in §0.10.3 and is **no longer a to-do**:
+
+| Was open in | Item | Why it is done |
+|---|---|---|
+| §3 audit | 1 — cross-tab storage ping-pong | `pipelineManagementRestoring` guard + page-scoped key + filtered listener |
+| §3 audit | 4 — `noopener` Edit handoff, giant inline `projectJson` | `openBatchEditPage()` writes a transition payload + cookie mirror and opens a short `layout=timeline` URL; no child-window object |
+| §3 audit | 5 — cookie mirror can exceed 4 KB | four 3800-char chunks + `boundedSnapshot()` (simulation: max chunk 1018 chars) |
+| §3 audit | 6 — cookie-only restore lossy | four cookies carry the full snapshot; restore covers scripts/titles/settings/flags |
+| §3 audit | 7 — localStorage had no TTL rule but cookies did | no TTL anywhere; trust is `updatedAt` + digest equality |
+| §3 audit | 10 — storage failures swallowed, `clear()` unused | banner + **Reset pipeline state** button |
+| §3 audit | 11 — no validation after the integration | validation runs exist (§0.10.2) |
+| §11.8 | 5 — subtitles deleted from the timeline | cue data rides in `timelineState.subtitles`, burns onto the preview/export and renders as a hidden read-only lane (§14) |
+| §17.11 | 2 — "no ripple option for duplicates; overlaps resolved by array order" | `resolveTimelineOverlaps()` pushes later boxes clear on duplicate/add/timing/load (§24.10) |
+| §20.17 | 1 — `BACKGROUND ELEMENT` panel at 7.5 px is too small | the panel is **10 px** since §21.6, with a `#timeline-child-panel *` catch-all |
+| §21.14 | 3 — "a commit while an export is running is not blocked" | `openTemplateClipsModal()` and `appendTemplateClip()` both guard `isExporting \|\| recorder` (§22.9) |
+| §21.14 | 5 — `＋ Add Clips` and `＋ Add media` "overlap in source" | they are two different surfaces: composer modal vs file/IndexedDB picker (§22.9) |
+| §22.17 | 1 — "`✎ Edit` unlocking with the row is a judgement call" | the decision is made and coded: all three icons share the `batchRowFinished()` lock (§22.11) |
+| §22.17 | 2 — "the boot accordion is created for `layout=table` boots too" | `ensureEditorAccordionOnLoad()` returns immediately unless `studioLayout === "editor"` |
+| §22.17 | 4 — "item 9 guards adding, not dragging; a canvas drag can still overlap" | the §24.10 resolver runs on timing edits and drags too |
+
+#### 0.10.6 Items tagged DONE (present in code, not exercised at runtime)
+
+**DONE** is used narrowly here: the change exists and is statically verified, but this pass could not exercise it in a real browser, so it should not be treated as an open to-do without a fresh reason.
+
+- **§15.9 #3 — "editor layout's non-timeline gallery previews remain unstyled".** DONE (code-verified): every preview/export path shares `generateMP4()` and `__videoStyleEffects()`; not eyeballed in a browser.
+- **§22.17 — the "`＋ Add Clips` no longer offers a plain file picker" note.** DONE (code-verified): the timeline bundle's `add-clips` action only calls `openTemplateClipsModal()`, and `appendTemplateClip()` is the only append path; the composer's inner surfaces were not clicked through.
+- **§24.15 — the "no more drawdown" note under §24.5's reading.** DONE (code-verified): the browser-side cursor/skip-list/failover state is gone; only `window.__yvsApiRotation.stats()` counters remain. Whether the user meant a different "drawdown" is still unconfirmed.
+
+#### 0.10.7 What genuinely remains open (index)
+
+Everything else keeps its original section and wording: the retry/backoff deadline, `for (;;)` waits, non-transactional persistence and no garbage collection (§3, §8.6); the missing minute control and the `[data-batch-field="minutes"]` tolerance (§10.8); the real-browser eyeball items (§11.8, §15.9, §16.10, §17.11); no lane reordering, no media drag, no canvas resize/rotate (§10.8, §16.10); no drag-to-reparent or multi-select (§17.11); undo/redo not covering binary media (§20.17); the clips modal's lack of trimming and the unpersisted queue (§21.14); the composer modal's missing "clips you already have" list and the sub-second epsilon (§22.17); the red test files and the slow `session-264` suite (§24.15); and the dormant `/api/render*` code plus the `IMAGE_PROMPT_MAX_TOKENS` mismatch (§8.6).
+
+#### 0.10.8 Reproducing this pass
+
+```text
+npm install
+npx tsc --noEmit                                  # 30 diagnostics, all src/index.ts
+node --import tsx --test tests/timeline-editor.test.mjs tests/quick-batch-table.test.mjs tests/final-media-cap-actions.test.mjs
+node --import tsx --test tests/template-composer.test.mjs tests/api-relay.test.mjs
+node --import tsx simulations/pipeline-management.mjs
+git status --porcelain                            # clean tree at 407ab86 before the edit
+```
 
 ## 1. Purpose
+
+> **2026-11-09:** this file now opens with §0 — a single system-wide user-flow summary plus the claim-verification pass that removed the already-done items from the later "Still open" lists. Sections 1–24 keep their original wording (history), with in-place status annotations where the code has moved on.
+>
+> **2026-11-09 (later):** **§25** records the five fixes requested after that verification pass — pill-shaped SEO walkthrough steps, the removed Pixabay link, a duplicate media filename moving the Pixabay result page, script-anchored scene keywords (no language model) and a timeline whose length is its content. Each one is coded, tested and verified there.
 
 Session 331 records the code study, the hanging-implementation audit, and the fixes requested for the **Quick Batch table** and **Editor** layouts. The active requirement is:
 
@@ -95,6 +306,8 @@ The editor pins its script textbox during script writing/retries and shares the 
 
 ### 2.5 First pipeline-management storage implementation
 
+> **Superseded by §4.1–§4.5 (verified 2026-11-09):** the shipped store uses **four page-scoped session cookies** (`ytvs_pipeline_management_<pageId>_1..4`, 3800-char chunks), there is **no `Max-Age`** and no TTL at all, and each cookie carries a slice of the **full** bounded snapshot rather than a compact digest mirror. The paragraph below is the history of the first attempt only.
+
 The first implementation used:
 
 - localStorage key `ytvs.pipeline-management.v1`
@@ -110,17 +323,19 @@ The short simulation showed normal save/read, cookie repair and cookie-only rest
 
 ## 3. Hanging-implementation audit from the previous review
 
-1. **Cross-tab storage event ping-pong.** A `storage` event called `restorePipelineManagementState()`, which called `setStudioLayout()` / `renderBatchTable()`, which called `persistPipelineManagementState()`, which wrote localStorage again and triggered another tab.
-2. **No absolute deadline for a silent retry stage.** `batchRunPipelineStage()` can wait 7 × 40 seconds plus request time. If an awaited step never settles, the row remains pinned and silent.
-3. **Web Locks loop can wait indefinitely.** `coordinated()` loops forever while a lock is unavailable unless cancellation or an API error occurs.
-4. **Edit handoff with `noopener`.** `window.open(..., "noopener")` usually returns `null`, so child-window assignment is unreliable. The inline `projectJson` URL can be too long. The localStorage fallback is removed on first read.
-5. **Cookie mirror can exceed browser limits.** A 20-row + 20-project compact mirror was measured at 4532 raw characters / 7554 encoded characters, above typical 4 KB cookie limits.
-6. **Cookie-only restore was lossy.** `fromCompact()` did not restore scripts, titles, settings, `runBusy`, queued IDs, `finishedCount` or media-related management state. Active/done stages were forced back to `ready`.
-7. **No TTL enforcement on localStorage, but cookies had TTL.** The cookie had `Max-Age=172800`; localStorage had no expiry check. The requirement is **no TTL**; the timestamp in localStorage must match the cookie.
-8. **Storage-event restore can overwrite live work.** Another tab's snapshot could change layout, reset row stages, clear live flags, add rows and modify editor settings.
-9. **Persistence hooks were not exhaustive.** Direct `retryImagePromptFlow()` start, some script textbox edits and some script-writing state changes were not individually hooked.
-10. **Storage failures were swallowed.** `persistPipelineManagementState()` only wrote a debug global; `clear()` was unused. **Resolved by section 8:** failures now show a warning banner and `clear()` is wired to a reset button.
-11. **Validation gap.** No full suite, TypeScript project check, Wrangler dry-run, server preview or commit/push after the storage integration.
+Status legend (2026-11-09 verification): **DONE** = fixed in code and re-checked in this pass; **OPEN** = still true today.
+
+1. **Cross-tab storage event ping-pong. — DONE.** `pipelineManagementRestoring` now blocks `persistPipelineManagementState()` during a restore, the `storage` listener only reacts to this page's `localStorageKey`, and every independently opened tab has its own page key. *Residual caveat:* a **duplicated** tab clones `sessionStorage`, so it shares the page id and can still receive its own write-back; see §8.6 #5.
+2. **No absolute deadline for a silent retry stage. — OPEN.** `batchRunPipelineStage()` still allows 1 + 7 attempts with 40 s backoff plus request time; a step that never settles still pins the row silently (`BATCH_PIPELINE_MAX_RETRIES = 7`, `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000`).
+3. **Web Locks loop can wait indefinitely. — OPEN.** `coordinated()` in `browser-offload.ts` and `requestNext()` in `progressive-image-pipeline.ts` both still use `for (;;)` with no deadline, relying on cancellation or an external condition.
+4. **Edit handoff with `noopener`. — DONE.** `openBatchEditPage()` no longer uses inline `projectJson` or a child-window object: it writes the transition payload to `MEDIA_TRANSITION_STORAGE_PREFIX + key`, mirrors `createdAt` in a cookie, and opens a short `?layout=timeline&pipelinePage=…&projectEdit=…` URL. `readTransitionProjectPayload()` consumes both entries only when the timestamps match.
+5. **Cookie mirror can exceed browser limits. — DONE.** Four page-scoped cookies of ≤ 3800 encoded chars plus `boundedSnapshot()` (8 rows / 8 projects / 800-char scripts, shrinking until it fits). The simulation measures a 1018-char maximum chunk.
+6. **Cookie-only restore was lossy. — DONE.** The four cookies carry slices of the same bounded full snapshot, and `restorePipelineManagementState()` restores scripts, titles, topic/style/minutes/resolution/orientation/quality, `runBusy`, `queued`, `finishedCount`, vids and the safe (`empty`/`writing`/`ready`/`queued`) stages.
+7. **No TTL enforcement on localStorage, but cookies had TTL. — DONE.** No `Max-Age` on the active cookies, `pipelineManagementTtl: 0`, and trust requires `local.updatedAt === cookie.t` plus a matching digest; a mismatch repairs the cookies from localStorage.
+8. **Storage-event restore can overwrite live work. — OPEN (narrowed).** The listener still calls `restorePipelineManagementState()` unconditionally for a matching key, and restore still sets the layout, rewrites row settings/stages and clears live flags. With per-page keys this only affects tabs that share a page id (a duplicated tab).
+9. **Persistence hooks were not exhaustive. — OPEN.** `retryImagePromptFlow()` still starts without a `persistPipelineManagementState()` call, and some script textbox/writing transitions still rely on the surrounding render/stage hooks.
+10. **Storage failures were swallowed. — DONE** (section 8). `showPipelineStorageWarning()` drives `#pipeline-storage-alert`, and `resetPipelineManagementState()` is bound to `#pipeline-storage-reset` and calls `pipelineManagementStore.clear()`.
+11. **Validation gap. — DONE.** Later sections ran the suite, `tsc --noEmit`, the simulation and route checks; §0.10.2 re-measures them (30 `src/index.ts` diagnostics; 540 tests / 502 pass / 32 fail / 6 cancelled across the 43 files that complete here).
 
 ## 4. Session 331 requirements and decisions
 
@@ -148,7 +363,7 @@ Implementation:
 - `pipelineManagementRestoring` suppresses all persistence while a restore is running.
 - `persistPipelineManagementState()` returns immediately when restoring.
 - The `storage` listener only reacts to the current page's localStorage key.
-- Every tab now has a different page key, so another tab's state cannot match this tab's key.
+- Every **newly opened** tab has a different page key, so another tab's state cannot match this tab's key. *Verified caveat (2026-11-09):* a **duplicated** tab clones `sessionStorage`, so it keeps the same `pageId` and the same key; see §8.6 #5.
 
 ### 4.3 Number 6 — cookie-only restore fixed
 
@@ -247,6 +462,8 @@ Sources:
 - `cookies`
 - `none`
 
+Bounds (re-verified 2026-11-09, `src/client/pipeline-management-store.ts`): `COOKIE_COUNT = 4`, `MAX_COOKIE_VALUE = 3800`, `MAX_ITEMS = 8` rows **and** 8 editor projects, `MAX_SCRIPT_CHARS = 800` (halved until the four chunks fit, then rows/projects dropped, and finally the whole snapshot emptied). `restorePipelineManagementState()` also slices to 8 rows / 8 projects, so a table with 9–10 rows (`BATCH_ROW_LIMIT = 10`) only persists the first 8.
+
 ### `src/client/app-js.ts`
 
 Added/changed:
@@ -306,6 +523,8 @@ Client script parse:
 APP_JS syntax OK 615318
 ```
 
+**Re-run 2026-11-09 (verified):** `node --import tsx simulations/pipeline-management.mjs` still exits 0 with the same transcript — four chunks (max 1018 / limit 3800), `timestampMatched: true`, cookie-only restore of 3 rows + 2 projects with scripts/titles/`runBusy`/`queued`, mismatch repair from localStorage, and an empty new-tab page (`p_pageb_1`). The only additions to the output are the `pageId`/`layout` echo fields.
+
 ## 7. Validation boundary
 
 Session 331 deliberately keeps validation short:
@@ -333,9 +552,9 @@ Static inventory of the workspace:
 
 | Surface | Files | Role |
 |---|---:|---|
-| `src/**/*.ts` | 37 TypeScript files, 70,031 lines | Runtime Worker + browser source of truth |
-| `tests/*.mjs` | 46 files | JSDOM/Worker test harnesses; inventoried, not used as runtime authority |
-| `bench/*` | 12 files | Benchmarks and smoke harnesses |
+| `src/**/*.ts` | **38** TypeScript files, **77,211** lines (re-counted 2026-11-09; was 37 / 70,031) | Runtime Worker + browser source of truth |
+| `tests/*.mjs` | **47** files (**45** `*.test.mjs` + 2 harnesses; was listed as 46) | JSDOM/Worker test harnesses; inventoried, not used as runtime authority |
+| `bench/*` | **14** entries (was 12) | Benchmarks and smoke harnesses |
 | `e2e/*` | 2 files | End-to-end Worker fixtures |
 | `render-app/*` | 5 files | Separate render helper service |
 | `simulations/*` | 1 file | `pipeline-management.mjs` short logical simulation |
@@ -350,15 +569,15 @@ Static inventory of the workspace:
 ### Runtime architecture from code
 
 1. **Single Worker entry.** `src/index.ts` exports the default `{ fetch }` object and exports `PixabayRateLimiter` from `src/modules/pixabay.ts`.
-2. **Cached page assembly.** `src/page.ts::createHTML()` caches one HTML string and substitutes `APP_CSS`, `API_ROTATION_JS`, `APP_JS`, `TEMPLATE_COMPOSER_JS` and `JSON.stringify(prompts)` into `src/client/markup.ts::PAGE_MARKUP`.
-3. **Main client bundle.** `src/client/app-js.ts` injects `PIXABAY_DIRECT_JS`, `BROWSER_OFFLOAD_JS`, `BROWSER_USAGE_JS`, `PROGRESSIVE_IMAGE_PIPELINE_JS`, `SCRIPT_NOTES_CLIENT_JS` and `PIPELINE_MANAGEMENT_STORE_JS`. It contains 355 function declarations in the static scan.
+2. **Cached page assembly.** `src/page.ts::createHTML()` caches one HTML string and substitutes `APP_CSS`, `API_ROTATION_JS`, `APP_JS`, `TEMPLATE_COMPOSER_JS`, **`TIMELINE_EDITOR_JS`** (added by §9; re-verified 2026-11-09 at `src/page.ts` lines 24 and 54) and `JSON.stringify(prompts)` into `src/client/markup.ts::PAGE_MARKUP`.
+3. **Main client bundle.** `src/client/app-js.ts` injects `PIXABAY_DIRECT_JS`, `BROWSER_OFFLOAD_JS`, `BROWSER_USAGE_JS`, `PROGRESSIVE_IMAGE_PIPELINE_JS`, `SCRIPT_NOTES_CLIENT_JS` and `PIPELINE_MANAGEMENT_STORE_JS` (verified as the six template interpolations at the top of the file). It contains **386** function declarations in the 2026-11-09 static scan (was 355).
 4. **Secondary client modules.** `api-rotation.ts`, `config-page-js.ts`, `payment-upload-js.ts`, `template-composer-js.ts`, `template-ring-carousel.ts`, `template-scene-editor.ts`, `template-shape-animations.ts`, `styles.ts`, `aerial-background.ts` and `reel-scene-assets.ts` supply rotation, admin, payment, template, CSS and bundled asset code.
 5. **Worker modules.** `pixabay.ts`, `image-prompts.ts`, `image-batch.ts`, `image-load.ts`, `image-queue.ts`, `script-seo.ts`, `script-notes.ts`, `script-notes-api.ts`, `script-event-loop.ts`, `voiceover.ts`, `llm-openrouter.ts`, `api-relay.ts`, `cms.ts`, `payments.ts`, `theme-shell.ts` and `user-pages.ts` implement API routes, queues, planning, media, auth-adjacent pages and admin surfaces.
 
 ### User flow
 
 1. **Page load.** The Worker canonicalizes public page URLs, applies the selected theme and CMS links, and returns cached HTML from `createHTML()`. Browser scripts are evaluated in one page context.
-2. **Client boot.** `app-js.ts` executes, in order: `initVideoStudio()`, `bindStudioShell()`, `restorePipelineManagementState()`, `applyTransitionProject()`, `bindLandingActions()`, `initAuth()`, then `persistPipelineManagementState("startup")`. It installs page-scoped `storage` and `beforeunload` listeners.
+2. **Client boot.** `app-js.ts` executes, in order: `initVideoStudio()`, `bindStudioShell()`, `restorePipelineManagementState()`, then the completed-row block (`purgeCompletedBatchRows()`, `restoreCompletedBatchRows()`, `scheduleCompletedBatchPurge()` — §24.9), `applyTransitionProject()`, `ensureEditorAccordionOnLoad()` (editor layout only — §22.10), `bindLandingActions()`, `initAuth()`, then `persistPipelineManagementState("startup")`. It installs one page-scoped `storage` listener and one `beforeunload` listener. A `?layout=timeline` boot runs only `applyTransitionProject()` and none of the above.
 3. **Identity and credits.** The shell calls `/api/session` and `/api/credits`. Login, signup and logout use `/api/login`, `/api/signup` and `/api/logout`. `/account` and `/upgrade` are standalone themed pages; `/upgrade` mounts the payment screenshot uploader. The Worker's KV/session remains the authority for credits and authorization.
 4. **Layout selection.** `setStudioLayout("editor" | "table")` toggles `#view-editor` / `#view-table` and `[data-layout]` buttons. Each tab receives a pipeline page id from `sessionStorage["ytvs.pipeline-page.v1"]` or a `pipelinePage` URL parameter. `restorePipelineManagementState()` restores only that page's state; a new tab starts empty in both layouts.
 5. **Editor script flow.** A user adds a video accordion, enters topic/minutes/style/resolution/orientation/quality and starts script writing. The browser uses `/api/script` with client-owned retry handling. `script-seo.ts` may use internal timestamped cues for validation but returns **plain narration text only**. The finished note is stored by `script-notes-client.ts` in localStorage + cookie, not KV. The script textbox stays pinned during writing and retries.
@@ -368,7 +587,7 @@ Static inventory of the workspace:
 9. **Editor completion.** Successful photo and MP4 assets fill the gallery, object URLs are retained in memory, filenames are deduplicated per video, and Preview / MP4 export use client-side WebCodecs rendering. `apiRenderVideo()` and `/api/render/*` remain as legacy worker-render code, but the static scan found no active call site for `apiRenderVideo`.
 10. **Quick Batch flow.** A user adds rows, types or pastes each plain script, and selects style/resolution/orientation. `#batch-generate` runs only prepared, idle `ready`/`queued` rows, not unprepared `staged` rows. `generateBatchRows()` starts up to `BATCH_RUN_CONCURRENCY` rows; `startUnprocessedRows()` has a reentrancy guard and starts later rows as early-stage capacity opens.
 11. **Quick Batch pipeline.** Each row proceeds voice → timing → prompts → combined Pixabay media → animation → done. `batchRunPipelineStage()` owns silent non-media retries. Media items use individual retries. `batchRowFinished()` requires `row.mp3`, `row.animated`, exactly 12 images, exactly 12 slides, 4 `video/mp4` clips and 12 unique filenames.
-12. **Quick Batch actions.** The last `Actions` column contains Preview, Process Export and Edit. Edit calls `openBatchEditPage()`: it writes a transition-only payload to shared localStorage and a short cookie mirror, then opens a short URL carrying `layout=editor`, `pipelinePage=<targetPageId>` and `projectEdit=<key>`. `applyTransitionProject()` consumes the payload only when `createdAt` matches, forces the editor layout, and assigns `_pipelineVid`. This is the explicit exception to the otherwise-empty new-tab rule.
+12. **Quick Batch actions.** The last `Actions` column draws Preview, Process Export and Edit for **every** row, all disabled until `batchRowFinished()` is true. Edit calls `openBatchEditPage()`: it writes a transition-only payload to shared localStorage and a short cookie mirror, then opens a short URL carrying **`layout=timeline`** (not `layout=editor` — superseded by §9), `pipelinePage=timeline-<sourcePageId>-row-<rowId>` and `projectEdit=<key>`. `applyTransitionProject()` consumes the payload only when `createdAt` matches, activates `#view-timeline` and returns before creating an editor project or a `_pipelineVid`. This is the explicit exception to the otherwise-empty new-tab rule.
 13. **Secondary flows.** The template composer modal offers 15 interactive scenes, a 3D ring carousel, reel scenes, 13 shape animations and WebCodecs MP4 export. The day-prefixed config page manages themes, backup Workers, relay status, LLM provider config, users, IP credits, payments and CMS. CMS pages are limited to 8 single-level non-reserved URLs. Payment screenshots are uploaded and reviewed through the payment routes.
 
 ### Route surface from code
@@ -384,7 +603,7 @@ Static inventory of the workspace:
 | Provider endpoints | `https://pixabay.com/api/`, `https://pixabay.com/api/videos/`, `https://cdn.pixabay.com/...` |
 | Config / admin | `/api/config/theme`, `/api/config/workers`, `/api/config/users`, `/api/config/ipcredits`, `/api/config/verify`, `/api/config/payment-gateway`, `/api/config/payments`, `/api/config/payments/approve`, `/api/config/payments/image/`, `/api/config/cms`, `/api/config/cms/delete`, `/api/cms/pages` |
 | Payments | `/api/payments/upload`, `/api/payments/my`, `/api/payments/image/` |
-| LLM / relay | `/api/llm/status`, `/api/llm/config`, `/api/llm/test`, `/api/llm/generate`, `/api/relay/ai`, `/api/relay/ping`, `/api/relay/pool`, `/api/relay/status`, `/api/relay/config`, `/api/relay/test` |
+| LLM / relay | `/api/llm/status`, `/api/llm/config`, `/api/llm/test`, `/api/llm/generate`, `/api/relay/endpoint` (**added by §24.3**), `/api/relay/ai`, `/api/relay/ping`, `/api/relay/pool`, `/api/relay/status`, `/api/relay/config`, `/api/relay/test` |
 | Worker jobs / legacy render | `/api/render`, `/api/render/<id>`, `/api/worker/poll`, `/api/worker/deliver`, `/api/worker/failed` |
 
 ### System rules
@@ -402,8 +621,8 @@ Static inventory of the workspace:
 11. **Pipeline management is per tab.** `sessionStorage["ytvs.pipeline-page.v1"]` or `?pipelinePage=` defines `pageId`. localStorage uses `ytvs.pipeline-management.v1.<pageId>`; four session cookies use `ytvs_pipeline_management_<pageId>_1..4`. Rows receive `vid = <pageId>-row-<id>`; editor projects receive `_pipelineVid = <pageId>-editor-<n>`.
 12. **Pipeline management has no TTL.** Active cookies have no `Max-Age`; `pipelineManagementTtl: 0`. Trust requires the localStorage `updatedAt` to equal the cookie chunk `t` and the FNV digest to match. A mismatch repairs cookies from localStorage. A new page id has no matching stores, so it starts empty.
 13. **Edit transition is timestamp-matched.** `openBatchEditPage()` no longer puts full project JSON in the URL and no longer relies on a child-window object. Shared localStorage `MEDIA_TRANSITION_STORAGE_PREFIX + key` plus a `ytvs_transition_project_<key>` cookie must have the same `createdAt`; both are removed after `readTransitionProjectPayload()` verifies them. The active Edit target is `layout=timeline`; see Section 9 for its stable row-scoped local timing store and IndexedDB-only Blob transfer.
-14. **Quick Batch completion is strict.** `batchRowFinished()` requires MP3, animation, 12 images, 12 slides, 4 MP4 clips and 12 unique stock filenames. Preview and Export unlock together; the Actions column has no AI enhancer button.
-15. **API rotation is scoped.** `api-rotation.ts` rotates only allow-listed AI paths to verified backup Workers with a ticket and `credentials: "omit"`; cookies and non-AI routes stay on the primary origin. `api-relay.ts` rotates the Worker's inference hop while KV, credits, CMS and payments remain local.
+14. **Quick Batch completion is strict.** `batchRowFinished()` requires MP3, animation, 12 images, 12 slides, 4 MP4 clips and 12 unique stock filenames. **Preview, Process Export and Edit unlock together** (three icons, all `disabled` + `aria-disabled="true"` before that; superseded by §22.11 on 2026-11-08); the Actions column has no text and no AI enhancer button.
+15. **API rotation is server-decided.** *Superseded by §24.3–§24.7 (verified 2026-11-09):* for an allow-listed AI path `api-rotation.ts` asks `GET /api/relay/endpoint?path=…` and calls exactly the URL it is handed (ticket + `credentials: "omit"` for a backup, the relative path for this Worker); the round-robin ring and the failure/cooldown decision live in `api-relay.ts`, and cookies, non-AI routes, KV, credits, CMS and payments stay on the primary origin. The browser no longer holds a cursor, skip list or failover order.
 16. **Export is client-side in the active Quick Batch path.** `exportBatchRow()` uses browser WebCodecs/MP4 generation. `/api/render*` and `workerRunJob` remain present as legacy worker-job code in `app-js.ts`; no active `apiRenderVideo()` call was found in the static scan.
 17. **Admin and standalone pages are separate.** `theme-shell.ts` supports seven themes and reusable CMS links. `cms.ts` limits pages to 8 single-level URLs and reserves app/API paths. `payments.ts` stores gateway metadata, screenshots and transaction verification in KV; admin approval promotes users to `paid_user`.
 18. **Template composer is independent.** `template-composer-js.ts` and its scene modules provide interactive scenes, shape animations and WebCodecs MP4 export that can also drop a clip into an accordion gallery. They do not own the 12-scene Pixabay pipeline.
@@ -419,6 +638,9 @@ Static inventory of the workspace:
 - `wrangler.json` currently contains `PIXABAY_API_KEY` in `vars`; `/api/media/config` returns it only when browser media fetching is enabled.
 - Script notes and the usage ledger have their own TTLs; Session 331's pipeline-management store specifically has none.
 - `/api/render*` and `/api/worker/*` routes and client helpers remain in the codebase even though the active Quick Batch export path is client-side.
+- A **newly opened** tab starts empty, but a **duplicated** tab inherits `sessionStorage["ytvs.pipeline-page.v1"]` and therefore the same page id, localStorage key and cookie names. That is the one case where two tabs share pipeline management state; an explicit `?pipelinePage=` overrides it.
+- `/api/relay/pool` still exists for diagnostics, but the studio no longer calls it (§24.7); the browser's only pre-call is `/api/relay/endpoint`.
+- The pipeline store persists at most 8 rows while the table allows 10 (`BATCH_ROW_LIMIT = 10`); rows 9–10 are live-only and are not restored after a reload.
 - Support code under `tests/`, `bench/`, `e2e/`, `render-app/` and `simulations/` was inventoried but not treated as runtime authority. No test suite, TypeScript project check, Wrangler dry-run, server preview, commit or push was performed for that static documentation pass; later fix verification is recorded in section 8.7. No commit or push has been made.
 
 ## 8. Follow-up fixes: visible storage recovery and Ready-only Generate
@@ -533,17 +755,19 @@ Excluded states: no script, `staged`, `running`, `retrying`, `stopRequested`, `b
 
 ### 8.6 Remaining problems
 
+> Re-verified 2026-11-09 (§0.10): items 1–7 are still unfulfilled in the current code, item 8 is re-measured, item 9 is a corrected claim, and done items were removed.
+
 The two named problems are fixed. These loose ends from the earlier code audit remain:
 
 1. **No outer retry deadline.** `1 + 7` attempts with 40,000 ms backoff can exceed 280 seconds plus request time, and a never-settling request can pin a row silently.
 2. **`generateBatchRows()` waits on `Promise.all()` in a `while` loop.** There is no global timeout for the generation pass.
 3. **Web Locks and progressive loops use `for (;;)`.** Some wait loops have no deadline and rely on an external condition eventually changing.
-4. **Persistence remains event-driven, not transactional.** Eleven explicit `persistPipelineManagementState()` call sites cover layout, Edit handoff, table render, batch stage, editor start/finalize, transition apply, startup, beforeunload and reset. A mutation that bypasses those hooks or crashes before one is not durably captured. The new warning detects save failure; it does not make all mutations atomic.
-5. **No TTL means stale page records accumulate.** This is intentional under the no-TTL directive, but old `pageId` localStorage keys/cookies are not garbage-collected. Duplicated tabs can also clone `sessionStorage` page IDs unless the URL supplies `?pipelinePage=`.
-6. **Dormant legacy render/worker code remains.** `/api/render*`, `/api/worker/*` and `apiRenderVideo()` are still present although active Quick Batch export is client-side WebCodecs.
-7. **Token constant mismatch persists.** `IMAGE_PROMPT_MAX_TOKENS = 3584` is exported, but the active `env.AI.run()` planner uses `max_tokens: 2048`.
-8. **Validation debt persists.** Full suite has 40 pre-existing failures and 6 cancellations; `tsc --noEmit` has 30 diagnostics. No new failures were introduced relative to HEAD.
-9. **Legacy mocks still assume older media plans.** Strict `batchRowFinished()`, fixed 12/4/8 media and `[1,4,7,10]` positions conflict with older expectations such as `[2,5,7,10]` or `[1,8]`.
+4. **Persistence remains event-driven, not transactional.** Eleven explicit `persistPipelineManagementState()` call sites (verified: 11 quoted reasons) cover layout, Edit handoff, table render, batch stage, editor start/finalize, transition apply, startup, completed-row purge, beforeunload and reset. A mutation that bypasses those hooks or crashes before one is not durably captured, and `retryImagePromptFlow()` still starts unhooked (§3 #9). The warning detects save failure; it does not make all mutations atomic.
+5. **No TTL means stale page records accumulate.** This is intentional under the no-TTL directive, but old `pageId` localStorage keys/cookies are not garbage-collected (`clear()` only touches the current page). A **duplicated** tab clones the `sessionStorage` page id and therefore shares this page's rows until the URL supplies a different `?pipelinePage=`; a newly opened tab is empty.
+6. **Dormant legacy render/worker code remains.** `/api/render*`, `/api/worker/*`, `apiRenderVideo()` and `workerRunJob()` are still present although active Quick Batch export is client-side WebCodecs, and no call site invokes them (verified).
+7. **Token constant mismatch persists.** `IMAGE_PROMPT_MAX_TOKENS = 3584` is exported from `image-prompts.ts`, but the active `env.AI.run()` planner uses `max_tokens: 2048` (verified).
+8. **Validation debt persists, but the numbers changed.** Measured 2026-11-09 on a clean tree: **540 tests / 502 pass / 32 fail / 6 cancelled** across the 43 files that complete in this sandbox, plus `deep-debug-regressions` and `session-264-editor-render` which do not finish (240 s / 700 s windows). `npx tsc --noEmit` still reports **30** diagnostics, all in `src/index.ts`. The old "40 failures / 514–521 tests" figure is stale; see §0.10.2.
+9. **Corrected 2026-11-09:** the old claim that legacy mocks still expect `[2,5,7,10]` or `[1,8]` no longer holds — every Pixabay/batch fixture uses `[1,4,7,10]`. The red files are the provider/fixture ones listed in §24.15 (`seo-walkthrough` 10, `session-262` 5, `api-relay` 5, `session-261` 4 + 6 cancelled, `session-250` 5, `session-244` 2, `llm-openrouter` 1), which fail on "AI image generation is disabled; use Pixabay" / missing `PIXABAY_KEY` fixtures rather than on media-plan drift.
 
 Oversimplified: the cook can still retry too long, the waiter can still wait forever, old order slips pile up, an old oven remains wired up, the recipe card disagrees with the cook, and the old checklist still has red marks. What changed is that a broken order pad now sounds an alarm, and the oven now refuses unprepared trays.
 
@@ -573,6 +797,16 @@ tests/quick-batch-table.test.mjs         14/14 pass
 full npm test                            514 tests / 468 pass / 40 fail / 6 cancelled
 vs HEAD                                  0 new failures; 15 HEAD failures removed
 npx tsc --noEmit                         30 diagnostics, identical to HEAD
+
+--- re-measured 2026-11-09 (see §0.10.2) ---
+tests/timeline-editor.test.mjs           35/35
+tests/quick-batch-table.test.mjs         15/15
+tests/final-media-cap-actions.test.mjs   11/11
+tests/template-composer.test.mjs         20/20
+tests/api-relay.test.mjs                 31/36  (5 pre-existing)
+43 completed test files                  540 tests / 502 pass / 32 fail / 6 cancelled
+deep-debug-regressions, session-264      did not finish (240 s / 700 s windows)
+npx tsc --noEmit                         30 diagnostics, all src/index.ts
 wrangler deploy --dry-run                exit 0
 syntax audit                             107 TS/JS parse, 0 problems
                                          15 generated JS strings, 0 problems
@@ -661,6 +895,8 @@ JSDOM route and generated client scripts       parse and execute in focused test
 local Wrangler route check                    HTTP 200 for /free?layout=timeline&pipelinePage=timeline-preview-row-1
 git diff --check                               clean
 ```
+
+> **Re-measured 2026-11-09:** the relevant files are `timeline-editor` 35/35, `quick-batch-table` 15/15 and `final-media-cap-actions` 11/11 (the timeline route/handoff assertions live there); across the 43 test files that complete in this sandbox the total is 540 / 502 pass / 32 fail / 6 cancelled. The historical numbers in the block above are kept as the record of that session.
 
 The full suite remains non-green. Its failure/cancellation totals match the Section 8.7 baseline; exact failure identities were not compared. All 29 focused Quick Batch/timeline tests pass, including legacy-track migration, four-lane cap, text and graphic preview across media-scene boundaries, IndexedDB Blob transfer, and row reopen persistence. The reopen test seeds `ytvs.timeline-editor.v1.<targetPageId>` after the transition-project localStorage entry. JSDOM plus an in-memory IndexedDB test validates Blob handoff and storage separation; the local route check is not a real-browser media-decoding test. No server-side timeline computation was added.
 
@@ -841,14 +1077,14 @@ Fixed while doing "fix what's left to fix":
 2. **A stray media lane could compete with the background.** Covered in 10.2: `normalizeState()` folds any extra `kind: "media"` track into the single background lane instead of rendering both.
 3. **The two client bundles were re-checked for syntax** after the edits (APP_JS 628,458 chars, TIMELINE_EDITOR_JS 76,663 chars, both parse).
 
-Still open:
+Still open (re-verified 2026-11-09, §0.10 — done items removed, uncertain ones tagged **DONE**):
 
 1. **No visual confirmation in a real browser.** The dock tint, the `BG` badge and the "background layer" placeholder line are styled and asserted statically; they were not eyeballed in Chrome/Safari at 100% and 125% zoom, and `wrangler dev` cannot boot in this sandbox (no `CLOUDFLARE_API_TOKEN`), so the route check is `worker.fetch()` rather than a served preview.
 2. **The removed minute field leaves no way to lengthen a silent row.** If `decodeBatchAudio()` returns nothing, a row falls back to `BATCH_MIN_MINUTES = 1` and the UI can no longer raise it. Options if that matters: derive it from the script word count, or expose the value in the timeline inspector instead of the table.
 3. **`row.minutes` is now non-editable UI state.** It is still in the pipeline-management snapshot, the Edit handoff (`basicSettings.minutes`) and the prompt request body, so it survives reloads at `1` (or an older saved value) and can drift from the measured narration. It is consistent, just not user-editable.
-4. **Legacy markup tolerance.** `syncBatchRowsFromDom()` keeps a `[data-batch-field="minutes"]` lookup purely for a cached older client bundle. Delete it once no cached bundle can be in the wild.
-5. **`layer: 0` is metadata, not a reorder control.** The background track stores `layer: 0` and is always rendered last, but there is no drag-to-reorder in the dock at all, so no other lane can be dragged under it. If lane reordering is ever added, it must keep the media lane pinned.
-6. **The suite is still not green.** 40 failures / 6 cancellations are pre-existing (Section 8.6: no outer retry deadline, non-transactional persistence, dormant `/api/render*` code, `IMAGE_PROMPT_MAX_TOKENS` mismatch with `max_tokens: 2048`, stale legacy mocks; and Section 9.6: no real-browser media decode test). This section added no new failures.
+4. **Legacy markup tolerance.** Verified 2026-11-09, still open: `syncBatchRowsFromDom()` still reads `[data-batch-field="minutes"]` (`src/client/app-js.ts`, the `syncBatchRowInput()` fallback) purely for a cached older client bundle. Delete it once no cached bundle can be in the wild.
+5. **`layer: 0` is metadata, not a reorder control.** Verified 2026-11-09, still open: the background track stores `layer: 0` and is always rendered last, and `src/client/timeline-editor.ts` has no reorder action at all (`grep reorder` → none), so no other lane can be dragged under it. If lane reordering is ever added, it must keep the media lane pinned.
+6. **The suite is still not green.** Re-measured 2026-11-09: 32 failures + 6 cancellations across the 43 files that finish here, with `deep-debug-regressions` and `session-264-editor-render` not finishing; the causes are the provider/fixture ones in §24.15 plus the structural ones in §8.6, not "stale legacy mocks" (corrected — no `[2,5,7,10]`/`[1,8]` fixtures exist). The focused timelines suites are green: 61/61. This section added no new failures.
 
 ### 10.9 Files touched in this section
 
@@ -977,12 +1213,15 @@ Honesty notes:
 
 ### 11.8 Still open
 
+> Re-verified 2026-11-09 (§0.10): every item below is still unfulfilled in the current code; done items were removed and uncertain ones are tagged **DONE**.
+
 1. **Real-browser eyeball.** Nothing here was rendered in Chrome/Safari at 100% and 125% zoom. The sticky offset (`top: 58px`, `52px` under 560 px) is tied to the topbar's `min-height`; if the topbar wraps to two lines the preview would pin slightly too high until the offset is re-derived from `getBoundingClientRect()`.
 2. **`position: sticky` on a flex child needs a scrolling ancestor with room.** Any future change that puts `.te-preview-panel` back inside an `overflow: hidden` wrapper silently turns the pin off; the CSS comment records this.
 3. **Sticky preview vs. a very short dock.** The pin is released when the shell's content box ends. The `.te-dock-tail` provides 260 px of that box; if the tail is ever removed, a document that ends exactly at the dock footer would unpin the preview one screen early and the dock would no longer be the last element in view.
 4. **The dummy text is only added when the lane is empty.** A row that already has a graphic but no text gets no dummy. That is the requested behaviour ("doesn't have text or graphics"), but it means a graphics-only video has no placeholder text.
-5. **`row.subtitles` is still alive for export.** Deleting the cue→clip mapping removed the only place the timeline reflected subtitles. If subtitle-aware timeline editing is wanted later it must come back as an explicit, user-toggled track rather than implicit caption clips. **(Superseded by Section 14: cue data now rides along in `timelineState.subtitles`, is burned onto the preview canvas, and renders as a hidden read-only tracks layer — still never as editable clips.)**
-6. **The suite is still not green** (Section 8.6 / 10.8). This section added no new failures.
+5. **The suite is still not green** (Section 8.6 / 10.8; re-measured in §0.10.2). This section added no new failures.
+
+> Removed 2026-11-09: the old item 5 ("`row.subtitles` is still alive for export… no place in the timeline") is **done** — cue data rides in `timelineState.subtitles`, burns onto the preview and export canvases (§14.3) and renders as a hidden read-only SUBTITLES lane (§14.5). Never as editable clips, which stays the design.
 
 ### 11.9 Files touched in this section
 
@@ -1332,11 +1571,13 @@ Honesty notes:
 
 ### 15.9 Still open
 
+> Re-verified 2026-11-09 (§0.10): every item below is still unfulfilled in the current code; done items were removed and uncertain ones are tagged **DONE**.
+
 1. **Real-browser eyeball.** The double gradient over a bright Pixabay photo, and the neon + VHS stack, are asserted structurally, not visually.
 2. **`row.style` and the canvas filter are not per scene.** `state.videoStyle` still drives `__videoStyleFilter` on Layer 0; a scene-level style override would need the filter call to read `scene.videoStyle` too.
-3. **The editor layout's non-timeline gallery previews remain unstyled** (unchanged boundary from Section 12) even though the shared `generateMP4()` renderer now paints the treatments.
+3. **The editor layout's non-timeline gallery previews remain unstyled** (unchanged boundary from Section 12) even though the shared `generateMP4()` renderer now paints the treatments. **DONE (code-verified 2026-11-09; not eyeballed):** every preview/export path resolves effects through `__videoStyleEffects()` and the shared renderer, so this is no longer a known gap — re-open only if a real browser shows an unstyled gallery preview.
 4. **A style switcher in the timeline does not exist**, so `scene.effects` cannot drift in practice - see 15.8.3 for what must happen if one is added.
-5. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10); `npx tsc --noEmit` still reports the long-standing `src/index.ts` diagnostics.
+5. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10; re-measured 2026-11-09 in §0.10.2 — 32 fail + 6 cancelled across 43 completed files); `npx tsc --noEmit` still reports the same **30** diagnostics, all in `src/index.ts`.
 
 ### 15.10 Status
 
@@ -1486,11 +1727,13 @@ Honesty notes:
 
 ### 16.10 Still open
 
+> Re-verified 2026-11-09 (§0.10): every item below is still unfulfilled in the current code; done items were removed and uncertain ones are tagged **DONE**.
+
 1. **Real-browser eyeball** of the drag feel and of the scroll layer's weight next to a real lane.
 2. **The four-lane cap still applies**, so the fifth `+ Text` lands in the current top lane instead of a fifth layer (by design, and the status line says so). Raising `MAX_VISUAL_TRACKS` would be a one-line change plus its test.
 3. **The drag is X/Y only** - no resize/rotate handles on the canvas, no keyboard nudging, and no snapping to the centre lines.
 4. **Media clips cannot be dragged**; the pinned background stays a cover-fit layer.
-5. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10), and `npx tsc --noEmit` still reports the long-standing `src/index.ts` diagnostics.
+5. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10; see §0.10.2), and `npx tsc --noEmit` still reports the same 30 `src/index.ts` diagnostics. This section's timeline assertions remain green (`timeline-editor` 35/35).
 
 ### 16.11 Status
 - Branch: `arena/4d1103b2-text-to-image-template` (the only branch this section was written on).
@@ -1740,13 +1983,16 @@ The failure/cancellation sets are the same pre-existing Pixabay, relay, image-ba
 
 ### 17.11 Still open
 
+> Re-verified 2026-11-09 (§0.10): every item below is still unfulfilled in the current code; done items were removed and uncertain ones are tagged **DONE**.
+
 1. **Real-browser eyeball** of the 70 / 30 split, the sticky row with the panel open, the panel's density at 320 px wide, and the transition when the panel opens/closes.
-2. **No ripple option for duplicates.** Overlaps are resolved by array order (see 17.10 #2); a "push the following scenes" mode is not implemented.
-3. **No drag-to-reparent.** A free text cannot be dropped onto a background clip to become its child, and a child cannot be promoted to a free clip from the UI (only by duplicating it out of the window).
-4. **No multi-select duplicate.** `⧉ Duplicate` works on the one selected clip; no marquee selection, no `Ctrl / ⌘ + D` shortcut.
-5. **The child list is not virtualised.** It renders every child of the selected background (bounded in practice by four lanes of clips).
-6. **The 30 % panel does not replace the inspector.** The selected child's controls appear in both places; both write the same model, and a canvas drag keeps both X / Y readouts in sync, but a plain inspector slider edit does not re-render the panel until the next selection/`renderInspector()`.
-7. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10), and `npx tsc --noEmit` still reports the long-standing `src/index.ts` diagnostics (31 in this tree, identical to `459be7b`).
+2. **No drag-to-reparent.** A free text cannot be dropped onto a background clip to become its child, and a child cannot be promoted to a free clip from the UI (only by duplicating it out of the window).
+3. **No multi-select duplicate.** `⧉ Duplicate` works on the one selected clip; no marquee selection, no `Ctrl / ⌘ + D` shortcut.
+4. **The child list is not virtualised.** It renders every child of the selected background (bounded in practice by four lanes of clips).
+5. **The 30 % panel does not replace the inspector.** The selected child's controls appear in both places; both write the same model, and a canvas drag keeps both X / Y readouts in sync, but a plain inspector slider edit does not re-render the panel until the next selection/`renderInspector()` — `renderChildPanel()` is still called only from the end of `renderInspector()` (verified 2026-11-09).
+6. **The suite is still not green** (Sections 8.6, 10.8, 11.8, 14.10; see §0.10.2), and `npx tsc --noEmit` still reports **30** `src/index.ts` diagnostics.
+
+> Removed 2026-11-09: the old item 2 ("no ripple option for duplicates — overlaps are resolved by array order") is **done**. §24.10's `resolveTimelineOverlaps()` runs on every duplicate/add/import/timing change and pushes the later boxes clear, with children following their background.
 
 ### 17.13 Appendix A - code map of what was coded
 
@@ -2250,9 +2496,12 @@ Two measurement facts came out of the audit and decided the implementation:
 
 ### 20.17 Still open
 
-- The 30 % `BACKGROUND ELEMENT` panel at 7.5 px is legible but very small on a low-DPI screen; if it proves hard to read, the next step is a per-panel font-size token rather than a fixed `7.5px`.
-- Undo/Redo does not yet cover binary media (uploaded Blobs live in IndexedDB), only the timing/element model — undoing an upload restores the clip metadata but the asset is re-read from IndexedDB on reload.
+> Re-verified 2026-11-09 (§0.10): every item below is still unfulfilled in the current code; done items were removed and uncertain ones are tagged **DONE**.
+
+- Undo/Redo does not yet cover binary media (uploaded Blobs live in IndexedDB), only the timing/element model — `snapshotProject()` serialises `durationSec`, `scenes` and `tracks` only, so undoing an upload restores the clip metadata but the asset is re-read from IndexedDB on reload.
 - Redo history is intentionally dropped on every new edit (standard linear history); a branching history is out of scope.
+
+> Removed 2026-11-09: the old first bullet ("the `BACKGROUND ELEMENT` panel at 7.5 px is too small") is **done** — since §21.6 the panel is **10 px** with a `#timeline-child-panel * { font-size: 10px !important }` catch-all, and no `7.5px` rule survives in `src/client/styles.ts`.
 
 ### 20.18 Status
 
@@ -2400,13 +2649,15 @@ The older sections are kept as they were written; each of the three headings bel
 
 ### 21.14 Still open
 
-> **Partly superseded by §22.9 (2026-11-08):** a commit during an export *is* blocked now (`openTemplateClipsModal()` and `appendTemplateClip()` both guard `isExporting || recorder`), and the transient queue is no longer user-visible — `clipsQueue` is a one-shot buffer drained inside `appendTemplateClip()`. The trimming/reordering gap and the `＋ Add media` overlap note still stand.
+> Re-verified 2026-11-09 (§0.10): every item below is still unfulfilled in the current code; done items were removed and uncertain ones are tagged **DONE**.
+
+> **Superseded by §22.9 (2026-11-08), verified 2026-11-09:** a commit during an export *is* blocked (`openTemplateClipsModal()` and `appendTemplateClip()` both guard `isExporting || recorder`), the transient queue is no longer user-visible (`clipsQueue` is a one-shot buffer drained inside `appendTemplateClip()`), and `＋ Add Clips` (composer modal) and `＋ Add media` (file/IndexedDB picker) are now two different surfaces, not two flavours of the same append.
 
 - The clips modal has no trimming, reordering or per-clip duration control; a queued MP4 keeps its probed length (5 s for stills and for anything that cannot be probed).
-- The queue is not persisted, so an open modal with pending picks loses them on reload (21.12).
-- A commit while an export is running is not blocked (the grid refresh is). If that ever matters, guard `appendQueuedClips()` with the same `if (isExporting || recorder) return;` the transport actions use.
+- The queue is not persisted, so pending composer picks are lost on reload (21.12).
 - A folded `TEXT & GRAPHICS` group still hides its lanes from drag-on-canvas selection, because the clip is not in the DOM; auto-opening the group on add was chosen over keeping the selection working while folded.
-- `＋ Add Clips` and `＋ Add media` overlap in source (both can add the same uploaded file); they differ only in where the clip lands. Merging them means giving `addMediaFiles()` an append mode, which would change the §12 placeholder-reuse behaviour this section deliberately left alone.
+
+> Removed 2026-11-09: the old "a commit while an export is running is not blocked" and "`＋ Add Clips` and `＋ Add media` overlap in source" bullets are **done** (§22.9 / §22.1).
 
 ### 21.15 Status
 
@@ -2582,17 +2833,22 @@ Older sections are kept exactly as they were written. These are the lines that n
 
 ### 22.17 Still open
 
-- **`✎ Edit` unlocking with the row** is the one judgement call in this section. If the intent was to keep Edit live for a drafted row (so timing can be set *before* generating), the exemption is one expression in `batchActionCell()` (`kind === "edit" ? "" : locked`) plus the matching carve-out in the `[data-batch-action]` delegation guard — say the word and it is a two-line change.
-- The boot accordion is created for `layout=table` boots as well (hidden), which persists an empty `Video 1` and adds one "skipped" to a bulk render of an empty studio. Creating it lazily on the first switch into the editor layout would avoid both, at the cost of an accordion appearing mid-session.
-- `＋ Add Clips` no longer offers a plain file picker or the row's own already-uploaded media; it is the composer (prompt → scenes → effects → MP4). `＋ Add media`, on the same row, is the file/IndexedDB path. If a "clips you already have" list is wanted inside that modal, it belongs in `TEMPLATE_COMPOSER_JS`, not in the timeline bundle (which still makes no Worker call by design).
-- Item 9 guards **adding**, not dragging: the 80 s Start/Duration sliders and a canvas drag can still move an element onto an occupied window, because the request was about the element that `＋ Text` / `＋ Graphic` creates. Extending the check to `setItemTiming()` would need a "nearest free window" nudge rather than a refusal.
-- Occupancy is measured in whole seconds with a 1 ms epsilon, so sub-millisecond touching is not detected (and is not visible either).
-- The neo sweep is a selector list: a future button-like class matching none of its patterns, with its own radius in an id-scoped rule, would need adding to the list.
+> Re-verified 2026-11-09 (§0.10): every item below is still unfulfilled in the current code; done items were removed and uncertain ones are tagged **DONE**.
+
+- `＋ Add Clips` no longer offers a plain file picker or the row's own already-uploaded media; it is the composer (prompt → scenes → effects → MP4). `＋ Add media`, on the same row, is the file/IndexedDB path. If a "clips you already have" list is wanted inside that modal, it belongs in `TEMPLATE_COMPOSER_JS`, not in the timeline bundle (which still makes no Worker call by design). **DONE (code-verified 2026-11-09; the composer's inner surfaces were not clicked through):** the timeline's `add-clips` action only calls `openTemplateClipsModal()`, so no plain picker remains in the timeline bundle.
+- Occupancy is measured in seconds with a 1 ms epsilon (`TIMING_EPSILON_SEC = 0.001`), so sub-millisecond touching is not detected (and is not visible either).
+- The neo sweep is a selector list: a future button-like class matching none of its patterns, with its own radius in an id-scoped rule, would need adding to the list (`html[data-theme="neo"] … { border-radius: 0 !important }`).
+
+> Removed 2026-11-09, all three already done:
+> - **"`✎ Edit` unlocking with the row is the one judgement call."** — decided and coded: all three Action icons share the `batchRowFinished()` lock (`batchActionCell()`), and Edit is documented as unlocking with the row (§22.11).
+> - **"The boot accordion is created for `layout=table` boots as well."** — `ensureEditorAccordionOnLoad()` returns immediately unless `studioLayout === "editor"`, so no empty `Video 1` is persisted from the table layout.
+> - **"Item 9 guards adding, not dragging; a drag can still overlap."** — §24.10's `resolveTimelineOverlaps()` runs on timing edits and drags as well as on adds, duplicates, imports and load.
 
 ### 22.18 Status
 
 - All nine code items are implemented (22.3–22.12), and item 10 — documenting the prompt — is this section.
-- Test state: `tests/timeline-editor.test.mjs` **33 / 33**; the whole suite **544 tests / 504 pass / 40 fail**, with **identical per-file counts** on a pristine `4967ef7` tree (the 40 are the eight pre-existing files of §8.6 / §20.15 / §21.11); `npx tsc --noEmit` unchanged at 30 pre-existing `src/index.ts` diagnostics; `npx wrangler deploy --dry-run` green.
+- Test state at the time: `tests/timeline-editor.test.mjs` **33 / 33**; the whole suite **544 tests / 504 pass / 40 fail**, with **identical per-file counts** on a pristine `4967ef7` tree; `npx tsc --noEmit` unchanged at 30 pre-existing `src/index.ts` diagnostics; `npx wrangler deploy --dry-run` green.
+- **Re-measured 2026-11-09 (§0.10.2):** `timeline-editor` **35/35**, `quick-batch-table` **15/15**, `final-media-cap-actions` **11/11**; 43 completed files total **540 / 502 / 32 / 6 cancelled**; `tsc` still **30**.
 
 ## 23. Timeline editor: a clip exported from the Add video from template modal becomes the last Scene Media scene (2026-11-09)
 
@@ -2833,12 +3089,426 @@ New coverage in detail:
 
 ### 24.15 Still open
 
-- `seo-walkthrough` (10), `session-250` (4), `session-261` (4), `session-262` (5), `deep-debug-regressions` (4), `session-244` (2), `llm-openrouter` (1) and `api-relay`'s five binary/Pixabay cases still fail exactly as they did at the baseline; none is caused by this section and each needs its own investigation (mostly "AI image generation is disabled; use Pixabay" / missing `PIXABAY_KEY` in the fixtures).
-- `tests/session-264-editor-render.test.mjs` did not finish inside a 200 s per-file window in this sandbox; it was not changed by this section and needs a longer, isolated run before it can be called green.
-- "No more drawdown" is implemented under the reading in §24.5; if the user meant a different drawdown, that needs one more follow-up.
+> Re-verified 2026-11-09 (§0.10): every item below is still unfulfilled in the current code; done items were removed and uncertain ones are tagged **DONE**.
+
+- **Re-measured 2026-11-09 (per-file, `-P 6`, 240 s cap):** `seo-walkthrough` 10, `session-250` **5** (previously 4), `session-261` 4 (+6 cancelled), `session-262` 5, `session-244` 2, `llm-openrouter` 1 and `api-relay`'s five binary/Pixabay cases fail exactly as they do at baseline (clean tree, commit `407ab86`); none is caused by this section and each needs its own investigation (mostly "AI image generation is disabled; use Pixabay" / missing `PIXABAY_KEY` in the fixtures). `deep-debug-regressions` still shows failures but did not finish inside 700 s, so its exact count was not re-established here.
+- `tests/session-264-editor-render.test.mjs` did not finish inside a 240 s per-file window in this sandbox (nor 700 s for `deep-debug-regressions`); neither file was changed by this section and both need a longer, isolated run before they can be called green.
+- "No more drawdown" is implemented under the reading in §24.5. **DONE (code-verified 2026-11-09):** the browser-side cursor / skip list / failover state is gone and only `window.__yvsApiRotation.stats()` counters remain; if the user meant a different drawdown, that needs one more follow-up.
 - The editor layout's own completed-project rows keep using `pipelineManagementStore` (title/script/style/stage). They survive a refresh but do not carry the 24 h archive or the five-per-page pager, because the request named "rows" in the Quick Batch table; extending the archive to the accordion list is a separate change.
 
 ### 24.16 Status
 
 - All seven requested items are implemented: server-side rotation behind `GET /api/relay/endpoint` (the browser asks, waits and calls exactly the given URL), round robin as the only scheme with the UI Worker on the smaller ring share, the browser-side pool drawdown removed, five backup URL inputs, completed Quick-Batch rows that survive a refresh with five-per-page pagination and a 24 h client-side deletion, and a timeline overlap resolver that runs on every element/scene addition, timing edit, undo/redo and load.
-- Test state for the touched suites: api-relay **31 / 36** (5 pre-existing failures), quick-batch-table **15 / 15**, timeline-editor **35 / 35**, template-composer **20 / 20**, plus the 26 other suites listed in §24.12 at their baseline; `npx tsc --noEmit` at the 30 pre-existing diagnostics.
+- Test state for the touched suites: api-relay **31 / 36** (5 pre-existing failures), quick-batch-table **15 / 15**, timeline-editor **35 / 35**, template-composer **20 / 20**, plus the other suites listed in §24.12 at their baseline; `npx tsc --noEmit` at the 30 pre-existing diagnostics. **Re-verified 2026-11-09:** those four counts are unchanged, `final-media-cap-actions` is **11 / 11**, and the server-side hand-out/rotary constants (`RELAY_ENDPOINT_PATH`, `MAX_RELAY_WORKERS = 5`, `RELAY_BACKUP_RING_WEIGHT = 3`, `pickRelayEndpoint()`) are present as described.
+
+## 25. Five editor fixes: pill-shaped walkthrough steps, no Pixabay link, duplicate filenames move the search page, script-anchored scene keywords, and a content-length timeline (2026-11-09)
+
+> Coded and verified after §0 and §24; everything below was checked against the code at `407ab86` before the edit and against the edited tree after it.
+
+### 25.1 Request → change → proof
+
+| # | Request (verbatim intent) | Old behaviour in the code | What was changed | Proof |
+|---|---|---|---|---|
+| 1 | Make the SEO walkthrough modal steps look like the Status-column tags of the uploaded HTML ([SEO plan > Choose a keyword set > Video image style > Script + images]) | `.seo-wt-steps/.seo-wt-step` were 999 px capsule bubbles with hard-coded `#374151` text and a cyan `#22d3ee` active chip (`src/client/styles.ts` 9013–9033) | `.seo-wt-step` now uses the reference `.pill` recipe — inline-flex, `padding: 3px 8px`, `border-radius: 4px`, `font: 600 .74rem 'JetBrains Mono'`, `background: var(--t-panel-2)`, `color: var(--t-muted)`, `border: 1px solid var(--t-line)`, `white-space: nowrap`; `.active` uses the theme accent, `.done` uses the reference success green (`rgba(16,185,129,.14)` / `#34d399`), with a ✓ prefix | `tests/session-331-fixes.test.mjs` (CSS rule + `done` toggle assertions) |
+| 2 | Remove the Pixabay link on the editor layout (“Stock media from Pixabay”) | The gallery heading row rendered `<a href="https://pixabay.com/" …>Stock media from Pixabay</a>` (`src/client/app-js.ts` 7247); the quick-batch table also linked the word “Pixabay” (`src/client/markup.ts` 400) | The anchor is deleted; the `Images / MP4s — drag cards to reorder` title, upload button and template link stay. The second link on the same page becomes plain text (the attribution sentence is kept) | `tests/session-331-fixes.test.mjs` (no `pixabay.com` in `APP_JS` or `PAGE_MARKUP`) |
+| 3 | A “Duplicate Pixabay filename rejected for scene N” error must move the Pixabay result page and use the first photo of the new page | `acceptMediaBlob()` rejected the duplicate and the retry ladder only rotated `index` (`base + attempt`) % 8; the page changed only after a full 8 (image) / 4 (video) rotation, so a duplicate at index 0 re-read the *same* page | Each rejection increments `owner._mediaDuplicatePages["scene-N"]`; `alternateMediaPrompt(prompt, attempt, scene, owner)` then sets `page = 1 + ((startPage − 1 + duplicates) % 2)` and `index = floor(duplicates / 2)`. First duplicate ⇒ page 2, index 0 (first photo of the new page); later duplicates walk that page instead of repeating `(page 1, index 0)`. Without an owner the old rotation is untouched | `tests/final-media-cap-actions.test.mjs` (new test: image + video, legacy caller) |
+| 4 | Plan scene image keywords from the script text itself (words that are in the script **and** in the SEO keyword plan first, matched to each scene’s word-occurrence timing, no articles/adjectives/short words, duplicates allowed when the word is in the SEO plan) | `/api/image-prompts` asked the instruct model for 1–5 word searches; the client sent no timing and no source | New deterministic planner in `src/modules/image-prompts.ts` (`timedScriptWords`, `isSceneKeywordWord`, `planScriptSceneKeywords`, `planScriptSceneQuery`). The client now sends `keywordSource: "script"` + `durationSec` from both layouts; `generateImagePrompts()` returns before touching `env.AI`. Words are character-weighted onto the verified voiceover length, the 12 scene windows are cut from it, and each window’s content words are ranked long-tail (3) → short keyword (2) → plain script word (1) | `tests/session-331-fixes.test.mjs` (10 tests incl. HTTP 200 with `{}` env, timing windows, stopword rejection, SEO priority) |
+| 5 | The video length in the timeline must not depend on stretched seconds / remaining space; it must be the end of the last element or last background scene | `maxTimelineEnd()` seeded itself from `state.durationSec`, and `ensureTimelineEnd()` rounded every growth up to the next 5 s (`Math.ceil(clamped / 5) * 5`), so an export was a multiple of the ruler, not the content | `timelineContentEnd()` measures the last item on any lane; `maxTimelineEnd()` clamps it; `ensureTimelineEnd()` assigns it (and re-clamps the playhead); `persistNow()` and `restoreSnapshot()` store/restore the measured value instead of a max/rounding | `tests/timeline-editor.test.mjs` (updated 6 s expectation + new shrink/grow/persist test) |
+
+### 25.2 Fix 1 — the walkthrough steps are status pills
+
+`src/client/styles.ts` (replaces the old 999 px bubbles):
+
+```css
+.seo-wt-step {
+	display: inline-flex; align-items: center; gap: 4px;
+	padding: 3px 8px; border-radius: 4px;
+	border: 1px solid var(--t-line, #374151);
+	background: var(--t-panel-2, #1b212b);
+	color: var(--t-muted, #9ca3af);
+	font-family: 'JetBrains Mono', monospace;
+	font-size: 0.74rem; font-weight: 600; line-height: 1.4; white-space: nowrap;
+}
+.seo-wt-step.done   { color: #34d399; border-color: rgba(16,185,129,.55); background: rgba(16,185,129,.14); }
+.seo-wt-step.done::before   { content: "✓"; font-size: .72rem; }
+.seo-wt-step.active { color: var(--t-heading, #f9fafb); border-color: var(--accent, #22d3ee); background: var(--t-panel-3, #232b37); font-weight: 700; box-shadow: inset 0 -2px 0 var(--accent, #22d3ee); }
+.seo-wt-step.active::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent, #22d3ee); }
+```
+
+`showSeoWalkthroughStep()` (`src/client/app-js.ts`) gained the state class:
+
+```js
+const stepOrder = ["plan", "sets", "style", "script"];
+const stepIndex = stepOrder.indexOf(step);
+chip.classList.toggle("active", chip.getAttribute("data-step") === step);
+chip.classList.toggle("done", chipIndex > -1 && stepIndex > -1 && chipIndex < stepIndex);
+```
+
+Notes:
+
+- No `.pill` class existed in `src/client/styles.ts`, so the reference HTML was **transcribed** into the design tokens the app already has (`--t-panel-2`, `--t-line`, `--t-muted`, `--t-panel-3`, `--accent`, `--t-heading`, all defined per theme). No new colour vocabulary was invented.
+- `--accent` differs per theme (`#baff61` in the dark theme, `#f59e0b` at the root), which is intended: the open step wears the theme accent, exactly like the reference's `.pill.accent`.
+
+### 25.3 Fix 2 — no Pixabay link
+
+- `src/client/app-js.ts`: `…drag cards to reorder</div><a href="https://pixabay.com/" …>Stock media from Pixabay</a>` → `…drag cards to reorder</div>`.
+- `src/client/markup.ts`: `Stock photos and clips from <a …>Pixabay</a> · 12 results per search…` → `Stock photos and clips from Pixabay · 12 results per search…` (same sentence, no outbound anchor).
+- `grep -rn "pixabay.com/" src/client/` now only matches a code comment in `pixabay-direct.ts`.
+
+### 25.4 Fix 3 — a duplicate filename moves the result page
+
+`src/client/app-js.ts`:
+
+```js
+function mediaDuplicatePages(owner, scene) { /* owner._mediaDuplicatePages["scene-" + scene] */ }
+function noteMediaDuplicate(owner, scene)       { /* +1, returns the new count */ }
+
+function acceptMediaBlob(owner, blob, scene) {
+	…
+	if (!reserveMediaFilename(owner, filename)) {
+		noteMediaDuplicate(owner, scene);      // NEW: remembers this rejection
+		mediaItemRetryLog({ event: "duplicate-filename", …, pageSteps: mediaDuplicatePages(owner, scene) });
+		return false;
+	}
+	…
+}
+
+function alternateMediaPrompt(prompt, attempt, scene, owner) {
+	… /* unchanged index rotation */
+	var duplicates = mediaDuplicatePages(owner, scene);
+	if (duplicates > 0) {
+		var startPage = Math.max(1, Math.floor(Number(token.page) || 1));
+		page = 1 + ((startPage - 1 + duplicates) % MEDIA_MAX_PIXABAY_PAGES);   // page 1 → 2 → 1 …
+		ordinal = Math.floor(duplicates / MEDIA_MAX_PIXABAY_PAGES) % limit;    // first hit, then next index
+	}
+	… /* token gains duplicatePages + uniqueFilename: "required" */
+}
+```
+
+Wiring: `retryFailedMediaOnly(owner, …)` now passes `owner` into `alternateMediaPrompt`, and both producers already hand in the right owner — the Quick Batch row (`requestBatchImagesWithIndividualRetries(row, …)`) and the editor project (`runEditorMediaWithIndividualRetries(…, project, …)`). The duplicate key is the **absolute** scene number in both paths (`sceneForIndex()` for the table, `sceneOffset + index` for the editor), so the counter always lands on the scene that failed.
+
+Bounds that are deliberately unchanged:
+
+- `MEDIA_MAX_PIXABAY_PAGES = 2` in the client and `MAX_PAGES = 2` in `src/client/pixabay-direct.ts`, so the round trip is page 1 → page 2. Two pages × 8 photos (or × 4 clips) still gives 16 (8) distinct candidates per scene, and `(page, index)` is never repeated, which is what the retry ladder needs; raising the page budget is a one-constant change in two files if a scene ever exhausts it.
+- The token still carries `uniqueFilename: "required"`, so a second rejection is still detected rather than silently accepted.
+
+### 25.5 Fix 4 — scene keywords come from the script, timed per scene
+
+#### 25.5.1 The planner
+
+`src/modules/image-prompts.ts` (new exports):
+
+| Symbol | Purpose |
+|---|---|
+| `SCRIPT_KEYWORD_STOPWORDS` | articles, pronouns, prepositions, auxiliaries, conjunctions, question words, fillers, number words, generic nouns (`thing`, `way`, `make`, `go`, …) |
+| `SCRIPT_KEYWORD_WEAK_WORDS` | flat adjectives/adverbs (`very`, `great`, `important`, `typical`, `monthly`, …) and flat verbs (`use`, `need`, `turn`, `stay`, …) |
+| `isSceneKeywordWord(word)` | the single content-word gate: ≥ 3 chars, not a number, not in either list |
+| `timedScriptWords(script, durationSec)` | every word with `{ word, startSec, endSec, ordinal }`, character-weighted (the 90th character of a 900-character script is spoken at 10 % of the video) |
+| `scenePlanDuration(input)` | the verified `durationSec`, else words ÷ 2.5 (150 spoken words/minute), else `minutes × 60` |
+| `planScriptSceneKeywords(input, total, offset, count)` | one plan per scene: `{ scene, startSec, endSec, query, words, planMatched }` |
+| `planScriptSceneQuery(...)` | the per-window selection described below |
+
+Per scene `s` of `total`: `startSec = duration × s / total`, `endSec = duration × (s + 1) / total`. Inside that window:
+
+1. keep only content words (`isSceneKeywordWord`);
+2. rank them `longTail → 3`, `short[] → 2`, plain script word → 1, tie-broken by the order they are spoken;
+3. take at most **5 words / 100 characters**, then re-sort the chosen words into **spoken order** so the query reads like the sentence;
+4. if the window has no content word (a silent stretch), borrow the nearest content word in time;
+5. if the script has none at all, fall back to the SEO set, then the topic.
+
+The SEO words must be **in the script window too** — the plan ranks, it never injects a word the narrator does not say in that scene. Duplicates across scenes are allowed on purpose (the request asks for that when the word is in the SEO plan); the token’s per-scene `index` ordinal is what keeps two scenes from reading the same Pixabay result.
+
+#### 25.5.2 No model on the in-app path
+
+```ts
+if (input.keywordSource === "script") {
+	const plans = planScriptSceneKeywords(input, total, offset, count);
+	return plans.map((plan, index) => "pixabay:" + JSON.stringify({
+		q: plan.query, type: slots[index].type, page: 1,
+		index: slot.type === "video" ? positions.indexOf(scene) : imageScenePositions(total).indexOf(scene),
+		scene: plan.scene
+	}));
+}
+if (!env?.AI) throw new Error("Scene keyword planner AI binding not configured");   // legacy path only
+```
+
+- `ImagePromptInput` gained `keywordSource?: "script"` and `durationSec?: number`; `sanitizeInput()` accepts/validates both (`durationSec` clamped to 1…3600).
+- The instruct-model planner (`buildStockSearchInstruction`, the 3-attempt ladder in `handleGenerateImagePrompts`) is **kept** for callers that send no `keywordSource`, which is why `tests/pixabay-media.test.mjs` (58/58) still passes unchanged.
+- Client wiring (three request bodies, verified by test): the editor flow sends `keywordSource: "script"` + `durationSec: editorScenePlanDuration(project)` (decoded voiceover → `_voiceoverDurationMs` → `scriptDurationMs` → `_seoMinutes × 60`); the quick-batch row sends `keywordSource: "script"` + `durationSec: batchScenePlanDuration(row)` (`row.audio.duration`, else `minutes × 60`).
+- The walkthrough copy under **Video image style** was rewritten to describe what the code now does (scene window + SEO priority + skipped stops words + the fixed 12-scene plan), replacing the stale "6/8/10 scenes by word count" sentence.
+
+### 25.6 Fix 5 — the timeline is exactly as long as its content
+
+`src/client/timeline-editor.ts`:
+
+```js
+function timelineContentEnd() {
+	var end = 0;
+	(state && state.tracks || []).forEach(function (track) {
+		(track && track.items || []).forEach(function (item) {
+			if (!item) return;
+			var start = Math.max(0, number(item.startSec, 0));
+			var duration = Math.max(MIN_CLIP_SEC, number(item.durationSec, MIN_CLIP_SEC));
+			end = Math.max(end, start + duration);
+		});
+	});
+	return end;
+}
+function maxTimelineEnd() { return clamp(timelineContentEnd(), 1, MAX_DURATION_SEC); }
+function ensureTimelineEnd(_end) {              // the argument is now only a hint
+	if (!state) return;
+	state.durationSec = maxTimelineEnd();
+	state.playheadSec = clamp(state.playheadSec, 0, state.durationSec);
+}
+```
+
+- Removed: the `state.durationSec` seed (a long project could never shrink) and the `Math.ceil(clamped / 5) * 5` rounding (a 6 s project exported as 10 s).
+- `persistNow()` writes `maxTimelineEnd()`; `restoreSnapshot()` re-measures a loaded/undone project from its own items.
+- The export follows the same number (`exportTimeline()` reads `state.durationSec`), so a 5 s scene + a 1 s composed clip renders exactly 6 s / 180 frames at 30 fps.
+- Nothing else uses the length as a *limit*: `setItemTiming`, `appendTemplateClip`, `addAudioFile` and `addMediaFiles` still extend the project past the old end (the new end is simply re-measured), and the child-element clamp is still the parent clip, not the canvas.
+
+### 25.7 Tests changed and added
+
+| File | Change |
+|---|---|
+| `tests/timeline-editor.test.mjs` | the composed-clip export now expects `state.durationSec === 6` (was 10, “rounded to the 5 s grid”) and 180 encoded frames (was 300); new test “the timeline length follows the last placed item, never the stretched ruler” (restore = 60 s, 7.5 s exact, element at 8 + 1.25 = 9.25, shrink to 8.5, persisted value equals the model) |
+| `tests/final-media-cap-actions.test.mjs` | new test “a duplicate Pixabay filename moves the search to the next result page”: page 2/index 0 on the first duplicate, page 1/index 1 on the second, legacy caller unchanged, video variant included |
+| `tests/pixabay-studio-flow.test.mjs` | the item-retry test now addresses scene 0 by its token (`scene === 0`) instead of a model keyword; the editor ladder test became a direct `handleGenerateImagePrompts` ladder test (the editor no longer calls the model) |
+| `tests/session-331-fixes.test.mjs` (new, 10 tests) | pills CSS + `done` state; no Pixabay link in `APP_JS`/`PAGE_MARKUP`; script-plan windows; stopword/adjective gate; SEO priority over plain script words; 12 distinct tokens without an AI binding; per-chunk scenes; HTTP 200 from `/api/image-prompts` with `{}` env; voiceover-driven windows; client wiring of `keywordSource` + `durationSec` |
+
+### 25.8 Verification (this pass)
+
+```text
+npx tsc --noEmit                                  # 30 diagnostics, all src/index.ts (unchanged baseline)
+
+# Session 331 suites
+session-331-fixes                10 / 10
+timeline-editor                  36 / 36
+final-media-cap-actions          12 / 12
+
+# Media / keyword / layout suites
+pixabay-media                    58 / 58
+pixabay-studio-flow              18 / 18
+pixabay-direct-browser           12 / 12
+pixabay-direct-routes            10 / 10
+pixabay-image-ui                  2 /  2
+pixabay-auto-retry                6 /  6
+pixabay-fetch-regressions         5 /  5
+quick-batch-table                15 / 15
+quick-batch-pipeline-retries      4 /  4
+progressive-image-pipeline       18 / 18
+session-263-partial-image-flow    9 /  9
+both-layout-media-hang            1 /  1
+script-seo                       17 / 17
+seo-plan-resilience               8 /  8
+studio-ui-session-243             3 /  3
+template-composer                20 / 20
+public-entry-points               9 /  9
+render-app-tts                    5 /  5
+editor-subtitles-parity           7 /  7
+```
+
+Baseline comparison for the files that are already red at `407ab86` (run from a clean worktree of `407ab86` in the same sandbox):
+
+| File | At `407ab86` | After this section |
+|---|---|---|
+| `seo-walkthrough` | 7 pass / 10 fail | 7 / 10 — **identical failing test names** (verified with a diff of the `not ok` lines) |
+| `session-250-batch-pipeline` | 8 pass / 5 fail | 8 / 5 — identical |
+
+`deep-debug-regressions` and `session-264-editor-render` still do not finish inside a 700 s / 240 s window (unchanged from §24.15); neither file was touched here.
+
+### 25.9 Small print and judgement calls
+
+- **Adjectives are a judgement call.** Only *flat* describing words are filtered (`SCRIPT_KEYWORD_WEAK_WORDS`). Words that describe an image (`neon`, `rusty`, `sunlit`) are kept, because they are exactly what a stock search needs. The list is data, not logic: adding a word is a one-line change.
+- **“Duplicates allowed” is implemented as “allowed across scenes, never within one”.** Two scenes may search the same word (the request asks for that when the word is in the SEO plan), but each scene still carries its own `index` ordinal so Pixabay returns a different asset.
+- **`durationSec` is the verified voiceover when one exists.** Before the voiceover is generated the planner uses the worker’s measured `scriptDurationMs`; failing both it assumes 2.5 words/second, then the project’s minutes. A later voiceover therefore does not retro-fit old tokens — the next plan uses the real length.
+- **The 5 s rule is gone everywhere, not just for media.** A caption or a music cue that runs past the last scene still counts (it is still on screen), which is why `timelineContentEnd()` reads every lane.
+- **`MEDIA_MAX_PIXABAY_PAGES` is still 2.** The fix moves the page; it does not add new pages beyond the provider budget the client and `pixabay-direct.ts` already agreed on.
+- **Not exercised in a real browser.** The pill styling, the removed link and the page-move were verified by source assertions, JSDOM tests and the HTTP/planner tests above — not by eye in a real Chromium session.
+
+## 26. Timeline → Quick Batch hand-back: the edits a user makes in the timeline editor come back with the row and drive its table status, Preview and Export (2026-11-09)
+
+**Status: coded and verified.** Request, verbatim:
+
+> "make sure when the link to get back to the quick batch table is clicked from the timeline editor the changes must be stored on cookie and localstorage and accessible by the rows action button so it reflects in the table layout and the preview buttons etc"
+
+### 26.1 What was wrong
+
+The timeline editor and the Quick Batch table are two different pages with two different stores, and nothing carried an edit from one to the other:
+
+- `src/client/timeline-editor.ts` saved its project under its own key (`ytvs.timeline-editor.v1.<projectId>`) and, on **Back**, simply navigated to the table. The row in the table was never told that anything changed.
+- `src/client/app-js.ts` (the table page) restored rows from the pipeline store, but a row's saved snapshot had no field for a timeline edit, so even if one had been written it would have been dropped by `boundedSnapshot()`.
+- The row's Action buttons (✎ / ▶ / ⚙) read `row.slides` only, and `row.slides` is rebuilt from the original media in a fixed order at fixed lengths. So a re-ordered or re-timed timeline was invisible to Preview and Export.
+
+### 26.2 The contract that was added
+
+**Published payload** — `window.__PUBLISH_TIMELINE_EDIT__({ sourcePageId, rowId, vid, key, summary, reason })` returns
+
+```text
+{ ok, reason, source: "localStorage+cookies", pageId, rows, cookies: 4, timestampMatched, updatedAt }
+```
+
+**Summary** — compact, bounded, and deliberately *not* the whole project (no blobs, no captions, no audio):
+
+```text
+{ v: 1, updatedAt, key, pageId, sourcePageId, rowId, vid,
+  durationSec, sceneCount, clipCount, textCount, videoStyle, frame: { width, height },
+  scenes: [ [mediaIndex, durationSec, typeCode], … ] }        // typeCode 0=image 1=video 2=gif
+```
+
+`mediaIndex` is 0-based (`scene-1` → `0`), and the array order **is** the playback order.
+
+### 26.3 Timeline side (`src/client/timeline-editor.ts`)
+
+| Piece | Behaviour |
+|---|---|
+| `sceneNumberOf(value)` | Reads the trailing digits without a regex (`lastIndexOf("scene-")` + digit scan), returns `-1` when the value is not a scene id, and `scene-1 → 0`. |
+| `timelineEditSummary()` | Builds the summary above from the live model: `maxTimelineEnd()` for `durationSec`, one entry per Scene Media item in lane order, the clip's own length, a type code from the media kind. |
+| `publishTimelineEdit(force)` | Calls the table's global and stores both results on `window.__TIMELINE_EDIT_PUBLISH__` and `window.__TIMELINE_HANDOFF__` (the second is what a browser check reads). |
+| `schedulePublish(force)` | Throttles to `PUBLISH_INTERVAL_MS = 1200`; a forced call always wins. |
+| `persistNow()` | Unchanged save path, plus `schedulePublish(false)` on success. |
+| `publishReady` | `false` until the project has loaded (set just before `resetHistory()`), so no partial summary is ever published during boot. |
+| Back click (`#timeline-back`) | `persistNow()`, then a **forced** publish, then `window.close()`; when the tab cannot close it navigates with `pipelinePage=state.sourcePageId` and `layout=table` (and drops `pipelinePage` when there is no source page, so the tab keeps its own). |
+| `beforeunload` | Forced publish too, so closing the tab is the same as pressing Back. |
+
+`pipelinePage` is deliberately kept on the Back URL: it is the storage namespace, and dropping it would fork a second, empty table.
+
+### 26.4 Table side (`src/client/app-js.ts`)
+
+- `publishTimelineEdit(payload)` resolves the right store — `timelineEditStoreFor(sourcePageId)` returns the page's own store, or a new one built by `window.__PIPELINE_MANAGEMENT_STORE_FACTORY__` (`createPipelineManagementStore(win, pageId)`, exported from `pipeline-management-store.ts`) — then merges the summary into that page's row by `vid` (falling back to `id`) and saves. The save is the normal one: localStorage first, four cookie chunks second, and `ok` only when the cookie timestamp/digest matches.
+- `applyTimelineEditToBatchRow(row)` is the single place that turns a saved edit into playback behaviour:
+  - scene **order** comes from `edit.scenes`;
+  - each scene's **length** lands on `slide._partialSec`, which `slideDurationSec()` already prefers (so Preview and the WebCodecs export both read it);
+  - slides are found by id — `-img-` / `-clip-` / `-gif-` plus `trailingDigits()` (`batch-7-img-3` → 3) — and fall back to the slide's position when a slide is unnamed, first hit wins;
+  - a slide the edit no longer places is **appended** rather than dropped;
+  - the row is stamped with `timelineEdited`, `timelineDurationSec`, `timelineSceneCount`.
+- `batchStatusText()` prints the hand-back in the Status cell (`… · timeline edit 43s`), so the table layout itself shows that the row was edited.
+- `reconcileTimelineEdits()` picks up an edit published **while the table is already open** (another tab pressed Back): it applies only rows whose `timelineUpdatedAt` is newer, returns the count, and is idempotent — a second call returns `0`. `row.script` is never touched.
+- Boot order: `window.__PUBLISH_TIMELINE_EDIT__` is assigned at the export tail of `app-js.ts` because the timeline page's script runs **first**; the timeline reads the global at publish time, not at parse time.
+
+### 26.5 Two bugs found while verifying
+
+1. **`SLIDE_SECONDS_MIN` is `9`, and it is a default, not a floor.** The first version clamped the edited length with `Math.max(SLIDE_SECONDS_MIN, seconds)`, so every hand-back scene was flattened to 9 s and the edit silently did nothing. The clamp is now `Math.min(MP4_MAX_DURATION_S, Math.max(0.1, seconds))` — positive and bounded like a clip, but the editor's own number survives.
+2. **Regex digit parsing did not survive the string-embedded build.** `\d` was collapsed to `d` when the client modules were emitted into the `APP_JS` string, so both the scene index and the slide lookup matched nothing. Both were replaced with character-code scanners (`sceneNumberOf`, `trailingDigits`) that contain no backslash at all.
+
+### 26.6 Tests added
+
+| File | Test | Asserts |
+|---|---|---|
+| `tests/timeline-editor.test.mjs` | "the Back link hands the edit back to the Quick Batch table (Session 331 follow-up)" | publish `ok`, `pageId` is the table page, `cookies: 4`, `timestampMatched: true`, 12 scene entries with `mediaIndex` 0–11 exactly once each, first scene carries the edited length, the four cookie chunks re-assemble into the same JSON as localStorage, and the timeline project is still saved under its own key |
+| `tests/final-media-cap-actions.test.mjs` | "a timeline edit comes back into the table: the row is re-timed and its Preview paints the edit" | restore applies the stored edit: `timelineEdited`, `timelineDurationSec 42.5`, 12 scenes, Status cell shows `timeline edit` + the edited length, `row.slides` re-ordered to the saved order, `_partialSec` 6.5 / 3, `slideDurationSec()` reads the edit |
+| `tests/final-media-cap-actions.test.mjs` | "a newer edit published while the table is open is picked up without touching the rest of the row" | `reconcileTimelineEdits()` applies a newer edit, returns `1`, is idempotent (`0` second time), and leaves `row.script` unchanged |
+
+Realm note: arrays read out of the JSDOM window must be copied with `Array.from(...)` before `assert.deepEqual`, because `deepStrictEqual` compares prototypes and a JSDOM-realm `Array` has a different `Array.prototype`.
+
+### 26.7 Verification (this pass)
+
+```text
+npx tsc --noEmit                       # 30 diagnostics, all src/index.ts (unchanged baseline)
+
+timeline-editor                 37 / 37   (was 36; +1 hand-back test)
+final-media-cap-actions         14 / 14   (was 12; +2 hand-back tests)
+quick-batch-table               15 / 15
+session-331-fixes               10 / 10
+pixabay-media                   58 / 58
+session-250-batch-pipeline       8 / 13   (pre-existing at 407ab86: same 5 failures: 5, 7, 8, 9, 10)
+```
+
+### 26.8 Small print and judgement calls
+
+- **The browser is the only store.** The hand-back rides the existing pipeline store — localStorage plus the four `ytvs_pipeline_management_<pageId>_1..4` cookie chunks — so it inherits the existing 8-row / 800-char bounding and the timestamp+digest verification. No new server endpoint, no KV.
+- **A summary, not a project.** Captions, audio, text content and media bytes stay in the timeline project and IndexedDB. The table needs order, length and kind to paint and to render; anything more would blow the cookie budget for no visible gain.
+- **Throttled, not debounced.** A slider drag publishes at most once every 1.2 s; Back and `beforeunload` force one final publish so the last state is never lost.
+- **Position fallback is a compatibility path.** Real slides are named after their image, so id matching is the normal path; the positional fallback only exists for slides created before the naming existed.
+- **Not exercised in a real browser.** The hand-back was verified by JSDOM tests against the real client modules and by the store's own save/verify result; the Back navigation itself was not clicked in a real Chromium page.
+
+## 27. Server API rotation: the round-robin is arithmetically sound, and every wait in it is now bounded (2026-11-09)
+
+**Status: audited, four bugs fixed, one fail-over metric repaired, tests green.** Request, verbatim:
+
+> "make sure the rotation on server is logical check for hanging implementation"
+
+Scope: `src/modules/api-relay.ts` (pool, ring, health, relay, endpoint hand-out) and `src/client/api-rotation.ts` (the caller that obeys it), plus the provider rotation in `src/modules/llm-openrouter.ts` that sits above it.
+
+### 27.1 What "logical" means here, and what the numbers are
+
+The rotation is one weighted ring walked by one cursor. The local (UI) Worker is entered `config.localWeight` times (default `1`); every backup is entered `RELAY_BACKUP_RING_WEIGHT = 3` times. Walking that ring with a cursor is a true round robin in which the UI Worker always carries the smaller share:
+
+| Registered backups | Ring length | UI Worker share | Each backup share |
+|---|---|---|---|
+| 0 | 1 | 100 % (the pre-rotation behaviour) | — |
+| 1 | `1 + 3 = 4` | 25 % | 75 % |
+| 2 | `1 + 6 = 7` | 14 % | 43 % each |
+| 3 | `1 + 9 = 10` | 10 % | 30 % each |
+| 4 | `1 + 12 = 13` | 8 % | 23 % each |
+| 5 | `1 + 15 = 16` | 6 % | 19 % each |
+
+`tests/api-relay.test.mjs` now walks 160 picks over a five-backup pool and asserts exactly 10 / 30 / 30 / 30 / 30 / 30, so the table is a pinned contract rather than a comment. The same test pins the two edges: `localWeight: 0` removes the UI Worker from the hand-out while every backup still takes its turn, and a pool whose backups have all cooled still answers — on the UI Worker, because a cooling member is pushed to the end of the list, never removed.
+
+Two smaller logical points were checked and are correct as written:
+
+- **The ring is rebuilt per call, from the healthy members only**, so a cooled member leaves the ring entirely (its slots go to the others) instead of occupying slots that then have to be skipped.
+- **`preferLocal`** (set when a request arrives carrying a rotation ticket) pulls the local member to the front, so work the browser just sent here is executed here and never bounced back to the Worker the studio left. A relayed call cannot relay again because `handleRelayRoutes` is dispatched with `baseEnv` (the raw bindings), and the compute endpoint calls `ai.run` directly.
+
+### 27.2 The hangs that were real
+
+| # | What hung | Why | Fixed |
+|---|---|---|---|
+| 1 | A **slow/hanging backup** failed the whole request instead of failing over | our own per-attempt deadline aborts the `fetch`, which rejects with `AbortError`; `isTransientRelayFailure()` reads `AbortError` as "the caller cancelled" and `runViaWorkersAi` rethrows it immediately | `abortSignalFor()` now records whether *our* timer fired and `runRemoteModel()` re-labels that case as a `TimeoutError` (transient) → the next member runs, and finally local |
+| 2 | A **browser failure report never cooled anything** | the report arrives on `GET /api/relay/endpoint?failed=<id>` with the ticket of the answer that handed out the URL, but `readRelayTicket()` is path-scoped to the AI paths, and the endpoint path is not one — so the very ticket the Worker minted was rejected | new `readRelayReportTicket()` verifies the HMAC and expiry and requires a scope made only of AI paths; the route then cools the reported member |
+| 3 | A report could cool **any** id, including `local` | the route fed `failed=<anything>` straight into `noteRelayFailure()` | the reported id must match a **backup of this pool** (`!entry.local`), so `failed=local` and unknown ids do nothing |
+| 4 | One `env.AI.run()` could wait **(maxAttempts + 1) x timeoutMs** | each attempt was allowed the full per-attempt timeout, and the local backstop is appended *beyond* `maxAttempts`; with defaults that is 400 s, with the largest configurable timeout it is 24 minutes | new `RELAY_CHAIN_MAX_MS = 180_000` gives the whole chain one budget (`timeoutMs x attempts`, capped); each attempt gets `min(timeoutMs, remaining)`, and a member is skipped when fewer than 250 ms are left |
+| 5 | The **inbound compute endpoint** had no deadline at all | `POST /api/relay/ai` awaited `ai.run()` and the result decoding with nothing bounding them; a hung binding pinned the isolate until the platform killed it | `withDeadline()` bounds `ai.run` **plus** `encodeRelayResult` at `RELAY_ENDPOINT_MAX_MS = 240_000` (the largest budget the policy can be configured with, so a legitimate long call is never cut) and answers `504` + `kind: transient`, which is exactly what makes the caller fail over |
+
+### 27.3 The fail-over that was never reported
+
+`stats.failedOver` only incremented on the *remote* success path (`if (attemptIndex > 1)`), so the most common fail-over of all — a backup failed and **the UI Worker answered** — reported `failedOver: 0`. The local branch now increments it too. This is diagnostics, not behaviour, but the `rotation` block that diagnostic routes return (`relayRuntimeOf(env).stats()`, e.g. `POST /api/llm/generate` in `src/index.ts`) reports it, so a pool that was failing over looked idle.
+
+### 27.4 Every wait in the path, and its bound
+
+| Wait | Bound | What happens when it fires |
+|---|---|---|
+| Browser asks for an endpoint (`GET /api/relay/endpoint`) | `ASK_TIMEOUT_MS = 8000` (`src/client/api-rotation.ts`) | `null` answer → the original same-origin request runs on the UI Worker |
+| Browser retries after a failed rotated call | `MAX_ASK_ATTEMPTS = 2`, and only for replayable bodies (`string`/`Blob`/`FormData`/`URLSearchParams`) | the last response is returned to the caller; a streamed body is never replayed |
+| One relayed model call | `min(policy.timeoutMs, chain remaining)`, floored at 1 s | `TimeoutError` → next member → local |
+| One whole `env.AI.run()` chain | `RELAY_CHAIN_MAX_MS = 180 s` | the last error is thrown; the request ends |
+| Local `ai.run` | race against the same per-attempt timeout | `TimeoutError` (transient) → next member |
+| Inbound `/api/relay/ai` compute | `RELAY_ENDPOINT_MAX_MS = 240 s` (model **and** decoding) | `504` transient → the caller fails over |
+| Reachability probe | 5 s per member, all members in parallel | that member is cached `reachable: false` for 60 s |
+| `GET /api/relay/pool` probes | backgrounded via `ctx.waitUntil` when available | the route answers immediately |
+| Circuit breaker | 30 s doubling to a 300 s ceiling, reset on success | the member leaves the ring while it cools |
+| Attempts per call | `maxAttempts` (1–5) + the local backstop | the last error is thrown |
+
+Nothing in the file loops without a counter: the ring walk is `for (i < ring.length)`, the attempt loop is `for (entry of attempts)`, the provider loop is `for (index < providers.length)`, and `readStreamBytes()` is bounded by `RELAY_MAX_RESULT_BYTES`. `orderLlmProviders()` returns at most two providers, each tried once.
+
+### 27.5 Tests added and repaired
+
+| File | Change |
+|---|---|
+| `tests/api-relay.test.mjs` | **new** “the UI Worker's share shrinks as backups are added: 1 slot in (1 + 3 x backups)” (160 picks → 10 local / 30 each; `localWeight: 0`; fully cooled pool falls back to local) |
+| `tests/api-relay.test.mjs` | **new** “a backup that never answers times out, is cooled, and the call still lands on the UI Worker” — a fetch that accepts the connection and never answers; `timeoutMs: 5000`; the call resolves on local, the chain stays under `RELAY_CHAIN_MAX_MS`, and the member's circuit is open with a timeout error recorded |
+| `tests/api-relay.test.mjs` | **new** “a timeout is transient but a cancelled request is not” — a pre-aborted request surfaces as `AbortError` and is **not** replayed on another member |
+| `tests/api-relay.test.mjs` | **new** “a browser failure report needs a signed ticket and can only cool a backup” — no ticket ⇒ nothing; forged ticket ⇒ nothing; `failed=local` ⇒ nothing; the real ticket ⇒ the backup cools and the next three hand-outs avoid it; a ticket scoped past the AI paths ⇒ refused |
+| `tests/api-relay.test.mjs` | **repaired (5 tests, pre-existing red at `407ab86`)** the `/api/image` fixtures were stale: Session 331 §25 removed AI image generation, so every one of them died on “AI image generation is disabled; use Pixabay” before reaching the relay. The binary-relay contract now rides on `@cf/myshell-ai/melotts`, and the two end-to-end route tests use `/api/voiceover` (a ticket-only caller, real `audio/mpeg` bytes) instead of the Pixabay importer |
+| `tests/llm-openrouter.test.mjs` | “an image model never reaches OpenRouter” now asserts the image guard (nothing is spent, the error points at Pixabay) instead of expecting a Cloudflare answer |
+
+### 27.6 Verification (this pass)
+
+```text
+npx tsc --noEmit                       # 30 diagnostics, all src/index.ts (unchanged baseline)
+
+api-relay                       40 / 40   (was 36 tests: 31 pass / 5 stale-red)
+llm-openrouter                  24 / 24   (was 23 / 24 - one stale image test)
+pixabay-media                   58 / 58
+public-entry-points              9 /  9
+session-331-fixes               10 / 10
+```
+
+### 27.7 Small print and judgement calls
+
+- **Health, cursors and cooldowns are per isolate.** They live in module memory, so a report or a timeout cools the member only for the isolate that saw it, and a brand-new isolate starts its cursor at slot 0 — which is the **local** slot. Under bursty traffic spread across many cold isolates the UI Worker therefore takes more than its 1-in-16 share; under steady traffic on warm isolates it takes exactly its share. Making the cursor start at a random offset would remove the warm-up bias, but the deterministic start is what the pinned ring tests (and a debuggable admin page) rely on, so it is left as is and documented.
+- **The browser still asks once per AI call.** Each `/api/script`, `/api/image`, `/api/voiceover` … costs one extra same-origin `GET /api/relay/endpoint` (KV reads cached 15–20 s inside the isolate) before the real request. That is the price of the server owning the pick; the 8 s cap plus the local fallback keeps it from ever being a hang.
+- **The endpoint's 240 s deadline is a hang guard, not a policy.** It equals the largest `timeoutMs` the policy can store, so no legitimate configuration is ever cut short by it; the shorter, user-facing guard is the caller's own per-attempt timeout.
+- **A timed-out `ai.run` on the receiving Worker keeps running.** JavaScript cannot cancel it; the isolate is released when it settles, and the caller has already failed over.
+- **The 5 repaired tests were red before this pass.** They failed at `407ab86` on the Pixabay-only policy added in §25, not on anything in the rotation, which is why §25's table listed `session-250-batch-pipeline` and `seo-walkthrough` as the only known reds — `api-relay` was not re-run in that pass. Retargeting them restored coverage of the binary relay path, which no passing test had covered since §25.
+- **Not exercised against real Cloudflare Workers.** The timing paths are pinned with stubbed bindings and fetch functions inside the test process; the 5 s timeout test really waits 5 s, but no test waits out the 180 s chain budget or the 240 s endpoint deadline.
