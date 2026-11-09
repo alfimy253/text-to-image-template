@@ -937,8 +937,11 @@ export const PAGE_MARKUP = `
 				the MP4 it makes back to this editor through
 				window.__TIMELINE_TEMPLATE_CLIP__, and the clip is appended at the
 				right-most end of the Scene Media layer, exactly as the old picker
-				did. Uploads still have their own button (＋ Add media) and its
-				hidden #timeline-media-upload input below.
+				did. Session 333: both modal buttons land there - "Download MP4"
+				saves the file and hands the same render over - so an exported clip
+				is the last scene of the timeline MP4. Uploads still have their own
+				button (＋ Add media) and its hidden #timeline-media-upload input
+				below.
 			-->
 		</div>
 	</section>

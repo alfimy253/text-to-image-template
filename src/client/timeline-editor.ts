@@ -2072,7 +2072,10 @@ export const TIMELINE_EDITOR_JS = `
 		 * this bundle returns early when layout != timeline, so the editor
 		 * layout's "add to the gallery" behaviour is untouched. The clip is
 		 * appended after the right-most clip of the Scene Media layer, one
-		 * scene per clip, which is the §21 landing rule unchanged.
+		 * scene per clip, which is the §21 landing rule unchanged. Session 333:
+		 * BOTH of the modal's buttons land here - "Download MP4" saves the file
+		 * and hands the same render over - so an exported clip always becomes the
+		 * last scene of the timeline MP4.
 		 *
 		 * clipsQueue stays as the pending list appendQueuedClips() drains, so
 		 * "append at the right-most end" still has exactly one implementation.
@@ -2094,7 +2097,7 @@ export const TIMELINE_EDITOR_JS = `
 			var opened = false;
 			try { opened = opener() !== false; } catch (error) { opened = false; }
 			if (!opened) { setStatus("The Add video from template modal could not be opened.", true); return false; }
-			setStatus("Compose the clip in the Add video from template modal \u2014 its \u2795 Add button appends the MP4 to the right-most end of Scene Media.", false);
+			setStatus("Compose the clip in the Add video from template modal \u2014 both its Download MP4 and \u2795 Add buttons append the clip to the right-most end of Scene Media as the last scene of the timeline MP4.", false);
 			return true;
 		}
 		/*
@@ -2155,12 +2158,20 @@ export const TIMELINE_EDITOR_JS = `
 			});
 			if (!added) { setStatus("None of the queued clips could be read.", true); return 0; }
 			clipsQueue = [];
+			/*
+			 * Session 333: the appended clip is a real scene, so the project
+			 * heading (which prints the scene count) is refreshed with the rest
+			 * of the UI, and ensureTimelineEnd() above has already grown
+			 * state.durationSec past the new scene's end - which is what makes
+			 * the timeline's own Export MP4 render it as the last scene.
+			 */
 			ensureTimelineEnd(nextStart);
 			state.selectedTrackId = MEDIA_TRACK_ID;
 			state.selectedItemId = lastItem ? lastItem.id : "";
 			if (lastSceneId) selectedSceneId = lastSceneId;
+			updateProjectHeading();
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
-			setStatus("Queued " + added + (added === 1 ? " clip" : " clips") + " at the right-most end of Scene Media (from " + formatTime(startAt) + " to " + formatTime(nextStart) + ").", false);
+			setStatus("Added " + added + (added === 1 ? " clip" : " clips") + " at the right-most end of Scene Media (from " + formatTime(startAt) + " to " + formatTime(nextStart) + ") \u2014 it is the last scene of the exported MP4.", false);
 			return added;
 		}
 		async function addAudioFile(trackId, file) {

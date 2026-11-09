@@ -2593,3 +2593,98 @@ Older sections are kept exactly as they were written. These are the lines that n
 
 - All nine code items are implemented (22.3–22.12), and item 10 — documenting the prompt — is this section.
 - Test state: `tests/timeline-editor.test.mjs` **33 / 33**; the whole suite **544 tests / 504 pass / 40 fail**, with **identical per-file counts** on a pristine `4967ef7` tree (the 40 are the eight pre-existing files of §8.6 / §20.15 / §21.11); `npx tsc --noEmit` unchanged at 30 pre-existing `src/index.ts` diagnostics; `npx wrangler deploy --dry-run` green.
+
+## 23. Timeline editor: a clip exported from the Add video from template modal becomes the last Scene Media scene (2026-11-09)
+
+### 23.1 Request & authority order
+
+> Study code (source of the truth) and the md file 331 (source of truth) and then i found a bug in the timeline editor the exported clip from the modal in timeline page must be added to the scene media track at the end of the layer as scene in mp4
+
+Authority order for this section, unchanged from §9.1: the shipped code is the source of truth for what happens, this file is the source of truth for why, and the request above is the change. Nothing here adds a server route, a Worker module, a KV key or a cookie; the timeline stays a browser-only layout.
+
+### 23.2 Code study that drove the change (pre-change audit)
+
+The append machinery built in §21.8 and §22.9 is correct and stays:
+
+| Piece | Where | What it already did |
+| --- | --- | --- |
+| Sink registration | `src/client/timeline-editor.ts`, inside `bindEvents()` | `window.__TIMELINE_TEMPLATE_CLIP__ = function (clip) { return appendTemplateClip(clip); }` — registered only on `layout=timeline`, so the editor layout is untouched. |
+| `appendTemplateClip(clip)` | `src/client/timeline-editor.ts` | Guards `state`, the blob, the timeline's own export, `MAX_MEDIA_FILES` and the missing media lane; registers the asset; queues it; drains the queue. |
+| `appendQueuedClips()` | `src/client/timeline-editor.ts` | Computes `nextStart = max(item.startSec + item.durationSec)` over the Scene Media lane, pushes one media item **and one scene** per clip back to back from there, selects the last one, calls `ensureTimelineEnd(nextStart)`, repaints and saves. |
+| `timelineClipSink()` / sink branch | `src/client/template-composer-js.ts` | `addTemplateToVideo()` (the **➕ Add to Video N** button) checks the sink before `project.assets.push(asset)` and, when it exists, hands `{ blob, file, name, durationSec }` over and returns. |
+
+The gap was in the other button. The modal's primary control is **⬇ Download MP4**, wired directly to `exportMP4()` (`exportBtn.addEventListener("click", exportMP4)`). `exportMP4()` rendered the MP4, downloaded it, and returned `lastVideo` — it never consulted `timelineClipSink()`. So on the timeline page:
+
+1. rendering a clip and clicking **⬇ Download MP4** downloaded `template_<scene>_portrait.mp4` and added **nothing** to the timeline;
+2. the Scene Media lane therefore had no new scene, `state.durationSec` never grew, and the timeline's own **⬇ Export MP4** could not contain the clip;
+3. the surviving **Add** button still said **➕ Add to Video N** on a page that renders no `Video N` accordion at all, which made the one path that did work read like the wrong one.
+
+A second, smaller gap: `appendQueuedClips()` reported `Queued 1 clip at the right-most end of Scene Media (…)`, which never said that the clip had become a scene of the exported MP4, and it did not refresh the project heading that prints the scene count.
+
+### 23.3 Change 1 — one hand-off helper, used by both buttons (`src/client/template-composer-js.ts`)
+
+Two small functions sit beside `timelineClipSink()`:
+
+- `timelineClipTarget(n)` returns `"Scene Media"` when the timeline sink exists and `"Video " + n` otherwise — the single source of the modal's target name.
+- `handClipToTimeline(renderedVideo, clipDuration)` performs the whole hand-off: it returns `0` when there is no sink or no bytes, wraps the blob in a `File` named after the render, and calls the sink with `{ blob, file, name, durationSec }`. Its return value is the sink's "how many clips landed" count, so the modal can report success or refusal. A `try/catch` keeps a throwing sink from breaking the modal.
+
+`exportMP4()` now calls it in its success path, **only when `shouldDownload !== false`**:
+
+```js
+let timelineLanded = 0;
+if (shouldDownload) {
+    timelineLanded = handClipToTimeline(lastVideo);
+}
+```
+
+That is exactly the "exported clip must be added" contract: the download still happens (the `<a download>` click above is unchanged), and the same render is appended at the right-most end of Scene Media, one scene per clip, so it is the last scene of the timeline MP4. The **➕** button keeps its own hand-off through the same helper inside `addTemplateToVideo()`; because that path renders with `download: false`, the two branches can never append the same render twice. With no sink registered (the editor layout) `handClipToTimeline()` returns `0`, so nothing about the gallery behaviour changes.
+
+### 23.4 Change 2 — the modal says what it will do (`src/client/template-composer-js.ts`)
+
+- Every button label is built from `timelineClipTarget(n)`: **➕ Add to Scene Media** on `layout=timeline`, **➕ Add to Video N** everywhere else; the "✅ Added to …" reset uses the same helper.
+- After a successful download hand-off the status line reads `MP4 ready — downloaded as <file> and added at the end of the Scene Media layer`; if the timeline refuses (its own export is running, the media lane is missing, the 100-clip cap), it reads `… but the timeline could not take the clip` instead of silently succeeding.
+- On the timeline page `buildModal()` rewrites `#tpl-sub` so the paragraph describes Scene Media and the timeline MP4 instead of the `Video N` gallery. The editor layout keeps the original paragraph byte for byte.
+
+### 23.5 Change 3 — the timeline reports the new last scene (`src/client/timeline-editor.ts`)
+
+- `appendQueuedClips()` calls `updateProjectHeading()` after the append, so the heading's scene count and the `state.scenes` list agree immediately.
+- The dock status is now `Added n clip(s) at the right-most end of Scene Media (from m:ss to m:ss) — it is the last scene of the exported MP4.` The append itself still runs `ensureTimelineEnd(nextStart)`, which grows `state.durationSec` (rounded up to the 5 s grid) so the timeline's own export covers the new scene.
+
+### 23.6 Files touched in this section
+
+| File | Change |
+| --- | --- |
+| `src/client/template-composer-js.ts` | `timelineClipTarget()` + `handClipToTimeline()`; the `shouldDownload` hand-off in `exportMP4()`; `addTemplateToVideo()` re-uses the helper; Scene Media button labels, status sentences and the timeline `#tpl-sub` copy. |
+| `src/client/timeline-editor.ts` | Append status names the new last scene of the exported MP4; `updateProjectHeading()` after an append; the ＋ Add Clips hint mentions both modal buttons. The sink, queue and append geometry are unchanged. |
+| `src/client/markup.ts` | The timeline page's comment block records that both composer buttons land in Scene Media. |
+| `tests/timeline-editor.test.mjs` | Test 32's source assertion follows the helper (`handClipToTimeline(renderedVideo, clipDuration)`, `durationSec: seconds`, the `shouldDownload` hand-off). New test 34 proves a composed clip is the last Scene Media **scene** and that the timeline MP4 export renders its window. |
+| `tests/template-composer.test.mjs` | New test 20 proves **⬇ Download MP4** both downloads and lands the clip, the **➕** button only lands it, the hidden gallery stays empty, and the editor layout keeps `Add to Video N`. |
+| `bug-fix-session-331.md` | This section. |
+
+### 23.7 Verification
+
+- `node --import tsx --test tests/timeline-editor.test.mjs` → **34 / 34 pass** (33 before, +1 new).
+- `node --import tsx --test tests/template-composer.test.mjs` → **20 / 20 pass** (19 before, +1 new).
+- `node --import tsx --test tests/final-media-cap-actions.test.mjs tests/quick-batch-table.test.mjs tests/public-entry-points.test.mjs` → **34 / 34 pass**.
+- `npx tsc --noEmit` → the same **30** pre-existing `src/index.ts` diagnostics as §22.18, none in a file this section touched.
+- Served-bundle parse check: `createHTML()`'s `<script>` body (~1.98 MB after `APP_JS` + `TEMPLATE_COMPOSER_JS` + `TIMELINE_EDITOR_JS`) is accepted by `new Function(...)`, so the new template-literal escaping survives page assembly. The composer's `\u2014`/`\u2795` escapes were kept at the same two-backslash depth as the surrounding lines, which resolves to one backslash in the served JavaScript and therefore to the intended glyphs.
+
+New coverage in detail:
+
+1. *timeline editor test 34 — a composed clip is the last Scene Media scene and the timeline MP4 export renders it*: a 5 s project receives `window.__TIMELINE_TEMPLATE_CLIP__({ blob, name: "closing-card.mp4", durationSec: 1 })`; the clip starts at the old right-most end (5 s), the project grows to 10 s on the 5 s grid, the matching `state.scenes` entry is last and carries the clip's scene id/asset id/name, `exportTimeline()` encodes **300** frames (10 s × 30 fps, i.e. the appended scene's whole window), and frames inside that window draw the composed clip's `<video>` rather than a placeholder.
+2. *template composer test 20 — on the timeline page Download MP4 also appends the clip to the end of Scene Media*: with the sink registered, `#tpl-add` reads **Add to Scene Media**, `exportMP4({ download: true })` renders 30 frames, downloads once **and** calls the sink once with the clip's own length and a `Blob`; the status names Scene Media; **➕** appends a second clip without a second download and without filling `videoProjects[0].assets`; deleting the sink and re-opening the modal restores **Add to Video 1** and the gallery push.
+
+### 23.8 Notes, gotchas and deliberate decisions
+
+- **Download and Add both land the clip, on purpose.** The request named the *exported* clip, and on the timeline page the export button is the modal's primary control. Keeping Download download-only would have left the reported bug in place; the append is idempotent per render, so a user who exports three clips gets three scenes, which is the same rule the ➕ button already followed.
+- **No double append is possible.** `exportMP4()` only hands over when `shouldDownload !== false`; `addTemplateToVideo()` renders with `download: false` and hands over itself. One render, one scene.
+- **The sink stays registered inside `bindEvents()`.** §22.15's reason is unchanged: a top-level registration would let the editor layout's composer hand its MP4s to a timeline that is not on screen.
+- **The editor layout is byte-for-byte unchanged where it matters.** With no sink: same labels, same `MAX_MP4_UPLOADS` cap, same `project.assets.push(asset)`, same `buildVaCard()`/`updateVideoStatus()`, same download. Test 20's last third asserts it.
+- **The appended clip is a scene, not a second overlay.** It goes into the one pinned `background-media` lane (`layer: 0`) as one `tracks` item plus one `state.scenes` entry with `mediaSource: "template composer"`; `syncScenesFromTracks()` then keeps `mediaAssetId`, timing and label in step on every save.
+- **The timeline MP4 renders it because the project grew.** `ensureTimelineEnd(nextStart)` rounds up to the 5 s grid, and `exportTimelineMp4()` derives its frame count from `state.durationSec`; test 34 pins both halves (duration 10 s, 300 encoded frames, real `drawImage` of the composed video).
+- **§22.9 is partly superseded.** Its "only the ＋ Add button hands the clip over" description is no longer the whole contract: the **⬇ Download MP4** path now lands the clip too. The rest of §22.9 (the sink, `appendTemplateClip()`, append-at-the-right-most-end, one scene per clip) still stands exactly as written.
+
+### 23.9 Status
+
+- The reported bug is fixed: a clip exported from the Add video from template modal on `layout=timeline` is appended at the right-most end of the Scene Media layer as a new scene, and the timeline's Export MP4 renders it in order at the end. The ➕ path keeps the same destination with clearer copy.
+- Test state for the touched suites: timeline **34 / 34**, template composer **20 / 20**, related Quick Batch/media/entry suites **34 / 34**; `npx tsc --noEmit` at the 30 pre-existing diagnostics.

@@ -1656,7 +1656,10 @@ test("＋ Add Clips opens the Add video from template modal and its MP4 lands at
 	const addFn = TEMPLATE_COMPOSER_JS.slice(TEMPLATE_COMPOSER_JS.indexOf("async function addTemplateToVideo()"));
 	assert.ok(addFn.indexOf("timelineClipSink()") < addFn.indexOf("project.assets.push(asset)"), "the sink is checked before the gallery push");
 	assert.match(addFn, /if \(!sink\) \{[\s\S]{0,200}?MAX_MP4_UPLOADS/, "the 5-clip gallery cap only guards the gallery path");
-	assert.match(addFn, /durationSec: clipDuration/, "the probed length travels with the clip, so the timeline never re-probes it");
+	assert.match(addFn, /handClipToTimeline\(renderedVideo, clipDuration\)/, "the probed length travels with the clip, so the timeline never re-probes it");
+	const handOff = TEMPLATE_COMPOSER_JS.slice(TEMPLATE_COMPOSER_JS.indexOf("function handClipToTimeline("));
+	assert.match(handOff.slice(0, 700), /durationSec: seconds/, "the single hand-off helper sends the length");
+	assert.match(TEMPLATE_COMPOSER_JS, /if \(shouldDownload\) \{\s*timelineLanded = handClipToTimeline\(lastVideo\);/, "the Download MP4 path lands the clip too (Session 333)");
 
 	const helper = APP_JS.slice(APP_JS.indexOf("function openTemplateModalForTimeline()"));
 	assert.match(helper, /if \(!videoProjects\.length\) \{\s*addVideoAccordion\(\);/, "the helper creates the Video N the composer needs");
@@ -1695,4 +1698,109 @@ test("a composed clip never steals a pending placeholder and the next one lands 
 	assert.equal(track.items.length, 14, "and the lane is unchanged");
 	assert.equal(api.appendQueuedClips(), 0, "an empty queue adds nothing");
 	assert.match(w.document.getElementById("timeline-status").textContent, /Queue at least one clip/i, "and says so");
+});
+
+test("a composed clip is the last Scene Media scene and the timeline MP4 export renders it", async (t) => {
+	const { dom, w, previewContext } = openTimeline();
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const track = state.tracks.find((candidate) => candidate.kind === "media");
+
+	/*
+	 * Shrink the project to one 5 s scene so the export is quick while still
+	 * proving that the appended scene extends the rendered MP4.
+	 */
+	track.items = track.items.slice(0, 1);
+	track.items[0].startSec = 0;
+	track.items[0].durationSec = 5;
+	state.scenes = state.scenes.slice(0, 1);
+	state.scenes[0].startSec = 0;
+	state.scenes[0].durationSec = 5;
+	state.durationSec = 5;
+
+	/*
+	 * A decoded MP4 stand-in: the painter only draws a <video> whose metadata
+	 * is ready, and seekVideoForExport() waits for "seeked".
+	 */
+	Object.defineProperty(w.HTMLMediaElement.prototype, "src", {
+		configurable: true,
+		set(value) {
+			this.setAttribute("src", value);
+			queueMicrotask(() => this.dispatchEvent(new w.Event("loadedmetadata")));
+			queueMicrotask(() => this.dispatchEvent(new w.Event("loadeddata")));
+		},
+		get() { return this.getAttribute("src"); }
+	});
+	Object.defineProperty(w.HTMLMediaElement.prototype, "readyState", { configurable: true, get: () => 4 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "videoWidth", { configurable: true, get: () => 1280 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "videoHeight", { configurable: true, get: () => 720 });
+	/* jsdom declares these on HTMLVideoElement itself, which shadows the base getters. */
+	Object.defineProperty(w.HTMLVideoElement.prototype, "videoWidth", { configurable: true, get: () => 1280 });
+	Object.defineProperty(w.HTMLVideoElement.prototype, "videoHeight", { configurable: true, get: () => 720 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "duration", { configurable: true, get: () => 1 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "currentTime", {
+		configurable: true,
+		get() { return this.__currentTime || 0; },
+		set(value) {
+			this.__currentTime = value;
+			queueMicrotask(() => this.dispatchEvent(new w.Event("seeked")));
+		}
+	});
+	w.HTMLMediaElement.prototype.load = () => {};
+
+	/* The appended clip is painted from its own <video>, not as a placeholder. */
+	const drawnVideos = [];
+	const originalDrawImage = previewContext.drawImage;
+	previewContext.drawImage = function (source, ...rest) {
+		if (source && source.tagName === "VIDEO") drawnVideos.push(source);
+		return originalDrawImage.call(this, source, ...rest);
+	};
+
+	const blob = new w.Blob(["composed"], { type: "video/mp4" });
+	assert.equal(
+		w.__TIMELINE_TEMPLATE_CLIP__({ blob, name: "closing-card.mp4", durationSec: 1 }),
+		1,
+		"the composed MP4 is appended"
+	);
+
+	const fresh = track.items[track.items.length - 1];
+	assert.equal(fresh.startSec, 5, "it starts at the right-most end of the Scene Media layer");
+	assert.equal(fresh.durationSec, 1);
+	assert.equal(state.durationSec, 10, "the timeline grows until the new scene's end (rounded to the 5 s grid)");
+	const scene = state.scenes[state.scenes.length - 1];
+	assert.equal(scene.id, fresh.sceneId, "the clip is a scene of the project, in last position");
+	assert.equal(scene.startSec, 5);
+	assert.equal(scene.mediaAssetId, fresh.assetId);
+	assert.match(scene.name, /closing-card\.mp4/, "the scene is named after the composed clip");
+
+	let encodedFrames = 0;
+	w.VideoFrame = class {
+		constructor(_source, init) { this.timestamp = init.timestamp; }
+		close() {}
+	};
+	w.VideoEncoder = class {
+		constructor() { this.state = "unconfigured"; this.encodeQueueSize = 0; }
+		static async isConfigSupported(config) { return { supported: true, config }; }
+		configure() { this.state = "configured"; }
+		encode() { encodedFrames++; }
+		async flush() {}
+		close() { this.state = "closed"; }
+	};
+	w.Mp4Muxer = {
+		ArrayBufferTarget: class { constructor() { this.buffer = new ArrayBuffer(64); } },
+		Muxer: class {
+			constructor(options) { this.target = options.target; }
+			addVideoChunk() {}
+			addAudioChunk() {}
+			finalize() {}
+		}
+	};
+	w.HTMLAnchorElement.prototype.click = () => {};
+
+	const result = await w.__TIMELINE_EDITOR__.exportTimeline();
+	assert.equal(result.ok, true);
+	assert.equal(result.format, "mp4");
+	assert.equal(encodedFrames, 300, "10 s at 30 fps: the exported MP4 covers the appended scene's window");
+	assert.ok(drawnVideos.length >= 20, "frames inside the appended scene draw its composed MP4, not a placeholder");
+	assert.equal(state.durationSec, 10);
 });

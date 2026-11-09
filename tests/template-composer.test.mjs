@@ -337,3 +337,37 @@ test("both export actions enforce ring minimum; valid uploads use the shared MP4
 	assert.equal(h.window.videoProjects[0].assets[0].kind, "mp4");
 	assert.deepEqual(h.alerts, []);
 });
+
+test("on the timeline page Download MP4 also appends the clip to the end of Scene Media", async (t) => {
+	const h = harness(t, 0);
+	const duration = h.document.querySelector("#tpl-duration");
+	h.change(duration, 1, "change");
+
+	const landed = [];
+	h.window.__TIMELINE_TEMPLATE_CLIP__ = (clip) => { landed.push(clip); return 1; };
+	/* The timeline page builds/opens the modal after its sink exists. */
+	h.window.openTemplateModal(1);
+	assert.match(h.document.querySelector("#tpl-add").textContent, /Add to Scene Media/, "the modal targets the timeline layer, not a hidden Video N");
+
+	await h.api.export({ download: true });
+	assert.equal(h.frames.length, 30, "the clip is rendered once");
+	assert.equal(h.downloads.length, 1, "Download MP4 still downloads the file");
+	assert.equal(landed.length, 1, "and the same render is handed to the timeline");
+	assert.equal(landed[0].durationSec, 1, "with its own length");
+	assert.ok(landed[0].blob instanceof h.window.Blob, "and its media bytes");
+	assert.match(h.document.querySelector("#tpl-status").textContent, /Scene Media/i, "the modal says where the clip landed");
+	assert.match(h.document.querySelector("#tpl-add").textContent, /Add to Scene Media/);
+
+	/* The Add button hands over without downloading, and never fills the gallery. */
+	await h.api.addToVideo();
+	assert.equal(landed.length, 2, "Add to Scene Media appends another clip");
+	assert.equal(h.downloads.length, 1, "Add never downloads");
+	assert.equal(h.window.videoProjects[0].assets.length, 0, "the hidden Video N gallery stays empty");
+
+	/* With no sink the modal is the editor layout's again. */
+	delete h.window.__TIMELINE_TEMPLATE_CLIP__;
+	h.window.openTemplateModal(1);
+	assert.match(h.document.querySelector("#tpl-add").textContent, /Add to Video 1/, "the editor layout keeps its gallery label");
+	await h.api.addToVideo();
+	assert.equal(h.window.videoProjects[0].assets.length, 1, "and its gallery path still fills the accordion");
+});

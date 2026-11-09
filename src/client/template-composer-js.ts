@@ -1963,14 +1963,35 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 					a.remove();
 				}
 
+				/*
+				 * Session 333: on the timeline page the export is not the end of
+				 * the story. The same MP4 is handed to the timeline sink, which
+				 * appends it at the right-most end of the Scene Media layer as a
+				 * new scene, so the timeline's Export MP4 renders that scene in
+				 * order (and the download above still happens).
+				 *
+				 * addTemplateToVideo() renders with download:false and hands its
+				 * own clip over, so this branch can never append the same render
+				 * twice.
+				 */
+				let timelineLanded = 0;
+				if (shouldDownload) {
+					timelineLanded = handClipToTimeline(lastVideo);
+				}
+
 				if (progressEl) {
 					progressEl.style.width = "100%";
 				}
 				statusEl.textContent = shouldDownload
-					? "MP4 ready \\u2014 downloaded as " + name
-					: "MP4 ready \\u2014 adding it to Video " + modalVideo;
+					? "MP4 ready \\u2014 downloaded as " + name +
+						(timelineClipSink()
+							? timelineLanded
+								? " and added at the end of the Scene Media layer"
+								: " but the timeline could not take the clip"
+							: "")
+					: "MP4 ready \\u2014 adding it to " + timelineClipTarget(modalVideo);
 				addBtn.disabled = false;
-				addBtn.textContent = "\\u2795 Add to Video " + modalVideo;
+				addBtn.textContent = "\\u2795 Add to " + timelineClipTarget(modalVideo);
 				return lastVideo;
 			}
 			catch (err) {
@@ -2023,6 +2044,53 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			return typeof window.__TIMELINE_TEMPLATE_CLIP__ === "function"
 				? window.__TIMELINE_TEMPLATE_CLIP__
 				: null;
+		}
+
+		/*
+		 * Session 333 - what the modal's two buttons mean on the timeline page.
+		 *
+		 * The timeline bundle registers the sink, so every MP4 this modal renders
+		 * belongs to the open timeline: "Download MP4" saves the file to disk AND
+		 * hands the same clip to the timeline, and "Add to Scene Media" only hands
+		 * it over. Either way the timeline appends it after the right-most Scene
+		 * Media clip, one scene per clip, so the timeline's own Export MP4 renders
+		 * the new scene in order at the end.
+		 *
+		 * With no sink registered - the editor layout - the label stays
+		 * "Add to Video N" and every existing gallery behaviour is unchanged.
+		 */
+		function timelineClipTarget(n) {
+			return timelineClipSink() ? "Scene Media" : "Video " + n;
+		}
+
+		/*
+		 * One hand-off implementation for both buttons. The sink is synchronous
+		 * (the timeline already knows the clip length from the probe), and its
+		 * return value is the number of clips that landed.
+		 */
+		function handClipToTimeline(renderedVideo, clipDuration) {
+			const sink = timelineClipSink();
+			if (!sink || !renderedVideo || !renderedVideo.blob) {
+				return 0;
+			}
+			const name = String(renderedVideo.name || "Template clip");
+			const seconds =
+				Number(clipDuration || renderedVideo.duration || duration) || 5;
+			try {
+				return Number(
+					sink({
+						blob: renderedVideo.blob,
+						file: new File([renderedVideo.blob], name, {
+							type: "video/mp4"
+						}),
+						name: name,
+						durationSec: seconds
+					})
+				) || 0;
+			}
+			catch (sinkError) {
+				return 0;
+			}
 		}
 
 		async function addTemplateToVideo() {
@@ -2102,21 +2170,11 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			/*
 			 * The timeline page takes the MP4 itself: it registers the asset in
 			 * its own IndexedDB store and appends it after the right-most clip
-			 * of the Scene Media layer. The composer only reports what happened.
+			 * of the Scene Media layer, one scene per clip. The composer only
+			 * reports what happened.
 			 */
 			if (sink) {
-				let landed = 0;
-				try {
-					landed = Number(sink({
-						blob: renderedVideo.blob,
-						file: file,
-						name: renderedVideo.name,
-						durationSec: clipDuration
-					})) || 0;
-				}
-				catch (sinkError) {
-					landed = 0;
-				}
+				const landed = handClipToTimeline(renderedVideo, clipDuration);
 				addBtn.disabled = false;
 				statusEl.textContent = landed
 					? "Added to the Scene Media layer (" +
@@ -2153,7 +2211,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				toggleGalleryScroll(n);
 			}
 
-			addBtn.textContent = "\\u2705 Added to Video " + n;
+			addBtn.textContent = "\\u2705 Added to " + timelineClipTarget(n);
 			statusEl.textContent =
 				"Added to Video " + n +
 				" (" + formatSeconds(clipDuration) + ")" +
@@ -2223,7 +2281,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				'<div class="tm-statusline"><span id="tpl-status" class="tpl-status">Pick a template \\u2014 each preview is the real animation</span></div>' +
 				'<div class="tpl-actions">' +
 				'<button type="button" id="tpl-export" class="tpl-primary" disabled>\\u2b07 Download MP4</button>' +
-				'<button type="button" id="tpl-add" disabled>\\u2795 Add to Video ' + n + "</button>" +
+				'<button type="button" id="tpl-add" disabled>\\u2795 Add to ' + timelineClipTarget(n) + "</button>" +
 				'<button type="button" id="tpl-close">\\u2715 Close</button>' +
 				"</div>" +
 				"</div>";
@@ -2246,6 +2304,26 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			playBtn = document.getElementById("tm-play");
 
 			buildGallery();
+
+			/*
+			 * The shared sub-line describes the Video N gallery. On the timeline
+			 * page this modal feeds Scene Media instead, so it says so: whatever
+			 * the buttons below render lands at the end of the timeline layer.
+			 */
+			if (timelineClipSink()) {
+				const timelineSub = document.getElementById("tpl-sub");
+				if (timelineSub) {
+					timelineSub.textContent =
+						"Choose one of 15 Interactive scenes, including the 3D Ring Carousel. " +
+						"Add any of 13 animated objects from the Graphics dropdown. Edit text, " +
+						"layer order, rotation, positions, colours, stickers, animations, " +
+						"transitions, photos and backgrounds. The ring accepts 5-7 uploaded " +
+						"images in its bottom accordion. Download a portrait 9:16 or landscape " +
+						"16:9 MP4 (max " + TPL_MAX_DURATION + " seconds) to disk, and the same " +
+						"clip is added at the right-most end of the Scene Media layer so the " +
+						"timeline's Export MP4 renders it as the last scene.";
+				}
+			}
 
 			document.getElementById("tm-back")
 				.addEventListener("click", showGallery);
@@ -2347,7 +2425,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				titleEl.textContent =
 					"\\ud83c\\udfac Add Video from Template \\u2014 Video " + n;
 				addBtn.textContent =
-					"\\u2795 Add to Video " + n;
+					"\\u2795 Add to " + timelineClipTarget(n);
 			}
 			modal.style.display = "flex";
 			showGallery();
