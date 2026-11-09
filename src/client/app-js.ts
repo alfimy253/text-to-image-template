@@ -6587,10 +6587,101 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			arrow.textContent =
 				body.style.display ===
 					"none"
-				? "\u25b6"
-				: "\u25bc";
+					? "\u25b6"
+					: "\u25bc";
 		}
 
+	}
+
+	/*
+	 * =========================================================
+	 * Session 332 — TWO small editor-shell guarantees
+	 * =========================================================
+	 *
+	 * 1. The editor layout always STARTS with one OPEN accordion, so the
+	 *    first thing on the page is a usable Video 1 instead of an empty
+	 *    card and a button to press. The ＋ Add Video button keeps its
+	 *    normal (unpressed) look: nothing about the accordion's presence is
+	 *    reflected on the button, no .active / aria-expanded / pressed
+	 *    class is ever added to it, and APP_CSS drops the hard offset
+	 *    shadow that used to make it look clicked down.
+	 *
+	 * 2. The timeline editor's ＋ Add Clips opens the SAME modal as this
+	 *    layout's "Add video from template" link. videoProjects and
+	 *    addVideoAccordion() live in this file's scope, so this file hands
+	 *    the timeline a usable Video N and opens the composer for it; the
+	 *    accordion it may have to create sits inside #view-editor, which is
+	 *    not the active view on the timeline page.
+	 */
+
+	function ensureEditorAccordionOnLoad() {
+
+		if (studioLayout !== "editor") {
+			return false;
+		}
+
+		if (!videoProjects.length) {
+			addVideoAccordion();
+		}
+
+		const first = videoProjects[0];
+
+		if (!first) {
+			return false;
+		}
+
+		const n = videoProjects.indexOf(first) + 1;
+
+		const body =
+			document.getElementById(
+				"va-body-" + n
+			);
+
+		/* Open, never toggled shut: an accordion the state restored collapsed
+		 * is re-opened on load, which is what "an opened accordion when the
+		 * page first loads" asks for. */
+		if (body && body.style.display === "none") {
+			toggleVideoAccordion(n);
+		}
+
+		const button =
+			document.getElementById("bulk-toggle");
+
+		if (button) {
+			button.classList.remove("active", "pressed", "is-down");
+			button.setAttribute("aria-expanded", "false");
+			button.setAttribute("aria-pressed", "false");
+		}
+
+		return true;
+
+	}
+
+	function openTemplateModalForTimeline() {
+
+		if (typeof window.openTemplateModal !== "function") {
+			return false;
+		}
+
+		if (!videoProjects.length) {
+			addVideoAccordion();
+		}
+
+		const n = videoProjects.length;
+
+		if (!n) {
+			return false;
+		}
+
+		window.openTemplateModal(n);
+
+		return true;
+
+	}
+
+	if (typeof window !== "undefined") {
+		window.__ensureEditorAccordionOnLoad = ensureEditorAccordionOnLoad;
+		window.openTemplateModalForTimeline = openTemplateModalForTimeline;
 	}
 
 	/*
@@ -7404,6 +7495,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const topGenerate = document.getElementById("top-generate");
 		const storageAlert = document.getElementById("pipeline-storage-alert");
 		const galleryEl = document.getElementById("gallery");
+		/* The ＋ Add Video heading is an editor-layout control: not on this page. */
+		const studioHeading = document.getElementById("studio-heading");
+		if (studioHeading) studioHeading.hidden = true;
 		if (viewSwitch) viewSwitch.hidden = true;
 		if (topGenerate) topGenerate.hidden = true;
 		if (storageAlert) storageAlert.hidden = true;
@@ -7427,6 +7521,16 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		const timelineView = document.getElementById("view-timeline");
 		if (timelineView) timelineView.classList.remove("active");
+
+		/*
+		 * Session 332: all that is left of the page heading is the ＋ Add Video
+		 * button (the VIDEO WORKSPACE kicker, the "\ud83c\udfac YouTube Vibe Studio"
+		 * title and the "Generates AI scenes\u2026" line are removed from every
+		 * layout), and that button belongs to the EDITOR layout only — it no
+		 * longer sits on top of the Quick Batch table.
+		 */
+		const studioHeading = document.getElementById("studio-heading");
+		if (studioHeading) studioHeading.hidden = studioLayout !== "editor";
 
 		const tableView =
 			document.getElementById(
@@ -9630,23 +9734,36 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		return payload;
 	}
 
+	/*
+	 * The Actions cell (Session 332)
+	 * ------------------------------
+	 * All THREE icons are rendered for EVERY row, ready or not: ▶ Preview,
+	 * ⚙ Process export and ✎ Edit. A row that is not finished yet keeps them
+	 * disabled — \`disabled\` + \`aria-disabled="true"\`, so the browser never
+	 * fires their click and the delegated [data-batch-action] handler is
+	 * never reached — and the cell carries NO text at all: the old
+	 * "Preview Here · Export Video" placeholder sentence is gone, which is
+	 * why .batch-pending no longer exists in APP_CSS either.
+	 *
+	 * batchRowFinished() stays the single flag behind all three, so they
+	 * still unlock together, at the same moment, exactly as before.
+	 */
 	function batchActionCell(row, kind) {
 		const id = escapeHTML(row.id);
+		const ready = batchRowFinished(row);
+		const locked = ready ? "" : ' disabled aria-disabled="true"';
+		const classes = "upload-btn small batch-action-btn" + (ready ? " batch-live" : "");
+		const suffix = " unlocks when this row is generated";
 		if (kind === "edit") {
-			return '<button type="button" class="upload-btn small batch-live batch-action-btn" data-batch-action="edit" data-batch-row="' +
-				id + '" title="Edit timing in the new timeline editor" aria-label="Open timeline editor">✎</button>';
-		}
-		if (!batchRowFinished(row)) {
-			return kind === "preview"
-				? '<span class="batch-pending">' + "Preview Here" + " · " + "Export Video" + "</span>"
-				: "";
+			return '<button type="button" class="' + classes + '" data-batch-action="edit" data-batch-row="' +
+				id + '"' + locked + ' title="' + (ready ? "Edit timing in the new timeline editor" : "Edit" + suffix) + '" aria-label="Open timeline editor">✎</button>';
 		}
 		if (kind === "preview") {
-			return '<button type="button" class="upload-btn small batch-live batch-action-btn" data-batch-action="preview" data-batch-row="' +
-				id + '" title="Preview" aria-label="Preview">▶</button>';
+			return '<button type="button" class="' + classes + '" data-batch-action="preview" data-batch-row="' +
+				id + '"' + locked + ' title="' + (ready ? "Preview" : "Preview" + suffix) + '" aria-label="Preview">▶</button>';
 		}
-		return '<button type="button" class="upload-btn small batch-live batch-action-btn" data-batch-action="export" data-batch-row="' +
-			id + '" title="Process export" aria-label="Process export">⚙</button>';
+		return '<button type="button" class="' + classes + '" data-batch-action="export" data-batch-row="' +
+			id + '"' + locked + ' title="' + (ready ? "Process export" : "Process export" + suffix) + '" aria-label="Process export">⚙</button>';
 	}
 
 	function batchActionsHTML(row) {
@@ -9748,7 +9865,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 			if (actions) {
 
-				/* Preview and Process Export share the same finished flag; Edit is always live. */
+				/*
+				 * All three icons are always in the cell; batchRowFinished()
+				 * is the one flag that decides whether they are enabled
+				 * (Session 332 — Edit is no longer "always live").
+				 */
 				actions.innerHTML =
 					batchActionsHTML(row);
 
@@ -13018,6 +13139,24 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 							: null;
 
 					if (!target) {
+
+						return;
+
+					}
+
+					/*
+					 * Session 332: a row that is not finished yet still renders
+					 * all three icons, but disabled. A disabled button never
+					 * fires a click in a browser; this guard keeps a synthetic
+					 * dispatch (or an aria-disabled-only node) out too, so the
+					 * cell is present and never clickable until the row is ready.
+					 */
+					if (
+						target.disabled ||
+						target.getAttribute(
+							"aria-disabled"
+						) === "true"
+					) {
 
 						return;
 
@@ -23906,6 +24045,12 @@ async function retryImagePromptFlow(n) {
 		bindStudioShell();
 		restorePipelineManagementState();
 		applyTransitionProject();
+		/*
+		 * Session 332: the editor layout opens with one OPEN accordion already
+		 * on the page (Video 1), so nobody has to press ＋ Add Video first — and
+		 * that button stays in its normal, unpressed state.
+		 */
+		ensureEditorAccordionOnLoad();
 		bindLandingActions();
 		initAuth();
 		persistPipelineManagementState("startup");

@@ -60,6 +60,48 @@ function makeApp(url = "https://studio.test/free", prepare) {
 	return { dom, w };
 }
 
+/*
+ * Session 332: all three Actions icons — ▶ Preview, ⚙ Process export and
+ * ✎ Edit — are rendered for EVERY row from the first paint, and a row that is
+ * not finished yet has them disabled (present, never clickable, no text in the
+ * cell). A test that exercises the Edit handoff therefore has to finish its row
+ * first; this builds exactly the shape batchRowFinished() demands: an MP3, the
+ * animated flag, 12 images holding 4 MP4 clips with 12 distinct stock
+ * filenames, and 12 slides.
+ */
+function finishRow(w, row) {
+	const videoIndexes = [0, 3, 6, 9];
+	row.images = Array.from({ length: 12 }, (_, index) => ({
+		index,
+		blob: { type: videoIndexes.includes(index) ? "video/mp4" : "image/jpeg", stockFilename: "scene-" + (index + 1) },
+		stockFilename: "scene-" + (index + 1)
+	}));
+	/*
+	 * slideDurationSec() times a scene from its slide, and a slide without a
+	 * slice falls back to SLIDE_SECONDS_MIN. The animator hands each slide its
+	 * share of the voiceover as _partialSec, so the fixture does the same: a
+	 * three-minute row is twelve 15-second scenes.
+	 */
+	const sceneSpan = ((Number(row.minutes) > 0 ? Number(row.minutes) : 1) * 60) / 12;
+	row.slides = row.images.map((image) => ({
+		img: { naturalWidth: 1280, naturalHeight: 720 },
+		type: image.blob.type === "video/mp4" ? "mp4" : "image",
+		_partialSec: sceneSpan,
+		duration: image.blob.type === "video/mp4" ? sceneSpan : 0
+	}));
+	row.mp3 = { blob: { type: "audio/mpeg" }, name: "voiceover.mp3", durationSec: 60 };
+	/*
+	 * The handoff times its scenes from the decoded voiceover (row.audio.duration),
+	 * exactly like the real pipeline stores it, so a three-minute row still hands
+	 * over 15-second scenes instead of falling back to the slide spans.
+	 */
+	row.audio = { name: "Row" + row.id + "-voiceover.mp3", duration: (Number(row.minutes) > 0 ? Number(row.minutes) : 1) * 60, buffer: null, url: null };
+	row.animated = true;
+	assert.equal(w.batchRowFinished(row), true, "the fixture row is finished, so its Actions icons unlock");
+	w.renderBatchTable();
+	return row;
+}
+
 test("the planner and Pixabay search always use 12 scenes: 4 videos + 8 photos", () => {
 	assert.equal(SCENE_MEDIA_TOTAL, 12);
 	assert.equal(SCENE_VIDEO_COUNT, 4);
@@ -100,9 +142,18 @@ test("the last table column is Actions with Preview, Process Export and Edit ico
 	assert.match(APP_JS, /data-batch-action="preview"/);
 	assert.match(APP_JS, /data-batch-action="export"/);
 	assert.match(APP_JS, /data-batch-action="edit"/);
-	assert.match(APP_JS, /title="Process export"/);
-	assert.match(APP_JS, /"Preview Here"/);
-	assert.match(APP_JS, /"Export Video"/);
+	assert.match(APP_JS, /ready \? "Process export" : "Process export" \+ suffix/, "the icon is titled Process export, with the reason appended while it is locked");
+	/*
+	 * Session 332: the icons are drawn for every row and a row that is not
+	 * finished yet keeps them disabled — never the "Preview Here"/"Export Video"
+	 * sentence the cell used to print.
+	 */
+	assert.doesNotMatch(APP_JS, /"Preview Here"/, "no pending sentence is printed in the Actions cell");
+	assert.doesNotMatch(APP_JS, /"Export Video"/, "and the second half of it is gone too");
+	assert.match(APP_JS, /const locked = ready \? "" : ' disabled aria-disabled="true"';/, "unfinished rows render the same three icons, disabled");
+	assert.match(APP_JS, /target\.disabled \|\|\s*target\.getAttribute\(\s*"aria-disabled"\s*\) === "true"/, "and the click delegation ignores them");
+	assert.doesNotMatch(APP_CSS, /\.batch-pending\s*\{/, "the pending text styling went with the text");
+	assert.match(APP_CSS, /\.batch-action-btn:disabled\s*\{[^}]*cursor:\s*not-allowed/, "a locked icon still reads as locked");
 	assert.doesNotMatch(APP_JS, /data-batch-generate|batch-row-ai/);
 	assert.doesNotMatch(APP_CSS, /batch-row-ai/);
 	assert.match(APP_JS, /AUTO_MEDIA_TOTAL = 12/);
@@ -128,14 +179,24 @@ test("Edit opens a new page with transition-only basic settings and no AI enhanc
 		blob: { type: index === 3 ? "video/mp4" : "image/jpeg", stockFilename: "scene-" + (index + 1) },
 		stockFilename: "scene-" + (index + 1)
 	}));
+	w.renderBatchTable();
 	const tr = w.document.querySelector('[data-batch-row="' + row.id + '"]');
 	assert.ok(tr, "the row is rendered");
 	assert.equal(tr.querySelector("[data-batch-generate]"), null, "AI enhancer button is gone");
-	assert.ok(tr.querySelector('[data-batch-action="edit"]'), "Edit icon is present");
 	const actions = tr.querySelector('[data-batch-slot="actions"]');
 	assert.ok(actions, "one Actions cell replaces the Preview/Export cells");
-	assert.match(actions.textContent, /Preview Here/);
-	tr.querySelector('[data-batch-action="edit"]').click();
+	/* Session 332: drafted row — the three icons are already there, locked, and the cell prints nothing. */
+	const draftedIcons = Array.from(actions.querySelectorAll("[data-batch-action]"), (button) => button.dataset.batchAction);
+	assert.deepEqual(draftedIcons, ["preview", "export", "edit"], "Preview, Process export and Edit are drawn from the first paint");
+	assert.ok(draftedIcons.every((action) => actions.querySelector('[data-batch-action="' + action + '"]').disabled), "and every one of them is disabled while the row is not finished");
+	assert.equal(/[A-Za-z]{2,}/.test(actions.textContent), false, "the Actions cell prints no words for a row that is not ready — only the ▶ ⚙ ✎ icons");
+
+	/* A finished row unlocks the same three icons — Edit included. */
+	finishRow(w, row);
+	const readyActions = w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="actions"]');
+	assert.ok(Array.from(readyActions.querySelectorAll("[data-batch-action]")).every((button) => !button.disabled), "a finished row's icons are clickable");
+	assert.equal(/[A-Za-z]{2,}/.test(readyActions.textContent), false, "and no words once it is ready either");
+	readyActions.querySelector('[data-batch-action="edit"]').click();
 	assert.match(opened, /layout=timeline/);
 	assert.match(opened, /pipelinePage=/);
 	assert.match(opened, /projectEdit=/);
@@ -178,7 +239,8 @@ test("a Quick Batch row hands off one dummy text at 0:00 instead of caption clip
 		{ startMs: 0, endMs: 2000, text: "Quiet rooftop gardens" },
 		{ startMs: 2000, endMs: 4000, text: "in the morning" }
 	];
-	w.renderBatchTable();
+	/* Session 332: Edit unlocks with the row, so the handoff test finishes it first. */
+	finishRow(w, row);
 	w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="edit"]').click();
 	assert.match(opened, /layout=timeline/);
 	const state = w.__BATCH_EDIT_PROJECT__.timelineState;
@@ -214,6 +276,8 @@ test("the edit icon passes the row's live video style into the project detail an
 	});
 	test.after(() => dom.window.close());
 	const row = w.addBatchRow({ script: "Quiet rooftop gardens in the morning.", style: "Neon Night", minutes: 1 });
+	/* Session 332: Edit unlocks with the row, so the handoff test finishes it first. */
+	finishRow(w, row);
 	const tr = w.document.querySelector('[data-batch-row="' + row.id + '"]');
 	/* the user picks a new style; the click itself must read it even before a change event commits */
 	const styleSelect = tr.querySelector('[data-batch-field="style"]');
@@ -438,7 +502,14 @@ test("duplicate row media indices still reach the background layer as distinct s
 		{ index: 0, blob: new w.Blob(["a"], { type: "image/jpeg" }), stockFilename: "first.jpg" },
 		{ index: 0, blob: new w.Blob(["b"], { type: "image/jpeg" }), stockFilename: "second.jpg" }
 	];
-	w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="edit"]').click();
+	/*
+	 * This row can never be "finished" — it is deliberately two images that share
+	 * an index — so its Edit icon stays disabled (Session 332). The handoff itself
+	 * is what is under test here, so it is called the way the icon calls it.
+	 */
+	const editIcon = w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="edit"]');
+	assert.equal(editIcon.disabled, true, "an unfinished row's Edit icon is disabled");
+	w.openBatchEditPage(row);
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	assert.equal(transfers.length, 1, "the Edit handoff wrote one IndexedDB transfer");
 	const keys = transfers[0].transfer.assets.map((asset) => asset.id);

@@ -2005,7 +2005,25 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		// Add the composed MP4 to the target Video N as a
 		// normal gallery asset (same shape + caps as an
 		// uploaded MP4 clip).
+		//
+		// Session 332: the timeline editor's \uff0b Add Clips opens
+		// THIS modal, so on that page the composed MP4 belongs to
+		// the timeline, not to a Video N gallery nobody can see.
+		// The timeline bundle registers
+		// window.__TIMELINE_TEMPLATE_CLIP__ (and only ever on
+		// layout=timeline), which makes this function hand the
+		// clip over instead of pushing it into the accordion:
+		// no 5-clip gallery cap, no hidden card, and the clip is
+		// appended at the right-most end of the Scene Media layer.
+		// With no sink registered — the editor layout — every
+		// line below behaves exactly as it always did.
 		// -------------------------------------------------
+
+		function timelineClipSink() {
+			return typeof window.__TIMELINE_TEMPLATE_CLIP__ === "function"
+				? window.__TIMELINE_TEMPLATE_CLIP__
+				: null;
+		}
 
 		async function addTemplateToVideo() {
 			if (exporting) return;
@@ -2014,23 +2032,27 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			if (!project) {
 				return;
 			}
-			const counts = videoCounts(project);
-			if (counts.clips >= MAX_MP4_UPLOADS) {
-				alert(
-					"Video " + n +
-					": you can add at most " +
-					MAX_MP4_UPLOADS +
-					" MP4 clips."
-				);
-				return;
+			const sink = timelineClipSink();
+			if (!sink) {
+				const counts = videoCounts(project);
+				if (counts.clips >= MAX_MP4_UPLOADS) {
+					alert(
+						"Video " + n +
+						": you can add at most " +
+						MAX_MP4_UPLOADS +
+						" MP4 clips."
+					);
+					return;
+				}
 			}
 
 			const renderedVideo = await exportMP4({ download: false });
 			if (!renderedVideo) return;
 
 			addBtn.disabled = true;
-			statusEl.textContent =
-				"Adding the composed MP4 to Video " + n + "\\u2026";
+			statusEl.textContent = sink
+				? "Adding the composed MP4 to the timeline\\u2026"
+				: "Adding the composed MP4 to Video " + n + "\\u2026";
 
 			const file = new File(
 				[renderedVideo.blob],
@@ -2076,6 +2098,33 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			}
 
 			probed.loop = true;
+
+			/*
+			 * The timeline page takes the MP4 itself: it registers the asset in
+			 * its own IndexedDB store and appends it after the right-most clip
+			 * of the Scene Media layer. The composer only reports what happened.
+			 */
+			if (sink) {
+				let landed = 0;
+				try {
+					landed = Number(sink({
+						blob: renderedVideo.blob,
+						file: file,
+						name: renderedVideo.name,
+						durationSec: clipDuration
+					})) || 0;
+				}
+				catch (sinkError) {
+					landed = 0;
+				}
+				addBtn.disabled = false;
+				statusEl.textContent = landed
+					? "Added to the Scene Media layer (" +
+						formatSeconds(clipDuration) +
+						") \\u2014 at the right-most end of the timeline"
+					: "The timeline could not take this clip; nothing was added";
+				return;
+			}
 
 			const asset = {
 				kind: "mp4",

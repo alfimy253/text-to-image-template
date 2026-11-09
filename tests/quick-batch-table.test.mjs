@@ -291,10 +291,16 @@ test("the table is an editable quick-batch grid with a Generate at its top right
 	assert.ok(table.includes('id="batch-generate"'));
 	assert.ok(table.indexOf('id="batch-generate"') < table.indexOf("<tbody id=\"batch-rows\">"));
 
-	/* the two action cells read as text before a row is finished */
-	assert.ok(APP_JS.includes('"Preview Here"'));
-	assert.ok(APP_JS.includes('"Export Video"'));
-	assert.ok(APP_CSS.includes(".batch-pending"));
+	/*
+	 * Session 332: the same three icons are drawn for every row from the first
+	 * paint; a row that is not finished yet keeps them disabled and its cell
+	 * prints no words. The old "Preview Here"/"Export Video" sentence and its
+	 * styling are gone.
+	 */
+	assert.equal(APP_JS.includes('"Preview Here"'), false, "no Preview Here sentence is left in the source");
+	assert.equal(APP_JS.includes('"Export Video"'), false, "no Export Video sentence either");
+	assert.ok(APP_JS.includes('const locked = ready ? "" : \' disabled aria-disabled="true"\';'), "unfinished rows render the same three icons, disabled");
+	assert.equal(/\.batch-pending\s*\{/.test(APP_CSS), false, "the pending sentence styling went with the sentence");
 
 	/* Preview / Export come from ONE renderer and ONE flag: together, or not at all */
 	const actionCells = APP_JS.match(/batchActionCell\(row, "(preview|export|edit)"\)/g) || [];
@@ -356,14 +362,26 @@ test("one Generate runs every row that has a script and unlocks both cells toget
 	assert.equal(ready.querySelectorAll('[data-batch-action="export"]').length, 1);
 	assert.equal(ready.querySelectorAll('[data-batch-action="edit"]').length, 1);
 
-	/* the empty rows stay text-only, and nothing about them was requested */
+	/*
+	 * The empty rows were never generated: all three icons are already there,
+	 * every one of them disabled, and the cell prints no words (Session 332).
+	 * Nothing about them was requested.
+	 */
 	for (const idleRow of [blank, whitespace]) {
 		const idle = w.document.querySelector('[data-batch-row="' + idleRow.id + '"]');
 		assert.ok(idle, "row " + idleRow.id + " is still in the table");
-		assert.equal(idle.querySelectorAll("button[data-batch-action]").length, 2, "remove and Edit only");
+		assert.equal(idle.querySelectorAll("button[data-batch-action]").length, 4, "remove, plus Preview, Process export and Edit");
 		const actions = idle.querySelector('[data-batch-slot="actions"]');
-		assert.match(actions.textContent, /Preview Here/);
-		assert.match(actions.textContent, /Export Video/);
+		assert.deepEqual(
+			Array.from(actions.querySelectorAll("[data-batch-action]"), (button) => button.dataset.batchAction),
+			["preview", "export", "edit"],
+			"the three icons are present before the row is ready"
+		);
+		assert.ok(
+			Array.from(actions.querySelectorAll("[data-batch-action]")).every((button) => button.disabled && button.getAttribute("aria-disabled") === "true"),
+			"and every one of them is disabled while the row is not ready"
+		);
+		assert.equal(/[A-Za-z]{2,}/.test(actions.textContent), false, "the cell holds no words - only the three icons");
 	}
 
 	/* defaults: an unwritten style / length never reach the request */
@@ -382,10 +400,16 @@ test("one Generate runs every row that has a script and unlocks both cells toget
  * simply tries it again. tests/session-244.test.mjs guards the silent
  * retry loop itself.
  */
-test("a row that keeps failing stays quiet and keeps its cells as text", async () => {
+test("a row that keeps failing stays quiet and keeps its action icons locked", async () => {
 	const calls = [];
 	const { dom, w } = makeApp();
 	test.after(() => dom.window.close());
+	/*
+	 * Session 332: the editor layout now opens with its own Video 1 accordion, so
+	 * the honest baseline for "the table never touched the accordion state" is the
+	 * count the page booted with, not zero.
+	 */
+	const accordionsOnBoot = w.document.querySelectorAll("#video-accordions > .video-accordion").length;
 	w.__BATCH_RETRY.attempts = 2;
 	w.__BATCH_RETRY.baseMs = 1;
 	w.__BATCH_RETRY.maxMs = 2;
@@ -408,10 +432,20 @@ test("a row that keeps failing stays quiet and keeps its cells as text", async (
 	assert.equal(status.getAttribute("data-loading"), "0");
 	/* every attempt was a quiet retry, never a visible error */
 	assert.equal(calls.filter((call) => call.path === "/api/voiceover").length, 2);
-	/* a failed row keeps its cells as text: no dead buttons to press */
-	assert.equal(w.document.querySelectorAll('[data-batch-action="preview"]').length, 0);
+	/*
+	 * A failed row is not ready, so its icons stay locked: drawn (one per row)
+	 * but disabled, with nothing in the cell inviting a press (Session 332).
+	 */
+	const failedPreviewIcons = Array.from(w.document.querySelectorAll('[data-batch-action="preview"]'));
+	assert.equal(failedPreviewIcons.length, w.__BATCH_ROWS.length, "every row still draws its Preview icon");
+	assert.ok(failedPreviewIcons.every((button) => button.disabled), "and none of them is clickable");
+	assert.equal(
+		Array.from(w.document.querySelectorAll('[data-batch-slot="actions"]')).some((cell) => /[A-Za-z]{2,}/.test(cell.textContent)),
+		false,
+		"no Actions cell prints a word"
+	);
 	/* and the table never touched the accordion state */
-	assert.equal(w.document.querySelectorAll("#video-accordions > .video-accordion").length, 0);
+	assert.equal(w.document.querySelectorAll("#video-accordions > .video-accordion").length, accordionsOnBoot, "the failed row created no editor accordion");
 });
 
 test("export is a client-side job: no render endpoint is ever called", async () => {

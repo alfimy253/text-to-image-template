@@ -28,6 +28,12 @@ test('stalled font loading falls back and unrelated document fonts do not block 
 test('unreadable GIF does not block later projects or leave the render lock held', async () => {
   const { w } = harness();
   accelerate(w, [30000]);
+  /*
+   * Session 332: the editor layout now opens with its own empty Video 1, and an
+   * empty project is counted as "skipped" by the render queue. Drain it so this
+   * test still measures only the two projects it creates itself.
+   */
+  while (w.__VIDEO_PROJECTS.length) w.deleteVideoAccordion(1);
   w.addVideoAccordion();
   w.addVideoAccordion();
   const first = w.__VIDEO_PROJECTS[0], second = w.__VIDEO_PROJECTS[1];
