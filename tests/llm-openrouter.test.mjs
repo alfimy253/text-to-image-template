@@ -354,7 +354,7 @@ test("#271 an instruct call is answered by OpenRouter and keeps the env.AI.run s
 	assert.equal(JSON.parse(seen[0].init.body).temperature, 0.65);
 });
 
-test("#271 an image model never reaches OpenRouter", async () => {
+test("#271 image generation is refused outright, so it can never reach OpenRouter", async () => {
 	reset();
 	let openRouterCalls = 0;
 	const { env } = runtimeWith({ OPENROUTER_API_KEY: "sk-or-test" });
@@ -366,9 +366,17 @@ test("#271 an image model never reaches OpenRouter", async () => {
 			return json({});
 		}
 	});
-	const result = await runtime.ai.run("@cf/stabilityai/stable-diffusion-xl-base-1.0", { prompt: "a cat" });
-	assert.deepEqual(result, { response: "cloudflare-answer" });
-	assert.equal(openRouterCalls, 0);
+	/*
+	 * Session 331 removed AI image generation (Pixabay imports only), so the
+	 * image guard fires before either provider: nothing is spent, and the
+	 * error still says where images come from. The OpenRouter half of the
+	 * contract is pinned by the instruct-model test above.
+	 */
+	await assert.rejects(
+		() => runtime.ai.run("@cf/stabilityai/stable-diffusion-xl-base-1.0", { prompt: "a cat" }),
+		/pixabay/i
+	);
+	assert.equal(openRouterCalls, 0, "an image model never reaches OpenRouter");
 });
 
 test("#271 a failing OpenRouter falls back to Cloudflare instead of failing the script", async () => {

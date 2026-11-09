@@ -172,6 +172,18 @@ export const RELAY_COOLDOWN_BASE_MS = 30_000;
 export const RELAY_COOLDOWN_MAX_MS = 300_000;
 
 /**
+ * Wall-clock ceiling for ONE `env.AI.run()` call across its whole fail-over
+ * chain (every pool member it tries, including local).
+ *
+ * Without it the worst case is `(maxAttempts + 1) x timeoutMs`: with the
+ * defaults that is 4 x 100 s = 400 s, and with the largest configurable
+ * timeout 6 x 240 s = 24 minutes - a request nobody is waiting for any more,
+ * holding an isolate. The budget is `timeoutMs x attempts` capped here, and
+ * every attempt only gets what is left of it.
+ */
+export const RELAY_CHAIN_MAX_MS = 180_000;
+
+/**
  * The built-in HMAC secret. It is only a fallback: set the `RELAY_SECRET`
  * environment variable to the SAME value on every Worker in the pool to make
  * relay tokens unforgeable. With the fallback, any deployment of this source
@@ -807,6 +819,35 @@ export async function readRelayTicket(request: Request, env: any, now = Date.now
 	return relayTicketAllowsPath(ticket, pathname) ? ticket : null;
 }
 
+/**
+ * Reads the ticket that authorised a BROWSER FAILURE REPORT.
+ *
+ * A report arrives on `GET /api/relay/endpoint?failed=<id>` with the ticket of
+ * the answer that handed out the failing URL. `readRelayTicket()` is
+ * path-scoped and the endpoint path is not an AI path, so it would reject the
+ * very ticket it issued (which made every report a no-op). This variant only
+ * needs proof that WE minted the ticket for AI work: the signature, the expiry
+ * and a scope made of known AI paths. A stranger cannot forge that HMAC, so
+ * reports stay unforgeable; the caller still cannot cool anything but a backup
+ * of its own pool (checked by the route).
+ */
+export async function readRelayReportTicket(
+	request: Request,
+	env: any,
+	now = Date.now()
+): Promise<RelayTokenPayload | null> {
+	const raw = request.headers.get(RELAY_TICKET_HEADER);
+	if (!raw) return null;
+	const ticket = await verifyRelayToken(env, raw, "client", now);
+	if (!ticket) return null;
+	const paths = Array.isArray(ticket.paths) ? ticket.paths : [];
+	if (!paths.length) return null;
+	for (const path of paths) {
+		if (RELAY_AI_PATHS.indexOf(path) === -1) return null;
+	}
+	return ticket;
+}
+
 /* =============================================================
  * RESULT ENCODING
  * ============================================================= */
@@ -892,9 +933,21 @@ export interface RelayRunContext {
 	stats: { relayed: number; local: number; failedOver: number; endpoints: string[] };
 }
 
-function abortSignalFor(request: Request | undefined, timeoutMs: number): { signal?: AbortSignal; cleanup: () => void } {
+function abortSignalFor(
+	request: Request | undefined,
+	timeoutMs: number
+): { signal?: AbortSignal; timedOut: () => boolean; cleanup: () => void } {
 	const controller = typeof AbortController === "function" ? new AbortController() : null;
-	const timer = setTimeout(() => controller?.abort(), Math.max(1_000, timeoutMs));
+	/*
+	 * `timedOut` separates OUR deadline from the caller's cancellation. Both
+	 * abort the same controller, but only our own timeout may fail over: a
+	 * cancelled request must never be replayed on another Worker.
+	 */
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller?.abort();
+	}, Math.max(1_000, timeoutMs));
 	let detach: (() => void) | null = null;
 	if (request && request.signal && controller) {
 		const signal = request.signal;
@@ -907,11 +960,19 @@ function abortSignalFor(request: Request | undefined, timeoutMs: number): { sign
 	}
 	return {
 		signal: controller ? controller.signal : undefined,
+		timedOut: () => timedOut,
 		cleanup: () => {
 			clearTimeout(timer);
 			if (detach) detach();
 		}
 	};
+}
+
+/** The one timeout error shape every layer classifies as transient. */
+function relayTimeoutError(timeoutMs: number): Error {
+	const error = new Error("Relayed model call timed out after " + Math.round(timeoutMs / 1000) + " s");
+	error.name = "TimeoutError";
+	return error;
 }
 
 interface RelayOutcome {
@@ -993,7 +1054,7 @@ async function runRemoteModel(
 
 	const fetchImpl = options.fetchImpl || fetch;
 	const startedAt = Date.now();
-	const { signal, cleanup } = abortSignalFor(request, timeoutMs);
+	const { signal, timedOut, cleanup } = abortSignalFor(request, timeoutMs);
 	healthFor(entry.id).inFlight += 1;
 	try {
 		const response = await fetchImpl(entry.url + RELAY_AI_PATH, {
@@ -1045,8 +1106,16 @@ async function runRemoteModel(
 		noteRelaySuccess(entry.id, Date.now() - startedAt);
 		return data.result;
 	} catch (error) {
-		if (isTransientRelayFailure(error)) noteRelayFailure(entry.id, error, cooldownMs);
-		throw error;
+		/*
+		 * A backup that never answers rejects the fetch with an AbortError,
+		 * which is indistinguishable from a caller cancellation unless we ask
+		 * our own controller. Re-label it as a timeout: transient, so the call
+		 * fails over to the next member (and finally to local) instead of
+		 * failing the whole request on a hanging backup.
+		 */
+		const failure = timedOut() ? relayTimeoutError(timeoutMs) : error;
+		if (isTransientRelayFailure(failure)) noteRelayFailure(entry.id, failure, cooldownMs);
+		throw failure;
 	} finally {
 		cleanup();
 		healthFor(entry.id).inFlight = Math.max(0, healthFor(entry.id).inFlight - 1);
@@ -1131,7 +1200,15 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 
 		let lastError: unknown = null;
 		let attemptIndex = 0;
+		/* One budget for the whole chain, so a pool of hanging members cannot
+		 * turn one call into `attempts x timeoutMs` of waiting. */
+		const chainStartedAt = Date.now();
+		const chainBudget = Math.min(RELAY_CHAIN_MAX_MS, Math.max(1, settings.timeoutMs) * attempts.length);
 		for (const entry of attempts) {
+			const remaining = chainBudget - (Date.now() - chainStartedAt);
+			/* The first member always runs; later ones need a usable slice. */
+			if (attemptIndex > 0 && remaining < 250) break;
+			const attemptMs = Math.max(1_000, Math.min(settings.timeoutMs, remaining));
 			attemptIndex += 1;
 			stats.endpoints.push(entry.local ? "local" : entry.label);
 			try {
@@ -1140,11 +1217,13 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 						env,
 						model,
 						input,
-						settings.timeoutMs,
+						attemptMs,
 						request,
 						settings.cooldownMs
 					);
 					stats.local += 1;
+					/* Local answering an earlier member's failure is a fail-over too. */
+					if (attemptIndex > 1) stats.failedOver += 1;
 					return value;
 				}
 				/* Never forward `stream`: a relayed call returns one complete payload. */
@@ -1155,7 +1234,7 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 					env,
 					model,
 					safeInput,
-					settings.timeoutMs,
+					attemptMs,
 					request,
 					options,
 					settings.cooldownMs
@@ -1312,6 +1391,32 @@ export function relayRuntimeOf(env: any): RelayRuntime | null {
  * INBOUND COMPUTE ENDPOINT  (POST /api/relay/ai)
  * ============================================================= */
 
+/**
+ * The longest ONE relayed model call may run on the receiving Worker.
+ *
+ * It matches the largest per-attempt budget the policy can be configured with
+ * (`normalizeRelayConfig` caps `timeoutMs` at 240 s), so a legitimate long call
+ * is never cut short. The point is only that a hung AI binding cannot pin the
+ * isolate: the caller's own per-attempt timeout is the shorter, user-facing
+ * guard, and its 504/transient answer makes it fail over here.
+ */
+export const RELAY_ENDPOINT_MAX_MS = 240_000;
+
+/** Resolves/rejects with `work`, or rejects with a TimeoutError after `timeoutMs`. */
+function withDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+	let timer: any = null;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => {
+			const error = new Error("Relayed model call did not finish within " + Math.round(timeoutMs / 1000) + " s");
+			error.name = "TimeoutError";
+			reject(error);
+		}, Math.max(1_000, timeoutMs));
+	});
+	return Promise.race([work, timeout]).finally(() => {
+		if (timer) clearTimeout(timer);
+	}) as Promise<T>;
+}
+
 async function readBodyText(request: Request, maxBytes: number): Promise<string | null> {
 	const declared = Number(request.headers.get("Content-Length") || 0);
 	if (declared && declared > maxBytes) return null;
@@ -1370,9 +1475,15 @@ export async function handleRelayAiCall(
 
 	const startedAt = Date.now();
 	try {
-		/* Never relay again from here: this endpoint always executes locally. */
-		const result = await ai.run(model, input);
-		const encoded = await encodeRelayResult(result);
+		/*
+		 * Never relay again from here: this call always executes locally, and it
+		 * always finishes in bounded time (a hung binding answers 504-transient
+		 * so the caller fails over instead of waiting for nothing).
+		 */
+		const encoded = await withDeadline(
+			Promise.resolve(ai.run(model, input)).then((result) => encodeRelayResult(result)),
+			RELAY_ENDPOINT_MAX_MS
+		);
 		const headers: Record<string, string> = {
 			"Cache-Control": "no-store",
 			[RELAY_RESULT_HEADER]: encoded.kind,
@@ -1387,6 +1498,13 @@ export async function handleRelayAiCall(
 		return new Response(JSON.stringify({ ok: true, result: encoded.value }), { status: 200, headers });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		if (error instanceof Error && error.name === "TimeoutError") {
+			return jsonResponse(
+				{ success: false, ok: false, error: message, kind: "transient" },
+				504,
+				{ [RELAY_RESULT_HEADER]: "json", [RELAY_ERROR_KIND_HEADER]: "transient" }
+			);
+		}
 		const classification = classifyImageFailure(error);
 		const kind = classification.kind === "fatal" ? "model" : "transient";
 		return jsonResponse(
@@ -1519,7 +1637,7 @@ export async function describeRelayPool(
 	]);
 	const now = (options.now || Date.now)();
 	const endpoints: RelayEndpointReport[] = [];
-	/* One round trip per member, all in parallel (a probe is 8 s at worst). */
+	/* One round trip per member, all in parallel (a probe gives up after 5 s). */
 	const probes = new Map<string, PingCacheEntry>();
 	await Promise.all(
 		pool.map(async (entry) => {
@@ -1679,9 +1797,15 @@ export async function handleRelayRoutes(
 		 */
 		const failedId = String(url.searchParams.get("failed") || "").trim().slice(0, 300);
 		if (failedId && config.enabled) {
-			const reporter = await readRelayTicket(request, env === undefined ? {} : env).catch(() => null);
-			if (reporter) {
-				noteRelayFailure(failedId, new Error("browser reported a failed call"), config.cooldownMs);
+			const reporter = await readRelayReportTicket(request, env === undefined ? {} : env).catch(() => null);
+			/*
+			 * Only a BACKUP of this pool can be cooled by a report: the id has to
+			 * match a registered member, so `failed=local` cannot take the UI
+			 * Worker out of the ring, and an unknown id cools nothing.
+			 */
+			const reported = reporter ? pool.find((entry) => entry.id === failedId && !entry.local) : null;
+			if (reported) {
+				noteRelayFailure(reported.id, new Error("browser reported a failed call"), config.cooldownMs);
 			}
 		}
 

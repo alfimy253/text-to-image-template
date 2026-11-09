@@ -3421,3 +3421,94 @@ session-250-batch-pipeline       8 / 13   (pre-existing at 407ab86: same 5 failu
 - **Throttled, not debounced.** A slider drag publishes at most once every 1.2 s; Back and `beforeunload` force one final publish so the last state is never lost.
 - **Position fallback is a compatibility path.** Real slides are named after their image, so id matching is the normal path; the positional fallback only exists for slides created before the naming existed.
 - **Not exercised in a real browser.** The hand-back was verified by JSDOM tests against the real client modules and by the store's own save/verify result; the Back navigation itself was not clicked in a real Chromium page.
+
+## 27. Server API rotation: the round-robin is arithmetically sound, and every wait in it is now bounded (2026-11-09)
+
+**Status: audited, four bugs fixed, one fail-over metric repaired, tests green.** Request, verbatim:
+
+> "make sure the rotation on server is logical check for hanging implementation"
+
+Scope: `src/modules/api-relay.ts` (pool, ring, health, relay, endpoint hand-out) and `src/client/api-rotation.ts` (the caller that obeys it), plus the provider rotation in `src/modules/llm-openrouter.ts` that sits above it.
+
+### 27.1 What "logical" means here, and what the numbers are
+
+The rotation is one weighted ring walked by one cursor. The local (UI) Worker is entered `config.localWeight` times (default `1`); every backup is entered `RELAY_BACKUP_RING_WEIGHT = 3` times. Walking that ring with a cursor is a true round robin in which the UI Worker always carries the smaller share:
+
+| Registered backups | Ring length | UI Worker share | Each backup share |
+|---|---|---|---|
+| 0 | 1 | 100 % (the pre-rotation behaviour) | — |
+| 1 | `1 + 3 = 4` | 25 % | 75 % |
+| 2 | `1 + 6 = 7` | 14 % | 43 % each |
+| 3 | `1 + 9 = 10` | 10 % | 30 % each |
+| 4 | `1 + 12 = 13` | 8 % | 23 % each |
+| 5 | `1 + 15 = 16` | 6 % | 19 % each |
+
+`tests/api-relay.test.mjs` now walks 160 picks over a five-backup pool and asserts exactly 10 / 30 / 30 / 30 / 30 / 30, so the table is a pinned contract rather than a comment. The same test pins the two edges: `localWeight: 0` removes the UI Worker from the hand-out while every backup still takes its turn, and a pool whose backups have all cooled still answers — on the UI Worker, because a cooling member is pushed to the end of the list, never removed.
+
+Two smaller logical points were checked and are correct as written:
+
+- **The ring is rebuilt per call, from the healthy members only**, so a cooled member leaves the ring entirely (its slots go to the others) instead of occupying slots that then have to be skipped.
+- **`preferLocal`** (set when a request arrives carrying a rotation ticket) pulls the local member to the front, so work the browser just sent here is executed here and never bounced back to the Worker the studio left. A relayed call cannot relay again because `handleRelayRoutes` is dispatched with `baseEnv` (the raw bindings), and the compute endpoint calls `ai.run` directly.
+
+### 27.2 The hangs that were real
+
+| # | What hung | Why | Fixed |
+|---|---|---|---|
+| 1 | A **slow/hanging backup** failed the whole request instead of failing over | our own per-attempt deadline aborts the `fetch`, which rejects with `AbortError`; `isTransientRelayFailure()` reads `AbortError` as "the caller cancelled" and `runViaWorkersAi` rethrows it immediately | `abortSignalFor()` now records whether *our* timer fired and `runRemoteModel()` re-labels that case as a `TimeoutError` (transient) → the next member runs, and finally local |
+| 2 | A **browser failure report never cooled anything** | the report arrives on `GET /api/relay/endpoint?failed=<id>` with the ticket of the answer that handed out the URL, but `readRelayTicket()` is path-scoped to the AI paths, and the endpoint path is not one — so the very ticket the Worker minted was rejected | new `readRelayReportTicket()` verifies the HMAC and expiry and requires a scope made only of AI paths; the route then cools the reported member |
+| 3 | A report could cool **any** id, including `local` | the route fed `failed=<anything>` straight into `noteRelayFailure()` | the reported id must match a **backup of this pool** (`!entry.local`), so `failed=local` and unknown ids do nothing |
+| 4 | One `env.AI.run()` could wait **(maxAttempts + 1) x timeoutMs** | each attempt was allowed the full per-attempt timeout, and the local backstop is appended *beyond* `maxAttempts`; with defaults that is 400 s, with the largest configurable timeout it is 24 minutes | new `RELAY_CHAIN_MAX_MS = 180_000` gives the whole chain one budget (`timeoutMs x attempts`, capped); each attempt gets `min(timeoutMs, remaining)`, and a member is skipped when fewer than 250 ms are left |
+| 5 | The **inbound compute endpoint** had no deadline at all | `POST /api/relay/ai` awaited `ai.run()` and the result decoding with nothing bounding them; a hung binding pinned the isolate until the platform killed it | `withDeadline()` bounds `ai.run` **plus** `encodeRelayResult` at `RELAY_ENDPOINT_MAX_MS = 240_000` (the largest budget the policy can be configured with, so a legitimate long call is never cut) and answers `504` + `kind: transient`, which is exactly what makes the caller fail over |
+
+### 27.3 The fail-over that was never reported
+
+`stats.failedOver` only incremented on the *remote* success path (`if (attemptIndex > 1)`), so the most common fail-over of all — a backup failed and **the UI Worker answered** — reported `failedOver: 0`. The local branch now increments it too. This is diagnostics, not behaviour, but the `rotation` block that diagnostic routes return (`relayRuntimeOf(env).stats()`, e.g. `POST /api/llm/generate` in `src/index.ts`) reports it, so a pool that was failing over looked idle.
+
+### 27.4 Every wait in the path, and its bound
+
+| Wait | Bound | What happens when it fires |
+|---|---|---|
+| Browser asks for an endpoint (`GET /api/relay/endpoint`) | `ASK_TIMEOUT_MS = 8000` (`src/client/api-rotation.ts`) | `null` answer → the original same-origin request runs on the UI Worker |
+| Browser retries after a failed rotated call | `MAX_ASK_ATTEMPTS = 2`, and only for replayable bodies (`string`/`Blob`/`FormData`/`URLSearchParams`) | the last response is returned to the caller; a streamed body is never replayed |
+| One relayed model call | `min(policy.timeoutMs, chain remaining)`, floored at 1 s | `TimeoutError` → next member → local |
+| One whole `env.AI.run()` chain | `RELAY_CHAIN_MAX_MS = 180 s` | the last error is thrown; the request ends |
+| Local `ai.run` | race against the same per-attempt timeout | `TimeoutError` (transient) → next member |
+| Inbound `/api/relay/ai` compute | `RELAY_ENDPOINT_MAX_MS = 240 s` (model **and** decoding) | `504` transient → the caller fails over |
+| Reachability probe | 5 s per member, all members in parallel | that member is cached `reachable: false` for 60 s |
+| `GET /api/relay/pool` probes | backgrounded via `ctx.waitUntil` when available | the route answers immediately |
+| Circuit breaker | 30 s doubling to a 300 s ceiling, reset on success | the member leaves the ring while it cools |
+| Attempts per call | `maxAttempts` (1–5) + the local backstop | the last error is thrown |
+
+Nothing in the file loops without a counter: the ring walk is `for (i < ring.length)`, the attempt loop is `for (entry of attempts)`, the provider loop is `for (index < providers.length)`, and `readStreamBytes()` is bounded by `RELAY_MAX_RESULT_BYTES`. `orderLlmProviders()` returns at most two providers, each tried once.
+
+### 27.5 Tests added and repaired
+
+| File | Change |
+|---|---|
+| `tests/api-relay.test.mjs` | **new** “the UI Worker's share shrinks as backups are added: 1 slot in (1 + 3 x backups)” (160 picks → 10 local / 30 each; `localWeight: 0`; fully cooled pool falls back to local) |
+| `tests/api-relay.test.mjs` | **new** “a backup that never answers times out, is cooled, and the call still lands on the UI Worker” — a fetch that accepts the connection and never answers; `timeoutMs: 5000`; the call resolves on local, the chain stays under `RELAY_CHAIN_MAX_MS`, and the member's circuit is open with a timeout error recorded |
+| `tests/api-relay.test.mjs` | **new** “a timeout is transient but a cancelled request is not” — a pre-aborted request surfaces as `AbortError` and is **not** replayed on another member |
+| `tests/api-relay.test.mjs` | **new** “a browser failure report needs a signed ticket and can only cool a backup” — no ticket ⇒ nothing; forged ticket ⇒ nothing; `failed=local` ⇒ nothing; the real ticket ⇒ the backup cools and the next three hand-outs avoid it; a ticket scoped past the AI paths ⇒ refused |
+| `tests/api-relay.test.mjs` | **repaired (5 tests, pre-existing red at `407ab86`)** the `/api/image` fixtures were stale: Session 331 §25 removed AI image generation, so every one of them died on “AI image generation is disabled; use Pixabay” before reaching the relay. The binary-relay contract now rides on `@cf/myshell-ai/melotts`, and the two end-to-end route tests use `/api/voiceover` (a ticket-only caller, real `audio/mpeg` bytes) instead of the Pixabay importer |
+| `tests/llm-openrouter.test.mjs` | “an image model never reaches OpenRouter” now asserts the image guard (nothing is spent, the error points at Pixabay) instead of expecting a Cloudflare answer |
+
+### 27.6 Verification (this pass)
+
+```text
+npx tsc --noEmit                       # 30 diagnostics, all src/index.ts (unchanged baseline)
+
+api-relay                       40 / 40   (was 36 tests: 31 pass / 5 stale-red)
+llm-openrouter                  24 / 24   (was 23 / 24 - one stale image test)
+pixabay-media                   58 / 58
+public-entry-points              9 /  9
+session-331-fixes               10 / 10
+```
+
+### 27.7 Small print and judgement calls
+
+- **Health, cursors and cooldowns are per isolate.** They live in module memory, so a report or a timeout cools the member only for the isolate that saw it, and a brand-new isolate starts its cursor at slot 0 — which is the **local** slot. Under bursty traffic spread across many cold isolates the UI Worker therefore takes more than its 1-in-16 share; under steady traffic on warm isolates it takes exactly its share. Making the cursor start at a random offset would remove the warm-up bias, but the deterministic start is what the pinned ring tests (and a debuggable admin page) rely on, so it is left as is and documented.
+- **The browser still asks once per AI call.** Each `/api/script`, `/api/image`, `/api/voiceover` … costs one extra same-origin `GET /api/relay/endpoint` (KV reads cached 15–20 s inside the isolate) before the real request. That is the price of the server owning the pick; the 8 s cap plus the local fallback keeps it from ever being a hang.
+- **The endpoint's 240 s deadline is a hang guard, not a policy.** It equals the largest `timeoutMs` the policy can store, so no legitimate configuration is ever cut short by it; the shorter, user-facing guard is the caller's own per-attempt timeout.
+- **A timed-out `ai.run` on the receiving Worker keeps running.** JavaScript cannot cancel it; the isolate is released when it settles, and the caller has already failed over.
+- **The 5 repaired tests were red before this pass.** They failed at `407ab86` on the Pixabay-only policy added in §25, not on anything in the rotation, which is why §25's table listed `session-250-batch-pipeline` and `seo-walkthrough` as the only known reds — `api-relay` was not re-run in that pass. Retargeting them restored coverage of the binary relay path, which no passing test had covered since §25.
+- **Not exercised against real Cloudflare Workers.** The timing paths are pinned with stubbed bindings and fetch functions inside the test process; the 5 s timeout test really waits 5 s, but no test waits out the 180 s chain budget or the 240 s endpoint deadline.
