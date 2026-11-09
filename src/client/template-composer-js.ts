@@ -2051,16 +2051,18 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		 *
 		 * The timeline bundle registers the sink, so every MP4 this modal renders
 		 * belongs to the open timeline: "Download MP4" saves the file to disk AND
-		 * hands the same clip to the timeline, and "Add to Scene Media" only hands
-		 * it over. Either way the timeline appends it after the right-most Scene
+		 * hands the same clip to the timeline, and "Add to Video" only hands it
+		 * over. Either way the timeline appends it after the right-most Scene
 		 * Media clip, one scene per clip, so the timeline's own Export MP4 renders
 		 * the new scene in order at the end.
 		 *
-		 * With no sink registered - the editor layout - the label stays
-		 * "Add to Video N" and every existing gallery behaviour is unchanged.
+		 * The button keeps the studio's "Add to Video" wording on both layouts.
+		 * The timeline page has no Video N accordion, so it drops the number
+		 * there; the editor layout keeps "Add to Video N" to say which accordion
+		 * the clip goes to, and its gallery behaviour is unchanged.
 		 */
 		function timelineClipTarget(n) {
-			return timelineClipSink() ? "Scene Media" : "Video " + n;
+			return timelineClipSink() ? "Video" : "Video " + n;
 		}
 
 		/*

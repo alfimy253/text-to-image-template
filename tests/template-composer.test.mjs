@@ -347,7 +347,7 @@ test("on the timeline page Download MP4 also appends the clip to the end of Scen
 	h.window.__TIMELINE_TEMPLATE_CLIP__ = (clip) => { landed.push(clip); return 1; };
 	/* The timeline page builds/opens the modal after its sink exists. */
 	h.window.openTemplateModal(1);
-	assert.match(h.document.querySelector("#tpl-add").textContent, /Add to Scene Media/, "the modal targets the timeline layer, not a hidden Video N");
+	assert.equal(h.document.querySelector("#tpl-add").textContent.trim(), "\u2795 Add to Video", "the modal keeps the studio's Add to Video wording and drops the invisible Video N number");
 
 	await h.api.export({ download: true });
 	assert.equal(h.frames.length, 30, "the clip is rendered once");
@@ -356,18 +356,18 @@ test("on the timeline page Download MP4 also appends the clip to the end of Scen
 	assert.equal(landed[0].durationSec, 1, "with its own length");
 	assert.ok(landed[0].blob instanceof h.window.Blob, "and its media bytes");
 	assert.match(h.document.querySelector("#tpl-status").textContent, /Scene Media/i, "the modal says where the clip landed");
-	assert.match(h.document.querySelector("#tpl-add").textContent, /Add to Scene Media/);
+	assert.equal(h.document.querySelector("#tpl-add").textContent.trim(), "\u2795 Add to Video");
 
 	/* The Add button hands over without downloading, and never fills the gallery. */
 	await h.api.addToVideo();
-	assert.equal(landed.length, 2, "Add to Scene Media appends another clip");
+	assert.equal(landed.length, 2, "Add to Video appends another clip");
 	assert.equal(h.downloads.length, 1, "Add never downloads");
 	assert.equal(h.window.videoProjects[0].assets.length, 0, "the hidden Video N gallery stays empty");
 
 	/* With no sink the modal is the editor layout's again. */
 	delete h.window.__TIMELINE_TEMPLATE_CLIP__;
 	h.window.openTemplateModal(1);
-	assert.match(h.document.querySelector("#tpl-add").textContent, /Add to Video 1/, "the editor layout keeps its gallery label");
+	assert.equal(h.document.querySelector("#tpl-add").textContent.trim(), "\u2795 Add to Video 1", "the editor layout keeps its numbered gallery label");
 	await h.api.addToVideo();
 	assert.equal(h.window.videoProjects[0].assets.length, 1, "and its gallery path still fills the accordion");
 });

@@ -2617,7 +2617,7 @@ The gap was in the other button. The modal's primary control is **⬇ Download M
 
 1. rendering a clip and clicking **⬇ Download MP4** downloaded `template_<scene>_portrait.mp4` and added **nothing** to the timeline;
 2. the Scene Media lane therefore had no new scene, `state.durationSec` never grew, and the timeline's own **⬇ Export MP4** could not contain the clip;
-3. the surviving **Add** button still said **➕ Add to Video N** on a page that renders no `Video N` accordion at all, which made the one path that did work read like the wrong one.
+3. the surviving **Add** button said **➕ Add to Video N** — a numbered accordion that page never renders — while the modal's primary **⬇ Download MP4** control was the one that added nothing, so the wording pointed away from the only path that worked.
 
 A second, smaller gap: `appendQueuedClips()` reported `Queued 1 clip at the right-most end of Scene Media (…)`, which never said that the clip had become a scene of the exported MP4, and it did not refresh the project heading that prints the scene count.
 
@@ -2625,7 +2625,7 @@ A second, smaller gap: `appendQueuedClips()` reported `Queued 1 clip at the righ
 
 Two small functions sit beside `timelineClipSink()`:
 
-- `timelineClipTarget(n)` returns `"Scene Media"` when the timeline sink exists and `"Video " + n` otherwise — the single source of the modal's target name.
+- `timelineClipTarget(n)` returns `"Video"` when the timeline sink exists and `"Video " + n` otherwise — the single source of the modal's target name. The timeline page has no `Video N` accordion, so its button is the plain **➕ Add to Video**; the editor layout keeps **➕ Add to Video N** to name the accordion the clip lands in.
 - `handClipToTimeline(renderedVideo, clipDuration)` performs the whole hand-off: it returns `0` when there is no sink or no bytes, wraps the blob in a `File` named after the render, and calls the sink with `{ blob, file, name, durationSec }`. Its return value is the sink's "how many clips landed" count, so the modal can report success or refusal. A `try/catch` keeps a throwing sink from breaking the modal.
 
 `exportMP4()` now calls it in its success path, **only when `shouldDownload !== false`**:
@@ -2641,7 +2641,7 @@ That is exactly the "exported clip must be added" contract: the download still h
 
 ### 23.4 Change 2 — the modal says what it will do (`src/client/template-composer-js.ts`)
 
-- Every button label is built from `timelineClipTarget(n)`: **➕ Add to Scene Media** on `layout=timeline`, **➕ Add to Video N** everywhere else; the "✅ Added to …" reset uses the same helper.
+- Every button label is built from `timelineClipTarget(n)`: **➕ Add to Video** on `layout=timeline`, **➕ Add to Video N** everywhere else; the "✅ Added to …" reset uses the same helper. The destination is explained by the status line and the timeline's own "Scene Media" lane label, not by renaming the button.
 - After a successful download hand-off the status line reads `MP4 ready — downloaded as <file> and added at the end of the Scene Media layer`; if the timeline refuses (its own export is running, the media lane is missing, the 100-clip cap), it reads `… but the timeline could not take the clip` instead of silently succeeding.
 - On the timeline page `buildModal()` rewrites `#tpl-sub` so the paragraph describes Scene Media and the timeline MP4 instead of the `Video N` gallery. The editor layout keeps the original paragraph byte for byte.
 
@@ -2672,7 +2672,7 @@ That is exactly the "exported clip must be added" contract: the download still h
 New coverage in detail:
 
 1. *timeline editor test 34 — a composed clip is the last Scene Media scene and the timeline MP4 export renders it*: a 5 s project receives `window.__TIMELINE_TEMPLATE_CLIP__({ blob, name: "closing-card.mp4", durationSec: 1 })`; the clip starts at the old right-most end (5 s), the project grows to 10 s on the 5 s grid, the matching `state.scenes` entry is last and carries the clip's scene id/asset id/name, `exportTimeline()` encodes **300** frames (10 s × 30 fps, i.e. the appended scene's whole window), and frames inside that window draw the composed clip's `<video>` rather than a placeholder.
-2. *template composer test 20 — on the timeline page Download MP4 also appends the clip to the end of Scene Media*: with the sink registered, `#tpl-add` reads **Add to Scene Media**, `exportMP4({ download: true })` renders 30 frames, downloads once **and** calls the sink once with the clip's own length and a `Blob`; the status names Scene Media; **➕** appends a second clip without a second download and without filling `videoProjects[0].assets`; deleting the sink and re-opening the modal restores **Add to Video 1** and the gallery push.
+2. *template composer test 20 — on the timeline page Download MP4 also appends the clip to the end of Scene Media*: with the sink registered, `#tpl-add` reads exactly **➕ Add to Video**, `exportMP4({ download: true })` renders 30 frames, downloads once **and** calls the sink once with the clip's own length and a `Blob`; the status names Scene Media as the destination; **➕** appends a second clip without a second download and without filling `videoProjects[0].assets`; deleting the sink and re-opening the modal restores **➕ Add to Video 1** and the gallery push.
 
 ### 23.8 Notes, gotchas and deliberate decisions
 
