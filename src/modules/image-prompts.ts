@@ -89,6 +89,14 @@ export interface ImagePromptInput {
 	totalScenes?: number;
 	resolution?: number;
 	orientation?: string;
+	/**
+	 * Session 331: "script" plans the Pixabay search terms from the narration
+	 * script + the selected SEO keyword set, inside each scene's time window.
+	 * Omitted (every legacy caller) keeps the instruct-model planner.
+	 */
+	keywordSource?: "script";
+	/** Verified voiceover length in seconds; the scene windows are cut from it. */
+	durationSec?: number;
 	/** Stateless browser-managed batch. Omitted by legacy callers. */
 	batch?: { offset: number; count: number; total: number; attempt: number; previous: string[]; previousError?: string };
 	/**
@@ -1548,13 +1556,309 @@ export function buildStockSearchInstruction(input: ImagePromptInput, total: numb
 	].filter(Boolean).join("\n");
 }
 
+/* ---------------------------------------------------------------------------
+ * SESSION 331 — SCRIPT-ANCHORED SCENE KEYWORDS (no language model)
+ *
+ * Scene searches used to be invented by the instruct model. They are now read
+ * straight out of the narration script, so a scene can only ever search for a
+ * word that is actually spoken inside that scene's time window:
+ *
+ *   1. the script is split into words; each word owns the span of speech it
+ *      would occupy (character-weighted, like a real read-through);
+ *   2. the scene (1 of 12) owns its own slice of that timeline, taken from the
+ *      verified voiceover length (or the script's read time when no audio
+ *      exists yet);
+ *   3. the words spoken inside that slice are ranked by the SEO plan the user
+ *      picked — long-tail words first, then the short keywords, then the rest
+ *      of the script's words;
+ *   4. articles, pronouns, prepositions, auxiliaries, numbers and flat
+ *      adjectives ("very", "great", "important") never become search terms.
+ *
+ * Duplicate search terms across scenes are allowed on purpose: the same word
+ * can be the right picture for two scenes, and the client still guarantees a
+ * distinct Pixabay result per scene through the token's `index`.
+ * ------------------------------------------------------------------------- */
+
+export const SCRIPT_KEYWORD_MAX_WORDS = 5;
+export const SCRIPT_KEYWORD_MAX_CHARS = 100;
+
+/* Words that carry no picture. Articles, prepositions, pronouns, auxiliaries,
+ * conjunctions, question words, fillers, number words and generic nouns. */
+export const SCRIPT_KEYWORD_STOPWORDS: readonly string[] = [
+	"a", "an", "the", "and", "or", "but", "nor", "so", "yet", "for", "of", "to",
+	"in", "on", "at", "by", "with", "from", "into", "onto", "over", "under",
+	"about", "above", "below", "across", "after", "before", "during", "between",
+	"through", "against", "within", "without", "upon", "via", "per", "than",
+	"then", "that", "this", "these", "those", "there", "here", "their", "they",
+	"them", "its", "it", "is", "are", "was", "were", "be", "been", "being", "am",
+	"do", "does", "did", "done", "doing", "have", "has", "had", "having", "will",
+	"would", "can", "could", "shall", "should", "may", "might", "must", "not",
+	"no", "yes", "if", "else", "as", "because", "while", "when", "where", "who",
+	"whom", "whose", "which", "what", "why", "how", "also", "just", "only",
+	"even", "still", "very", "too", "quite", "rather", "really", "actually",
+	"literally", "basically", "simply", "already", "again", "always", "never",
+	"often", "sometimes", "usually", "soon", "now", "today", "tomorrow",
+	"yesterday", "one", "two", "three", "four", "five", "six", "seven", "eight",
+	"nine", "ten", "first", "second", "third", "last", "next", "other",
+	"another", "same", "own", "each", "every", "all", "any", "both", "few",
+	"many", "much", "more", "most", "less", "least", "some", "such", "enough",
+	"several", "various", "whole", "entire", "part", "kind", "sort", "lot",
+	"lots", "bit", "thing", "things", "stuff", "way", "ways", "make", "makes",
+	"made", "making", "get", "gets", "got", "getting", "go", "goes", "went",
+	"going", "gone", "let", "lets", "you", "your", "yours", "we", "us", "our",
+	"ours", "i", "me", "my", "mine", "he", "him", "his", "she", "her", "hers"
+];
+
+/* Flat describing words: they say how something is, never what it is. */
+export const SCRIPT_KEYWORD_WEAK_WORDS: readonly string[] = [
+	"good", "great", "bad", "worse", "worst", "best", "better", "big", "bigger",
+	"biggest", "small", "smaller", "smallest", "large", "larger", "largest",
+	"little", "tiny", "huge", "massive", "nice", "fine", "okay", "ok",
+	"important", "different", "similar", "simple", "easy", "hard", "difficult",
+	"new", "newer", "newest", "old", "older", "oldest", "modern", "beautiful",
+	"pretty", "amazing", "awesome", "incredible", "fantastic", "wonderful",
+	"interesting", "exciting", "powerful", "strong", "weak", "fast", "slow",
+	"quick", "quickly", "slowly", "easily", "real", "actual", "true", "false",
+	"main", "major", "minor", "key", "core", "basic", "common", "general",
+	"certain", "specific", "particular", "possible", "impossible", "able",
+	"unable", "sure", "clear", "obvious", "complex", "serious", "enormous",
+	"typical", "usual", "normal", "average", "overall", "extra", "final", "full",
+	"empty", "open", "closed", "high", "low", "long", "short", "wide", "narrow",
+	"deep", "daily", "weekly", "monthly", "yearly", "annual", "total",
+	/* Flat verbs: they describe an action, not an image. */
+	"use", "used", "uses", "using", "need", "needs", "needed", "turn", "turns",
+	"turned", "stay", "stays", "keep", "keeps", "see", "sees", "saw", "know",
+	"knows", "knew", "think", "thinks", "want", "wants", "like", "likes", "look",
+	"looks", "come", "comes", "came", "take", "takes", "took", "give", "gives",
+	"gave", "say", "says", "said", "tell", "tells", "told", "find", "finds",
+	"found", "help", "helps", "seem", "seems", "include", "includes", "become",
+	"becomes", "happen", "happens", "allow", "allows", "provide", "provides"
+];
+
+const SCRIPT_KEYWORD_STOP_SET = new Set(SCRIPT_KEYWORD_STOPWORDS);
+const SCRIPT_KEYWORD_WEAK_SET = new Set(SCRIPT_KEYWORD_WEAK_WORDS);
+
+export interface TimedScriptWord {
+	/** Normalised, search-ready word. */
+	word: string;
+	/** When the word starts / ends being spoken, in seconds. */
+	startSec: number;
+	endSec: number;
+	/** Position in the script, so a query keeps the spoken order. */
+	ordinal: number;
+}
+
+export interface ScriptSceneKeywordPlan {
+	scene: number;
+	query: string;
+	words: string[];
+	startSec: number;
+	endSec: number;
+	/** True when at least one chosen word is also in the user's SEO plan. */
+	planMatched: boolean;
+}
+
+export interface SceneKeywordVocabulary {
+	longTail: Set<string>;
+	short: Set<string>;
+}
+
+function sceneKeywordWord(value: string): string {
+	return String(value ?? "")
+		.toLowerCase()
+		.replace(/[\u2018\u2019']/g, "")
+		.replace(/[^a-z0-9]+/g, "")
+		.trim();
+}
+
+/** A word may become a Pixabay search term only if it names something. */
+export function isSceneKeywordWord(value: string): boolean {
+	const word = sceneKeywordWord(value);
+	if (!word || word.length < 3) return false;
+	if (/^\d+$/.test(word)) return false;
+	if (SCRIPT_KEYWORD_STOP_SET.has(word)) return false;
+	if (SCRIPT_KEYWORD_WEAK_SET.has(word)) return false;
+	return true;
+}
+
+/**
+ * Split the script into words and give every word the span of speech it would
+ * occupy. Longer words take longer to say, so the span is character-weighted:
+ * the 90th character of a 900-character script is spoken at 10% of the video.
+ */
+export function timedScriptWords(script: string, durationSec: number): TimedScriptWord[] {
+	const text = String(script || "");
+	const pattern = /[A-Za-z\u2018\u2019'][A-Za-z\u2018\u2019'-]*/g;
+	const tokens: { word: string; weight: number }[] = [];
+	let match: RegExpExecArray | null = null;
+	while ((match = pattern.exec(text))) {
+		const word = sceneKeywordWord(match[0]);
+		if (!word || /^\d+$/.test(word)) continue;
+		tokens.push({ word, weight: Math.max(1, word.length) });
+	}
+	const totalWeight = tokens.reduce((sum, token) => sum + token.weight, 0) || 1;
+	const duration = Math.max(1, Number(durationSec) || 0);
+	let elapsed = 0;
+	return tokens.map((token, ordinal) => {
+		const startSec = (elapsed / totalWeight) * duration;
+		elapsed += token.weight;
+		return { word: token.word, startSec, endSec: (elapsed / totalWeight) * duration, ordinal };
+	});
+}
+
+/** Long-tail words outrank short keywords, which outrank plain script words. */
+function sceneKeywordWeight(vocabulary: SceneKeywordVocabulary, word: string): number {
+	if (vocabulary.longTail.has(word)) return 3;
+	if (vocabulary.short.has(word)) return 2;
+	return 1;
+}
+
+function sceneKeywordVocabulary(keywordSet: ImagePromptInput["keywordSet"]): SceneKeywordVocabulary {
+	const longTail = new Set<string>();
+	const short = new Set<string>();
+	const add = (target: Set<string>, value: unknown) => {
+		const text = typeof value === "string" ? value : value && typeof value === "object"
+			? String((value as Record<string, unknown>).keyword ?? (value as Record<string, unknown>).text ?? (value as Record<string, unknown>).word ?? "")
+			: "";
+		text.split(/[^A-Za-z0-9']+/).forEach((part) => {
+			const word = sceneKeywordWord(part);
+			if (word) target.add(word);
+		});
+	};
+	if (keywordSet && typeof keywordSet === "object") {
+		add(longTail, keywordSet.longTail);
+		if (Array.isArray(keywordSet.short)) keywordSet.short.forEach((entry) => add(short, entry));
+	}
+	return { longTail, short };
+}
+
+/** The video length the scene windows are cut from. */
+export function scenePlanDuration(input: ImagePromptInput): number {
+	const explicit = Number(input.durationSec);
+	if (Number.isFinite(explicit) && explicit > 0) return Math.min(3600, Math.max(1, explicit));
+	const words = String(input.script || input.scriptIdea || "").split(/\s+/).filter(Boolean).length;
+	/* 150 spoken words a minute = 2.5 words a second. */
+	if (words > 0) return Math.min(3600, Math.max(1, words / 2.5));
+	return Math.min(3600, Math.max(1, (Number(input.minutes) || 1) * 60));
+}
+
+function clampSceneQuery(words: string[]): string {
+	const picked: string[] = [];
+	let length = 0;
+	for (const word of words) {
+		const next = picked.length ? length + 1 + word.length : word.length;
+		if (picked.length >= SCRIPT_KEYWORD_MAX_WORDS || next > SCRIPT_KEYWORD_MAX_CHARS) break;
+		if (picked.indexOf(word) !== -1) continue;
+		picked.push(word);
+		length = next;
+	}
+	return picked.join(" ");
+}
+
+function nearestSceneWord(words: TimedScriptWord[], at: number): TimedScriptWord | null {
+	let best: TimedScriptWord | null = null;
+	let bestDistance = Number.POSITIVE_INFINITY;
+	for (const word of words) {
+		const distance = Math.min(Math.abs(word.startSec - at), Math.abs(word.endSec - at));
+		if (distance < bestDistance) { best = word; bestDistance = distance; }
+	}
+	return best;
+}
+
+function vocabularyFallback(vocabulary: SceneKeywordVocabulary): string[] {
+	return Array.from(vocabulary.longTail).concat(Array.from(vocabulary.short));
+}
+
+/**
+ * The words for one scene: the content words spoken inside its window, ranked
+ * by the SEO plan, then by the order they are said.
+ */
+export function planScriptSceneQuery(
+	words: TimedScriptWord[],
+	vocabulary: SceneKeywordVocabulary,
+	startSec: number,
+	endSec: number,
+	input: ImagePromptInput
+): { query: string; words: string[]; planMatched: boolean } {
+	const lastWindow = endSec >= scenePlanDuration(input) - 0.001;
+	const inWindow = words.filter((word) => {
+		const at = (word.startSec + word.endSec) / 2;
+		if (at < startSec) return false;
+		return lastWindow ? at <= endSec + 0.001 : at < endSec;
+	});
+	const scored = inWindow
+		.map((word) => ({ word, weight: sceneKeywordWeight(vocabulary, word.word) }))
+		.sort((a, b) => b.weight - a.weight || a.word.ordinal - b.word.ordinal);
+	const chosen: TimedScriptWord[] = [];
+	let planMatched = false;
+	for (const entry of scored) {
+		if (chosen.length >= SCRIPT_KEYWORD_MAX_WORDS) break;
+		if (chosen.some((word) => word.word === entry.word.word)) continue;
+		if (entry.weight > 1) planMatched = true;
+		chosen.push(entry.word);
+	}
+	if (chosen.length) {
+		/* Keep the spoken order so the query reads like the sentence. */
+		chosen.sort((a, b) => a.ordinal - b.ordinal);
+		const query = clampSceneQuery(chosen.map((word) => word.word));
+		if (query) return { query, words: query.split(" "), planMatched };
+	}
+	/* Nothing said inside the window names a thing: borrow the closest word. */
+	const nearest = nearestSceneWord(words, (startSec + endSec) / 2);
+	const nearestQuery = nearest ? clampSceneQuery([nearest.word]) : "";
+	if (nearestQuery) return { query: nearestQuery, words: nearestQuery.split(" "), planMatched: sceneKeywordWeight(vocabulary, nearest!.word) > 1 };
+	/* A silent stretch of script: fall back to the SEO plan, then the topic. */
+	const planQuery = clampSceneQuery(vocabularyFallback(vocabulary));
+	if (planQuery) return { query: planQuery, words: planQuery.split(" "), planMatched: true };
+	const topicQuery = clampSceneQuery(
+		String(input.topic || "").split(/\s+/).filter((word) => isSceneKeywordWord(word)).map(sceneKeywordWord)
+	);
+	if (topicQuery) return { query: topicQuery, words: topicQuery.split(" "), planMatched: false };
+	const rawTopic = normalizeSearchQuery(String(input.topic || "abstract background")).slice(0, SCRIPT_KEYWORD_MAX_CHARS);
+	return { query: rawTopic, words: rawTopic.split(" "), planMatched: false };
+}
+
+/**
+ * One search query per requested scene. `offset`/`count` mirror the stateless
+ * browser batch, so scene 3 of a 3-scene chunk still uses the window of scene
+ * 3 of the whole video.
+ */
+export function planScriptSceneKeywords(
+	input: ImagePromptInput,
+	total: number,
+	offset = 0,
+	count?: number
+): ScriptSceneKeywordPlan[] {
+	const totalScenes = Math.max(1, Math.floor(Number(total) || SCENE_MEDIA_TOTAL));
+	const first = Math.max(0, Math.floor(Number(offset) || 0));
+	const wanted = Math.max(0, Math.floor(Number(count ?? totalScenes - first) || 0));
+	const durationSec = scenePlanDuration(input);
+	/*
+	 * Only words that name something reach a search query: the articles,
+	 * pronouns, prepositions, auxiliaries, numbers and flat adjectives are
+	 * dropped before the timing windows are cut.
+	 */
+	const words = timedScriptWords(input.script || input.scriptIdea || "", durationSec)
+		.filter((word) => isSceneKeywordWord(word.word));
+	const vocabulary = sceneKeywordVocabulary(input.keywordSet);
+	const plans: ScriptSceneKeywordPlan[] = [];
+	for (let index = 0; index < wanted; index++) {
+		const scene = first + index;
+		if (scene >= totalScenes) break;
+		const startSec = (durationSec * scene) / totalScenes;
+		const endSec = (durationSec * (scene + 1)) / totalScenes;
+		const planned = planScriptSceneQuery(words, vocabulary, startSec, endSec, input);
+		plans.push({ scene, startSec, endSec, query: planned.query, words: planned.words, planMatched: planned.planMatched });
+	}
+	return plans;
+}
+
 export async function generateImagePrompts(
 	env: AiEnv,
 	model: string,
 	input: ImagePromptInput,
 	fallbackModels: readonly string[] = IMAGE_PROMPT_FALLBACK_MODELS
 ): Promise<string[]> {
-	if (!env?.AI) throw new Error("Scene keyword planner AI binding not configured");
 	/*
 	 * #275 — the total is the SCRIPT's word-count total (6/8/10). A validated
 	 * smaller `totalScenes` (the editor's remaining gallery room) still wins so
@@ -1566,6 +1870,31 @@ export async function generateImagePrompts(
 	const positions = videoScenePositions(total);
 	const slots = Array.from({ length: count }, (_, i) => ({ scene: offset + i,
 		type: positions.includes(offset + i) ? "video" : "image" }));
+	/*
+	 * Session 331: `keywordSource: "script"` is the whole in-app path. The
+	 * search terms are read from the script inside each scene's own time
+	 * window, so no model is asked for them and no AI binding is required.
+	 */
+	if (input.keywordSource === "script") {
+		const plans = planScriptSceneKeywords(input, total, offset, count);
+		return plans.map((plan, index) => {
+			const slot = slots[index] || { scene: plan.scene, type: "image" as const };
+			const ordinal = slot.type === "video"
+				? positions.indexOf(slot.scene)
+				: imageScenePositions(total).indexOf(slot.scene);
+			console.info("[image-prompts] script.keyword", {
+				scene: plan.scene,
+				type: slot.type,
+				startSec: Math.round(plan.startSec * 100) / 100,
+				endSec: Math.round(plan.endSec * 100) / 100,
+				words: plan.words,
+				seoPlanMatched: plan.planMatched
+			});
+			return "pixabay:" + JSON.stringify({ q: plan.query, type: slot.type,
+				page: 1, index: Math.max(0, ordinal), scene: plan.scene });
+		});
+	}
+	if (!env?.AI) throw new Error("Scene keyword planner AI binding not configured");
 	const baseInstruction = buildStockSearchInstruction(input, total, slots);
 	/*
 	 * Session 279: the attempt counter belongs to whoever owns the ladder. This
@@ -1731,7 +2060,7 @@ const rawIdea = typeof body.script === "string" && body.script.trim()
 		body.keywordSet && typeof body.keywordSet === "object" && !Array.isArray(body.keywordSet)
 			? (body.keywordSet as ImagePromptInput["keywordSet"])
 			: null;
-	return {
+	const input: ImagePromptInput = {
 		topic,
 		minutes,
 		style,
@@ -1743,6 +2072,11 @@ const rawIdea = typeof body.script === "string" && body.script.trim()
 		orientation: frame.orientation,
 		batch
 	};
+	/* Session 331: script-anchored planning (see planScriptSceneKeywords). */
+	if (String(body.keywordSource ?? "").trim().toLowerCase() === "script") input.keywordSource = "script";
+	const rawDuration = Number(body.durationSec);
+	if (Number.isFinite(rawDuration) && rawDuration > 0) input.durationSec = Math.min(3600, rawDuration);
+	return input;
 }
 
 /*

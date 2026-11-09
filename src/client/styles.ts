@@ -9012,24 +9012,58 @@ export const APP_CSS = `
 
 		.seo-wt-steps {
 			display: flex;
-			gap: 8px;
+			gap: 6px;
 			flex-wrap: wrap;
 			margin-bottom: 14px;
 		}
 
+		/*
+		 * Session 331: the four walkthrough steps are status pills, the same
+		 * shape as the reference board's Status column tags - monospace, 4 px
+		 * radius, quiet grey by default, green once the step is behind the user
+		 * and accented while it is the step on screen.
+		 */
 		.seo-wt-step {
-			font-size: 0.75rem;
-			padding: 4px 10px;
-			border-radius: 999px;
-			border: 1px solid #374151;
-			color: #9ca3af;
+			display: inline-flex;
+			align-items: center;
+			gap: 4px;
+			padding: 3px 8px;
+			border: 1px solid var(--t-line, #374151);
+			border-radius: 4px;
+			background: var(--t-panel-2, #1b212b);
+			color: var(--t-muted, #9ca3af);
+			font-family: 'JetBrains Mono', monospace;
+			font-size: 0.74rem;
+			font-weight: 600;
+			line-height: 1.4;
+			white-space: nowrap;
+		}
+
+		.seo-wt-step.done {
+			color: #34d399;
+			border-color: rgba(16, 185, 129, 0.55);
+			background: rgba(16, 185, 129, 0.14);
+		}
+
+		.seo-wt-step.done::before {
+			content: "✓";
+			font-size: 0.72rem;
 		}
 
 		.seo-wt-step.active {
-			color: #0b0e14;
-			background: #22d3ee;
-			border-color: #22d3ee;
+			color: var(--t-heading, #f9fafb);
+			border-color: var(--accent, #22d3ee);
+			background: var(--t-panel-3, #232b37);
 			font-weight: 700;
+			box-shadow: inset 0 -2px 0 var(--accent, #22d3ee);
+		}
+
+		.seo-wt-step.active::before {
+			content: "";
+			width: 6px;
+			height: 6px;
+			border-radius: 50%;
+			background: var(--accent, #22d3ee);
 		}
 
 		.seo-wt-loading {

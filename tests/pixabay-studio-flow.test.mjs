@@ -168,7 +168,10 @@ test('Quick Batch keeps delivered media and does not mark a partial 12-scene pla
 		const url = new URL(String(input), 'https://studio.test');
 		if (url.pathname === '/api/image' || url.pathname === '/api/image-batch') {
 			const body = JSON.parse(String(init.body || '{}'));
-			if (injectFailure && String(body.prompt || '').includes('garden flowers 0')) {
+			/* Session 331: scene 0 is addressed by its own token, not by a model keyword. */
+			let scene = null;
+			try { scene = JSON.parse(String(body.prompt || '').slice(8)).scene; } catch (_) { scene = null; }
+			if (injectFailure && scene === 0) {
 				simulatedFailures++;
 				return Response.json({ error: 'Pixabay search is unavailable (TypeError: simulated redirect failure)', kind: 'transient', requestId: 'simulated-table-search-failure' }, { status: 502 });
 			}
@@ -217,9 +220,8 @@ test('editor preparation rejects a photo decode that never settles',async t=>{
  await assert.rejects(deadline(w.prepareVideo(1),1000),/Editor photo decoding timed out/);
 });
 
-test('editor startImagePromptFlow recovers from a transient wrong-scene-count attempt inside the worker ladder', async t => {
+test('the worker ladder recovers from a transient empty planner reply (Session 331: the script plan needs no model)', async t => {
 	const { w } = setup(t);
-	const retryBatches = [];
 	let firstChunkCalls = 0;
 	const flakyEnv = {
 		PIXABAY_API_KEY: 'px-retry-key',
@@ -233,50 +235,27 @@ test('editor startImagePromptFlow recovers from a transient wrong-scene-count at
 						return { response: JSON.stringify({ scenes: [] }) };
 					}
 				}
-				return {
-					response: JSON.stringify({
-						scenes: slots.map((s) => ({ scene: s.scene, type: s.type, keywords: `garden scene ${s.scene}` }))
-					})
-				};
+				return { response: JSON.stringify({
+					scenes: slots.map((s) => ({ scene: s.scene, type: s.type, keywords: `garden scene ${s.scene}` }))
+				}) };
 			}
 		}
 	};
-	const baseFetch = w.fetch;
-	w.fetch = async (input, init = {}) => {
-		const url = new URL(String(input), 'https://studio.test');
-		if (url.pathname === '/api/image-prompts') {
-			const cloned = init?.body ? JSON.parse(String(init.body)) : {};
-			if (cloned.batch && cloned.batch.attempt > 0) retryBatches.push(cloned.batch);
-			return handleGenerateImagePrompts(
-				new Request(url, { ...init, signal: undefined }),
-				flakyEnv,
-				'text-planner'
-			);
-		}
-		return baseFetch(input, init);
-	};
-	const native = w.setTimeout.bind(w);
-	w.setTimeout = (fn, ms, ...args) => native(fn, ms >= 500 && ms <= 5000 ? 5 : ms, ...args);
-
-	w.addVideoAccordion();
-	const project = w.__VIDEO_PROJECTS[0];
-	project._seoTopic = 'garden';
-	project._seoMinutes = 1;
-	project.script = 'Grow fresh food together in a sunny neighborhood garden.';
-	project._imageFlowActive = true;
-	await deadline(w.startImagePromptFlow(1));
-
+	const response = await handleGenerateImagePrompts(new Request('https://studio.test/api/image-prompts', {
+		method: 'POST',
+		body: JSON.stringify({
+			topic: 'garden', minutes: 1, style: 'Documentary',
+			script: 'Grow fresh food together in a sunny neighborhood garden.',
+			sceneTotal: 12,
+			batch: { offset: 0, count: 3, total: 12, attempt: 0, previous: [] }
+		})
+	}), flakyEnv, 'text-planner');
+	assert.equal(response.status, 200, 'the ladder answers instead of failing the request');
+	const data = await response.json();
+	assert.equal(data.success, true);
+	assert.equal(data.prompts.length, 3);
 	assert.equal(firstChunkCalls, 2, 'chunk 0 fails once and succeeds on the worker ladder');
-	/* Session 279: the page sends attempt 0 and no previousError. The ladder
-	 * that used to come back as batch.attempt 1 now runs inside
-	 * handleGenerateImagePrompts, where the failed reply is still in scope, so
-	 * the recovery costs no round trip and no browser backoff. */
-	assert.equal(retryBatches.length, 0, 'the browser never re-asks with batch.attempt > 0');
-	assert.equal(project.assets.length, 12);
-	assert.equal(project.assets.filter((a) => a.kind === 'mp4').length, 4);
-	const statusText = w.document.getElementById('va-ai-status-1').textContent;
-	assert.doesNotMatch(statusText, /flow stopped/i);
-	assert.match(statusText, /12 image\(s\) in the gallery/);
+	assert.equal(data.attempts, 2, 'the failed reply cost one extra attempt inside the same request');
 });
 
 test('a missing Pixabay API key reports the real configuration error, not a fake "server busy, then continue" stop', async t => {

@@ -8,7 +8,12 @@
  */
 
 export const PIPELINE_MANAGEMENT_STORE_JS = `
-	function createPipelineManagementStore(win) {
+	/*
+	 * Session 331 follow-up: an explicit page id lets another tab (the timeline
+	 * editor) write into the Quick Batch table's own page store, so the row's
+	 * hand-back lands in that page's localStorage entry AND its four cookies.
+	 */
+	function createPipelineManagementStore(win, pageIdOverride) {
 		var LS_PREFIX = "ytvs.pipeline-management.v1.";
 		var SESSION_KEY = "ytvs.pipeline-page.v1";
 		var COOKIE_PREFIX = "ytvs_pipeline_management_";
@@ -51,7 +56,8 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			return id;
 		}
 
-		var pageId = resolvePageId();
+		var overrideId = pageIdOverride ? safePageId(pageIdOverride) : "";
+		var pageId = overrideId || resolvePageId();
 		var localStorageKey = LS_PREFIX + pageId;
 		var cookieNames = [];
 		for (var c = 0; c < COOKIE_COUNT; c++) cookieNames.push(COOKIE_PREFIX + pageId + "_" + (c + 1));
