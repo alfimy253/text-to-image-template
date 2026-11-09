@@ -418,6 +418,17 @@ export const PAGE_MARKUP = `
 
 			</div>
 
+			<!--
+				Session 331: the table shows five rows per page. The pager is hidden
+				while every row fits on page 1; it appears as soon as there is a
+				second page.
+			-->
+			<div class="batch-pager" id="batch-pager" hidden style="display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:10px;">
+				<button type="button" class="upload-btn small" id="batch-page-prev">\u2039 Prev</button>
+				<span class="card-note" id="batch-page-label">Page 1 of 1</span>
+				<button type="button" class="upload-btn small" id="batch-page-next">Next \u203a</button>
+			</div>
+
 			<div class="table-empty" id="batch-empty">
 				No rows yet \u2014 press \uff0b Add Row, paste a script,
 				pick a style and press \u2726 Generate.
@@ -937,8 +948,11 @@ export const PAGE_MARKUP = `
 				the MP4 it makes back to this editor through
 				window.__TIMELINE_TEMPLATE_CLIP__, and the clip is appended at the
 				right-most end of the Scene Media layer, exactly as the old picker
-				did. Uploads still have their own button (＋ Add media) and its
-				hidden #timeline-media-upload input below.
+				did. Session 333: both modal buttons land there - "Download MP4"
+				saves the file and hands the same render over - so an exported clip
+				is the last scene of the timeline MP4. Uploads still have their own
+				button (＋ Add media) and its hidden #timeline-media-upload input
+				below.
 			-->
 		</div>
 	</section>

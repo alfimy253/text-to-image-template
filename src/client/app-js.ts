@@ -8837,6 +8837,38 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		false;
 
 	/*
+	 * Session 331 - completed rows survive a refresh, five per page.
+	 *
+	 * A row whose render or export succeeded is copied into its own
+	 * localStorage archive (scripts and settings only: the MP4/slides live in
+	 * browser memory and are never persisted). On the next load those rows are
+	 * put back on the page as completed rows, the table is paginated five rows
+	 * per page, and the browser deletes every archived row 24 hours after it
+	 * finished - nothing on the server is involved.
+	 */
+	const BATCH_PAGE_SIZE =
+		5;
+
+	const BATCH_COMPLETED_KEY =
+		"ytvs.quick-batch-completed.v1";
+
+	const BATCH_COMPLETED_TTL_MS =
+		24 * 60 * 60 * 1000;
+
+	const BATCH_COMPLETED_LIMIT =
+		40;
+
+	/* The purge re-runs hourly; the 24 h cut-off is what actually deletes. */
+	const BATCH_PURGE_INTERVAL_MS =
+		60 * 60 * 1000;
+
+	let batchPage =
+		0;
+
+	let batchCompletedTimer =
+		null;
+
+	/*
 	 * Session #248: queue and in-flight tracking for staggered pipeline execution.
 	 * When a row moves to image generation, an unprocessed row from batchQueue
 	 * is started without waiting for earlier rows to reach 'done'.
@@ -8930,6 +8962,238 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
+	function batchCompletedStore() {
+		try { return window.localStorage || null; } catch (error) { return null; }
+	}
+
+	/* Reads the archive and drops every entry the browser must delete (24 h). */
+	function readCompletedBatchRows() {
+		const store = batchCompletedStore();
+		const out = [];
+		if (!store) return out;
+		let parsed = null;
+		try { parsed = JSON.parse(store.getItem(BATCH_COMPLETED_KEY) || "null"); } catch (error) { parsed = null; }
+		const list = parsed && Array.isArray(parsed.rows) ? parsed.rows : [];
+		const cutoff = Date.now() - BATCH_COMPLETED_TTL_MS;
+		for (const entry of list) {
+			if (!entry) continue;
+			const at = Number(entry.completedAt) || 0;
+			/* Older than 24 h (or never stamped): the client deletes it. */
+			if (!at || at <= cutoff) continue;
+			if (!String(entry.script || "").trim()) continue;
+			out.push(entry);
+		}
+		return out;
+	}
+
+	function writeCompletedBatchRows(list) {
+		const store = batchCompletedStore();
+		if (!store) return false;
+		try {
+			store.setItem(BATCH_COMPLETED_KEY, JSON.stringify({
+				version: 1,
+				updatedAt: Date.now(),
+				rows: (list || []).slice(0, BATCH_COMPLETED_LIMIT)
+			}));
+			return true;
+		} catch (error) {
+			return false;
+		}
+	}
+
+	function completedBatchEntry(row, kind) {
+		return {
+			id: String(row.id),
+			vid: String(row.vid || ""),
+			title: String(row.title || "").slice(0, 120),
+			topic: String(row.topic || "").slice(0, 160),
+			script: String(row.script || ""),
+			style: String(row.style || ""),
+			minutes: pipelineManagementNumber(row.minutes, 1),
+			resolution: String(row.resolution || ""),
+			orientation: String(row.orientation || ""),
+			quality: String(row.quality || ""),
+			kind: kind === "export" ? "export" : "render",
+			detail: String(row.detail || "").slice(0, 200),
+			slides: Array.isArray(row.slides) ? row.slides.length : 0,
+			completedAt: Date.now()
+		};
+	}
+
+	/* One successful render or export -> one archived row (refreshed in place). */
+	function recordCompletedBatchRow(row, kind) {
+		if (!row) return null;
+		const entry = completedBatchEntry(row, kind);
+		const list = readCompletedBatchRows().filter(function (candidate) {
+			return String(candidate.id) !== String(entry.id);
+		});
+		list.unshift(entry);
+		writeCompletedBatchRows(list);
+		return entry;
+	}
+
+	function forgetCompletedBatchRow(id) {
+		const list = readCompletedBatchRows().filter(function (candidate) {
+			return String(candidate.id) !== String(id);
+		});
+		writeCompletedBatchRows(list);
+	}
+
+	function completedBatchDetail(entry) {
+		const what = entry.kind === "export" ? "Exported" : "Rendered";
+		let when = "";
+		try { when = new Date(Number(entry.completedAt) || Date.now()).toLocaleString(); } catch (error) { when = ""; }
+		return what + (when ? " " + when : "") + " \u00b7 kept 24 h";
+	}
+
+	/*
+	 * A restored completed row is a record, not a re-renderable row: the media
+	 * blobs only ever lived in browser memory, so Preview/Export stay locked
+	 * while the row itself (script, style, time, status) stays on the page.
+	 */
+	function archivedBatchRow(entry) {
+		const row = createBatchRow({
+			script: entry.script || "",
+			title: entry.title || "",
+			topic: entry.topic || "",
+			style: entry.style || "",
+			minutes: pipelineManagementNumber(entry.minutes, 1),
+			resolution: entry.resolution || "",
+			orientation: entry.orientation || "",
+			quality: entry.quality || ""
+		});
+		row.vid = entry.vid || pipelineManagementStore.pageId + "-row-" + String(row.id);
+		row.stage = "done";
+		row.detail = completedBatchDetail(entry);
+		row.running = false;
+		row.retrying = false;
+		row._archived = true;
+		row._archivedSourceId = String(entry.id || "");
+		row._completedAt = Number(entry.completedAt) || Date.now();
+		row._completedKind = entry.kind === "export" ? "export" : "render";
+		return row;
+	}
+
+	function markBatchRowCompleted(row, entry) {
+		if (!row || !entry) return;
+		row.stage = "done";
+		row.detail = completedBatchDetail(entry);
+		row._archived = true;
+		row._completedAt = Number(entry.completedAt) || Date.now();
+		row._completedKind = entry.kind === "export" ? "export" : "render";
+	}
+
+	/* Called once per load, AFTER the pipeline store has restored its rows. */
+	function restoreCompletedBatchRows() {
+		const kept = readCompletedBatchRows();
+		writeCompletedBatchRows(kept);
+		if (!kept.length) return 0;
+		/* A load starts on page 1, exactly like a fresh page view. */
+		batchPage = 0;
+		let added = 0;
+		for (const entry of kept) {
+			const id = String(entry.id || "");
+			const existing = batchRows.find(function (candidate) {
+				return String(candidate.id) === id || String(candidate._archivedSourceId || "") === id;
+			});
+			if (existing) {
+				markBatchRowCompleted(existing, entry);
+				continue;
+			}
+			batchRows.push(archivedBatchRow(entry));
+			added += 1;
+		}
+		try { renderBatchTable(); } catch (renderError) { }
+		return added;
+	}
+
+	/* The 24 h deletion, run at load and every hour afterwards. */
+	function purgeCompletedBatchRows() {
+		/* readCompletedBatchRows() has already dropped every 24 h old entry. */
+		const list = readCompletedBatchRows();
+		const cutoff = Date.now() - BATCH_COMPLETED_TTL_MS;
+		const fresh = {};
+		list.forEach(function (entry) { fresh[String(entry.id || "")] = true; });
+		let changed = false;
+		for (let index = batchRows.length - 1; index >= 0; index--) {
+			const row = batchRows[index];
+			if (!row || !row._archived) continue;
+			/*
+			 * A restored row lives exactly as long as its archive entry: once the
+			 * entry is 24 h old (or was removed) the row goes too.
+			 */
+			const sourceId = String(row._archivedSourceId || row.id);
+			const stillArchived = fresh[sourceId] === true;
+			const recent = (Number(row._completedAt) || 0) > cutoff;
+			if (stillArchived && recent) continue;
+			batchRows.splice(index, 1);
+			changed = true;
+		}
+		/* writeCompletedBatchRows() also drops anything past the cut-off. */
+		writeCompletedBatchRows(list);
+		if (changed) {
+			try { renderBatchTable(); } catch (renderError) { }
+			persistPipelineManagementState("completed-rows-purged");
+		}
+		return changed;
+	}
+
+	function scheduleCompletedBatchPurge() {
+		if (batchCompletedTimer) return;
+		if (!window || typeof window.setInterval !== "function") return;
+		batchCompletedTimer = window.setInterval(function () {
+			try { purgeCompletedBatchRows(); } catch (purgeError) { }
+		}, BATCH_PURGE_INTERVAL_MS);
+	}
+
+	function batchPageCount() {
+		return Math.max(1, Math.ceil(batchRows.length / BATCH_PAGE_SIZE));
+	}
+
+	function visibleBatchRows() {
+		const pages = batchPageCount();
+		if (batchPage > pages - 1) batchPage = pages - 1;
+		if (batchPage < 0) batchPage = 0;
+		const start = batchPage * BATCH_PAGE_SIZE;
+		return batchRows.slice(start, start + BATCH_PAGE_SIZE);
+	}
+
+	function setBatchPage(page) {
+		const next = Math.min(batchPageCount() - 1, Math.max(0, Math.round(Number(page) || 0)));
+		if (next === batchPage) { updateBatchPager(); return; }
+		batchPage = next;
+		renderBatchTable();
+	}
+
+	function bindBatchPager() {
+		const prev = document.getElementById("batch-page-prev");
+		const next = document.getElementById("batch-page-next");
+		if (prev && !prev._batchBound) {
+			prev._batchBound = true;
+			prev.addEventListener("click", function () { setBatchPage(batchPage - 1); });
+		}
+		if (next && !next._batchBound) {
+			next._batchBound = true;
+			next.addEventListener("click", function () { setBatchPage(batchPage + 1); });
+		}
+		updateBatchPager();
+	}
+
+	function updateBatchPager() {
+		const pager = document.getElementById("batch-pager");
+		if (!pager) return;
+		const pages = batchPageCount();
+		pager.hidden = pages <= 1;
+		/* The element carries an inline display:flex, so hide it explicitly. */
+		try { pager.style.display = pages <= 1 ? "none" : "flex"; } catch (styleError) { }
+		const label = document.getElementById("batch-page-label");
+		if (label) label.textContent = "Page " + (batchPage + 1) + " of " + pages;
+		const prev = document.getElementById("batch-page-prev");
+		const next = document.getElementById("batch-page-next");
+		if (prev) prev.disabled = batchPage <= 0;
+		if (next) next.disabled = batchPage >= pages - 1;
+	}
+
 	function getBatchRow(id) {
 
 		for (const row of batchRows) {
@@ -8987,6 +9251,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			createBatchRow(seed);
 
 		batchRows.push(row);
+
+		/* The new row's page opens, so the row that was just added is visible. */
+		batchPage =
+			Math.floor((batchRows.length - 1) / BATCH_PAGE_SIZE);
 
 		renderBatchTable();
 
@@ -9052,9 +9320,15 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		batchAttemptedRows.delete(String(id));
 
+		/* A row the user removes is gone for good: drop its 24 h archive copy. */
+		try { forgetCompletedBatchRow(id); } catch (forgetError) { }
+
 		if (!batchRows.length) {
 			closeBatchPreview();
 		}
+
+		if (batchPage > batchPageCount() - 1) batchPage = batchPageCount() - 1;
+		if (batchPage < 0) batchPage = 0;
 
 		renderBatchTable();
 
@@ -9828,7 +10102,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	function batchTableSignature() {
 
-		return batchRows
+		/* The page is part of the signature: a page change rebuilds the tbody. */
+		return batchPage + "|" + batchRows
 			.map(function (row) {
 				return row.id;
 			})
@@ -9919,10 +10194,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			signature
 		) {
 
+			/*
+			 * Session 331: five rows per page. The row number printed in the
+			 * first cell stays GLOBAL (row 6 is 06 even when it opens page 2).
+			 */
 			body.innerHTML =
-				batchRows
-					.map(function (row, index) {
-						return batchRowHTML(row, index + 1);
+				visibleBatchRows()
+					.map(function (row) {
+						return batchRowHTML(row, batchRows.indexOf(row) + 1);
 					})
 					.join("");
 
@@ -9938,6 +10217,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			refreshBatchRowCells();
 
 		}
+
+		bindBatchPager();
 
 		updateBatchToolbar();
 
@@ -11678,6 +11959,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				row.slides.length + " slides \u00b7 " + formatSeconds(spanMs / 1000)
 			);
 
+			/* Session 331: a successful render is archived for 24 h. */
+			try { recordCompletedBatchRow(row, "render"); } catch (archiveError) { }
+
 			console.info("[batch-table] row " + row.id + " finished", {
 				ms: row.finishedAt - row.startedAt,
 				slides: row.slides.length,
@@ -12747,6 +13031,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				"done",
 				"Exported \u00b7 " + Math.round(blob.size / 1024) + " KB"
 			);
+
+			/* Session 331: a successful export is archived for 24 h. */
+			try { recordCompletedBatchRow(row, "export"); } catch (archiveError) { }
 
 		}
 		catch (renderError) {
@@ -24044,6 +24331,16 @@ async function retryImagePromptFlow(n) {
 		initVideoStudio();
 		bindStudioShell();
 		restorePipelineManagementState();
+		/*
+		 * Session 331: rows that finished a render or export in the last 24 h
+		 * are put back on the page (five per page); anything older is deleted
+		 * by this browser, not by the server.
+		 */
+		try {
+			purgeCompletedBatchRows();
+			restoreCompletedBatchRows();
+			scheduleCompletedBatchPurge();
+		} catch (completedError) { }
 		applyTransitionProject();
 		/*
 		 * Session 332: the editor layout opens with one OPEN accordion already

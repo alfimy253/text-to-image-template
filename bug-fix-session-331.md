@@ -2593,3 +2593,252 @@ Older sections are kept exactly as they were written. These are the lines that n
 
 - All nine code items are implemented (22.3–22.12), and item 10 — documenting the prompt — is this section.
 - Test state: `tests/timeline-editor.test.mjs` **33 / 33**; the whole suite **544 tests / 504 pass / 40 fail**, with **identical per-file counts** on a pristine `4967ef7` tree (the 40 are the eight pre-existing files of §8.6 / §20.15 / §21.11); `npx tsc --noEmit` unchanged at 30 pre-existing `src/index.ts` diagnostics; `npx wrangler deploy --dry-run` green.
+
+## 23. Timeline editor: a clip exported from the Add video from template modal becomes the last Scene Media scene (2026-11-09)
+
+### 23.1 Request & authority order
+
+> Study code (source of the truth) and the md file 331 (source of truth) and then i found a bug in the timeline editor the exported clip from the modal in timeline page must be added to the scene media track at the end of the layer as scene in mp4
+
+Authority order for this section, unchanged from §9.1: the shipped code is the source of truth for what happens, this file is the source of truth for why, and the request above is the change. Nothing here adds a server route, a Worker module, a KV key or a cookie; the timeline stays a browser-only layout.
+
+### 23.2 Code study that drove the change (pre-change audit)
+
+The append machinery built in §21.8 and §22.9 is correct and stays:
+
+| Piece | Where | What it already did |
+| --- | --- | --- |
+| Sink registration | `src/client/timeline-editor.ts`, inside `bindEvents()` | `window.__TIMELINE_TEMPLATE_CLIP__ = function (clip) { return appendTemplateClip(clip); }` — registered only on `layout=timeline`, so the editor layout is untouched. |
+| `appendTemplateClip(clip)` | `src/client/timeline-editor.ts` | Guards `state`, the blob, the timeline's own export, `MAX_MEDIA_FILES` and the missing media lane; registers the asset; queues it; drains the queue. |
+| `appendQueuedClips()` | `src/client/timeline-editor.ts` | Computes `nextStart = max(item.startSec + item.durationSec)` over the Scene Media lane, pushes one media item **and one scene** per clip back to back from there, selects the last one, calls `ensureTimelineEnd(nextStart)`, repaints and saves. |
+| `timelineClipSink()` / sink branch | `src/client/template-composer-js.ts` | `addTemplateToVideo()` (the **➕ Add to Video N** button) checks the sink before `project.assets.push(asset)` and, when it exists, hands `{ blob, file, name, durationSec }` over and returns. |
+
+The gap was in the other button. The modal's primary control is **⬇ Download MP4**, wired directly to `exportMP4()` (`exportBtn.addEventListener("click", exportMP4)`). `exportMP4()` rendered the MP4, downloaded it, and returned `lastVideo` — it never consulted `timelineClipSink()`. So on the timeline page:
+
+1. rendering a clip and clicking **⬇ Download MP4** downloaded `template_<scene>_portrait.mp4` and added **nothing** to the timeline;
+2. the Scene Media lane therefore had no new scene, `state.durationSec` never grew, and the timeline's own **⬇ Export MP4** could not contain the clip;
+3. the surviving **Add** button said **➕ Add to Video N** — a numbered accordion that page never renders — while the modal's primary **⬇ Download MP4** control was the one that added nothing, so the wording pointed away from the only path that worked.
+
+A second, smaller gap: `appendQueuedClips()` reported `Queued 1 clip at the right-most end of Scene Media (…)`, which never said that the clip had become a scene of the exported MP4, and it did not refresh the project heading that prints the scene count.
+
+### 23.3 Change 1 — one hand-off helper, used by both buttons (`src/client/template-composer-js.ts`)
+
+Two small functions sit beside `timelineClipSink()`:
+
+- `timelineClipTarget(n)` returns `"Video"` when the timeline sink exists and `"Video " + n` otherwise — the single source of the modal's target name. The timeline page has no `Video N` accordion, so its button is the plain **➕ Add to Video**; the editor layout keeps **➕ Add to Video N** to name the accordion the clip lands in.
+- `handClipToTimeline(renderedVideo, clipDuration)` performs the whole hand-off: it returns `0` when there is no sink or no bytes, wraps the blob in a `File` named after the render, and calls the sink with `{ blob, file, name, durationSec }`. Its return value is the sink's "how many clips landed" count, so the modal can report success or refusal. A `try/catch` keeps a throwing sink from breaking the modal.
+
+`exportMP4()` now calls it in its success path, **only when `shouldDownload !== false`**:
+
+```js
+let timelineLanded = 0;
+if (shouldDownload) {
+    timelineLanded = handClipToTimeline(lastVideo);
+}
+```
+
+That is exactly the "exported clip must be added" contract: the download still happens (the `<a download>` click above is unchanged), and the same render is appended at the right-most end of Scene Media, one scene per clip, so it is the last scene of the timeline MP4. The **➕** button keeps its own hand-off through the same helper inside `addTemplateToVideo()`; because that path renders with `download: false`, the two branches can never append the same render twice. With no sink registered (the editor layout) `handClipToTimeline()` returns `0`, so nothing about the gallery behaviour changes.
+
+### 23.4 Change 2 — the modal says what it will do (`src/client/template-composer-js.ts`)
+
+- Every button label is built from `timelineClipTarget(n)`: **➕ Add to Video** on `layout=timeline`, **➕ Add to Video N** everywhere else; the "✅ Added to …" reset uses the same helper. The destination is explained by the status line and the timeline's own "Scene Media" lane label, not by renaming the button.
+- After a successful download hand-off the status line reads `MP4 ready — downloaded as <file> and added at the end of the Scene Media layer`; if the timeline refuses (its own export is running, the media lane is missing, the 100-clip cap), it reads `… but the timeline could not take the clip` instead of silently succeeding.
+- On the timeline page `buildModal()` rewrites `#tpl-sub` so the paragraph describes Scene Media and the timeline MP4 instead of the `Video N` gallery. The editor layout keeps the original paragraph byte for byte.
+
+### 23.5 Change 3 — the timeline reports the new last scene (`src/client/timeline-editor.ts`)
+
+- `appendQueuedClips()` calls `updateProjectHeading()` after the append, so the heading's scene count and the `state.scenes` list agree immediately.
+- The dock status is now `Added n clip(s) at the right-most end of Scene Media (from m:ss to m:ss) — it is the last scene of the exported MP4.` The append itself still runs `ensureTimelineEnd(nextStart)`, which grows `state.durationSec` (rounded up to the 5 s grid) so the timeline's own export covers the new scene.
+
+### 23.6 Files touched in this section
+
+| File | Change |
+| --- | --- |
+| `src/client/template-composer-js.ts` | `timelineClipTarget()` + `handClipToTimeline()`; the `shouldDownload` hand-off in `exportMP4()`; `addTemplateToVideo()` re-uses the helper; Scene Media button labels, status sentences and the timeline `#tpl-sub` copy. |
+| `src/client/timeline-editor.ts` | Append status names the new last scene of the exported MP4; `updateProjectHeading()` after an append; the ＋ Add Clips hint mentions both modal buttons. The sink, queue and append geometry are unchanged. |
+| `src/client/markup.ts` | The timeline page's comment block records that both composer buttons land in Scene Media. |
+| `tests/timeline-editor.test.mjs` | Test 32's source assertion follows the helper (`handClipToTimeline(renderedVideo, clipDuration)`, `durationSec: seconds`, the `shouldDownload` hand-off). New test 34 proves a composed clip is the last Scene Media **scene** and that the timeline MP4 export renders its window. |
+| `tests/template-composer.test.mjs` | New test 20 proves **⬇ Download MP4** both downloads and lands the clip, the **➕** button only lands it, the hidden gallery stays empty, and the editor layout keeps `Add to Video N`. |
+| `bug-fix-session-331.md` | This section. |
+
+### 23.7 Verification
+
+- `node --import tsx --test tests/timeline-editor.test.mjs` → **34 / 34 pass** (33 before, +1 new).
+- `node --import tsx --test tests/template-composer.test.mjs` → **20 / 20 pass** (19 before, +1 new).
+- `node --import tsx --test tests/final-media-cap-actions.test.mjs tests/quick-batch-table.test.mjs tests/public-entry-points.test.mjs` → **34 / 34 pass**.
+- `npx tsc --noEmit` → the same **30** pre-existing `src/index.ts` diagnostics as §22.18, none in a file this section touched.
+- Served-bundle parse check: `createHTML()`'s `<script>` body (~1.98 MB after `APP_JS` + `TEMPLATE_COMPOSER_JS` + `TIMELINE_EDITOR_JS`) is accepted by `new Function(...)`, so the new template-literal escaping survives page assembly. The composer's `\u2014`/`\u2795` escapes were kept at the same two-backslash depth as the surrounding lines, which resolves to one backslash in the served JavaScript and therefore to the intended glyphs.
+
+New coverage in detail:
+
+1. *timeline editor test 34 — a composed clip is the last Scene Media scene and the timeline MP4 export renders it*: a 5 s project receives `window.__TIMELINE_TEMPLATE_CLIP__({ blob, name: "closing-card.mp4", durationSec: 1 })`; the clip starts at the old right-most end (5 s), the project grows to 10 s on the 5 s grid, the matching `state.scenes` entry is last and carries the clip's scene id/asset id/name, `exportTimeline()` encodes **300** frames (10 s × 30 fps, i.e. the appended scene's whole window), and frames inside that window draw the composed clip's `<video>` rather than a placeholder.
+2. *template composer test 20 — on the timeline page Download MP4 also appends the clip to the end of Scene Media*: with the sink registered, `#tpl-add` reads exactly **➕ Add to Video**, `exportMP4({ download: true })` renders 30 frames, downloads once **and** calls the sink once with the clip's own length and a `Blob`; the status names Scene Media as the destination; **➕** appends a second clip without a second download and without filling `videoProjects[0].assets`; deleting the sink and re-opening the modal restores **➕ Add to Video 1** and the gallery push.
+
+### 23.8 Notes, gotchas and deliberate decisions
+
+- **Download and Add both land the clip, on purpose.** The request named the *exported* clip, and on the timeline page the export button is the modal's primary control. Keeping Download download-only would have left the reported bug in place; the append is idempotent per render, so a user who exports three clips gets three scenes, which is the same rule the ➕ button already followed.
+- **No double append is possible.** `exportMP4()` only hands over when `shouldDownload !== false`; `addTemplateToVideo()` renders with `download: false` and hands over itself. One render, one scene.
+- **The sink stays registered inside `bindEvents()`.** §22.15's reason is unchanged: a top-level registration would let the editor layout's composer hand its MP4s to a timeline that is not on screen.
+- **The editor layout is byte-for-byte unchanged where it matters.** With no sink: same labels, same `MAX_MP4_UPLOADS` cap, same `project.assets.push(asset)`, same `buildVaCard()`/`updateVideoStatus()`, same download. Test 20's last third asserts it.
+- **The appended clip is a scene, not a second overlay.** It goes into the one pinned `background-media` lane (`layer: 0`) as one `tracks` item plus one `state.scenes` entry with `mediaSource: "template composer"`; `syncScenesFromTracks()` then keeps `mediaAssetId`, timing and label in step on every save.
+- **The timeline MP4 renders it because the project grew.** `ensureTimelineEnd(nextStart)` rounds up to the 5 s grid, and `exportTimelineMp4()` derives its frame count from `state.durationSec`; test 34 pins both halves (duration 10 s, 300 encoded frames, real `drawImage` of the composed video).
+- **§22.9 is partly superseded.** Its "only the ＋ Add button hands the clip over" description is no longer the whole contract: the **⬇ Download MP4** path now lands the clip too. The rest of §22.9 (the sink, `appendTemplateClip()`, append-at-the-right-most-end, one scene per clip) still stands exactly as written.
+
+### 23.9 Status
+
+- The reported bug is fixed: a clip exported from the Add video from template modal on `layout=timeline` is appended at the right-most end of the Scene Media layer as a new scene, and the timeline's Export MP4 renders it in order at the end. The ➕ path keeps the same destination with clearer copy.
+- Test state for the touched suites: timeline **34 / 34**, template composer **20 / 20**, related Quick Batch/media/entry suites **34 / 34**; `npx tsc --noEmit` at the 30 pre-existing diagnostics.
+
+## 24. Server-side API rotation, round robin with a smaller share for the UI Worker, five backup URLs, completed Quick-Batch rows that survive a refresh (five per page, deleted after 24 h), and a timeline that resolves overlapping boxes on every add (2026-11-09)
+
+### 24.1 Request & authority order
+
+The request, in the user's words:
+
+1. "Check the admin page; make the rotation of all backup API URL happen on the server. The pipeline API URL must be rotated in the CF server that serves the UI; the client browser JS must ask for the URL of a specific pipeline API and wait, then call that given URL."
+2. "In the admin page the default rotation scheme must be round robin, but less API work must be given to the UI CF server."
+3. "No more drawdown for rotation scheme."
+4. "Allow up to 5 text inputs of CF backup server in the admin" (was 3).
+5. "When the page is refreshed for the editor and Quick Batch table layouts, the rows with a successful export or render must still remain in the page, paginated at 5 items per page, and every 24 hrs the client browser JS must delete them."
+6. "Any overlapping boxes in the track layers must be moved in the timeline so no overlapping boxes remain, and the overlap-adjusting JS must trigger when an element or scene is added to the timeline."
+7. "Document all of this in `bug-fix-session-331.md`."
+
+Authority order, unchanged from §21–§23: **the code is the first source of truth, this file the second**. Every change below was written after reading the exact function it touches; no behaviour was inferred from a comment alone.
+
+### 24.2 Code study that drove the changes (pre-change audit)
+
+| Area | What the code actually did before this section |
+| --- | --- |
+| `src/client/api-rotation.ts` | Wrapped `window.fetch`; fetched `GET /api/relay/pool` (pool + signed ticket), then chose the endpoint **in the browser**: local cursor, per-endpoint 30 s skip list, round-robin over local + verified backups, own failover loop. That is exactly the decision the request moves to the server. |
+| `src/modules/api-relay.ts` | `resolveRelayPool()` read `config:workers`; `orderRelayCandidates()` implemented three strategies (`round-robin`, `least-pending`, `weighted`) with a module-level cursor and a health/circuit store; `/api/relay/pool` advertised verified endpoints + a ticket; `/api/relay/config` stored the policy; `RELAY_AI_PATHS` covered only `/api/script`, `/api/seo-plan`, `/api/voiceover`, `/tts`. |
+| `src/index.ts` | `POST /api/config/workers` trimmed the list with `.slice(0, 3)`; the route table comment said "up to 3 worker URLs". |
+| `src/client/config-page-js.ts` | Three worker inputs `#cfg-worker-url-1..3`; the relay card carried `#cfg-relay-client` ("rotate whole AI requests in the browser") and a three-option `#cfg-relay-strategy` dropdown; the save handler posted `strategy` and `clientRotation`. |
+| `src/client/app-js.ts` | Quick-batch rows lived in `batchRows` and were mirrored by `pipelineManagementStore` (script/title/style only). `renderBatchTable()` drew **every** row; nothing paginated. `setBatchStage(row, "done", …)` marked a successful render/export, but on reload the stored row came back as `ready` and no completion time existed. |
+| `src/client/timeline-editor.ts` | `clampClipBox()` shortened the *drawn* box when two clips shared seconds; the **model** kept the overlap. `itemTimingChanged()` rippled only forward, and a moved/duplicated/imported clip could sit on top of its neighbour. Adds (`addMediaFiles`, `appendQueuedClips`, `addVisualElement`, `addAudioFile`, `duplicateSelectedItem`) each wrote `startSec` without a lane-wide check. |
+
+`grep -rn "drawdown"` over the whole repository returns **nothing**: "no more drawdown" was not an existing feature name. §24.5 records how it was resolved.
+
+### 24.3 Change 1 — the rotation is decided on the server (`src/modules/api-relay.ts`, `src/index.ts`)
+
+A new route, `GET /api/relay/endpoint?path=/api/script` (`RELAY_ENDPOINT_PATH`), is the only way the studio now learns where a pipeline call goes:
+
+- It validates the path against `RELAY_AI_PATHS` (400 for anything else, so `/api/config/*`, `/api/payments/*`, `/api/session`, CMS and account routes can never be handed out).
+- It reads `config:relay` + `config:workers`, and calls **`pickRelayEndpoint(pool, config)`** — the same `orderRelayCandidates()` the Worker uses for its own model calls. The browser never sees the candidate list, the cursor, the health state or a cooldown.
+- A backup pick mints the same short-lived `client` ticket `/api/relay/pool` already issued (identity or guest; 3-minute TTL; scoped to `RELAY_AI_PATHS`). A pick of this Worker answers with the relative path and **no** ticket.
+- An anonymous visitor whose slot is a backup is answered by the UI Worker (`local: true, reason: "no client ticket"`), so rotation can never turn a working request into a 401.
+- `&failed=<endpoint id>` (sent with the ticket from the previous answer) reports that the given URL did not answer. `readRelayTicket()` proves the reporter was really handed that URL, then `noteRelayFailure()` opens the circuit breaker — the server, not the browser, decides what happens next.
+- `isRelayPath()` includes the new route, so preflights, CORS and the "unknown `/api/relay/*` falls through" behaviour are unchanged.
+
+`POST /api/relay/ai` (worker→worker compute) and `/api/relay/pool` (diagnostics) are untouched in shape; `/api/relay/pool` is simply no longer used by the studio.
+
+### 24.4 Change 2 — round robin only, and the UI Worker gets the smaller share (`src/modules/api-relay.ts`)
+
+- `RelayStrategy` is now the single literal `"round-robin"`; `normalizeRelayConfig()` drops any stored `least-pending` / `weighted` value, and the `least-pending` / `weighted` branches are gone from `orderRelayCandidates()`. A policy saved by an older build keeps its other fields and silently becomes round robin.
+- The ring (`relayRing()`) enters the **local** (UI) Worker `config.localWeight` times (default **1**) and every backup **`RELAY_BACKUP_RING_WEIGHT = 3`** times. One shared cursor walks the ring, so the share is exact and fixed: with one backup the UI Worker answers 1 request in 4 (25 %), with five backups 1 in 16 (≈ 6 %). `localWeight: 0` keeps this Worker out of the ring entirely while still leaving it as the last resort when every backup is cooling.
+- Cooling members still move to the end instead of disappearing, so a pool whose backups are all broken still answers.
+
+### 24.5 Change 3 — "no more drawdown for rotation scheme"
+
+The term does not exist in the repository (no `drawdown` anywhere in `src/` or `tests/`), so it is resolved with the reading that matches change 1: **the browser no longer draws/consumes anything from the pool.** Before this section `api-rotation.ts` kept its own cursor, its own 30 s skip list and its own failover order — it *drew down* the endpoint list by itself. That state (`state.cursor`, `state.failUntil`, `state.endpoints`, `orderEndpoints()`, `refreshPool()`, `usable()`) is deleted; the only bookkeeping left in the browser is the counters exposed on `window.__yvsApiRotation.stats()` for diagnostics. If "drawdown" was meant as something else (a billing/credit drawdown, or a visual "drawdown" of the timeline), say so and this section is amended — the code change above is the only interpretation the repository supports.
+
+### 24.6 Change 4 — five backup Worker URLs (`src/client/config-page-js.ts`, `src/modules/api-relay.ts`, `src/index.ts`)
+
+- `MAX_RELAY_WORKERS = 5` is exported and used by `resolveRelayPool()`; the cap is applied **after** junk/duplicate filtering (capping the raw list would let five bad entries hide a good sixth — test 1 in `tests/api-relay.test.mjs` guards exactly that).
+- `POST /api/config/workers` stores `.slice(0, 5)`; the route table comment in `src/index.ts` says "up to 5 worker URLs".
+- The admin card renders `#cfg-worker-url-1..5`, `renderWorkersList()` fills five inputs, and the save handler collects five. Copy reads "Up to 5 extra deployments of this same app".
+
+### 24.7 Change 5 — the browser asks, waits, then calls the given URL (`src/client/api-rotation.ts`)
+
+`API_ROTATION_JS` is rewritten around one rule: *ask, wait, call exactly that*.
+
+1. For an allow-listed AI path the wrapper calls `GET /api/relay/endpoint?path=…` on this origin (`credentials: "same-origin"`, `cache: "no-store"`, 8 s abort guard) and **waits** for the answer.
+2. `local: true` → the original, unmodified same-origin request through `nativeFetch` (cookies, streaming, downloads all unchanged). A backup → `fetch(<given.url> + <original query>)` with the answer's `x-yvs-relay-ticket`, `credentials: "omit"`, `mode: "cors"`.
+3. If the given URL does not answer (network error, 502/503/504) the wrapper asks **once more** with `&failed=<endpointId>` and calls the new answer; after that it falls back to this origin. A streamed body is never replayed.
+4. Non-AI paths, `/api/relay/*` and cross-origin URLs are passed straight through with no ask.
+5. `AI_PATHS` now matches `RELAY_AI_PATHS`: the four text/voice paths **plus** `/api/image`, `/api/image-batch`, `/api/image-prompts` and `/image/gen`. The list had drifted: the old header claimed the image routes rotated while the array left them out, so image work never left the UI Worker. `RELAY_AI_PATHS` gained those four paths in the same commit, which is also what made the pre-existing ticket/preflight tests (§24.12) pass.
+
+### 24.8 Change 6 — the admin page (`src/client/config-page-js.ts`)
+
+- `#cfg-relay-client` (browser rotation) and `#cfg-relay-strategy` (scheme dropdown) are **gone**. A new `#cfg-relay-scheme` line states "Round robin — the only scheme; the server picks, the studio never rotates by itself".
+- `#cfg-relay-weight` is relabelled "This Worker's ring weight" with a hint giving the real arithmetic (1 in 4 with one backup, 1 in 16 with five, 0 keeps pipeline calls off this Worker).
+- `loadRelayConfig()` no longer writes a scheme or a client switch; the save handler posts `enabled`, `localWeight`, `maxAttempts`, `timeoutMs` only.
+- The card copy explains `GET /api/relay/endpoint` and says the decision is made on this Worker.
+
+### 24.9 Change 7 — completed Quick-Batch rows survive a refresh, five per page, deleted after 24 h (`src/client/app-js.ts`, `src/client/markup.ts`)
+
+- New client-only archive `ytvs.quick-batch-completed.v1` in `localStorage`: id, vid, title, topic, script, style, minutes, resolution, orientation, quality, kind (`render` | `export`), detail, slide count and `completedAt`. Media blobs are **not** stored — they only ever lived in browser memory.
+- `recordCompletedBatchRow(row, kind)` runs on a successful render (`setBatchStage(row, "done", …)` after the animation step) and on a successful export (`exportBatchRow()` after the MP4 download). Re-recording refreshes the timestamp in place.
+- `restoreCompletedBatchRows()` runs at boot for the table/editor shell: it re-reads the archive, writes back the pruned list, and re-creates each row as a completed row (`stage: "done"`, detail `Rendered|Exported <date> · kept 24 h`, `_archived: true`). A row the pipeline store already restored is marked completed instead of duplicated.
+- Pagination: `BATCH_PAGE_SIZE = 5`; `renderBatchTable()` draws only `visibleBatchRows()`, the printed row number stays global (row 6 shows `06` on page 2), `batchTableSignature()` includes the page, and a new pager `#batch-pager` (`#batch-page-prev`, `#batch-page-label`, `#batch-page-next`) appears as soon as there is a second page. Adding a row opens that row's page; removing a row clamps the page.
+- 24 h deletion: `readCompletedBatchRows()` never returns an entry older than `BATCH_COMPLETED_TTL_MS` (24 h), `purgeCompletedBatchRows()` runs at boot and hourly (`BATCH_PURGE_INTERVAL_MS`), and it also removes the restored row itself when its archive entry expired. `removeBatchRow()` deletes the archive entry immediately when the user removes a row by hand.
+- A restored completed row is a **record**, not a re-renderable row: Preview/Export stay locked because the media bytes are gone. The row, its script and its completion status stay on the page for 24 h, which is exactly what the request asked for.
+
+### 24.10 Change 8 — no overlapping boxes in a timeline lane (`src/client/timeline-editor.ts`)
+
+- `resolveTrackOverlaps(track)` sorts a lane by `startSec` and walks it left to right: a clip that starts before the previous one ends is **moved** to that end (its length is kept; a lane that would run past `MAX_DURATION_SEC` is trimmed instead). A child text/graphic (with `parentId`) may only move inside its background clip's window, and is shortened to the rest of that window rather than pushed outside the clip.
+- `resolveTimelineOverlaps()` runs the resolver on **every** lane, moves the children of a background clip that moved by the same delta, re-reads the scene list (`syncScenesFromTracks()`), grows the timeline end and clamps the playhead.
+- It is triggered by **every** addition — `addMediaFiles()`, `appendQueuedClips()` (the composer hand-off), `addVisualElement()` (＋ Text / ＋ Graphic and ＋ Child …), `addAudioFile()`, `duplicateSelectedItem()` — and also by `itemTimingChanged()` (drag/resize/inspector), `applyHistorySnapshot()` (undo/redo) and `boot()` (a project saved before this rule is cleaned on load).
+- `clampClipBox()` stays as the drawing guard it always was; after this pass it has nothing to hide.
+
+### 24.11 Files touched in this section
+
+| File | Change |
+| --- | --- |
+| `src/modules/api-relay.ts` | `RELAY_ENDPOINT_PATH`, `MAX_RELAY_WORKERS`, `RELAY_BACKUP_RING_WEIGHT`; round-robin-only normalisation; `relayRing()` / rewritten `orderRelayCandidates()` / `pickRelayEndpoint()`; `mintRelayClientTicket()`; the `/api/relay/endpoint` route (pick, ticket, `&failed=` report); image paths added to `RELAY_AI_PATHS`; five-worker pool cap. |
+| `src/client/api-rotation.ts` | Full rewrite: ask → wait → call the given URL; one recovery report; no cursor, no skip list, no endpoint list, no client-side failover order. |
+| `src/client/config-page-js.ts` | Five worker inputs; scheme + browser-rotation controls removed; ring-weight copy; save payload trimmed; relay card copy explains server-side picking. |
+| `src/index.ts` | `/api/config/workers` cap 3 → 5; route comment lists `GET /api/relay/endpoint`. |
+| `src/client/app-js.ts` | Completed-row archive, restore, hourly purge, five-per-page pagination, pager binding, record-on-render/export, forget-on-remove, boot wiring. |
+| `src/client/markup.ts` | `#batch-pager` markup (hidden until there is a second page). |
+| `src/client/timeline-editor.ts` | `resolveTrackOverlaps()` / `resolveTimelineOverlaps()` and their call sites (five adds, timing edits, undo/redo, boot). |
+| `tests/api-relay.test.mjs` | Strategy test rewritten as the weighted-ring test; policy-save, admin-page and browser-runtime tests follow the new contract; new tests for `/api/relay/endpoint` and the five-worker cap. |
+| `tests/quick-batch-table.test.mjs` | New test: archive → restore → five per page → 24 h deletion. |
+| `tests/timeline-editor.test.mjs` | Two assertions follow the overlap rule; new test proves the resolver runs on every add. |
+| `bug-fix-session-331.md` | This section. |
+
+### 24.12 Verification
+
+- `node --import tsx --test tests/api-relay.test.mjs` → **31 pass / 5 fail**. The five failures (`binary model results survive the relay as bytes`, `the compute endpoint returns raw bytes…`, `a model failure at the endpoint is reported…`, `the studio can rotate /api/image…`, `worker A relays a real /api/image model call…`) are the same pre-existing failures this suite had before this section (24 pass / 10 fail at `4c0b2b1`); they are Pixabay-key/binary-relay cases unrelated to the hand-out. **Five previously failing tests now pass** (`a client ticket authorizes only the AI paths`, `only AI paths answer a preflight…`, `the Worker serves /api/relay/ping…`, `the studio can rotate /api/image…`'s siblings and `a rotated GET keeps its query string` was rewritten and passes) because `RELAY_AI_PATHS` now includes the image routes.
+- `node --import tsx --test tests/quick-batch-table.test.mjs` → **15 / 15** (14 before, +1 new).
+- `node --import tsx --test tests/timeline-editor.test.mjs` → **35 / 35** (34 before, +1 new).
+- `node --import tsx --test tests/template-composer.test.mjs` → **20 / 20**.
+- Per-file suite sweep after the change: `pixabay-media` 58, `script-pipeline-hang` 19, `pixabay-studio-flow` 18, `progressive-image-pipeline` 18, `script-seo` 17, `final-media-cap-actions` + `session-248` 17, `script-note-client-only` 12, `script-retry-owner` 12, `pixabay-direct-browser` 12, `script-hang-audit` 10, `pixabay-direct-routes` 10, `public-entry-points` 9, `script-image-deep-debug` 9, `script-slow-pipeline` 9, `retry-offload-worker` 9, `session-263` 9, `account-rows` 6, `script-note-memory` 6, `pixabay-auto-retry` 6, `render-app-tts` 5, `render-hang-regressions` 5, `script-writing-client-retries` 5, `editor-subtitles-parity` 7, `browser-local-render` 3, `studio-ui-session-243` 3, `both-layout-media-hang` 1 — all pass.
+- Unchanged pre-existing failures elsewhere: `seo-walkthrough` 10, `session-262` 5, `session-261` 4, `session-250` 4, `deep-debug-regressions` 4, `session-244` 2, `llm-openrouter` 1 (image model disabled / Pixabay key) — the same files §22.18 and §23.7 already recorded as failing at the baseline.
+- `npx tsc --noEmit` → the same **30** pre-existing `src/index.ts` diagnostics; nothing in a file this section touched.
+
+New coverage in detail:
+
+1. *api-relay — `GET /api/relay/endpoint` hands out the server's round-robin URL for one AI path*: four asks with one backup return the UI Worker exactly once and `https://backup.test/api/script` three times; the backup answer carries a signed `client` ticket naming the user and the full `RELAY_AI_PATHS`; a non-AI path is refused with 400; `POST` is 405; an anonymous caller is answered by the UI Worker (`local: true`, no ticket, `reason: "no client ticket"`) on all three backup slots.
+2. *api-relay — the admin page accepts five backup Worker URLs and the pool keeps all five*: six posted URLs store five, and `resolveRelayPool()` returns this Worker + five backups.
+3. *quick-batch-table — a finished row survives a reload, five rows per page, and the browser deletes it after 24 hours*: seven rows recorded as renders/exports land in the archive with timestamps; clearing the table and re-running the boot restore brings seven `done` rows back with `kept 24 h` detail; page 1 shows five rows and page 2 the remaining two (the pager appears, the label flips, Prev returns); rewriting the timestamps past 24 h makes `readCompletedBatchRows()` return nothing and `purgeCompletedBatchRows()` delete both the rows and the archive.
+4. *timeline-editor — overlapping boxes are moved clear, and every element or scene addition re-runs the pass*: a clip dragged onto the clip before it is moved back to that clip's end; a composed clip added through `window.__TIMELINE_TEMPLATE_CLIP__`, five text elements (which hit the four-lane cap), and a duplicate each leave every lane with no two boxes over the same second.
+
+### 24.13 Notes, gotchas and deliberate decisions
+
+- **The browser can still recover from a dead URL, but it cannot rotate.** The single re-ask with `&failed=` exists so a paused/failed backup costs one retried request instead of a broken studio; the *choice* of the next URL is still the server's. That is why the wrapper never retries the same URL and never falls back to a second backup on its own.
+- **Image routes now rotate.** `RELAY_AI_PATHS` gained `/api/image`, `/api/image-batch`, `/api/image-prompts`, `/image/gen`. Those are billed AI calls (the whole point of the pool) and they remain out of reach of the settings/payment/account routes. This also removed the pre-existing drift where `api-rotation.ts`'s header claimed image rotation while its array excluded it.
+- **Tickets are still the only cross-origin credential.** A backup has no cookie for this origin; the ticket is scoped to `RELAY_AI_PATHS`, expires in three minutes, and `applyRelayCors()` still refuses to add CORS headers to any other path. The `&failed=` report is ignored unless it carries a ticket this Worker signed.
+- **A restored completed row is a record.** The MP4 and the 12 slides are browser-memory objects; persisting them would mean writing tens of MB into `localStorage`. The row, its script, its style and its completion time survive; Preview/Export stay locked. This is stated in the row's detail text so the lock is never a mystery.
+- **The archive is separate from the pipeline store on purpose.** `pipelineManagementStore` mirrors the *editable* table (script/title/style, 8 rows, no TTL); the archive mirrors *finished* rows (40 entries, 24 h). A row can be in both: restore then marks the pipeline row completed instead of adding a duplicate.
+- **A child clip is pinned to its background clip.** The overlap resolver moves children inside their parent's window and shortens them to the rest of that window; pushing them outside would break the §21 rule that a child lives inside its background clip. A child with no room left in the window keeps its place and the drawing guard truncates it — the only deliberate exception to "no overlapping boxes".
+- **The overlap resolver can lengthen a timeline.** Pushing the later clip right is the only way to keep both clips' lengths; `ensureTimelineEnd()` then grows `state.durationSec` on the 5 s grid. Two existing timeline assertions encoded the old overlapping geometry and were updated (scene 2 now starts at 10 s, not 8 s; the ruler-seek fixture seeks before moving a clip).
+- **`/api/relay/pool` survives as a diagnostic.** It still lists verified endpoints and mints a ticket; the studio simply does not call it any more. Nothing in the browser depends on it.
+- **`clientRotation` survives as a stored field.** Old `config:relay` documents still parse; the flag no longer switches anything off, and the admin page no longer offers it.
+
+### 24.14 Superseded copy in this file
+
+- §22.12 / §22.13's "a new ＋ Text / ＋ Graphic never shares a timed window" describes only the *placement* heuristic (`freeVisualWindow()`). It is now backed by a real model-level pass (§24.10) that also covers drags, duplicates, imports, audio and undo/redo.
+- §23's "up to 3" wording for backup Workers (and `src/index.ts`'s route comment) is superseded by §24.6.
+- The api-relay module header's "optionally the studio itself rotates the whole AI request" paragraph and §24.7's browser rotation are superseded by the server-side hand-out in §24.3.
+
+### 24.15 Still open
+
+- `seo-walkthrough` (10), `session-250` (4), `session-261` (4), `session-262` (5), `deep-debug-regressions` (4), `session-244` (2), `llm-openrouter` (1) and `api-relay`'s five binary/Pixabay cases still fail exactly as they did at the baseline; none is caused by this section and each needs its own investigation (mostly "AI image generation is disabled; use Pixabay" / missing `PIXABAY_KEY` in the fixtures).
+- `tests/session-264-editor-render.test.mjs` did not finish inside a 200 s per-file window in this sandbox; it was not changed by this section and needs a longer, isolated run before it can be called green.
+- "No more drawdown" is implemented under the reading in §24.5; if the user meant a different drawdown, that needs one more follow-up.
+- The editor layout's own completed-project rows keep using `pipelineManagementStore` (title/script/style/stage). They survive a refresh but do not carry the 24 h archive or the five-per-page pager, because the request named "rows" in the Quick Batch table; extending the archive to the accordion list is a separate change.
+
+### 24.16 Status
+
+- All seven requested items are implemented: server-side rotation behind `GET /api/relay/endpoint` (the browser asks, waits and calls exactly the given URL), round robin as the only scheme with the UI Worker on the smaller ring share, the browser-side pool drawdown removed, five backup URL inputs, completed Quick-Batch rows that survive a refresh with five-per-page pagination and a 24 h client-side deletion, and a timeline overlap resolver that runs on every element/scene addition, timing edit, undo/redo and load.
+- Test state for the touched suites: api-relay **31 / 36** (5 pre-existing failures), quick-batch-table **15 / 15**, timeline-editor **35 / 35**, template-composer **20 / 20**, plus the 26 other suites listed in §24.12 at their baseline; `npx tsc --noEmit` at the 30 pre-existing diagnostics.

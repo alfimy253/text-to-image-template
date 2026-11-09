@@ -319,7 +319,12 @@ test("scene and element timing changes persist; shared text/graphics lanes cap a
 	assert.equal(saved.scenes.length, 12);
 	assert.equal(saved.scenes[0].startSec, 2);
 	assert.equal(saved.scenes[0].durationSec, 8);
-	assert.equal(saved.scenes[1].startSec, 8, "extending a scene ripples the following scene timing");
+	/*
+	 * Session 331: the ripple alone left scene 2 at 8 s, under scene 1's new
+	 * 2-10 s window - two boxes over each other. The overlap resolver moves it
+	 * clear of the previous clip, so the lane has no overlapping box at all.
+	 */
+	assert.equal(saved.scenes[1].startSec, 10, "the overlap resolver moves the next scene clear");
 	const elements = saved.scenes[0].elements;
 	assert.equal(elements.length, 2, "existing and newly-added elements are stored on their scene");
 	assert.equal(elements.find((item) => item.id === "dummy-text-1").startSec, 2, "moving a scene carries its timed elements");
@@ -514,12 +519,21 @@ test("frame details, ruler seeking, gap preview and controls survive timeline ed
  assert.equal(w.document.querySelectorAll('[data-timeline-action="export"]').length, 3);
  assert.equal(w.document.querySelectorAll('[data-timeline-action="play"]').length, 2);
  assert.ok(w.document.querySelector('[data-scroll-lane]'));
- w.__TIMELINE_EDITOR__.setItemTiming("media-1", 10, 5);
  const ruler = w.document.querySelector('.te-ruler');
  ruler.getBoundingClientRect = () => ({ left: 0 });
  ruler.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, clientX: 36 }));
  w.document.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true }));
  assert.equal(state.playheadSec, 2);
+ assert.equal(w.document.getElementById('timeline-current-scene').textContent, 'Scene 1');
+ /*
+  * Session 331: the moved clip (and the overlap resolver behind it) pushes
+  * the scene away from 2 s, so the same ruler column is now a gap. The pixel
+  * scale may have changed with the longer timeline, so only the label is
+  * asserted here - the seek itself is checked above.
+  */
+ w.__TIMELINE_EDITOR__.setItemTiming("media-1", 10, 5);
+ ruler.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, clientX: 36 }));
+ w.document.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true }));
  assert.equal(w.document.getElementById('timeline-current-scene').textContent, 'No scene selected');
  w.__TIMELINE_EDITOR__.save();
  assert.equal(JSON.parse(w.localStorage.getItem('ytvs.timeline-editor.v1.' + state.projectId)).frame.orientation, 'portrait');
@@ -1656,7 +1670,10 @@ test("＋ Add Clips opens the Add video from template modal and its MP4 lands at
 	const addFn = TEMPLATE_COMPOSER_JS.slice(TEMPLATE_COMPOSER_JS.indexOf("async function addTemplateToVideo()"));
 	assert.ok(addFn.indexOf("timelineClipSink()") < addFn.indexOf("project.assets.push(asset)"), "the sink is checked before the gallery push");
 	assert.match(addFn, /if \(!sink\) \{[\s\S]{0,200}?MAX_MP4_UPLOADS/, "the 5-clip gallery cap only guards the gallery path");
-	assert.match(addFn, /durationSec: clipDuration/, "the probed length travels with the clip, so the timeline never re-probes it");
+	assert.match(addFn, /handClipToTimeline\(renderedVideo, clipDuration\)/, "the probed length travels with the clip, so the timeline never re-probes it");
+	const handOff = TEMPLATE_COMPOSER_JS.slice(TEMPLATE_COMPOSER_JS.indexOf("function handClipToTimeline("));
+	assert.match(handOff.slice(0, 700), /durationSec: seconds/, "the single hand-off helper sends the length");
+	assert.match(TEMPLATE_COMPOSER_JS, /if \(shouldDownload\) \{\s*timelineLanded = handClipToTimeline\(lastVideo\);/, "the Download MP4 path lands the clip too (Session 333)");
 
 	const helper = APP_JS.slice(APP_JS.indexOf("function openTemplateModalForTimeline()"));
 	assert.match(helper, /if \(!videoProjects\.length\) \{\s*addVideoAccordion\(\);/, "the helper creates the Video N the composer needs");
@@ -1695,4 +1712,161 @@ test("a composed clip never steals a pending placeholder and the next one lands 
 	assert.equal(track.items.length, 14, "and the lane is unchanged");
 	assert.equal(api.appendQueuedClips(), 0, "an empty queue adds nothing");
 	assert.match(w.document.getElementById("timeline-status").textContent, /Queue at least one clip/i, "and says so");
+});
+
+test("a composed clip is the last Scene Media scene and the timeline MP4 export renders it", async (t) => {
+	const { dom, w, previewContext } = openTimeline();
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const track = state.tracks.find((candidate) => candidate.kind === "media");
+
+	/*
+	 * Shrink the project to one 5 s scene so the export is quick while still
+	 * proving that the appended scene extends the rendered MP4.
+	 */
+	track.items = track.items.slice(0, 1);
+	track.items[0].startSec = 0;
+	track.items[0].durationSec = 5;
+	state.scenes = state.scenes.slice(0, 1);
+	state.scenes[0].startSec = 0;
+	state.scenes[0].durationSec = 5;
+	state.durationSec = 5;
+
+	/*
+	 * A decoded MP4 stand-in: the painter only draws a <video> whose metadata
+	 * is ready, and seekVideoForExport() waits for "seeked".
+	 */
+	Object.defineProperty(w.HTMLMediaElement.prototype, "src", {
+		configurable: true,
+		set(value) {
+			this.setAttribute("src", value);
+			queueMicrotask(() => this.dispatchEvent(new w.Event("loadedmetadata")));
+			queueMicrotask(() => this.dispatchEvent(new w.Event("loadeddata")));
+		},
+		get() { return this.getAttribute("src"); }
+	});
+	Object.defineProperty(w.HTMLMediaElement.prototype, "readyState", { configurable: true, get: () => 4 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "videoWidth", { configurable: true, get: () => 1280 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "videoHeight", { configurable: true, get: () => 720 });
+	/* jsdom declares these on HTMLVideoElement itself, which shadows the base getters. */
+	Object.defineProperty(w.HTMLVideoElement.prototype, "videoWidth", { configurable: true, get: () => 1280 });
+	Object.defineProperty(w.HTMLVideoElement.prototype, "videoHeight", { configurable: true, get: () => 720 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "duration", { configurable: true, get: () => 1 });
+	Object.defineProperty(w.HTMLMediaElement.prototype, "currentTime", {
+		configurable: true,
+		get() { return this.__currentTime || 0; },
+		set(value) {
+			this.__currentTime = value;
+			queueMicrotask(() => this.dispatchEvent(new w.Event("seeked")));
+		}
+	});
+	w.HTMLMediaElement.prototype.load = () => {};
+
+	/* The appended clip is painted from its own <video>, not as a placeholder. */
+	const drawnVideos = [];
+	const originalDrawImage = previewContext.drawImage;
+	previewContext.drawImage = function (source, ...rest) {
+		if (source && source.tagName === "VIDEO") drawnVideos.push(source);
+		return originalDrawImage.call(this, source, ...rest);
+	};
+
+	const blob = new w.Blob(["composed"], { type: "video/mp4" });
+	assert.equal(
+		w.__TIMELINE_TEMPLATE_CLIP__({ blob, name: "closing-card.mp4", durationSec: 1 }),
+		1,
+		"the composed MP4 is appended"
+	);
+
+	const fresh = track.items[track.items.length - 1];
+	assert.equal(fresh.startSec, 5, "it starts at the right-most end of the Scene Media layer");
+	assert.equal(fresh.durationSec, 1);
+	assert.equal(state.durationSec, 10, "the timeline grows until the new scene's end (rounded to the 5 s grid)");
+	const scene = state.scenes[state.scenes.length - 1];
+	assert.equal(scene.id, fresh.sceneId, "the clip is a scene of the project, in last position");
+	assert.equal(scene.startSec, 5);
+	assert.equal(scene.mediaAssetId, fresh.assetId);
+	assert.match(scene.name, /closing-card\.mp4/, "the scene is named after the composed clip");
+
+	let encodedFrames = 0;
+	w.VideoFrame = class {
+		constructor(_source, init) { this.timestamp = init.timestamp; }
+		close() {}
+	};
+	w.VideoEncoder = class {
+		constructor() { this.state = "unconfigured"; this.encodeQueueSize = 0; }
+		static async isConfigSupported(config) { return { supported: true, config }; }
+		configure() { this.state = "configured"; }
+		encode() { encodedFrames++; }
+		async flush() {}
+		close() { this.state = "closed"; }
+	};
+	w.Mp4Muxer = {
+		ArrayBufferTarget: class { constructor() { this.buffer = new ArrayBuffer(64); } },
+		Muxer: class {
+			constructor(options) { this.target = options.target; }
+			addVideoChunk() {}
+			addAudioChunk() {}
+			finalize() {}
+		}
+	};
+	w.HTMLAnchorElement.prototype.click = () => {};
+
+	const result = await w.__TIMELINE_EDITOR__.exportTimeline();
+	assert.equal(result.ok, true);
+	assert.equal(result.format, "mp4");
+	assert.equal(encodedFrames, 300, "10 s at 30 fps: the exported MP4 covers the appended scene's window");
+	assert.ok(drawnVideos.length >= 20, "frames inside the appended scene draw its composed MP4, not a placeholder");
+	assert.equal(state.durationSec, 10);
+});
+
+test("overlapping boxes are moved clear, and every element or scene addition re-runs the pass", (t) => {
+	const { dom, w } = openTimeline();
+	t.after(() => dom.window.close());
+	const api = w.__TIMELINE_EDITOR__;
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const media = state.tracks.find((track) => track.kind === "media");
+
+	/*
+	 * Session 331 - the overlap rule. Before this pass a clip could be dropped
+	 * on top of its neighbour (a drag, a duplicate, an imported scene) and the
+	 * lane drew two boxes over the same seconds. clampClipBox() only shortened
+	 * the drawing; the model kept the overlap. The resolver moves the later
+	 * clip to the end of the previous one, on every track, every time.
+	 */
+	const assertNoOverlaps = (label) => {
+		for (const track of state.tracks) {
+			const ordered = track.items.slice().sort((a, b) => a.startSec - b.startSec);
+			for (let index = 1; index < ordered.length; index++) {
+				const previousEnd = ordered[index - 1].startSec + ordered[index - 1].durationSec;
+				assert.ok(
+					ordered[index].startSec + 0.001 >= previousEnd,
+					label + ": " + track.label + " has no overlapping boxes (" + ordered[index].id + " starts at " + ordered[index].startSec + ", previous ends at " + previousEnd + ")"
+				);
+			}
+		}
+	};
+
+	/* 1. A drag that lands on the clip before it is moved back out. */
+	api.setItemTiming("media-2", 2, 5);
+	const moved = media.items.find((item) => item.id === "media-2");
+	assert.equal(moved.startSec, 5, "the overlapping Scene Media clip is moved to the end of the clip before it");
+	assertNoOverlaps("after a timing edit");
+
+	/* 2. A new scene (the composer hand-off) never lands on top of another. */
+	assert.equal(w.__TIMELINE_TEMPLATE_CLIP__({ blob: new w.Blob(["composed"], { type: "video/mp4" }), name: "overlap-probe.mp4", durationSec: 4 }), 1);
+	assertNoOverlaps("after a scene was added");
+
+	/* 3. A new text/graphic is placed clear of the boxes already in its lane. */
+	for (let index = 0; index < 5; index++) {
+		const element = api.addTextElement("overlap text " + index);
+		assert.ok(element, "text " + index + " was added");
+	}
+	assert.ok(state.tracks.filter((track) => track.kind === "visual").length <= 4, "the four-lane cap still holds");
+	assertNoOverlaps("after five text elements were added");
+
+	/* 4. A duplicate never overlaps the clip it was copied from. */
+	api.setItemTiming("media-3", 0, 5);
+	const copy = api.duplicateSelectedItem();
+	assert.ok(copy, "the selection was duplicated");
+	assertNoOverlaps("after a duplicate");
 });

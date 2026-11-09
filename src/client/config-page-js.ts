@@ -877,11 +877,13 @@ export const CONFIG_PAGE_SCRIPT = `
 					'<div class="cfg-two-col">' +
 						'<div class="cfg-card">' +
 							'<h2>Registered Background Workers</h2>' +
-							'<p class="cfg-sub">Up to 3 extra deployments of this same app. They join the API rotation pool below: inference is spread across them, while accounts, sessions, credits, payments and CMS stay on this Worker.</p>' +
+							'<p class="cfg-sub">Up to 5 extra deployments of this same app. They join the API rotation pool below: inference is spread across them, while accounts, sessions, credits, payments and CMS stay on this Worker.</p>' +
 							'<div style="display:grid;gap:8px;">' +
 								'<input id="cfg-worker-url-1" class="cfg-input" type="url" placeholder="Worker 1 URL (https://your-worker.workers.dev)" />' +
 								'<input id="cfg-worker-url-2" class="cfg-input" type="url" placeholder="Worker 2 URL (optional)" />' +
 								'<input id="cfg-worker-url-3" class="cfg-input" type="url" placeholder="Worker 3 URL (optional)" />' +
+								'<input id="cfg-worker-url-4" class="cfg-input" type="url" placeholder="Worker 4 URL (optional)" />' +
+								'<input id="cfg-worker-url-5" class="cfg-input" type="url" placeholder="Worker 5 URL (optional)" />' +
 							'</div>' +
 							'<div id="cfg-workers-list" style="margin-top:10px;"></div>' +
 							'<div style="margin-top:12px;">' +
@@ -907,24 +909,17 @@ export const CONFIG_PAGE_SCRIPT = `
 						'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
 							'<div>' +
 								'<h2>API Rotation &amp; Backup Worker Pool</h2>' +
-								'<p class="cfg-sub" style="margin-bottom:0;">Every AI route (<code>/api/image</code>, <code>/api/image-batch</code>, <code>/api/image-prompts</code>, <code>/api/script</code>, <code>/api/seo-plan</code>, <code>/api/voiceover</code>, <code>/image/gen</code>, <code>/tts</code>) can run on this Worker or on one of the registered backups above. Rotation spreads the Workers AI neuron bill and the inference load; accounts, credits, payments and CMS always stay on this Worker.</p>' +
+								'<p class="cfg-sub" style="margin-bottom:0;">Every AI route (<code>/api/image</code>, <code>/api/image-batch</code>, <code>/api/image-prompts</code>, <code>/api/script</code>, <code>/api/seo-plan</code>, <code>/api/voiceover</code>, <code>/image/gen</code>, <code>/tts</code>) can run on this Worker or on one of the registered backups above. The rotation is decided <strong>here, on this Worker</strong>: the studio asks for the URL of one pipeline call (<code>GET /api/relay/endpoint</code>) and calls exactly what it is given, so no browser ever picks an endpoint. Accounts, credits, payments and CMS always stay on this Worker.</p>' +
 							'</div>' +
 							'<button type="button" class="cfg-btn" id="cfg-relay-refresh">Refresh Status</button>' +
 						'</div>' +
 						'<div class="cfg-relay-grid">' +
-							'<label class="cfg-relay-row"><input type="checkbox" id="cfg-relay-enabled" /> Rotate inference across the pool</label>' +
-							'<label class="cfg-relay-row"><input type="checkbox" id="cfg-relay-client" /> Rotate whole AI requests in the browser</label>' +
+							'<label class="cfg-relay-row"><input type="checkbox" id="cfg-relay-enabled" /> Rotate pipeline calls across the pool</label>' +
+							'<div class="cfg-relay-row" id="cfg-relay-scheme"><strong>Round robin</strong> \u2014 the only scheme; the server picks, the studio never rotates by itself.</div>' +
 							'<div>' +
-								'<label class="cfg-label" for="cfg-relay-strategy">Rotation strategy</label>' +
-								'<select class="cfg-input" id="cfg-relay-strategy">' +
-									'<option value="round-robin">Round robin (even spread)</option>' +
-									'<option value="least-pending">Least pending (busiest Worker skipped)</option>' +
-									'<option value="weighted">Weighted (favour this Worker)</option>' +
-								'</select>' +
-							'</div>' +
-							'<div>' +
-								'<label class="cfg-label" for="cfg-relay-weight">This Worker\u2019s weight</label>' +
+								'<label class="cfg-label" for="cfg-relay-weight">This Worker\u2019s ring weight</label>' +
 								'<input class="cfg-input" id="cfg-relay-weight" type="number" min="0" max="10" step="1" value="1" />' +
+								'<div class="cfg-relay-hint">Each backup is entered 3 times in the ring, so 1 keeps this UI Worker on the smaller share (1 request in 4 with one backup, 1 in 16 with five). 0 keeps pipeline calls off this Worker entirely.</div>' +
 							'</div>' +
 							'<div>' +
 								'<label class="cfg-label" for="cfg-relay-attempts">Max endpoints tried per call</label>' +
@@ -1323,7 +1318,7 @@ export const CONFIG_PAGE_SCRIPT = `
 	function renderWorkersList(urls) {
 		var box = document.getElementById("cfg-workers-list");
 		if (!box) return;
-		for (var idx = 0; idx < 3; idx++) {
+		for (var idx = 0; idx < 5; idx++) {
 			var inp = document.getElementById("cfg-worker-url-" + (idx + 1));
 			if (inp) inp.value = (urls && urls[idx]) || "";
 		}
@@ -1350,7 +1345,7 @@ export const CONFIG_PAGE_SCRIPT = `
 	document.getElementById("cfg-worker-save").addEventListener("click", function() {
 		var msg = document.getElementById("cfg-worker-msg");
 		var urls = [];
-		for (var idx = 1; idx <= 3; idx++) {
+		for (var idx = 1; idx <= 5; idx++) {
 			var val = document.getElementById("cfg-worker-url-" + idx).value.trim();
 			if (val) urls.push(val);
 		}
@@ -1439,14 +1434,11 @@ export const CONFIG_PAGE_SCRIPT = `
 			.then(function(d) {
 				if (!d || !d.config) return;
 				var enabled = document.getElementById("cfg-relay-enabled");
-				var client = document.getElementById("cfg-relay-client");
-				var strategy = document.getElementById("cfg-relay-strategy");
 				var weight = document.getElementById("cfg-relay-weight");
 				var attempts = document.getElementById("cfg-relay-attempts");
 				var timeout = document.getElementById("cfg-relay-timeout");
 				if (enabled) enabled.checked = d.config.enabled !== false;
-				if (client) client.checked = d.config.clientRotation !== false;
-				if (strategy) strategy.value = d.config.strategy || "round-robin";
+				/* The scheme is fixed: round robin, chosen on this Worker. */
 				if (weight) weight.value = String(d.config.localWeight == null ? 1 : d.config.localWeight);
 				if (attempts) attempts.value = String(d.config.maxAttempts || 3);
 				if (timeout) timeout.value = String(Math.round((d.config.timeoutMs || 100000) / 1000));
@@ -1505,8 +1497,7 @@ export const CONFIG_PAGE_SCRIPT = `
 		var payload = {
 			pw: unlockedPw,
 			enabled: !!document.getElementById("cfg-relay-enabled").checked,
-			clientRotation: !!document.getElementById("cfg-relay-client").checked,
-			strategy: document.getElementById("cfg-relay-strategy").value,
+			/* No scheme field: the server always rotates round robin. */
 			localWeight: Number(document.getElementById("cfg-relay-weight").value),
 			maxAttempts: Number(document.getElementById("cfg-relay-attempts").value),
 			timeoutMs: Number(document.getElementById("cfg-relay-timeout").value) * 1000
