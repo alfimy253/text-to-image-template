@@ -171,7 +171,7 @@ test('a whole-video plan of the wrong length is mapped onto the fixed 12 request
 	assert.deepEqual(renumbered.map((t) => JSON.parse(t.slice(8)).type), ['image', 'video', 'image']);
 });
 
-test('#275 the planner instruction asks for 1-5 word search terms and reuses the SEO keywords', async () => {
+test('#275 the planner instruction asks for 1-3 word search terms and reuses the SEO keywords', async () => {
 	const prompts = [];
 	const planner = { AI: { run: async (_m, input) => {
 		prompts.push(input.prompt);
@@ -184,7 +184,7 @@ test('#275 the planner instruction asks for 1-5 word search terms and reuses the
 		batch: { offset: 0, count: 3, attempt: 0 }
 	});
 	const prompt = prompts[0];
-	assert.match(prompt, /SHORT STOCK SEARCH TERM of 1-5 words/);
+	assert.match(prompt, /SHORT STOCK SEARCH TERM of 1-3 words/);
 	assert.match(prompt, /search terms, NOT image prompts/i);
 	assert.match(prompt, /no sentences, art direction, camera or lens instructions/i);
 	assert.ok(!/2-5 simple search keywords/.test(prompt), 'the old 2-5 art-prompt wording is gone');
@@ -198,14 +198,24 @@ test('#275 the planner instruction asks for 1-5 word search terms and reuses the
 			{ type: 'video', keywords: 'slow motion drone shot over water' },
 			{ type: 'image', keywords: 'soft golden hour light on leaves' }] }) }) } }, 'text',
 		{ topic: 'garden', script: 'Grow food together.', minutes: 1, batch: { offset: 0, count: 3 } }),
-		/1-5 word search terms/
+		/1-3 word search terms/
 	);
-	const fiveWords = await generateImagePrompts({ AI: { run: async () => ({ response: JSON.stringify({ scenes: [
-		{ scene: 0, type: 'image', keywords: 'sunny neighborhood vegetable garden' },
-		{ scene: 1, type: 'video', keywords: 'gardening neighbors working together' },
+	/* Session 331 (keyword limit): three words is the most a search term may have. */
+	const threeWords = await generateImagePrompts({ AI: { run: async () => ({ response: JSON.stringify({ scenes: [
+		{ scene: 0, type: 'image', keywords: 'sunny vegetable garden' },
+		{ scene: 1, type: 'video', keywords: 'gardening neighbors together' },
 		{ scene: 2, type: 'image', keywords: 'fresh compost soil' }] }) }) } }, 'text',
 	{ topic: 'garden', script: 'Grow food together.', minutes: 1, batch: { offset: 0, count: 3 } });
-	assert.equal(fiveWords.length, 3);
+	assert.equal(threeWords.length, 3);
+	/* A four-word term is over the limit and is not accepted as a search term. */
+	await assert.rejects(
+		generateImagePrompts({ AI: { run: async () => ({ response: JSON.stringify({ scenes: [
+			{ type: 'image', keywords: 'sunny neighborhood vegetable garden' },
+			{ type: 'video', keywords: 'gardening neighbors working together' },
+			{ type: 'image', keywords: 'fresh compost soil now' }] }) }) } }, 'text',
+		{ topic: 'garden', script: 'Grow food together.', minutes: 1, batch: { offset: 0, count: 3 } }),
+		/1-3 word search terms/
+	);
 });
 
 test('LLM scene planner reads the entire script and assigns exactly four stock video scenes', async () => {

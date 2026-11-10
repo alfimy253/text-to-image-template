@@ -119,7 +119,7 @@ test("words from the selected SEO keyword set outrank the rest of the script", (
 	assert.ok(plan.words.includes("golf"), "the long-tail word is kept");
 	assert.ok(plan.words.includes("foxtrot"), "the short keyword is kept");
 	assert.ok(plan.words.indexOf("golf") >= 0 && plan.words.indexOf("foxtrot") >= 0);
-	assert.equal(plan.words.length, 5, "the 1-5 word limit still holds");
+	assert.equal(plan.words.length, 3, "the 1-3 word limit still holds (Session 331 keyword limit)");
 	assert.ok(!plan.words.includes("delta"), "a lower-ranked word is dropped first");
 	assert.ok(!plan.words.includes("echo"), "a lower-ranked word is dropped first");
 });

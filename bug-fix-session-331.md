@@ -3512,3 +3512,110 @@ session-331-fixes               10 / 10
 - **A timed-out `ai.run` on the receiving Worker keeps running.** JavaScript cannot cancel it; the isolate is released when it settles, and the caller has already failed over.
 - **The 5 repaired tests were red before this pass.** They failed at `407ab86` on the Pixabay-only policy added in §25, not on anything in the rotation, which is why §25's table listed `session-250-batch-pipeline` and `seo-walkthrough` as the only known reds — `api-relay` was not re-run in that pass. Retargeting them restored coverage of the binary relay path, which no passing test had covered since §25.
 - **Not exercised against real Cloudflare Workers.** The timing paths are pinned with stubbed bindings and fetch functions inside the test process; the 5 s timeout test really waits 5 s, but no test waits out the 180 s chain budget or the 240 s endpoint deadline.
+
+## 28. Quick Batch regenerate fix (finished rows stay clickable, can be regenerated, and survive a reload), Delete Video moved to the bottom of the accordion, and search keywords capped at three words (2026-11-10)
+
+### 28.1 The request
+
+1. **Quick Batch table.** A finished row must be regenerable. Preview, Process export and Edit must stay clickable after generation, must still work after the row is edited in the timeline editor, and a timeline edit must reset the row so it can be generated again.
+2. Document the request and the fix here, after section 27.
+3. **Editor layout.** The Delete Video button takes the look of the top-bar Generate button, sits inside the accordion body at the bottom, and spans the full accordion width.
+4. **Image search keywords** are at most three words.
+
+Standing constraints from the user: treat this log and the other `.md` files as possibly stale and check them against the code; do not break the code or the system.
+
+### 28.2 What the code actually did (verified, not taken from this log)
+
+Section 24.9 says a restored completed row is a *record*, with Preview and Export locked, because media bytes were never persisted. That was true of the code, but it is what the user is asking to change. Tracing the path again showed three separate faults:
+
+| # | Where | What happened |
+|---|---|---|
+| A | `restorePipelineManagementState` (~1270) → `hydrateBatchRowAssetsFromTimeline` | The restore set `stage = "done"` and started hydration **without awaiting it**. The restore runs inside `APP_JS`, and the timeline editor script (`window.__TIMELINE_EDITOR__`, the only reader of the IndexedDB media) is emitted in the same page block **after** it. So on every reload hydration returned `false` at once, and the row came back with no mp3, images or slides. |
+| B | `batchRowReadyForGeneration` | It accepted only `ready` / `queued`, so a `done` row with no media could not be generated. With its buttons locked as well, the row was stuck: Preview, Export, Edit and Generate were all disabled. |
+| C | `openBatchEditPage` (the only writer of the row's media to IndexedDB) | A finished row's voiceover and Pixabay media were written to IndexedDB **only when the row was opened in the timeline**. A row that finished and was never opened had no copy to restore from. |
+
+Two other points from the trace:
+
+- `batchRowFinished()` treats a row as finished from the stored `_storedFinished` / `_storedMp3` / `_storedAnimated` flags alone (clause (b)). The existing tests depend on that for a cookie-restored, timeline-edited row, so it is kept.
+- The timeline-edit regeneration reset was already in place: `batchRowTimelinePendingRegen()` returns true when the edit is newer than `_timelineRegeneratedAt`, and `batchRowReadyForGeneration()` admits such a row. That behaviour is pinned by the existing sync test and is unchanged.
+
+### 28.3 The fix (`src/client/app-js.ts`)
+
+**Media is kept on finish (fault C).**
+
+- The asset-transfer block that used to live inline in `openBatchEditPage` is now `persistBatchRowMedia(row)`. `openBatchEditPage` and the successful end of `runBatchRow` both call it. The key is `batchRowMediaPageId(row)` = `timeline-<pageId>-row-<id>`, the same key `openBatchEditPage` has always used.
+- `hydrateBatchRowAssetsFromTimeline` reads from that same key, so writing and reading agree (before, it used the timeline's own key, which can differ).
+
+**Restore waits for the timeline editor, then rebuilds (fault A).**
+
+- `recoverBatchRowMedia(row)` replaces the un-awaited hydration call in the restore. It sets `_recoveringMedia`, yields one tick (`batchDelay(0)`) so the timeline editor script has loaded, waits for any hydration already in flight, hydrates, and then runs `rebuildBatchSlidesFromItems(row)`.
+- `rebuildBatchSlidesFromItems` rebuilds the slides from the stored `slideItems` (the same timing data `composeBatchSlideItems` writes). It reuses `cloneOrReuseBatchSlide` and the restored media, and does not decode or probe anything again.
+- When recovery finishes, the row is repainted (`paintBatchRowStatus`, `renderBatchTable`).
+
+**A finished row that cannot be restored becomes a record (demotion).**
+
+- If `stage === "done"` and `batchRowFinished()` is still false after recovery, `demoteBatchRowToRecord(row)` clears the `_stored*` flags and sets `detail` to "Media not kept - Generate builds it again". Nothing is shown as an error.
+
+**Generation gate (fault B).**
+
+- `batchRowReadyForGeneration()` now also admits `done` rows that are not finished, so a demoted record can be generated again. Finished rows (live buttons) are still excluded, and a row with `_recoveringMedia` is never queued.
+
+**Timeline edits (item 1, last point).** No change to the logic. The edit still makes the row pending regeneration, which is now honoured for restored rows too, because the gate no longer blocks a `done` row.
+
+### 28.4 Delete Video (item 3)
+
+- `videoAccordionHTML` (`app-js.ts` ~8570–8640): the button left the header and now sits in `va-body`, after `va-left` and before the body's closing `</div>`. The class `va-delete-btn`, the id `va-delete-N`, the title and the `deleteVideoAccordion(N)` handler are unchanged.
+- `styles.ts`: `.va-delete-btn` is a full-width block with the Generate button's look: accent background, `var(--t-on-accent)` text, `1px solid var(--accent)`, `10px 13px` padding, `10px` radius, weight 800, `0.8rem`, and a `brightness(1.06)` hover. The accent override (`html[data-theme] #studio-app .va-delete-btn`) and the neo square/uppercase rules follow the `.app-generate` ones; the small-screen size matches too. The old red `#dc2626` hover is removed. `html[data-theme] .va-delete-btn` stays in the grey-list selector, which `studio-ui-session-243` checks; the accent rule wins over it by specificity.
+
+### 28.5 Keywords (item 4)
+
+- `SCENE_KEYWORDS_MAX_WORDS` and `SCRIPT_KEYWORD_MAX_WORDS` are 3 (`image-prompts.ts`). The planner instruction, the error messages and the comments now say 1–3 words.
+- The no-model planner's raw-topic fallback used to be capped only by characters, so a long topic could still reach Pixabay as a long phrase. It now goes through `clampSceneQuery`, so it obeys the same three-word limit.
+- **Judgement call:** `cleanSceneKeywords()` **rejects** a reply with more than three words (the existing §275 behaviour for prose); it does not trim it to its first three words. Trimming would turn a sentence such as "a calm misty morning" into "a calm misty", which is not a usable search term. If the user meant trimming, this is the one place to change.
+- `system-rules.md` line 24 now reads 1–3 words, the same as the code.
+
+### 28.6 Tests changed or added
+
+| File | Change |
+|---|---|
+| `tests/pixabay-media.test.mjs` | #7 now expects "1-3 word search terms" in the prompt and error. The four-word reply case is now a rejection; a three-word reply is accepted. |
+| `tests/session-331-fixes.test.mjs` | The keyword-set test asserts a three-word plan. |
+| `tests/timeline-quick-batch-sync.test.mjs` | The Req 3 cookie test now waits one tick for media recovery before asserting that the row is regenerable (the gate is deliberate). **New:** "a finished row restored after reload gets its media back from IndexedDB, rebuilds its slides and stays live" (12 media, voiceover, 12 rebuilt slides with media, `batchRowFinished` true, not queued). **New:** "a finished row whose media cannot be found is demoted to a record that Generate can build again". |
+
+### 28.7 Verification
+
+```text
+npx tsc --noEmit                         30 diagnostics, all in src/index.ts (unchanged baseline)
+
+Per-file runs on this branch (npm test runs them all in one process; see 28.8). Totals: 524 subtests passing across the 44 files that finish.
+  quick-batch-table                 15 / 15
+  timeline-quick-batch-sync          6 /  6   (was 4: two new tests)
+  session-331-fixes                 10 / 10
+  pixabay-media                     58 / 58
+  studio-ui-session-243              3 /  3
+  timeline-editor                   37 / 37
+  + 33 other files, all green
+  44 files were run in the loop: 39 green, 5 with pre-existing failures (listed below)
+```
+
+**Failing files, each confirmed identical on the untouched commit `cbaa888` (extracted with `git archive`, same node_modules):**
+
+| File | Failing | Note |
+|---|---|---|
+| `deep-debug-regressions` | 4 of 6 | Also hangs at the end (timeout). Pre-existing. |
+| `session-264-editor-render` | hangs after 10 subtests | Same stall on the baseline. |
+| `seo-walkthrough` | 3 | Pre-existing. |
+| `session-244` | 2 | Pre-existing. |
+| `session-250-batch-pipeline` | 5 | Pre-existing (same five names on baseline). |
+| `session-261-browser-offload` | 4 | Pre-existing. |
+| `session-262-load-balancing` | 5 | Pre-existing. |
+
+None of these failures is in a test this section touched, and none failed for a reason in this change. They are real but unrelated to this work, and they should be picked up separately.
+
+### 28.8 Small print and judgement calls
+
+- **No real browser was available** (no Chromium, no playwright-core in devDependencies), so everything was verified in JSDOM. The Delete Video button's look is checked against the CSS rules, not in a rendered page. Please look at it once in a browser.
+- **Only rows that finish after this change keep their media across a reload.** A row that finished before it, with no IndexedDB copy, comes back as a record and can be generated again. That is the intended fallback.
+- **The `_recoveringMedia` gate blocks Generate on a restored row for a moment** (one tick plus the IndexedDB read). That is deliberate: without it a run could start while old media is being put back.
+- **`npm test` does not finish in this sandbox**: `deep-debug-regressions` and `session-264-editor-render` stall on the untouched commit too. The per-file loop above is the reliable check.
+- The keyword limit is three, as the user asked. It is tighter than the earlier five-word rule (§25 and §275), and `system-rules.md` has been updated to match.

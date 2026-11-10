@@ -21,7 +21,7 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
   script** on each chunk call. Both layouts send full `script`; it wins over legacy summaries.
 - Scenes portray broad concrete ideas from the **whole script**, not literal isolated sentences.
   The model returns typed stock searches: `{scenes:[{type:"image"|"video",keywords:"..."}]}`.
-  Every `keywords` value is a **stock search term of 1–5 words** (≤100 characters), never an
+  Every `keywords` value is a **stock search term of 1–3 words** (≤100 characters), never an
   image prompt: sentences, art direction, camera/lens notes, mood paragraphs, style words and
   negative prompts are rejected by `cleanSceneKeywords()`. The instruction says "write search
   terms, NOT image prompts" and offers the script's own **long-tail + short SEO keywords** as
@@ -2124,11 +2124,14 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
   scripted rows run to completion without requiring a second click of Generate. Each row keeps its
   own controller/object URLs, and a finished row unlocks its buttons without waiting for the rest
   of the table.
-- **A finished row is never generated again.** Because the queue is built from
-  `batchRowPending()`, pressing ✦ Generate again skips every row whose Actions buttons are
-  already live: its MP3, images and slides are in memory, so re-running it would re-bill the
-  credits and throw the animation away. With no pending row left the table shows
-  `showRequiredModal(["Every row with a script is already finished …"])` instead of starting a run.
+- **A finished row is regenerated only when its buttons are not live (Session 331, regenerate
+  fix).** The queue is built from `batchRowPending()` → `batchRowReadyForGeneration()`. A row whose
+  Actions buttons are live (`batchRowFinished()`) is skipped, so ✦ Generate does not re-bill credits
+  for finished media. A row that is *not* finished can be generated again, including a `done` row
+  whose media could not be restored after a reload (it is demoted to a record). A row whose timeline
+  was edited after its last render (`batchRowTimelinePendingRegen()`) is pending again. A row that
+  is still recovering its media (`_recoveringMedia`) is never queued. With no pending row left the
+  table shows `showRequiredModal(["Every row with a script is already finished …"])`.
   (A *failed* row is pending again and is retried by the next Generate; clear a finished row's
   script to make it runnable anew.)
 - **Isolation + silent retries (Session #244).** A failure is contained to its own row **and is
