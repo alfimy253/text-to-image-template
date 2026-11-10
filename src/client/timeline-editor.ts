@@ -12,6 +12,9 @@ export const TIMELINE_EDITOR_JS = `
 		var DB_VERSION = 1;
 		var DB_STORE = "projects";
 		var STATE_PREFIX = "ytvs.timeline-editor.v1.";
+		var TIMELINE_COOKIE_PREFIX = "ytvs_timeline_editor_";
+		var TIMELINE_COOKIE_CHUNKS = 8;
+		var TIMELINE_COOKIE_MAX_VALUE = 3800;
 		var MAX_DURATION_SEC = 3600;
 		/*
 		 * Every seconds slider in the selected-element sections stops at 80 s.
@@ -128,6 +131,25 @@ export const TIMELINE_EDITOR_JS = `
 			});
 		}
 
+		function deleteAssetRecord(projectId) {
+			var id = String(projectId || "");
+			if (!id) return Promise.resolve(false);
+			return openAssetDb().then(function (db) {
+				return new Promise(function (resolve) {
+					try {
+						var transaction = db.transaction(DB_STORE, "readwrite");
+						transaction.objectStore(DB_STORE).delete(id);
+						transaction.oncomplete = function () { db.close(); resolve(true); };
+						transaction.onerror = function () { db.close(); resolve(false); };
+						transaction.onabort = function () { db.close(); resolve(false); };
+					} catch (deleteError) {
+						try { db.close(); } catch (closeErr) { }
+						resolve(false);
+					}
+				});
+			}).catch(function () { return false; });
+		}
+
 		function storeProjectAssets(projectId, transfer) {
 			var id = String(projectId || "");
 			if (!id) return Promise.resolve({ ok: false, reason: "missing timeline project id" });
@@ -166,6 +188,7 @@ export const TIMELINE_EDITOR_JS = `
 		var api = {
 			storeProjectAssets: storeProjectAssets,
 			readProjectAssets: readAssetRecord,
+			deleteProjectAssets: deleteAssetRecord,
 			storeAsset: storeOneAsset,
 			getState: function () { return window.__TIMELINE_EDITOR_STATE__ || null; }
 		};
@@ -303,6 +326,32 @@ export const TIMELINE_EDITOR_JS = `
 				.join(" + ");
 		}
 
+		function roundTimelineSec(value) {
+			return Math.round(Math.max(0, number(value, 0)) * 1000) / 1000;
+		}
+		function timelineSafeId(value) {
+			return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "default";
+		}
+		function timelineCookieNames(targetId) {
+			var prefix = TIMELINE_COOKIE_PREFIX + timelineSafeId(targetId || pageId) + "_";
+			var list = [];
+			for (var i = 0; i < TIMELINE_COOKIE_CHUNKS; i++) list.push(prefix + (i + 1));
+			return list;
+		}
+		function timelineCookieDigest(text) {
+			var hash = 2166136261;
+			var str = String(text || "");
+			for (var i = 0; i < str.length; i++) {
+				hash ^= str.charCodeAt(i);
+				hash = (hash * 16777619) >>> 0;
+			}
+			return hash.toString(36);
+		}
+		function timelineSecureSuffix() {
+			try { return window.location && window.location.protocol === "https:" ? "; Secure" : ""; }
+			catch (error) { return ""; }
+		}
+
 		/*
 		 * The project detail is the row's identity plus its visual treatment.
 		 * The Quick Batch Edit handoff now sends one (payload.projectDetail), and
@@ -317,10 +366,19 @@ export const TIMELINE_EDITOR_JS = `
 				return {
 					id: String(scene && scene.id || ""),
 					index: Number(scene && scene.index) || 0,
+					name: String(scene && scene.name || ""),
 					mediaType: String(scene && scene.mediaType || "image"),
-					startSec: number(scene && scene.startSec, 0),
-					durationSec: number(scene && scene.durationSec, 0),
-					effects: normalizeEffects(scene && scene.effects, style)
+					mediaAssetId: String(scene && scene.mediaAssetId || ""),
+					mediaName: String(scene && scene.mediaName || ""),
+					mediaSource: String(scene && scene.mediaSource || ""),
+					startSec: roundTimelineSec(scene && scene.startSec),
+					durationSec: roundTimelineSec(scene && scene.durationSec),
+					fit: String(scene && scene.fit || "cover"),
+					trimStartSec: roundTimelineSec(scene && scene.trimStartSec),
+					visible: scene ? scene.visible !== false : true,
+					videoStyle: String(scene && scene.videoStyle || style),
+					effects: normalizeEffects(scene && scene.effects, style),
+					elements: Array.isArray(scene && scene.elements) ? scene.elements.slice() : []
 				};
 			});
 			return {
@@ -338,9 +396,372 @@ export const TIMELINE_EDITOR_JS = `
 				orientation: String(source.orientation || ""),
 				quality: String(source.quality || ""),
 				frame: source.frame || fallback.frame || { width: 1280, height: 720, orientation: "landscape" },
+				hasCompletedMedia: Boolean(source.hasCompletedMedia || detailScenes.some(function (scene) { return Boolean(scene.mediaAssetId); })),
 				sceneCount: detailScenes.length,
 				scenes: detailScenes
 			};
+		}
+
+		function composeSlidesFromTimeline(targetState) {
+			if (!targetState) return [];
+			var tracks = Array.isArray(targetState.tracks) ? targetState.tracks : [];
+			var media = tracks.find(function (track) { return track && track.id === MEDIA_TRACK_ID; }) ||
+				tracks.find(function (track) { return track && track.kind === "media"; }) || null;
+			var mediaItems = media && Array.isArray(media.items)
+				? media.items.slice().sort(function (a, b) { return number(a && a.startSec, 0) - number(b && b.startSec, 0); })
+				: [];
+			var scenes = Array.isArray(targetState.scenes) ? targetState.scenes : [];
+			var style = String(targetState.videoStyle || "Cinematic Film");
+			var effects = normalizeEffects(targetState.videoStyleEffects, style);
+			if (mediaItems.length) {
+				return mediaItems.map(function (item, index) {
+					var scene = scenes.find(function (candidate) { return String(candidate && candidate.id || "") === String(item.sceneId || ""); }) || scenes[index] || null;
+					var rawSceneNum = sceneNumberOf(item.sceneId);
+					if (rawSceneNum < 0) rawSceneNum = sceneNumberOf(item.assetId);
+					var mediaIndex = rawSceneNum > 0 ? rawSceneNum - 1 : -1;
+					var mediaType = String(item.mediaType || (scene && scene.mediaType) || "image");
+					var durationSec = roundTimelineSec(Math.max(MIN_CLIP_SEC, number(item.durationSec, MIN_CLIP_SEC)));
+					return {
+						id: String(item.id || ("slide-" + (index + 1))),
+						index: index,
+						sceneId: String(item.sceneId || (scene && scene.id) || ("scene-" + (index + 1))),
+						mediaIndex: mediaIndex,
+						assetId: String(item.assetId || (scene && scene.mediaAssetId) || ""),
+						name: String(item.label || (scene && scene.name) || ("Scene " + (index + 1))),
+						type: mediaType === "video" ? "mp4" : mediaType === "gif" ? "gif" : "image",
+						mediaType: mediaType,
+						mediaSource: String(item.mediaSource || (scene && scene.mediaSource) || ""),
+						startSec: roundTimelineSec(item.startSec),
+						durationSec: durationSec,
+						_partialSec: durationSec,
+						trimStartSec: roundTimelineSec(item.trimStartSec),
+						fit: String(item.fit || "cover"),
+						visible: item.visible !== false,
+						videoStyle: String(scene && scene.videoStyle || style),
+						effects: normalizeEffects(scene && scene.effects, style)
+					};
+				});
+			}
+			return scenes.map(function (scene, index) {
+				var rawSceneNum = sceneNumberOf(scene && scene.id);
+				if (rawSceneNum < 0) rawSceneNum = sceneNumberOf(scene && scene.mediaAssetId);
+				var mediaIndex = rawSceneNum > 0 ? rawSceneNum - 1 : -1;
+				var mediaType = String(scene && scene.mediaType || "image");
+				var durationSec = roundTimelineSec(Math.max(MIN_CLIP_SEC, number(scene && scene.durationSec, MIN_CLIP_SEC)));
+				return {
+					id: "slide-" + (index + 1),
+					index: index,
+					sceneId: String(scene && scene.id || ("scene-" + (index + 1))),
+					mediaIndex: mediaIndex,
+					assetId: String(scene && scene.mediaAssetId || ""),
+					name: String(scene && scene.name || ("Scene " + (index + 1))),
+					type: mediaType === "video" ? "mp4" : mediaType === "gif" ? "gif" : "image",
+					mediaType: mediaType,
+					mediaSource: String(scene && scene.mediaSource || ""),
+					startSec: roundTimelineSec(scene && scene.startSec),
+					durationSec: durationSec,
+					_partialSec: durationSec,
+					trimStartSec: roundTimelineSec(scene && scene.trimStartSec),
+					fit: String(scene && scene.fit || "cover"),
+					visible: scene ? scene.visible !== false : true,
+					videoStyle: String(scene && scene.videoStyle || style),
+					effects: normalizeEffects(scene && scene.effects, style)
+				};
+			});
+		}
+
+		/*
+		 * Re-compose projectDetail and slides directly from the current timeline
+		 * tracks, scenes, style, frame, and visual/audio elements so any edit on
+		 * the timeline page keeps projectDetail 100% up to date.
+		 */
+		function composeProjectDetail(targetState) {
+			if (!targetState) return null;
+			var prev = targetState.projectDetail && typeof targetState.projectDetail === "object" ? targetState.projectDetail : {};
+			var settings = transition && transition.basicSettings || {};
+			var transDetail = transition && transition.projectDetail || {};
+			var style = String(targetState.videoStyle || prev.style || settings.style || "Cinematic Film");
+			var effects = normalizeEffects(targetState.videoStyleEffects || prev.effects, style);
+			targetState.videoStyleEffects = effects.slice();
+			var frame = targetState.frame && typeof targetState.frame === "object"
+				? Object.assign({}, targetState.frame)
+				: Object.assign({}, prev.frame || { width: 1280, height: 720, orientation: "landscape" });
+			var tracks = Array.isArray(targetState.tracks) ? targetState.tracks : [];
+			var media = tracks.find(function (track) { return track && track.id === MEDIA_TRACK_ID; }) ||
+				tracks.find(function (track) { return track && track.kind === "media"; }) || null;
+			var mediaByScene = Object.create(null);
+			if (media && Array.isArray(media.items)) {
+				media.items.forEach(function (item) {
+					if (item && item.sceneId) mediaByScene[String(item.sceneId)] = item;
+				});
+			}
+			var visualItems = [];
+			var textCount = 0;
+			var graphicCount = 0;
+			var audioCount = 0;
+			tracks.forEach(function (track) {
+				if (!track || !Array.isArray(track.items)) return;
+				if (track.kind === "visual") {
+					track.items.forEach(function (item) {
+						if (!item) return;
+						if (item.kind === "graphic") graphicCount += 1;
+						else textCount += 1;
+						visualItems.push({
+							id: String(item.id || ""),
+							kind: String(item.kind || "text"),
+							trackId: String(track.id || ""),
+							sceneId: String(item.sceneId || ""),
+							parentId: String(item.parentId || ""),
+							startSec: roundTimelineSec(item.startSec),
+							durationSec: roundTimelineSec(item.durationSec),
+							text: item.kind === "text" ? String(item.text || "").slice(0, 120) : "",
+							graphic: item.kind === "graphic" ? String(item.graphic || "circle") : "",
+							x: number(item.x, 50),
+							y: number(item.y, item.kind === "graphic" ? 50 : 78),
+							visible: item.visible !== false
+						});
+					});
+				} else if (track.kind === "audio") {
+					audioCount += track.items.length;
+				}
+			});
+			var scenes = Array.isArray(targetState.scenes) ? targetState.scenes : [];
+			var detailScenes = scenes.map(function (scene, index) {
+				var sceneId = String(scene && scene.id || ("scene-" + (index + 1)));
+				var mediaItem = mediaByScene[sceneId] || null;
+				var sceneElements = visualItems.filter(function (el) {
+					if (el.sceneId && el.sceneId === sceneId) return true;
+					if (mediaItem && el.parentId && el.parentId === String(mediaItem.id)) return true;
+					return false;
+				});
+				var sceneStyle = String(scene && scene.videoStyle || style);
+				var sceneEffects = normalizeEffects(scene && scene.effects, sceneStyle);
+				return {
+					id: sceneId,
+					index: index,
+					name: String(scene && scene.name || (mediaItem && mediaItem.label) || ("Scene " + (index + 1))),
+					mediaType: String((mediaItem && mediaItem.mediaType) || (scene && scene.mediaType) || "image"),
+					mediaAssetId: String((mediaItem && mediaItem.assetId) || (scene && scene.mediaAssetId) || ""),
+					mediaName: String((mediaItem && mediaItem.label) || (scene && scene.mediaName) || ""),
+					mediaSource: String((mediaItem && mediaItem.mediaSource) || (scene && scene.mediaSource) || ""),
+					startSec: roundTimelineSec(mediaItem ? mediaItem.startSec : (scene && scene.startSec)),
+					durationSec: roundTimelineSec(mediaItem ? mediaItem.durationSec : (scene && scene.durationSec)),
+					fit: String((mediaItem && mediaItem.fit) || (scene && scene.fit) || "cover"),
+					trimStartSec: roundTimelineSec((mediaItem && mediaItem.trimStartSec) || (scene && scene.trimStartSec)),
+					visible: mediaItem ? mediaItem.visible !== false : (scene ? scene.visible !== false : true),
+					videoStyle: sceneStyle,
+					effects: sceneEffects,
+					elements: sceneElements
+				};
+			});
+			var slides = composeSlidesFromTimeline(targetState);
+			targetState.slides = slides;
+			var durationEnd = 0;
+			tracks.forEach(function (track) {
+				(track && track.items || []).forEach(function (item) {
+					if (!item) return;
+					durationEnd = Math.max(durationEnd, Math.max(0, number(item.startSec, 0)) + Math.max(MIN_CLIP_SEC, number(item.durationSec, MIN_CLIP_SEC)));
+				});
+			});
+			var durationSec = roundTimelineSec(durationEnd > 0 ? clamp(durationEnd, 1, MAX_DURATION_SEC) : number(targetState.durationSec, 1));
+			var hasAssets = Boolean(Object.keys(assetMap).some(function (key) { return key !== "voiceover"; }));
+			var composed = {
+				id: String(prev.id || targetState.sourceRowId || transDetail.id || settings.id || ""),
+				rowId: String(prev.rowId || prev.id || targetState.sourceRowId || transDetail.rowId || settings.id || ""),
+				vid: String(prev.vid || targetState.sourceVid || transDetail.vid || settings.vid || ""),
+				title: String(prev.title || transDetail.title || settings.title || "").slice(0, 70),
+				topic: String(prev.topic || transDetail.topic || settings.topic || "").slice(0, 160),
+				sourcePageId: String(prev.sourcePageId || targetState.sourcePageId || transDetail.sourcePageId || ""),
+				targetPageId: String(prev.targetPageId || transDetail.targetPageId || pageId || ""),
+				style: style,
+				effects: effects,
+				effectLabel: effectLabel(effects),
+				resolution: String(frame.resolution || prev.resolution || transDetail.resolution || settings.resolution || ""),
+				orientation: String(frame.orientation || prev.orientation || transDetail.orientation || settings.orientation || ""),
+				quality: String(prev.quality || transDetail.quality || settings.quality || ""),
+				frame: frame,
+				durationSec: durationSec,
+				hasCompletedMedia: Boolean(prev.hasCompletedMedia || transDetail.hasCompletedMedia || hasAssets || detailScenes.some(function (scene) { return Boolean(scene.mediaAssetId); })),
+				sceneCount: detailScenes.length,
+				slideCount: slides.length,
+				clipCount: detailScenes.filter(function (scene) { return scene.mediaType === "video"; }).length,
+				textCount: textCount,
+				graphicCount: graphicCount,
+				elementCount: visualItems.length,
+				audioCount: audioCount,
+				updatedAt: number(targetState.updatedAt, Date.now()),
+				scenes: detailScenes,
+				slides: slides,
+				elements: visualItems
+			};
+			targetState.projectDetail = composed;
+			return composed;
+		}
+
+		function timelineCookieChunks(text, updatedAt, digest) {
+			var chars = Array.from(String(text || ""));
+			var safe = timelineSafeId(pageId);
+			for (var count = 1; count <= TIMELINE_COOKIE_CHUNKS; count++) {
+				var size = Math.ceil(chars.length / count) || 1;
+				var values = [];
+				var fits = true;
+				for (var i = 0; i < count; i++) {
+					var chunk = chars.slice(i * size, (i + 1) * size).join("");
+					var meta = encodeURIComponent(JSON.stringify({
+						v: 1,
+						p: safe,
+						n: count,
+						i: i + 1,
+						t: updatedAt,
+						h: digest,
+						d: chunk
+					}));
+					if (meta.length > TIMELINE_COOKIE_MAX_VALUE) {
+						fits = false;
+						break;
+					}
+					values.push(meta);
+				}
+				if (fits) return values;
+			}
+			return null;
+		}
+
+		function buildTimelineCookieSnapshot(currentState) {
+			if (!currentState) return null;
+			var clone = deepCopy(currentState);
+			if (!clone) return null;
+			clone.slides = composeSlidesFromTimeline(currentState);
+			var text = JSON.stringify(clone);
+			var values = timelineCookieChunks(text, clone.updatedAt, timelineCookieDigest(text));
+			if (values) return { snapshot: clone, text: text, values: values };
+			/* Step 1: drop duplicate projectDetail arrays (re-composed from scenes/tracks on restore). */
+			if (clone.projectDetail && typeof clone.projectDetail === "object") {
+				delete clone.projectDetail.scenes;
+				delete clone.projectDetail.slides;
+				delete clone.projectDetail.elements;
+			}
+			if (Array.isArray(clone.scenes)) {
+				clone.scenes.forEach(function (scene) {
+					if (!scene || typeof scene !== "object") return;
+					if (typeof scene.prompt === "string" && scene.prompt.length > 80) delete scene.prompt;
+					delete scene.elements;
+				});
+			}
+			text = JSON.stringify(clone);
+			values = timelineCookieChunks(text, clone.updatedAt, timelineCookieDigest(text));
+			if (values) return { snapshot: clone, text: text, values: values };
+			/* Step 2: drop redundant slides cache (composeSlidesFromTimeline rebuilds all slides on load). */
+			delete clone.slides;
+			text = JSON.stringify(clone);
+			values = timelineCookieChunks(text, clone.updatedAt, timelineCookieDigest(text));
+			if (values) return { snapshot: clone, text: text, values: values };
+			/* Step 3: trim optional cue/prompt/label metadata while keeping all scenes and tracks. */
+			if (Array.isArray(clone.subtitles) && clone.subtitles.length) {
+				clone.subtitles = [];
+			}
+			if (Array.isArray(clone.scenes)) {
+				clone.scenes.forEach(function (scene) {
+					if (!scene || typeof scene !== "object") return;
+					delete scene.prompt;
+					delete scene.note;
+					if (typeof scene.mediaName === "string") scene.mediaName = scene.mediaName.slice(0, 32);
+					if (typeof scene.name === "string") scene.name = scene.name.slice(0, 32);
+				});
+			}
+			if (Array.isArray(clone.tracks)) {
+				clone.tracks.forEach(function (track) {
+					(track && track.items || []).forEach(function (item) {
+						if (!item || typeof item !== "object") return;
+						if (typeof item.label === "string") item.label = item.label.slice(0, 32);
+						if (typeof item.text === "string") item.text = item.text.slice(0, 80);
+					});
+				});
+			}
+			text = JSON.stringify(clone);
+			values = timelineCookieChunks(text, clone.updatedAt, timelineCookieDigest(text));
+			if (values) return { snapshot: clone, text: text, values: values };
+			/* Step 4: drop redundant scenes array (syncScenesFromTracks rebuilds every scene from tracks). */
+			delete clone.scenes;
+			text = JSON.stringify(clone);
+			values = timelineCookieChunks(text, clone.updatedAt, timelineCookieDigest(text));
+			if (values) return { snapshot: clone, text: text, values: values };
+			return null;
+		}
+
+		function writeTimelineCookies(currentState) {
+			var names = timelineCookieNames(pageId);
+			try {
+				if (!window.document) return 0;
+				var built = buildTimelineCookieSnapshot(currentState);
+				if (!built || !built.values) return 0;
+				var written = 0;
+				for (var i = 0; i < names.length; i++) {
+					if (i < built.values.length) {
+						window.document.cookie = names[i] + "=" + built.values[i] +
+							"; Path=/; SameSite=Lax" + timelineSecureSuffix();
+						written += 1;
+					} else {
+						window.document.cookie = names[i] + "=; Max-Age=0; Path=/; SameSite=Lax";
+					}
+				}
+				return written;
+			} catch (error) {
+				return 0;
+			}
+		}
+
+		function readTimelineCookies() {
+			try {
+				if (!window.document) return null;
+				var names = timelineCookieNames(pageId);
+				var safePage = timelineSafeId(pageId);
+				var parts = String(window.document.cookie || "").split(";");
+				var byName = Object.create(null);
+				for (var p = 0; p < parts.length; p++) {
+					var entry = parts[p].trim();
+					var equal = entry.indexOf("=");
+					if (equal < 0) continue;
+					byName[entry.slice(0, equal)] = entry.slice(equal + 1);
+				}
+				var metas = [];
+				var total = 0;
+				for (var i = 0; i < names.length; i++) {
+					var raw = byName[names[i]];
+					if (!raw) continue;
+					var meta = JSON.parse(decodeURIComponent(raw));
+					if (!meta || meta.v !== 1 || meta.p !== safePage) return null;
+					if (!total) total = Number(meta.n) || 0;
+					if (Number(meta.n) !== total) return null;
+					metas.push(meta);
+				}
+				if (!total || metas.length !== total) return null;
+				metas.sort(function (a, b) { return a.i - b.i; });
+				var expectedTs = metas[0].t;
+				var expectedHash = metas[0].h;
+				var joined = "";
+				for (var m = 0; m < metas.length; m++) {
+					if (metas[m].i !== m + 1 || metas[m].t !== expectedTs || metas[m].h !== expectedHash) return null;
+					joined += String(metas[m].d || "");
+				}
+				var text = joined;
+				if (timelineCookieDigest(text) !== expectedHash) return null;
+				var parsed = JSON.parse(text);
+				return parsed && parsed.projectId === pageId ? parsed : null;
+			} catch (error) {
+				return null;
+			}
+		}
+
+		function loadPersistedTimelineState() {
+			var localSaved = null;
+			try { localSaved = JSON.parse(window.localStorage.getItem(storageKey) || "null"); } catch (error) { localSaved = null; }
+			if (!localSaved || localSaved.projectId !== pageId) localSaved = null;
+			var cookieSaved = readTimelineCookies();
+			if (localSaved && cookieSaved) {
+				return number(cookieSaved.updatedAt, 0) > number(localSaved.updatedAt, 0) ? cookieSaved : localSaved;
+			}
+			return localSaved || cookieSaved || null;
 		}
 
 		/*
@@ -633,6 +1054,8 @@ export const TIMELINE_EDITOR_JS = `
 				updatedAt: number(base.updatedAt, Date.now()),
 				sourcePageId: String(base.sourcePageId || transition && transition.sourcePageId || ""),
 				sourceRowId: String(base.sourceRowId || transition && transition.basicSettings && transition.basicSettings.id || ""),
+				sourceVid: String(base.sourceVid || transition && transition.basicSettings && transition.basicSettings.vid || ""),
+				sourceScript: String(base.sourceScript || transition && transition.basicSettings && transition.basicSettings.script || "").slice(0, 800),
 				frame: frame,
 				videoStyle: videoStyle,
 				videoStyleEffects: normalizeEffects(base.videoStyleEffects, videoStyle),
@@ -665,6 +1088,7 @@ export const TIMELINE_EDITOR_JS = `
 				visualsExpanded: base.visualsExpanded !== false,
 				zoom: clamp(base.zoom, 0.5, 2),
 				scenes: scenes,
+				slides: [],
 				tracks: tracks,
 				selectedTrackId: String(base.selectedTrackId || MEDIA_TRACK_ID),
 				selectedItemId: String(base.selectedItemId || "")
@@ -673,6 +1097,7 @@ export const TIMELINE_EDITOR_JS = `
 				var selectedLayer = visualLayers[0];
 				if (selectedLayer) result.selectedTrackId = selectedLayer.id;
 			}
+			composeProjectDetail(result);
 			return result;
 		}
 
@@ -787,17 +1212,51 @@ export const TIMELINE_EDITOR_JS = `
 		function syncScenesFromTracks() {
 			if (!state) return;
 			var media = mediaTrack();
-			state.scenes.forEach(function (scene) {
-				var mediaItem = media && media.items.find(function (item) { return String(item.sceneId || "") === String(scene.id); });
-				if (mediaItem) {
+			var existingById = Object.create(null);
+			(state.scenes || []).forEach(function (scene) {
+				if (scene && scene.id) existingById[String(scene.id)] = scene;
+			});
+			var mediaItems = media && Array.isArray(media.items)
+				? media.items.slice().sort(function (a, b) { return number(a && a.startSec, 0) - number(b && b.startSec, 0); })
+				: [];
+			if (mediaItems.length) {
+				var nextScenes = [];
+				mediaItems.forEach(function (mediaItem, index) {
+					if (!mediaItem) return;
+					var sceneId = String(mediaItem.sceneId || makeId("scene"));
+					mediaItem.sceneId = sceneId;
+					var scene = existingById[sceneId] || {
+						id: sceneId,
+						index: index,
+						name: String(mediaItem.label || ("Scene " + (index + 1))),
+						prompt: "",
+						effects: normalizeEffects(state.videoStyleEffects, state.videoStyle),
+						videoStyle: String(state.videoStyle || "Cinematic Film")
+					};
+					scene.index = index;
 					scene.startSec = mediaItem.startSec;
 					scene.durationSec = mediaItem.durationSec;
-					scene.mediaAssetId = mediaItem.assetId;
+					scene.mediaAssetId = mediaItem.assetId || "";
 					scene.mediaType = mediaItem.mediaType || scene.mediaType || "image";
 					scene.mediaName = mediaItem.label || scene.mediaName || "";
-				}
-				scene.elements = sceneElementEntries(scene.id).map(function (entry) { return Object.assign({}, entry.item); });
-			});
+					scene.mediaSource = mediaItem.mediaSource || scene.mediaSource || "";
+					scene.fit = mediaItem.fit || scene.fit || "cover";
+					scene.trimStartSec = number(mediaItem.trimStartSec, number(scene.trimStartSec, 0));
+					scene.visible = mediaItem.visible !== false;
+					scene.videoStyle = String(scene.videoStyle || state.videoStyle || "Cinematic Film");
+					scene.effects = normalizeEffects(scene.effects, scene.videoStyle);
+					scene.elements = sceneElementEntries(scene.id).map(function (entry) { return Object.assign({}, entry.item); });
+					nextScenes.push(scene);
+				});
+				state.scenes = nextScenes;
+			} else {
+				(state.scenes || []).forEach(function (scene, index) {
+					scene.index = index;
+					scene.elements = sceneElementEntries(scene.id).map(function (entry) { return Object.assign({}, entry.item); });
+				});
+			}
+			composeProjectDetail(state);
+			try { updateProjectHeading(); } catch (headingError) { }
 		}
 		/*
 		 * Session 331 — the video's length is its content, not its canvas.
@@ -1052,49 +1511,119 @@ export const TIMELINE_EDITOR_JS = `
 
 		function timelineEditSummary() {
 			if (!state) return null;
+			syncScenesFromTracks();
+			state.durationSec = maxTimelineEnd();
+			composeProjectDetail(state);
 			var media = mediaTrack();
 			var entries = [];
+			var sceneItems = [];
 			((media && media.items) || []).slice()
 				.sort(function (a, b) { return number(a && a.startSec, 0) - number(b && b.startSec, 0); })
-				.forEach(function (item) {
+				.forEach(function (item, idx) {
 					if (!item) return;
 					var mediaIndex = sceneNumberOf(item.sceneId);
 					if (mediaIndex < 0) mediaIndex = sceneNumberOf(item.assetId);
 					/* scene-1 is the row's image 0. */
 					if (mediaIndex > 0) mediaIndex -= 1;
 					else if (mediaIndex === 0) mediaIndex = -1;
-					var scene = mediaIndex >= 0
-						? (state.scenes || []).find(function (entry) { return Number(entry && entry.index) === mediaIndex; })
-						: null;
+					var scene = (state.scenes || []).find(function (entry) { return String(entry && entry.id || "") === String(item.sceneId || ""); }) ||
+						(mediaIndex >= 0
+							? (state.scenes || []).find(function (entry) { return Number(entry && entry.index) === mediaIndex; })
+							: null);
 					var mediaType = String(item.mediaType || (scene && scene.mediaType) || "image");
-					entries.push([
-						mediaIndex,
-						Math.round(Math.max(0, number(item.durationSec, 0)) * 1000) / 1000,
-						mediaType === "video" ? 1 : mediaType === "gif" ? 2 : 0
-					]);
+					var typeCode = mediaType === "video" ? 1 : mediaType === "gif" ? 2 : 0;
+					var startSec = roundTimelineSec(item.startSec);
+					var durationSec = roundTimelineSec(item.durationSec);
+					entries.push([mediaIndex, durationSec, typeCode]);
+					sceneItems.push({
+						id: String(item.sceneId || (scene && scene.id) || ("scene-" + (idx + 1))),
+						slideId: String(item.id || ("slide-" + (idx + 1))),
+						i: mediaIndex,
+						a: String(item.assetId || (scene && scene.mediaAssetId) || ""),
+						n: String((scene && scene.name) || item.label || ("Scene " + (idx + 1))).slice(0, 60),
+						m: String(item.label || (scene && scene.mediaName) || "").slice(0, 60),
+						src: String(item.mediaSource || (scene && scene.mediaSource) || "").slice(0, 24),
+						t: typeCode,
+						s: startSec,
+						d: durationSec,
+						tr: roundTimelineSec(item.trimStartSec),
+						f: item.fit === "contain" ? 1 : 0,
+						v: item.visible === false ? 0 : 1
+					});
 				});
-			var visuals = 0;
+			var visuals = [];
+			var audios = [];
 			(state.tracks || []).forEach(function (track) {
-				if (track && track.kind === "visual") visuals += (track.items || []).length;
+				if (!track || !Array.isArray(track.items)) return;
+				if (track.kind === "visual") {
+					track.items.forEach(function (item) {
+						if (!item) return;
+						var rec = {
+							id: String(item.id || ""),
+							k: item.kind === "graphic" ? "g" : "t",
+							trId: String(track.id || ""),
+							scId: String(item.sceneId || ""),
+							pId: String(item.parentId || ""),
+							s: roundTimelineSec(item.startSec),
+							d: roundTimelineSec(item.durationSec),
+							x: number(item.x, 50),
+							y: number(item.y, item.kind === "graphic" ? 50 : 78),
+							sz: item.kind === "graphic" ? number(item.size, 72) : number(item.fontSize, 28),
+							c: String(item.color || ""),
+							v: item.visible === false ? 0 : 1
+						};
+						if (item.kind === "text") {
+							rec.tx = String(item.text || "").slice(0, 120);
+							if (item.font) rec.fn = String(item.font);
+							if (item.align) rec.al = String(item.align);
+						} else {
+							rec.gr = String(item.graphic || "circle");
+						}
+						if (item.dummy) rec.dm = 1;
+						visuals.push(rec);
+					});
+				} else if (track.kind === "audio") {
+					track.items.forEach(function (item) {
+						if (!item) return;
+						audios.push({
+							id: String(item.id || ""),
+							trId: String(track.id || ""),
+							a: String(item.assetId || ""),
+							n: String(item.label || "").slice(0, 50),
+							s: roundTimelineSec(item.startSec),
+							d: roundTimelineSec(item.durationSec),
+							vol: number(item.volume, 1),
+							m: item.muted ? 1 : 0
+						});
+					});
+				}
 			});
+			var pd = state.projectDetail && typeof state.projectDetail === "object" ? Object.assign({}, state.projectDetail) : composeProjectDetail(state);
+			var now = Date.now();
 			return {
 				v: 1,
-				updatedAt: Date.now(),
+				updatedAt: now,
 				key: storageKey,
 				pageId: pageId,
 				sourcePageId: String(state.sourcePageId || ""),
 				rowId: String(state.sourceRowId || ""),
 				vid: String(state.sourceVid || ""),
-				durationSec: Math.round(Math.max(0, number(state.durationSec, 0)) * 1000) / 1000,
+				durationSec: roundTimelineSec(state.durationSec),
 				sceneCount: entries.length,
 				clipCount: entries.filter(function (entry) { return entry[2] === 1; }).length,
-				textCount: visuals,
+				textCount: visuals.length,
 				videoStyle: String(state.videoStyle || ""),
 				frame: {
 					width: number(state.frame && state.frame.width, 0),
-					height: number(state.frame && state.frame.height, 0)
+					height: number(state.frame && state.frame.height, 0),
+					resolution: String(state.frame && state.frame.resolution || ""),
+					orientation: String(state.frame && state.frame.orientation || "")
 				},
-				scenes: entries
+				scenes: entries,
+				sceneItems: sceneItems,
+				visuals: visuals,
+				audios: audios,
+				projectDetail: pd
 			};
 		}
 		function publishTimelineEdit(force) {
@@ -1110,6 +1639,7 @@ export const TIMELINE_EDITOR_JS = `
 					sourcePageId: String(state.sourcePageId || ""),
 					rowId: String(state.sourceRowId || ""),
 					vid: String(state.sourceVid || ""),
+					script: String(state.sourceScript || ""),
 					key: storageKey,
 					summary: summary,
 					reason: force ? "timeline-back" : "timeline-save"
@@ -1136,15 +1666,16 @@ export const TIMELINE_EDITOR_JS = `
 
 		function persistNow() {
 			if (!state) return false;
-			syncScenesFromTracks();
 			/* Session 331: the saved length is the last placed item's end. */
 			state.durationSec = maxTimelineEnd();
 			state.updatedAt = Date.now();
+			syncScenesFromTracks();
 			if (!suppressHistory) recordHistoryEntry();
 			try {
 				window.localStorage.setItem(storageKey, JSON.stringify(state));
+				var cookiesWritten = writeTimelineCookies(state);
 				setSaveStatus("Timing saved in this browser", false);
-				window.__TIMELINE_EDITOR_SAVE__ = { ok: true, key: storageKey, updatedAt: state.updatedAt, scenes: state.scenes.length, tracks: state.tracks.length };
+				window.__TIMELINE_EDITOR_SAVE__ = { ok: true, key: storageKey, updatedAt: state.updatedAt, scenes: state.scenes.length, slides: (state.slides || []).length, tracks: state.tracks.length, cookies: cookiesWritten };
 				/* Session 331 follow-up: keep the table's own store in step with the edit. */
 				try { schedulePublish(false); } catch (publishError) { }
 				return true;
@@ -1155,6 +1686,7 @@ export const TIMELINE_EDITOR_JS = `
 			}
 		}
 		function scheduleSave() {
+			if (state) composeProjectDetail(state);
 			if (saveTimer) clearTimeout(saveTimer);
 			setSaveStatus("Saving timing locally…", false);
 			saveTimer = setTimeout(function () { saveTimer = 0; persistNow(); }, 180);
@@ -3713,8 +4245,13 @@ export const TIMELINE_EDITOR_JS = `
 				} catch (error) { break; }
 				await new Promise(function (resolve) { setTimeout(resolve, 150); });
 			}
-			if (count) setStatus(count + (count === 1 ? " local media asset loaded." : " local media assets loaded."), false);
-			else setStatus("No transferred media file was available. Timing still works; use + Add media or upload audio.", false);
+			if (count) {
+				if (state) {
+					composeProjectDetail(state);
+					updateProjectHeading();
+				}
+				setStatus(count + (count === 1 ? " local media asset loaded." : " local media assets loaded."), false);
+			} else setStatus("No transferred media file was available. Timing still works; use + Add media or upload audio.", false);
 			drawPreview();
 		}
 
@@ -3749,8 +4286,7 @@ export const TIMELINE_EDITOR_JS = `
 				galleryEl.style.display = "none";
 				galleryEl.innerHTML = "";
 			}
-			var saved = null;
-			try { saved = JSON.parse(window.localStorage.getItem(storageKey) || "null"); } catch (error) {}
+			var saved = loadPersistedTimelineState();
 			var initial = saved && saved.projectId === pageId ? saved : transition && transition.timelineState || null;
 			state = normalizeState(initial || defaultTimeline());
 			/*
@@ -3762,7 +4298,11 @@ export const TIMELINE_EDITOR_JS = `
 				state.sourcePageId = String(transition.sourcePageId || state.sourcePageId || "");
 				state.sourceRowId = String(transition.basicSettings && transition.basicSettings.id || state.sourceRowId || "");
 				state.sourceVid = String(transition.basicSettings && transition.basicSettings.vid || state.sourceVid || "");
+				if (transition.basicSettings && transition.basicSettings.script) {
+					state.sourceScript = String(transition.basicSettings.script).slice(0, 800);
+				}
 			}
+			syncScenesFromTracks();
 			if (transition && transition.basicSettings && transition.basicSettings.script && !state.scenes.some(function (scene) { return scene.prompt; })) {
 				/* The scene list remains a timing scaffold; no pipeline or prompt request is run here. */
 				state.scenes.forEach(function (scene, index) { if (index === 0) scene.note = "Script is available in the Quick Batch row"; });
@@ -3803,7 +4343,7 @@ export const TIMELINE_EDITOR_JS = `
 		api.addTextElement = function (text) {
 			if (!state) return null;
 			var item = addVisualElementFromAction("text");
-			if (item && text != null) { item.text = String(text); renderInspector(); drawPreview(); scheduleSave(); }
+			if (item && text != null) { item.text = String(text); composeProjectDetail(state); renderInspector(); drawPreview(); scheduleSave(); }
 			return item;
 		};
 		api.addGraphicElement = function () { return state ? addVisualElementFromAction("graphic") : null; };
@@ -3824,9 +4364,15 @@ export const TIMELINE_EDITOR_JS = `
 		api.redo = function () { return state ? redo() : false; };
 		api.getHistory = function () { return { undo: historyUndo.length, redo: historyRedo.length }; };
 		/* The row's project detail (style + template-modal effects) is inspectable. */
-		api.getProjectDetail = function () { return state ? state.projectDetail : null; };
+		api.getProjectDetail = function () {
+			if (!state) return null;
+			syncScenesFromTracks();
+			return state.projectDetail || null;
+		};
+		api.getSlides = function () { return state ? composeSlidesFromTimeline(state) : []; };
 		api.getStyleEffects = function (style) { return styleEffectsFor(style); };
 		api.save = persistNow;
+		api.loadPersistedState = loadPersistedTimelineState;
 		api.addMediaFiles = addMediaFiles;
 		api.addAudioFile = addAudioFile;
 		/*
