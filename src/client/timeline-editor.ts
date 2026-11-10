@@ -1509,6 +1509,40 @@ export const TIMELINE_EDITOR_JS = `
 			return digits ? Number(digits) : -1;
 		}
 
+		/*
+		 * Session 333 — the way back to the Quick Batch table.
+		 *
+		 * This page's own page id is BUILT by the table as
+		 * "timeline-<tablePageId>-row-<rowId>" (batchRowMediaPageId), so the
+		 * table's page id and row id can always be read back out of it. That
+		 * matters because state.sourcePageId only exists when the handoff payload
+		 * or the saved project survived: open the timeline, reload it after the
+		 * handoff entry was consumed, and the publish used to fail with "the
+		 * table page store is unavailable" while the Back link dropped
+		 * pipelinePage and landed on an empty page.
+		 */
+		function splitTimelinePageId(value) {
+			var text = String(value || "");
+			if (text.indexOf("timeline-") !== 0) return null;
+			var marker = "-row-";
+			var at = text.lastIndexOf(marker);
+			if (at <= "timeline-".length) return null;
+			var sourcePageId = text.slice("timeline-".length, at);
+			var rowId = text.slice(at + marker.length);
+			if (!sourcePageId || !rowId) return null;
+			return { pageId: sourcePageId, rowId: rowId };
+		}
+
+		function tableHandoffIdentity() {
+			var split = splitTimelinePageId(pageId);
+			var detail = state && state.projectDetail && typeof state.projectDetail === "object" ? state.projectDetail : null;
+			return {
+				sourcePageId: String((state && state.sourcePageId) || (detail && detail.sourcePageId) || (split && split.pageId) || ""),
+				rowId: String((state && state.sourceRowId) || (split && split.rowId) || ""),
+				vid: String((state && state.sourceVid) || "")
+			};
+		}
+
 		function timelineEditSummary() {
 			if (!state) return null;
 			syncScenesFromTracks();
@@ -1600,14 +1634,15 @@ export const TIMELINE_EDITOR_JS = `
 			});
 			var pd = state.projectDetail && typeof state.projectDetail === "object" ? Object.assign({}, state.projectDetail) : composeProjectDetail(state);
 			var now = Date.now();
+			var identity = tableHandoffIdentity();
 			return {
 				v: 1,
 				updatedAt: now,
 				key: storageKey,
 				pageId: pageId,
-				sourcePageId: String(state.sourcePageId || ""),
-				rowId: String(state.sourceRowId || ""),
-				vid: String(state.sourceVid || ""),
+				sourcePageId: identity.sourcePageId,
+				rowId: identity.rowId,
+				vid: identity.vid,
 				durationSec: roundTimelineSec(state.durationSec),
 				sceneCount: entries.length,
 				clipCount: entries.filter(function (entry) { return entry[2] === 1; }).length,
@@ -1634,11 +1669,12 @@ export const TIMELINE_EDITOR_JS = `
 			if (!summary) return null;
 			var result = null;
 			lastPublishAt = Date.now();
+			var identity = tableHandoffIdentity();
 			try {
 				result = publish({
-					sourcePageId: String(state.sourcePageId || ""),
-					rowId: String(state.sourceRowId || ""),
-					vid: String(state.sourceVid || ""),
+					sourcePageId: identity.sourcePageId,
+					rowId: identity.rowId,
+					vid: identity.vid,
 					script: String(state.sourceScript || ""),
 					key: storageKey,
 					summary: summary,
@@ -4201,7 +4237,11 @@ export const TIMELINE_EDITOR_JS = `
 				try { window.close(); } catch (error) {}
 				if (!window.closed) {
 					var url = new URL(window.location.href);
-					var sourcePageId = String(state && state.sourcePageId || "");
+					/*
+					 * The table's page id, recovered from the handoff when it is
+					 * still there and from this page's own id when it is not.
+					 */
+					var sourcePageId = tableHandoffIdentity().sourcePageId;
 					url.searchParams.delete("projectEdit");
 					/*
 					 * Navigate back to the SAME page id the table uses, so the reload
@@ -4209,6 +4249,12 @@ export const TIMELINE_EDITOR_JS = `
 					 */
 					if (sourcePageId) url.searchParams.set("pipelinePage", sourcePageId);
 					else url.searchParams.delete("pipelinePage");
+					/*
+					 * Session 333: layout=table is now read by the table page
+					 * (requestedStudioLayout), so this link always lands on the
+					 * Quick Batch table instead of whatever layout the page's
+					 * store was last saved with.
+					 */
 					url.searchParams.set("layout", "table");
 					window.location.href = url.pathname + url.search + url.hash;
 				}
