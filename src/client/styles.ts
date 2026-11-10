@@ -1422,39 +1422,43 @@ export const APP_CSS = `
 
 
 		/*
-		 * Delete Video sits where the old API button was. It is the
-		 * only red control in the accordion header, so a video can
-		 * always be removed without hunting for a menu.
+		 * Delete Video sits at the bottom of the accordion body and spans its
+		 * full width. It carries the same look as the top-bar Generate button
+		 * (.app-generate, see the accent and neo overrides below).
 		 */
 		.va-delete-btn {
 
-			background:
-				#b91c1c;
+			display: block;
 
-			border:
-				none;
+			width: 100%;
 
-			border-radius:
-				6px;
+			box-sizing: border-box;
 
-			color:
-				#ffffff;
+			border: 1px solid var(--accent);
 
-			font-size:
-				0.75rem;
+			background: var(--accent);
 
-			padding:
-				6px 10px;
+			color: var(--t-on-accent, #10140d);
 
-			cursor:
-				pointer;
+			padding: 10px 13px;
+
+			border-radius: 10px;
+
+			font-weight: 800;
+
+			font-size: 0.8rem;
+
+			cursor: pointer;
 		}
 
+		.va-body .va-delete-btn {
+
+			margin: 12px 0 4px;
+		}
 
 		.va-delete-btn:hover {
 
-			background:
-				#dc2626;
+			filter: brightness(1.06);
 		}
 
 
@@ -4222,6 +4226,7 @@ export const APP_CSS = `
 		html[data-theme="neo"] .upload-btn,
 		html[data-theme="neo"] #render-btn,
 		html[data-theme="neo"] .app-generate,
+		html[data-theme="neo"] .va-delete-btn,
 		html[data-theme="neo"] .bulk-toggle,
 		html[data-theme="neo"] .view-switch,
 		html[data-theme="neo"] .view-switch-btn.active {
@@ -4300,6 +4305,7 @@ export const APP_CSS = `
 		html[data-theme="neo"] .bulk-toggle,
 		html[data-theme="neo"] .upload-btn,
 		html[data-theme="neo"] .app-generate,
+		html[data-theme="neo"] .va-delete-btn,
 		html[data-theme="neo"] .view-switch,
 		html[data-theme="neo"] .view-switch-btn,
 		html[data-theme="neo"] .tm-gallery-tab,
@@ -4321,6 +4327,7 @@ export const APP_CSS = `
 
 		html[data-theme="neo"] .upload-btn:active,
 		html[data-theme="neo"] #render-btn:active,
+		html[data-theme="neo"] .va-delete-btn:active,
 		html[data-theme="neo"] .app-generate:active {
 			box-shadow: 1px 1px 0 #111111;
 			transform: translate(2px, 2px);
@@ -8234,10 +8241,19 @@ export const APP_CSS = `
 			color: var(--accent);
 		}
 
-		html[data-theme] #studio-app .app-generate {
+		html[data-theme] #studio-app .app-generate,
+		html[data-theme] #studio-app .va-delete-btn {
 			border-color: var(--accent);
 			background: var(--accent);
 			color: var(--t-on-accent);
+		}
+		html[data-theme] #studio-app .va-delete-btn {
+			border-radius: 10px;
+			letter-spacing: normal;
+		}
+		html[data-theme] #studio-app .va-delete-btn:hover {
+			background: var(--accent);
+			filter: brightness(1.06);
 		}
 
 		/*
@@ -8294,6 +8310,10 @@ export const APP_CSS = `
 			}
 
 			#studio-app .app-generate {
+				padding: 9px 11px;
+				font-size: 0.74rem;
+			}
+			#studio-app .va-delete-btn {
 				padding: 9px 11px;
 				font-size: 0.74rem;
 			}

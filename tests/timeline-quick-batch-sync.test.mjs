@@ -468,7 +468,107 @@ test("Req 3: all timeline slides, scenes, and projectDetail compose cleanly from
 	assert.equal(row3.slides.length, 13, "Quick Batch composed all 13 slides from cookies alone");
 	assert.equal(row3.projectDetail.sceneCount, 13);
 	assert.equal(tableCookie.w.batchRowFinished(row3), true, "buttons stay enabled from cookie restore");
+	/* Session 331 (regenerate fix): a restored row waits for its media recovery to settle before Generate can start on it. */
+	await new Promise((resolve) => setTimeout(resolve, 20));
 	assert.equal(tableCookie.w.batchRowReadyForGeneration(row3), true, "timeline edit remains regenerable from cookie restore");
+});
+
+/* Session 331 (regenerate fix): a finished row's media is kept in IndexedDB and comes back after a reload. */
+test("Regenerate fix: a finished row restored after reload gets its media back from IndexedDB, rebuilds its slides and stays live", async (t) => {
+	const pageId = "pg_idb_restore";
+	const localStorage = makeMemoryStorage();
+	const sessionStorage = makeMemoryStorage();
+	const cookieJar = makeCookieJar();
+	const indexedDB = makeMemoryIndexedDB();
+	const seed = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar, indexedDB: indexedDB.factory, loadTimeline: true
+	});
+	t.after(() => seed.dom.window.close());
+	const w0 = seed.w;
+	const videoIndexes = [0, 3, 6, 9];
+	const slideItems = Array.from({ length: 12 }, (_, index) => ({
+		id: "batch-1-img-" + index, slideId: "batch-1-img-" + index, i: index, a: "scene-" + (index + 1),
+		n: "Scene " + (index + 1), t: videoIndexes.includes(index) ? 1 : 0, s: index * 5, d: 5, tr: 0, f: 0, v: 1
+	}));
+	const tableStore = w0.__PIPELINE_MANAGEMENT_STORE_FACTORY__(w0, pageId);
+	assert.equal(tableStore.save({
+		version: 1, pageId, updatedAt: Date.now(), layout: "table",
+		quickBatch: {
+			runBusy: false, queued: [], finishedCount: 1,
+			rows: [{
+				id: "1", vid: pageId + "-row-1", script: "A finished script that the reload must keep.", stage: "done",
+				mp3: true, animated: true, finished: true, images: 12, slides: 12, slideItems
+			}]
+		},
+		editor: { projects: [] }
+	}).ok, true);
+
+	const reloaded = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar, indexedDB: indexedDB.factory, loadTimeline: true
+	});
+	t.after(() => reloaded.dom.window.close());
+	const w = reloaded.w;
+	/* The voiceover and the twelve Pixabay media are in IndexedDB under the row's timeline page id. */
+	const assets = {};
+	for (let index = 0; index < 12; index++) {
+		const id = "scene-" + (index + 1);
+		const type = videoIndexes.includes(index) ? "video/mp4" : "image/jpeg";
+		assets[id] = { id, blob: new w.Blob(["m"], { type }), name: id + ".jpg", type, source: null };
+	}
+	indexedDB.records.set("timeline-" + pageId + "-row-1", {
+		id: "timeline-" + pageId + "-row-1",
+		voiceover: new w.Blob([new Uint8Array([255, 243, 1, 2])], { type: "audio/mpeg" }),
+		assets,
+		updatedAt: Date.now()
+	});
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	const row = w.getBatchRow("1");
+	assert.ok(row, "the finished row is back on the table");
+	assert.equal(row.stage, "done");
+	assert.equal(row.images.length, 12, "the twelve media came back from IndexedDB");
+	assert.ok(row.mp3, "the voiceover came back from IndexedDB");
+	assert.equal(row.slides.length, 12, "the slides were rebuilt from the stored timing");
+	assert.ok(row.slides.every((slide) => slide.img), "every rebuilt slide has its media");
+	assert.equal(w.batchRowFinished(row), true, "the action buttons stay live after the reload");
+	assert.equal(w.batchRowReadyForGeneration(row), false, "a finished row is not queued for generation again");
+});
+
+test("Regenerate fix: a finished row whose media cannot be found is demoted to a record that Generate can build again", async (t) => {
+	const pageId = "pg_idb_missing";
+	const localStorage = makeMemoryStorage();
+	const sessionStorage = makeMemoryStorage();
+	const cookieJar = makeCookieJar();
+	const indexedDB = makeMemoryIndexedDB();
+	const seed = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar, indexedDB: indexedDB.factory, loadTimeline: true
+	});
+	t.after(() => seed.dom.window.close());
+	const tableStore = seed.w.__PIPELINE_MANAGEMENT_STORE_FACTORY__(seed.w, pageId);
+	assert.equal(tableStore.save({
+		version: 1, pageId, updatedAt: Date.now(), layout: "table",
+		quickBatch: {
+			runBusy: false, queued: [], finishedCount: 1,
+			rows: [{ id: "2", vid: pageId + "-row-2", script: "Media that was never stored.", stage: "done", mp3: true, animated: true, finished: true, images: 12, slides: 12 }]
+		},
+		editor: { projects: [] }
+	}).ok, true);
+
+	const reloaded = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar, indexedDB: indexedDB.factory, loadTimeline: true
+	});
+	t.after(() => reloaded.dom.window.close());
+	const w = reloaded.w;
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	const row = w.getBatchRow("2");
+	assert.ok(row, "the row is still on the table as a record");
+	assert.equal(row.stage, "done");
+	assert.equal(w.batchRowFinished(row), false, "no media came back, so the row is not finished");
+	assert.equal(row._storedFinished, false, "the stored finished flag is cleared");
+	assert.equal(w.batchRowReadyForGeneration(row), true, "Generate can build the row again");
 });
 
 test("Req 4: blank-script rows with stored project details have their localStorage and cookie entries deleted on restore, publish, script clear, and remove", (t) => {

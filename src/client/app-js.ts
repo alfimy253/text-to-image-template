@@ -792,7 +792,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	async function hydrateBatchRowAssetsFromTimeline(row) {
 		if (!row || row._hydratingAssets) return false;
 		if (!window.__TIMELINE_EDITOR__ || typeof window.__TIMELINE_EDITOR__.readProjectAssets !== "function") return false;
-		const targetPageId = batchTimelinePageIdForRow(row);
+		const targetPageId = batchRowMediaPageId(row) || batchTimelinePageIdForRow(row);
 		if (!targetPageId) return false;
 		row._hydratingAssets = true;
 		try {
@@ -859,6 +859,91 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		} finally {
 			row._hydratingAssets = false;
 		}
+	}
+
+	/*
+	 * Session 331 (regenerate fix): rebuild a restored row's slides from the
+	 * timing the row stored (slideItems). Synchronous: it reuses the media that
+	 * hydration has already put back, so nothing is decoded or probed again.
+	 */
+	function rebuildBatchSlidesFromItems(row) {
+		const items = Array.isArray(row && row.slideItems) ? row.slideItems : [];
+		if (!items.length || (Array.isArray(row.slides) && row.slides.length)) return false;
+		const medias = Array.isArray(row.images) ? row.images : [];
+		const style = String(row.style || "Cinematic Film");
+		const effects = typeof window.__videoStyleEffects === "function" ? window.__videoStyleEffects(style) : [];
+		const built = [];
+		items.forEach(function (item, idx) {
+			if (!item || typeof item !== "object") return;
+			const slide = cloneOrReuseBatchSlide(null, item, idx, style, effects);
+			const media = medias.find(function (candidate) { return candidate.assetId === slide.assetId; }) ||
+				medias.find(function (candidate) { return Number(candidate.index) === Number(slide.mediaIndex); }) || null;
+			if (media && media.url && typeof document !== "undefined") {
+				if (slide.type === "mp4") {
+					const video = document.createElement("video");
+					video.src = media.url;
+					slide.videoEl = video;
+					slide.img = video;
+				} else if (typeof Image === "function") {
+					const img = new Image();
+					img.src = media.url;
+					slide.img = img;
+				}
+			}
+			built.push(slide);
+		});
+		if (!built.length) return false;
+		row.slides = built;
+		return true;
+	}
+
+	/*
+	 * Session 331 (regenerate fix): a finished row whose media could not be put
+	 * back becomes a plain record. It keeps its script, timing and status, loses
+	 * its "finished" flags, so its action buttons stay locked and Generate can
+	 * build it again. Nothing is shown as an error.
+	 */
+	function demoteBatchRowToRecord(row) {
+		if (!row) return;
+		row._storedFinished = false;
+		row._storedMp3 = false;
+		row._storedAnimated = false;
+		row._storedImagesCount = 0;
+		row._storedSlidesCount = 0;
+		row.stage = "done";
+		row.detail = "Media not kept - Generate builds it again";
+	}
+
+	/*
+	 * Session 331 (regenerate fix): put a restored row's media back. It waits
+	 * for any hydration already running, reads the media from IndexedDB,
+	 * rebuilds the slides, then repaints the row. The row is marked
+	 * _recoveringMedia meanwhile, so Generate does not start on it.
+	 */
+	async function recoverBatchRowMedia(row) {
+		if (!row) return false;
+		row._recoveringMedia = true;
+		try {
+			/*
+			 * The restore runs while the page's own script is still loading, so the
+			 * timeline editor (which reads the media) is not on the page yet. One
+			 * tick lets that script finish before the media is read.
+			 */
+			await batchDelay(0);
+			let waited = 0;
+			while (row._hydratingAssets && waited < 10000) {
+				await batchDelay(100);
+				waited += 100;
+			}
+			const restored = await hydrateBatchRowAssetsFromTimeline(row);
+			if (restored) rebuildBatchSlidesFromItems(row);
+		} catch (recoverError) { }
+		row._recoveringMedia = false;
+		if (row.stage === "done" && !batchRowFinished(row)) demoteBatchRowToRecord(row);
+		try { paintBatchRowStatus(row); } catch (paintError) { }
+		try { renderBatchTable(); } catch (renderError) { }
+		if (row.stage === "done" && batchRowFinished(row)) persistPipelineManagementState("batch-row-media-restored");
+		return batchRowFinished(row);
 	}
 
 	function pipelineManagementSnapshot() {
@@ -1191,7 +1276,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				);
 				applyTimelineEditToBatchRow(row);
 				if (liveHasMedia || storedHasLiveMedia || row.timelineEdited) {
-					hydrateBatchRowAssetsFromTimeline(row);
+					recoverBatchRowMedia(row);
 				}
 			}
 			const storedProjects = ((snapshot.editor && snapshot.editor.projects) || [])
@@ -8496,7 +8581,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'<div class="va-header">' +
 			'<span class="va-title">\ud83c\udfac Video ' + n + '</span>' +
 			'<span class="va-status" id="va-status-' + n + '">empty</span>' +
-			'<button type="button" class="va-delete-btn" id="va-delete-' + n + '" onclick="deleteVideoAccordion(' + n + ')" title="Delete this video with its images, MP4s, audio and script">\ud83d\uddd1\ufe0f Delete Video</button>' +
 			'<span class="va-summary" id="va-summary-' + n + '"></span>' +
 			'<button type="button" class="va-arrow" id="va-arrow-' + n + '" onclick="toggleVideoAccordion(' + n + ')" title="Collapse / expand">\u25bc</button>' +
 			'</div>' +
@@ -8548,6 +8632,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				'<select id="va-quality-' + n + '" class="quality-select">' + QUALITY_OPTIONS + '</select>' +
 				'</div>' +
 			'</div>' +
+			/* Session 331 (layout): Delete Video sits at the bottom of the body, full width. */
+			'<button type="button" class="va-delete-btn" id="va-delete-' + n + '" onclick="deleteVideoAccordion(' + n + ')" title="Delete this video with its images, MP4s, audio and script">\ud83d\uddd1\ufe0f Delete Video</button>' +
 			'</div>' +
 			'<input type="file" id="va-file-' + n + '" multiple accept="image/*,image/gif,.gif,video/mp4,.mp4" style="display:none">' +
 			'<input type="file" id="va-audio-' + n + '" accept="audio/mpeg,.mp3" style="display:none">'
@@ -11274,26 +11360,24 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		};
 	}
 
-	function openBatchEditPage(row) {
-		if (!row || !batchRowHasScript(row)) {
-			if (row) try { purgeRowLocalAndCookieEntries(row); } catch (purgeError) { }
-			return null;
-		}
-		const payload = batchProjectJson(row);
-		if (!payload) return null;
-		const key = "edit-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
-		/* Keep the timeline project id stable for this Quick Batch row so its local timing survives reopen/reload. */
-		const targetPageId = ("timeline-" + String(pipelineManagementStore.pageId || "local") + "-row-" + String(row.id)).replace(/[^a-zA-Z0-9_-]/g, "");
-		payload.sourcePageId = pipelineManagementStore.pageId;
-		payload.targetPageId = targetPageId;
-		payload.basicSettings.vid = row.vid || pipelineManagementStore.pageId + "-row-" + String(row.id);
-		/* The project detail carries the same identity, so the timeline can show it. */
-		if (payload.projectDetail) {
-			payload.projectDetail.vid = payload.basicSettings.vid;
-			payload.projectDetail.sourcePageId = payload.sourcePageId;
-			payload.projectDetail.targetPageId = targetPageId;
-		}
-		/* Large media blobs travel browser-to-browser through IndexedDB, never through localStorage or a URL. */
+	/*
+	 * Session 331 (regenerate fix): the IndexedDB key a row's voiceover and
+	 * media are kept under. The timeline hand-off and the restore both use it.
+	 */
+	function batchRowMediaPageId(row) {
+		const id = row && row.id != null ? String(row.id) : "";
+		if (!id) return "";
+		return ("timeline-" + String(pipelineManagementStore.pageId || "local") + "-row-" + id).replace(/[^a-zA-Z0-9_-]/g, "");
+	}
+
+	/*
+	 * Session 331 (regenerate fix): one transfer for a row's voiceover and its
+	 * Pixabay media into browser IndexedDB. It runs when a row finishes (so a
+	 * reload can put the bytes back) and when the row is opened in the timeline.
+	 */
+	function persistBatchRowMedia(row) {
+		const targetPageId = batchRowMediaPageId(row);
+		if (!row || !targetPageId) return null;
 		try {
 			/*
 			 * Session 331 follow-up: the timeline keeps ONE background layer keyed by
@@ -11321,11 +11405,36 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			if (window.__TIMELINE_EDITOR__ && typeof window.__TIMELINE_EDITOR__.storeProjectAssets === "function") {
 				const savingAssets = window.__TIMELINE_EDITOR__.storeProjectAssets(targetPageId, assetTransfer);
 				if (savingAssets && typeof savingAssets.then === "function") {
-					savingAssets.then(function (result) { window.__TIMELINE_ASSET_SAVE__ = result; })
+					return savingAssets.then(function (result) { window.__TIMELINE_ASSET_SAVE__ = result; return result; })
 						.catch(function (error) { window.__TIMELINE_ASSET_SAVE__ = { ok: false, reason: String(error && error.message || error) }; });
 				}
 			}
 		} catch (assetError) { window.__TIMELINE_ASSET_SAVE__ = { ok: false, reason: String(assetError && assetError.message || assetError) }; }
+		return null;
+	}
+
+	function openBatchEditPage(row) {
+		if (!row || !batchRowHasScript(row)) {
+			if (row) try { purgeRowLocalAndCookieEntries(row); } catch (purgeError) { }
+			return null;
+		}
+		const payload = batchProjectJson(row);
+		if (!payload) return null;
+		const key = "edit-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
+		/* Keep the timeline project id stable for this Quick Batch row so its local timing survives reopen/reload. */
+		const targetPageId = batchRowMediaPageId(row);
+		payload.sourcePageId = pipelineManagementStore.pageId;
+		payload.targetPageId = targetPageId;
+		payload.basicSettings.vid = row.vid || pipelineManagementStore.pageId + "-row-" + String(row.id);
+		/* The project detail carries the same identity, so the timeline can show it. */
+		if (payload.projectDetail) {
+			payload.projectDetail.vid = payload.basicSettings.vid;
+			payload.projectDetail.sourcePageId = payload.sourcePageId;
+			payload.projectDetail.targetPageId = targetPageId;
+		}
+		/* Large media blobs travel browser-to-browser through IndexedDB, never through localStorage or a URL. */
+		/* Session 331 (regenerate fix): the transfer is the same one a finished row uses to keep its media. */
+		persistBatchRowMedia(row);
 		try {
 			window.localStorage.setItem(MEDIA_TRANSITION_STORAGE_PREFIX + key, JSON.stringify(payload));
 			window.document.cookie = "ytvs_transition_project_" + key.replace(/[^a-zA-Z0-9_-]/g, "_") +
@@ -13426,6 +13535,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 			/* Session 331: a successful render is archived for 24 h. */
 			try { recordCompletedBatchRow(row, "render"); } catch (archiveError) { }
+			/* Session 331 (regenerate fix): a finished row keeps its media so a reload can restore it. */
+			try { persistBatchRowMedia(row); } catch (persistError) { }
 
 			console.info("[batch-table] row " + row.id + " finished", {
 				ms: row.finishedAt - row.startedAt,
@@ -13470,6 +13581,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			row.running ||
 			row.retrying ||
 			row.stopRequested ||
+			row._recoveringMedia ||
 			batchRowBusy(row)
 		) {
 			return false;
@@ -13480,9 +13592,19 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				row.stage === "done"
 			);
 		}
+		/*
+		 * Session 331 (regenerate fix): a row whose action buttons are NOT live
+		 * can always be generated again. A row that finished in this browser
+		 * is live and stays out of the queue; a row that is "done" but has no
+		 * media in memory (a finished row restored after a reload) is not, and
+		 * it must not be left stuck with disabled buttons and a blocked Generate.
+		 */
 		return (
 			!batchRowFinished(row) &&
-			BATCH_GENERATABLE_STAGES.indexOf(row.stage) !== -1
+			(
+				BATCH_GENERATABLE_STAGES.indexOf(row.stage) !== -1 ||
+				row.stage === "done"
+			)
 		);
 
 	}
