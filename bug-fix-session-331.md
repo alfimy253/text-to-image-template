@@ -3619,3 +3619,95 @@ None of these failures is in a test this section touched, and none failed for a 
 - **The `_recoveringMedia` gate blocks Generate on a restored row for a moment** (one tick plus the IndexedDB read). That is deliberate: without it a run could start while old media is being put back.
 - **`npm test` does not finish in this sandbox**: `deep-debug-regressions` and `session-264-editor-render` stall on the untouched commit too. The per-file loop above is the reliable check.
 - The keyword limit is three, as the user asked. It is tighter than the earlier five-word rule (§25 and §275), and `system-rules.md` has been updated to match.
+
+## 29. Timeline → Quick Batch: the link lands on the table every time, and the row comes back with its script whole (2026-11-10)
+
+**Status: coded and verified.** Request, verbatim:
+
+> "Study the code and the md file 331 and fix the link to the quick batch table fom the timeline editor page....... Bec its not redirected to the layout always...then when i redirect manually the the rows are malformed ( script was deleted and few chars were only left..)it may be that the finalized edit from timeline page may not be stored right in the cookie or localstorage when an edit happened to the timeline page or maybe the app just failed to read the project details again.....fix this bug"
+
+### 29.1 What the code actually did (measured, not taken from this log)
+
+Three separate faults, each reproduced before anything was changed.
+
+| # | Where | What happened |
+|---|---|---|
+| A | `src/client/app-js.ts` — `timelineEditorRouteRequested()` was the **only** reader of `?layout=` | The Back link navigates to `?layout=table&pipelinePage=<the table page>`, and nothing read `layout=table`. The layout came from `restorePipelineManagementState()` → `setStudioLayout(snapshot.layout === "table" ? "table" : "editor")`, i.e. from whatever the page's store was last saved with, and `"editor"` when there was nothing. Measured: seed a page store with `layout: "editor"`, load `?layout=table&pipelinePage=…` → the active view was `#view-editor`. That is the "not redirected to the layout always": the same click landed on the table or on the editor depending on the stored flag. |
+| B | `timelineEditSummary()` (timeline) + `publishTimelineEdit()` (table) + `boundedSnapshot()` (store) | The hand-back had grown into the whole project — `sceneItems`, `visuals`, `audios` and a full `projectDetail` — **11,885 JSON chars** for one 12-scene edit with one text and one graphic, measured. It was written into a store whose entire cookie budget is 4 × 3800 **encoded** chars, and that store wrote ONE bounded text to localStorage *and* to the cookies, degrading it until it fitted: halve every script 800 → 400 → 200 → … → **1 char**, strip labels, delete `projectDetail` / `slideItems` / `timeline.*`, then drop rows. Measured on two rows with 1400-char scripts: `400` chars stored on seed, **`32` chars after the hand-back**, and the reloaded table showed `Scene beat for market dawn: the ` — the user's "script was deleted and few chars were only left". |
+| C | `state.sourcePageId` (timeline) | It only exists while the handoff payload or the saved project survives. Open the timeline, reload it after the handoff entry was consumed (§0.3 #11), and the publish failed with *"the table page store is unavailable"* while the Back URL **deleted `pipelinePage`** — so the tab reloaded onto the timeline's own page id and showed an empty table. That is the "app just failed to read the project details again". |
+
+Two things the trace cleared:
+
+- The hand-back was not lost. `publishTimelineEdit()` returned `{ok: true, cookies: 4, timestampMatched: true}` in the failing run — the write succeeded; it was the store's degrade ladder that ate the row on the way in.
+- `SLIDE_SECONDS_MIN`, `applyTimelineEditToBatchRow()` and the scene-order contract of §26 are unchanged and were not part of this fault.
+
+### 29.2 The fix
+
+**A — the URL's layout request is honoured (`src/client/app-js.ts`).**
+
+- `requestedStudioLayout()` reads `?layout=` and returns `"table"` or `"editor"` (the timeline route stays with `timelineEditorRouteRequested()`).
+- The boot branch applies it **after** `restorePipelineManagementState()`, so it wins over the stored layout exactly once — on the navigation that carried it. A later `storage`-event restore, or the user's own click on the `[data-layout]` switch, rules again, so nothing yanks the page back to a layout the user has already left.
+- `?layout=editor` goes through the same path.
+
+**B — the pipeline store is two tiers, and a script is never shredded (`src/client/pipeline-management-store.ts`).**
+
+| Tier | What it holds |
+|---|---|
+| localStorage (`boundedSnapshot()`) | The authoritative copy: up to 8 rows, **scripts up to `MAX_SCRIPT_CHARS = 8000`** (was 800), blank-script rows dropped, ids normalised — and no degrade ladder at all. A 6-minute narration is ≈ 5,400 chars, so this cap is a runaway guard, not a budget. |
+| the four cookies (`cookieMirror()`) | The same snapshot, reduced only when it does not fit: `compactTimelineFields(false)` → `compactTimelineFields(true)` → `timeline.visuals/audios/projectDetail` → `row.projectDetail` / `row.slideItems` → `timeline.sceneItems` (the compact `scenes` triples stay) → scripts 800 → 400 → 200 → **floor 120** → whole rows from the end → clear. |
+
+- `save()` writes both, verifies each against **its own** digest, and reports `localStorageChars`, `cookieChars`, `mirrorReduced`, `mirrorScriptChars`, `mirrorRows`, `mirrorRowsDropped`. `ok` still needs localStorage + all four chunks + agreement.
+- Agreement is now the **timestamp**, not a shared digest — the two tiers can legitimately hold different text. Each chunk carries `r: 1` when the mirror shed weight, `fitsCookies()` measures with that mark present, and `load()` surfaces it as `debug.partial` on a cookie-only read.
+- `load()`'s repair path re-derives the mirror (`writeMirrorCookies`) instead of pushing the full text into chunks that cannot hold it.
+- Measured after the change: 2 rows × 1400 chars + a full edit → both tiers keep **1400**; 8 rows × 2550 chars + edits → localStorage keeps all eight in full, the mirror keeps **all eight rows** at 200 chars each with their 12 scene triples, every chunk ≤ 3800; 1 row × 20,000 chars → 8000 in both.
+
+**B′ — the hand-back is a summary again (`src/client/app-js.ts`).**
+
+- `compactTimelineEditForStorage(edit)` keeps identity (`key`, `pageId`, `sourcePageId`, `rowId`, `vid`), the shape (`durationSec`, `sceneCount`, `clipCount`, `textCount`, `videoStyle`, `frame`), the `scenes` triples and compact `sceneItems` (24-char names, no `m`/`src`). It drops `visuals`, `audios` and `projectDetail`: the timeline project already persists all of it under `ytvs.timeline-editor.v1.<projectId>` plus its own eight cookie chunks, and `readTimelineEditorStateForRow()` + `composeTimelineSummaryFromState()` rebuild it on the table side.
+- `publishTimelineEdit()` no longer writes `row.slideItems` alongside `row.timeline.sceneItems` (the same list twice), and stores `projectDetail` without `scenes`/`slides`/`elements`. It still reads the full incoming `projectDetail` for the `images` / `mp3` / `stage` flags.
+
+**C — the way back is always recoverable (`src/client/timeline-editor.ts`, `src/client/app-js.ts`).**
+
+- The table page id is what `batchRowMediaPageId()` built this page's id from: `timeline-<tablePageId>-row-<rowId>`. `splitTimelinePageId()` reads it back on both sides, and `tableHandoffIdentity()` prefers `state.sourcePageId` → `projectDetail.sourcePageId` → the page id. The summary, the publish payload and the Back URL all use it, so the publish reaches the right store and the Back link keeps `pipelinePage` even after the handoff entry is gone.
+
+### 29.3 Tests added (`tests/timeline-quick-batch-sync.test.mjs`, 6 → 10)
+
+| Test | Asserts |
+|---|---|
+| the Back link's `?layout=table` wins over the layout the page store remembers | `requestedStudioLayout()` is read, `#view-table` is active although the store says `editor`, the same page's rows are there, and a later `storage` restore does not undo the user's own switch |
+| a long script survives the timeline hand-back and the reload whole | 1400-char scripts before and after the publish, the stored edit carries `scenes` but no `visuals`/`audios`/`projectDetail`, all four chunks ≤ 3800, the reload lands on the table with the byte-identical script in the row's script box |
+| when the snapshot outgrows four cookies the mirror sheds weight, never a script | 8 rows × 2550 chars: `ok`, four chunks, `mirrorReduced`, localStorage full, mirror keeps 8 rows at ≥ `cookieScriptFloor` with 12 scene triples each, and a cookie-only `load()` reports `partial` with eight whole rows |
+| the hand-back finds its table page from the timeline page id alone | a timeline tab with `sourcePageId === ""` still publishes into the table page's existing row, keeping its script |
+
+### 29.4 Verification (this pass)
+
+```text
+npx tsc --noEmit                 30 diagnostics, all in src/index.ts (unchanged baseline)
+npx wrangler deploy --dry-run    bundles clean, 3209.35 KiB (the client strings embed intact)
+
+Per-file loop, this branch vs. the untouched commit 92b60c2 in a separate worktree
+(same node_modules, same 240 s per-file cap). Every line is identical except the one
+this section added tests to:
+
+  timeline-quick-batch-sync     10 / 0    (was 6 / 0 — four new tests)
+  timeline-editor               37 / 0    quick-batch-table        15 / 0
+  final-media-cap-actions       14 / 0    session-331-fixes        10 / 10
+  pixabay-media                 58 / 0    template-composer        20 / 0
+  + 37 other files, byte-identical results on both trees
+
+  Pre-existing on BOTH trees, untouched:
+    deep-debug-regressions      stall (timeout)     session-264-editor-render  stall (timeout)
+    session-250-batch-pipeline  stall at 240 s; with a 900 s cap: 8 pass / 5 fail
+                                (5, 7, 8, 9, 10) — the same five names on both trees
+    seo-walkthrough 10 · session-244 2 · session-261-browser-offload 4 ·
+    session-262-load-balancing 5 · script-image-deep-debug 1
+```
+
+### 29.5 Small print and judgement calls
+
+- **localStorage is now the truth and the cookies are a mirror.** A reload with localStorage (the normal case) gets the whole script. A reload from cookies alone can get a shorter script — never below 120 chars — and, for a page too big for four chunks even then, fewer rows. `load().debug.partial` says which happened. Before this change the *localStorage* copy was the mangled one, which is why the corruption survived a normal reload.
+- **`COOKIE_COUNT` stayed at 4.** Doubling the chunks would raise the domain's cookie total, and the timeline editor already writes eight 3800-char chunks per project. The mirror ladder is what makes four enough.
+- **The script cap went 800 → 8000 in localStorage.** That is a deliberate widening: 800 silently truncated every longer narration on reload. If a page ever needs more, the mirror is unaffected — it trims on its own schedule.
+- **The URL layout request is spent once.** Applying it on every restore would fight the `[data-layout]` switch and the `storage`-event restore.
+- **One unexplained flake, stated plainly.** The first cold run of `timeline-quick-batch-sync` in this session failed once; the following nine runs on this branch and five on the untouched baseline were all green, and the failing assertion was never captured. Nothing in this change touches that file's earlier tests, but it is not accounted for.
+- **No real browser** (no Chromium, no `playwright-core` in devDependencies): everything above is JSDOM against the real client modules. The `window.close()` branch of the Back handler is unchanged and was not exercised in a browser — please click ← Quick Batch once in Chrome and confirm the table comes up.

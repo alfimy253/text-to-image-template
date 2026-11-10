@@ -2,9 +2,27 @@
  * Bug Fix Session 331 — per-page pipeline-management storage.
  *
  * Every browser tab gets its own localStorage page key. Four session cookies
- * carry the FULL management snapshot in chunks, so a cookie-only reload is no
- * longer lossy. There is no TTL: localStorage and the cookie chunks are only
- * trusted when their updatedAt timestamp and digest match exactly.
+ * carry the management snapshot in chunks, so a cookie-only reload still finds
+ * the page's rows. There is no TTL: each channel is trusted only when its own
+ * digest verifies, and the two are only said to agree when their updatedAt
+ * timestamps are identical.
+ *
+ * Session 333 — TWO TIERS, because one text can no longer serve both:
+ *
+ *   localStorage  the authoritative copy. It keeps the user's script intact
+ *                 (MAX_SCRIPT_CHARS) and every row, because it has megabytes.
+ *   cookies       a mirror of the same snapshot for the reload that has no
+ *                 localStorage. Four 3800-char chunks are a hard budget, so
+ *                 when the snapshot is bigger than that the mirror sheds
+ *                 RECOMPOSABLE weight first (labels, duplicated slide caches,
+ *                 the projectDetail arrays) and then whole rows.
+ *
+ * What the mirror never does is what the old single-tier ladder did: halve a
+ * script down to one character and drop whole fields off a row that is still
+ * listed. That is how a Quick Batch row came back from the timeline editor
+ * with its script deleted and a few characters left. A row is now either in
+ * the mirror whole, or not in it at all, and a script is never cut below
+ * COOKIE_SCRIPT_FLOOR.
  */
 
 export const PIPELINE_MANAGEMENT_STORE_JS = `
@@ -21,7 +39,11 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 		var COOKIE_COUNT = 4;
 		var MAX_COOKIE_VALUE = 3800;
 		var MAX_ITEMS = 8;
-		var MAX_SCRIPT_CHARS = 800;
+		/* localStorage keeps the user's script; this is a runaway guard, not a budget. */
+		var MAX_SCRIPT_CHARS = 8000;
+		/* The cookie mirror starts trimming here and stops at the floor. */
+		var COOKIE_SCRIPT_START = 800;
+		var COOKIE_SCRIPT_FLOOR = 120;
 
 		function num(value, fallback) {
 			var n = Number(value);
@@ -87,7 +109,7 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			return win.location && win.location.protocol === "https:" ? "; Secure" : "";
 		}
 
-		function cookieValues(text, updatedAt, hash) {
+		function cookieValues(text, updatedAt, hash, reduced) {
 			var chars = Array.from(String(text));
 			var size = Math.ceil(chars.length / COOKIE_COUNT) || 1;
 			var values = [];
@@ -95,6 +117,8 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 				var meta = {
 					v: VERSION, p: pageId, t: updatedAt, h: hash,
 					n: COOKIE_COUNT, i: i + 1,
+					/* r marks a mirror that had to shed weight to fit the chunks. */
+					r: reduced ? 1 : 0,
 					d: chars.slice(i * size, (i + 1) * size).join("")
 				};
 				values.push(encodeURIComponent(JSON.stringify(meta)));
@@ -103,7 +127,8 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 		}
 
 		function fitsCookies(text, updatedAt) {
-			var values = cookieValues(text, updatedAt, "00000000");
+			/* Measured with the reduced flag set, so the mark itself is budgeted for. */
+			var values = cookieValues(text, updatedAt, "00000000", true);
 			for (var i = 0; i < values.length; i++) if (values[i].length > MAX_COOKIE_VALUE) return false;
 			return true;
 		}
@@ -183,6 +208,12 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			});
 		}
 
+		/*
+		 * The localStorage tier: rows and projects bounded to MAX_ITEMS, blank
+		 * scripts dropped, ids normalised — and nothing else. In particular the
+		 * script is NOT cut to fit a cookie: this text is the one the page reads
+		 * back, so it has to hold what the user typed.
+		 */
 		function boundedSnapshot(snapshot) {
 			var clone = deepCopy(snapshot) || {};
 			clone.version = VERSION;
@@ -200,94 +231,159 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 				.filter(function (project) { return Boolean(project && hasNonBlankText(project.script)); })
 				.slice(0, MAX_ITEMS)
 				.map(normalizeProject);
-			var keptIds = Object.create(null);
-			rows.forEach(function (row) { keptIds[String(row.id)] = true; });
 			clone.quickBatch = {
 				runBusy: Boolean(qb.runBusy),
-				queued: (Array.isArray(qb.queued) ? qb.queued : [])
-					.map(String)
-					.filter(function (id) { return keptIds[id] === true; })
-					.slice(0, MAX_ITEMS),
+				queued: queuedIds(qb.queued, rows),
 				finishedCount: num(qb.finishedCount, 0),
 				rows: rows
 			};
 			clone.editor = { projects: projects };
-			clone.videoIds = rows.map(function (row) { return row.vid; }).concat(projects.map(function (project) { return project.vid; }));
-
-			var text = JSON.stringify(clone);
-			if (!fitsCookies(text, clone.updatedAt)) {
-				compactTimelineFields(rows, false);
-				text = JSON.stringify(clone);
-			}
-			var scriptCap = MAX_SCRIPT_CHARS;
-			while (!fitsCookies(text, clone.updatedAt) && scriptCap > 32) {
-				scriptCap = Math.max(32, Math.floor(scriptCap / 2));
-				rows.forEach(function (row) { row.script = String(row.script || "").slice(0, scriptCap); });
-				projects.forEach(function (project) { project.script = String(project.script || "").slice(0, scriptCap); });
-				text = JSON.stringify(clone);
-			}
-			if (!fitsCookies(text, clone.updatedAt)) {
-				compactTimelineFields(rows, true);
-				text = JSON.stringify(clone);
-			}
-			while (!fitsCookies(text, clone.updatedAt) && scriptCap > 0) {
-				scriptCap = Math.floor(scriptCap / 2);
-				var floorCap = scriptCap > 0 ? scriptCap : 1;
-				rows.forEach(function (row) {
-					var s = String(row.script || "").trim();
-					row.script = s ? s.slice(0, floorCap) : "";
-				});
-				projects.forEach(function (project) {
-					var s = String(project.script || "").trim();
-					project.script = s ? s.slice(0, floorCap) : "";
-				});
-				text = JSON.stringify(clone);
-				if (scriptCap === 0) break;
-			}
-			if (!fitsCookies(text, clone.updatedAt)) {
-				rows.forEach(function (row) {
-					if (!row || !row.timeline || typeof row.timeline !== "object") return;
-					delete row.timeline.visuals;
-					delete row.timeline.audios;
-					delete row.timeline.projectDetail;
-				});
-				text = JSON.stringify(clone);
-			}
-			if (!fitsCookies(text, clone.updatedAt)) {
-				rows.forEach(function (row) {
-					if (!row || typeof row !== "object") return;
-					if (row.timeline && typeof row.timeline === "object") {
-						if (Array.isArray(row.timeline.scenes) && row.timeline.scenes.length) {
-							delete row.timeline.sceneItems;
-						}
-					}
-				});
-				text = JSON.stringify(clone);
-			}
-			if (!fitsCookies(text, clone.updatedAt)) {
-				rows.forEach(function (row) {
-					if (!row || typeof row !== "object") return;
-					delete row.projectDetail;
-					delete row.slideItems;
-				});
-				text = JSON.stringify(clone);
-			}
-			while (!fitsCookies(text, clone.updatedAt) && (rows.length || projects.length)) {
-				if (rows.length) rows.pop(); else projects.pop();
-				clone.videoIds = rows.map(function (row) { return row.vid; }).concat(projects.map(function (project) { return project.vid; }));
-				text = JSON.stringify(clone);
-			}
-			if (!fitsCookies(text, clone.updatedAt)) {
-				clone.quickBatch = { runBusy: false, queued: [], finishedCount: 0, rows: [] };
-				clone.editor = { projects: [] };
-				clone.videoIds = [];
-				text = JSON.stringify(clone);
-			}
+			clone.videoIds = videoIdsOf(rows, projects);
 			return clone;
 		}
 
-		function writeCookies(text, updatedAt, hash) {
-			var values = cookieValues(text, updatedAt, hash);
+		function keptIdsOf(rows) {
+			var keptIds = Object.create(null);
+			(Array.isArray(rows) ? rows : []).forEach(function (row) {
+				if (row) keptIds[String(row.id)] = true;
+			});
+			return keptIds;
+		}
+
+		function queuedIds(queued, rows) {
+			var keptIds = keptIdsOf(rows);
+			return (Array.isArray(queued) ? queued : [])
+				.map(String)
+				.filter(function (id) { return keptIds[id] === true; })
+				.slice(0, MAX_ITEMS);
+		}
+
+		function videoIdsOf(rows, projects) {
+			return (rows || []).map(function (row) { return row.vid; })
+				.concat((projects || []).map(function (project) { return project.vid; }));
+		}
+
+		function trimScripts(rows, projects, cap) {
+			(rows || []).forEach(function (row) {
+				if (!row) return;
+				var text = String(row.script || "").trim();
+				row.script = text ? text.slice(0, cap) : "";
+			});
+			(projects || []).forEach(function (project) {
+				if (!project) return;
+				var text = String(project.script || "").trim();
+				project.script = text ? text.slice(0, cap) : "";
+			});
+		}
+
+		/*
+		 * The cookie tier: the same snapshot, reduced until its four chunks fit.
+		 *
+		 * Order matters. Everything shed here is rebuilt on restore — the
+		 * projectDetail arrays come back from the row's slides, the slide labels
+		 * from the timeline project's own store, the timeline edit's visuals and
+		 * audio from the timeline project itself. The script and the row's
+		 * identity are shed last, and a script is never cut below
+		 * COOKIE_SCRIPT_FLOOR: below that a "restored" row is a lie, so the row
+		 * is dropped from the mirror instead and localStorage stays the truth.
+		 */
+		function cookieMirror(source) {
+			var clone = deepCopy(source) || {};
+			var rows = Array.isArray(clone.quickBatch && clone.quickBatch.rows) ? clone.quickBatch.rows : [];
+			var projects = Array.isArray(clone.editor && clone.editor.projects) ? clone.editor.projects : [];
+			var updatedAt = num(clone.updatedAt, Date.now());
+			var rowTotal = rows.length;
+			var projectTotal = projects.length;
+			var scriptChars = MAX_SCRIPT_CHARS;
+			var text = JSON.stringify(clone);
+			var reduced = false;
+
+			function settle() {
+				return {
+					snapshot: clone,
+					text: text,
+					info: {
+						reduced: reduced,
+						scriptChars: scriptChars,
+						rows: rows.length,
+						projects: projects.length,
+						rowsDropped: Math.max(0, rowTotal - rows.length),
+						projectsDropped: Math.max(0, projectTotal - projects.length)
+					}
+				};
+			}
+
+			if (fitsCookies(text, updatedAt)) return settle();
+			reduced = true;
+
+			compactTimelineFields(rows, false);
+			text = JSON.stringify(clone);
+			if (fitsCookies(text, updatedAt)) return settle();
+
+			compactTimelineFields(rows, true);
+			text = JSON.stringify(clone);
+			if (fitsCookies(text, updatedAt)) return settle();
+
+			rows.forEach(function (row) {
+				if (!row || !row.timeline || typeof row.timeline !== "object") return;
+				delete row.timeline.visuals;
+				delete row.timeline.audios;
+				delete row.timeline.projectDetail;
+			});
+			text = JSON.stringify(clone);
+			if (fitsCookies(text, updatedAt)) return settle();
+
+			rows.forEach(function (row) {
+				if (!row || typeof row !== "object") return;
+				delete row.projectDetail;
+				delete row.slideItems;
+			});
+			text = JSON.stringify(clone);
+			if (fitsCookies(text, updatedAt)) return settle();
+
+			/*
+			 * The edit's per-scene records go next, but its compact
+			 * [mediaIndex, seconds, kind] triples stay: those triples ARE the
+			 * scene order and the edited lengths, and applyTimelineEditToBatchRow
+			 * rebuilds the row's slides from them alone. Only the labels are lost,
+			 * and the timeline project's own store still has them.
+			 */
+			rows.forEach(function (row) {
+				if (!row || !row.timeline || typeof row.timeline !== "object") return;
+				if (!Array.isArray(row.timeline.scenes) || !row.timeline.scenes.length) return;
+				delete row.timeline.sceneItems;
+			});
+			text = JSON.stringify(clone);
+			if (fitsCookies(text, updatedAt)) return settle();
+
+			scriptChars = Math.min(COOKIE_SCRIPT_START, MAX_SCRIPT_CHARS);
+			while (!fitsCookies(text, updatedAt) && scriptChars > COOKIE_SCRIPT_FLOOR) {
+				scriptChars = Math.max(COOKIE_SCRIPT_FLOOR, Math.floor(scriptChars / 2));
+				trimScripts(rows, projects, scriptChars);
+				text = JSON.stringify(clone);
+			}
+			if (fitsCookies(text, updatedAt)) return settle();
+
+			/* Whole rows go before a kept row is mutilated. The first row is kept. */
+			while (!fitsCookies(text, updatedAt) && (rows.length > 1 || projects.length)) {
+				if (projects.length) projects.pop(); else rows.pop();
+				clone.quickBatch.queued = queuedIds(clone.quickBatch.queued, rows);
+				clone.videoIds = videoIdsOf(rows, projects);
+				text = JSON.stringify(clone);
+			}
+			if (fitsCookies(text, updatedAt)) return settle();
+
+			clone.quickBatch = { runBusy: false, queued: [], finishedCount: 0, rows: [] };
+			clone.editor = { projects: [] };
+			clone.videoIds = [];
+			rows = clone.quickBatch.rows;
+			projects = clone.editor.projects;
+			text = JSON.stringify(clone);
+			return settle();
+		}
+
+		function writeCookies(text, updatedAt, hash, reduced) {
+			var values = cookieValues(text, updatedAt, hash, reduced);
 			var written = 0;
 			for (var i = 0; i < COOKIE_COUNT; i++) {
 				try {
@@ -345,31 +441,50 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			if (digest(text) !== first.h) return null;
 			var snapshot = safeParse(text);
 			if (!snapshot || snapshot.pageId !== pageId || num(snapshot.updatedAt, -1) !== num(first.t, -2)) return null;
-			return { snapshot: snapshot, meta: { t: num(first.t, 0), h: first.h } };
+			return { snapshot: snapshot, meta: { t: num(first.t, 0), h: first.h, reduced: num(first.r, 0) === 1 } };
 		}
 
+		/*
+		 * One save, two tiers: the full snapshot goes to localStorage, its
+		 * (possibly reduced) mirror goes to the four cookie chunks. Each tier is
+		 * read back and verified against its OWN digest; the two tiers are said
+		 * to agree when they carry the same updatedAt, which is what a reload
+		 * needs to trust localStorage over the mirror.
+		 */
 		function save(snapshot) {
 			var store = localStore();
 			if (!store || !snapshot) return { ok: false, reason: "localStorage unavailable" };
 			var normalized = boundedSnapshot(snapshot);
 			var text = JSON.stringify(normalized);
 			var hash = digest(text);
+			var updatedAt = normalized.updatedAt;
+			var mirror = cookieMirror(normalized);
+			var mirrorHash = digest(mirror.text);
 			var localWritten = false;
 			try { store.setItem(localStorageKey, text); localWritten = true; } catch (error) { }
-			var cookiesWritten = writeCookies(text, normalized.updatedAt, hash);
+			var cookiesWritten = writeCookies(mirror.text, updatedAt, mirrorHash, mirror.info.reduced);
 			var backLocal = readLocal();
 			var backCookie = readCookieSnapshot();
-			var localMatch = Boolean(backLocal && num(backLocal.updatedAt, -1) === normalized.updatedAt && digest(JSON.stringify(backLocal)) === hash);
-			var cookieMatch = Boolean(backCookie && num(backCookie.meta.t, -1) === normalized.updatedAt && backCookie.meta.h === hash);
+			var localMatch = Boolean(backLocal && num(backLocal.updatedAt, -1) === updatedAt && digest(JSON.stringify(backLocal)) === hash);
+			var cookieMatch = Boolean(backCookie && num(backCookie.meta.t, -1) === updatedAt && backCookie.meta.h === mirrorHash);
 			var timestampMatched = localMatch && cookieMatch;
 			return {
 				ok: Boolean(localWritten && cookiesWritten === COOKIE_COUNT && timestampMatched),
 				localStorage: localWritten,
+				localStorageChars: text.length,
 				cookies: cookiesWritten,
 				cookieCount: COOKIE_COUNT,
+				cookieChars: mirror.text.length,
 				timestampMatched: timestampMatched,
 				digest: hash,
-				updatedAt: normalized.updatedAt,
+				cookieDigest: mirrorHash,
+				mirrorReduced: mirror.info.reduced,
+				mirrorScriptChars: mirror.info.scriptChars,
+				mirrorRows: mirror.info.rows,
+				mirrorProjects: mirror.info.projects,
+				mirrorRowsDropped: mirror.info.rowsDropped,
+				mirrorProjectsDropped: mirror.info.projectsDropped,
+				updatedAt: updatedAt,
 				pageId: pageId,
 				layout: normalized.layout,
 				videoIds: (normalized.videoIds || []).length,
@@ -378,20 +493,30 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			};
 		}
 
+		/* Re-derive this snapshot's mirror and put it in the four chunks. */
+		function writeMirrorCookies(snapshot) {
+			var mirror = cookieMirror(snapshot || {});
+			return writeCookies(mirror.text, num(snapshot && snapshot.updatedAt, Date.now()), digest(mirror.text), mirror.info.reduced);
+		}
+
 		function load() {
 			var local = readLocal();
 			var cookie = readCookieSnapshot();
-			var localText = local ? JSON.stringify(local) : "";
-			var localHash = local ? digest(localText) : "";
+			/*
+			 * The two tiers can legitimately hold different text (the mirror is
+			 * reduced when the snapshot outgrows four cookies), so agreement is
+			 * about the timestamp, not the digest. Each tier's own digest was
+			 * already verified on the way in.
+			 */
 			var timestampMatched = Boolean(local && cookie &&
-				num(local.updatedAt, -1) === num(cookie.meta.t, -2) && localHash === cookie.meta.h);
+				num(local.updatedAt, -1) === num(cookie.meta.t, -2));
 			if (local && !timestampMatched) {
-				var repaired = writeCookies(localText, num(local.updatedAt, Date.now()), localHash);
+				var repaired = writeMirrorCookies(local);
 				return {
 					snapshot: local,
 					source: "localStorage",
 					repairedCookie: repaired === COOKIE_COUNT,
-					debug: { localStorage: true, cookies: Boolean(cookie), timestampMatched: false, repaired: repaired === COOKIE_COUNT, ttl: 0 }
+					debug: { localStorage: true, cookies: Boolean(cookie), timestampMatched: false, repaired: repaired === COOKIE_COUNT, partial: false, ttl: 0 }
 				};
 			}
 			if (local && timestampMatched) {
@@ -399,7 +524,7 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 					snapshot: local,
 					source: "localStorage+cookies",
 					repairedCookie: false,
-					debug: { localStorage: true, cookies: true, timestampMatched: true, repaired: false, ttl: 0 }
+					debug: { localStorage: true, cookies: true, timestampMatched: true, repaired: false, partial: false, ttl: 0 }
 				};
 			}
 			if (cookie) {
@@ -407,14 +532,21 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 					snapshot: cookie.snapshot,
 					source: "cookies",
 					repairedCookie: false,
-					debug: { localStorage: false, cookies: true, timestampMatched: true, repaired: false, ttl: 0 }
+					debug: {
+						localStorage: false,
+						cookies: true,
+						timestampMatched: true,
+						repaired: false,
+						partial: Boolean(cookie.meta.reduced),
+						ttl: 0
+					}
 				};
 			}
 			return {
 				snapshot: null,
 				source: "none",
 				repairedCookie: false,
-				debug: { localStorage: false, cookies: false, timestampMatched: false, repaired: false, ttl: 0 }
+				debug: { localStorage: false, cookies: false, timestampMatched: false, repaired: false, partial: false, ttl: 0 }
 			};
 		}
 
@@ -432,6 +564,9 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			freshPageId: freshPageId,
 			digest: digest,
 			boundedSnapshot: boundedSnapshot,
+			cookieMirror: cookieMirror,
+			maxScriptChars: MAX_SCRIPT_CHARS,
+			cookieScriptFloor: COOKIE_SCRIPT_FLOOR,
 			save: save,
 			load: load,
 			clear: clear

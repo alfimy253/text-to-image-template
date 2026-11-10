@@ -1511,6 +1511,87 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	}
 
 	/*
+	 * "timeline-<tablePageId>-row-<rowId>" -> { pageId, rowId }
+	 *
+	 * The timeline page id is BUILT from the table page id (batchRowMediaPageId),
+	 * so the way back to the table's store can always be recovered from it — even
+	 * when the transition payload was consumed and the saved project is gone,
+	 * which is exactly when a publish used to fail with "no table page store" and
+	 * the Back link used to drop pipelinePage and land on an empty page.
+	 */
+	function splitTimelinePageId(value) {
+		const text = String(value || "");
+		if (text.indexOf("timeline-") !== 0) return null;
+		const marker = "-row-";
+		const at = text.lastIndexOf(marker);
+		if (at <= "timeline-".length) return null;
+		const pageId = text.slice("timeline-".length, at);
+		const rowId = text.slice(at + marker.length);
+		if (!pageId || !rowId) return null;
+		return { pageId: pageId, rowId: rowId };
+	}
+
+	/*
+	 * The hand-back the pipeline store keeps.
+	 *
+	 * This is a SUMMARY, not the project: the timeline editor already persists
+	 * the whole thing under ytvs.timeline-editor.v1.<projectId> (localStorage)
+	 * and its own eight cookie chunks, and readTimelineEditorStateForRow() +
+	 * composeTimelineSummaryFromState() rebuild the text, graphics and audio
+	 * from there on the table side. Publishing the project a second time into
+	 * the table's four-cookie store is what blew its budget and made the store
+	 * shred the row's script to fit. What stays here is what only this store
+	 * knows: which row, which scene order, which length per scene.
+	 */
+	function compactTimelineEditForStorage(edit) {
+		if (!edit || typeof edit !== "object") return null;
+		const compact = {
+			v: Number(edit.v) || 1,
+			updatedAt: Number(edit.updatedAt) || Date.now(),
+			key: String(edit.key || ""),
+			pageId: String(edit.pageId || ""),
+			sourcePageId: String(edit.sourcePageId || ""),
+			rowId: String(edit.rowId || ""),
+			vid: String(edit.vid || ""),
+			durationSec: Number(edit.durationSec) || 0,
+			sceneCount: Number(edit.sceneCount) || 0,
+			clipCount: Number(edit.clipCount) || 0,
+			textCount: Number(edit.textCount) || 0,
+			videoStyle: String(edit.videoStyle || ""),
+			frame: {
+				width: Number(edit.frame && edit.frame.width) || 0,
+				height: Number(edit.frame && edit.frame.height) || 0,
+				resolution: String(edit.frame && edit.frame.resolution || ""),
+				orientation: String(edit.frame && edit.frame.orientation || "")
+			},
+			scenes: (Array.isArray(edit.scenes) ? edit.scenes : []).map(function (entry) {
+				return Array.isArray(entry) ? entry.slice(0, 3) : entry;
+			})
+		};
+		if (Array.isArray(edit.sceneItems) && edit.sceneItems.length) {
+			compact.sceneItems = edit.sceneItems.map(function (item) {
+				if (!item || typeof item !== "object") return null;
+				const out = {
+					id: String(item.id || ""),
+					slideId: String(item.slideId || ""),
+					i: Number(item.i),
+					a: String(item.a || ""),
+					t: Number(item.t) || 0,
+					s: Number(item.s) || 0,
+					d: Number(item.d) || 0,
+					tr: Number(item.tr) || 0,
+					f: Number(item.f) || 0,
+					v: Number(item.v) === 0 ? 0 : 1
+				};
+				/* A short name only: the full label lives in the timeline project. */
+				if (item.n) out.n = String(item.n).slice(0, 24);
+				return out;
+			}).filter(function (item) { return Boolean(item); });
+		}
+		return compact;
+	}
+
+	/*
 	 * Write the edit into the table page's store (localStorage + four cookies).
 	 * Called from the timeline tab; harmless on the table tab itself.
 	 */
@@ -1522,7 +1603,15 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			window.__TIMELINE_EDIT_PUBLISH__ = result;
 			return result;
 		}
-		const store = timelineEditStoreFor(payload.sourcePageId);
+		/* The table page is found by the hand-off's own page id, then by the timeline page id it was built from. */
+		const derived = splitTimelinePageId(edit.pageId) || splitTimelinePageId(payload && payload.key);
+		const sourcePageId = String(
+			(payload && payload.sourcePageId) ||
+			edit.sourcePageId ||
+			(derived && derived.pageId) ||
+			""
+		);
+		const store = timelineEditStoreFor(sourcePageId);
 		if (!store) {
 			result.reason = "the table page store is unavailable";
 			window.__TIMELINE_EDIT_PUBLISH__ = result;
@@ -1542,8 +1631,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		}
 		if (!Array.isArray(quickBatch.rows)) quickBatch.rows = [];
 		if (!snapshot.editor || typeof snapshot.editor !== "object") snapshot.editor = { projects: [] };
-		const rowId = String(payload.rowId || "").trim();
-		const vid = String(payload.vid || "").trim();
+		const rowId = String(
+			(payload && payload.rowId) ||
+			edit.rowId ||
+			(derived && derived.rowId) ||
+			""
+		).trim();
+		const vid = String((payload && payload.vid) || edit.vid || "").trim();
 		let row = quickBatch.rows.find(function (candidate) {
 			if (!candidate || typeof candidate !== "object") return false;
 			if (rowId && String(candidate.id) === rowId) return true;
@@ -1585,16 +1679,31 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			row = { id: rowId, vid: vid || store.pageId + "-row-" + rowId, script: String(payload.script || ""), stage: "ready" };
 			quickBatch.rows.push(row);
 		}
-		row.timeline = edit;
-		row.timelineKey = String(edit.key || payload.key || "");
+		/*
+		 * The row keeps the SUMMARY. The full project stays where the timeline
+		 * editor put it; applyTimelineEditToBatchRow() merges it back in from
+		 * there on restore, so nothing the table can rebuild is stored twice.
+		 */
+		const storedEdit = compactTimelineEditForStorage(edit) || edit;
+		row.timeline = storedEdit;
+		row.timelineKey = String(storedEdit.key || edit.key || payload.key || "");
 		row.timelineUpdatedAt = Number(edit.updatedAt) || Date.now();
 		if (edit.videoStyle) row.style = String(edit.videoStyle);
-		if (Array.isArray(edit.sceneItems) && edit.sceneItems.length) {
-			row.slideItems = edit.sceneItems.slice();
-			row.slides = edit.sceneItems.length;
+		if (Array.isArray(storedEdit.sceneItems) && storedEdit.sceneItems.length) {
+			/*
+			 * slideItems is the same list under another name; storing both is what
+			 * doubled every edited row. The row's slides are composed from the
+			 * edit, and composeBatchSlideItems() writes this field back on save.
+			 */
+			row.slides = storedEdit.sceneItems.length;
 		}
 		if (edit.projectDetail && typeof edit.projectDetail === "object") {
-			row.projectDetail = Object.assign({}, edit.projectDetail);
+			const detail = Object.assign({}, edit.projectDetail);
+			/* Recomposed from the row's slides on restore; never stored twice. */
+			delete detail.scenes;
+			delete detail.slides;
+			delete detail.elements;
+			row.projectDetail = detail;
 			if (edit.projectDetail.hasCompletedMedia) {
 				row.images = Math.max(Number(row.images) || 0, Number(edit.projectDetail.sceneCount) || 0);
 				if (Number(edit.projectDetail.audioCount) > 0 || (Array.isArray(edit.audios) && edit.audios.length > 0)) {
@@ -1695,6 +1804,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	window.publishTimelineEdit = publishTimelineEdit;
 	/* The name the timeline editor calls; it runs before this file's body ends. */
 	window.__PUBLISH_TIMELINE_EDIT__ = publishTimelineEdit;
+	window.compactTimelineEditForStorage = compactTimelineEditForStorage;
+	window.splitTimelinePageId = splitTimelinePageId;
+	window.requestedStudioLayout = requestedStudioLayout;
 	window.applyTimelineEditToBatchRow = applyTimelineEditToBatchRow;
 	window.reconcileTimelineEdits = reconcileTimelineEdits;
 	window.composeBatchProjectDetail = composeBatchProjectDetail;
@@ -8835,6 +8947,25 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		try {
 			return new URLSearchParams(window.location.search || "").get("layout") === "timeline";
 		} catch (error) { return false; }
+	}
+
+	/*
+	 * Session 333: an explicit ?layout= in the address bar is a request, and it
+	 * wins over the layout the page's store happens to remember.
+	 *
+	 * The timeline editor's "← Quick Batch" link navigates to
+	 * ?layout=table&pipelinePage=<the table's page>. Until now nothing read that
+	 * parameter: restorePipelineManagementState() put the page back into whatever
+	 * layout the snapshot was last saved with ("editor" for any page that had
+	 * ever been in the editor), so the same click sometimes landed on the Quick
+	 * Batch table and sometimes on the editor accordion. The timeline route is
+	 * handled by timelineEditorRouteRequested() and is not this function's business.
+	 */
+	function requestedStudioLayout() {
+		try {
+			const name = new URLSearchParams(window.location.search || "").get("layout");
+			return name === "table" || name === "editor" ? name : "";
+		} catch (error) { return ""; }
 	}
 
 	function activateTimelineEditorLayout() {
@@ -26054,6 +26185,17 @@ async function retryImagePromptFlow(n) {
 			pipelineManagementRestoring = false;
 		}
 		restorePipelineManagementState();
+		/*
+		 * Session 333: the URL's own layout request is applied AFTER the restore,
+		 * so it wins over the stored layout exactly once — on the navigation that
+		 * carried it. Afterwards the [data-layout] switch and the stored layout
+		 * rule again, so a later storage-event restore never yanks the user back
+		 * to a layout they have already clicked away from.
+		 */
+		const requestedLayout = requestedStudioLayout();
+		if (requestedLayout) {
+			try { setStudioLayout(requestedLayout); } catch (layoutError) { }
+		}
 		/*
 		 * Session 331: rows that finished a render or export in the last 24 h
 		 * are put back on the page (five per page); anything older is deleted

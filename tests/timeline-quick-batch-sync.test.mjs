@@ -822,3 +822,278 @@ test("Req 1 & 2 & 4: cross-page blank rows purge on startup and live storage rec
 	assert.equal(tr.querySelector('[data-batch-action="edit"]').disabled, false);
 	assert.equal(w.document.getElementById("batch-generate").disabled, false);
 });
+
+/*
+ * Session 333 — the two faults behind "the link to the quick batch table is not
+ * redirected to the layout always" and "the rows are malformed (script was
+ * deleted and few chars were only left)".
+ */
+
+function activeLayoutOf(w) {
+	if (w.document.getElementById("view-table").classList.contains("active")) return "table";
+	if (w.document.getElementById("view-editor").classList.contains("active")) return "editor";
+	return "none";
+}
+
+function narration(w, topic, chars) {
+	const beat = "Beat for " + topic + ": the narrator walks the market at dawn and describes the light. ";
+	let text = "";
+	while (text.length < chars) text += beat;
+	return text.slice(0, chars);
+}
+
+test("Session 333: the Back link's ?layout=table wins over the layout the page store remembers", async (t) => {
+	const pageId = "pg_layout_333";
+	const localStorage = makeMemoryStorage();
+	const sessionStorage = makeMemoryStorage();
+	const cookieJar = makeCookieJar();
+
+	/* The table page was last saved in the EDITOR layout. */
+	const seed = bootWindow({
+		url: "https://studio.test/free?pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar
+	});
+	t.after(() => seed.dom.window.close());
+	seed.w.setStudioLayout("editor");
+	const row = seed.w.__BATCH_ROWS[0];
+	row.script = "A script for the row the timeline was opened from.";
+	seed.w.persistPipelineManagementState("seed-editor-layout");
+	assert.equal(JSON.parse(localStorage.getItem("ytvs.pipeline-management.v1." + pageId)).layout, "editor");
+
+	/* ← Quick Batch navigates to ?layout=table&pipelinePage=<the table page>. */
+	const back = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar
+	});
+	t.after(() => back.dom.window.close());
+	assert.equal(back.w.requestedStudioLayout(), "table", "the URL's layout request is read");
+	assert.equal(activeLayoutOf(back.w), "table", "the page opens on the Quick Batch table, not the stored editor layout");
+	assert.ok(back.w.getBatchRow(row.id), "and it is the SAME page's rows, not a fresh page id");
+
+	/* The request is spent on that navigation: it must not fight the user afterwards. */
+	back.w.setStudioLayout("editor");
+	assert.equal(activeLayoutOf(back.w), "editor", "the layout switch still works");
+	back.w.dispatchEvent(new back.w.StorageEvent("storage", { key: "ytvs.pipeline-management.v1." + pageId }));
+	assert.equal(activeLayoutOf(back.w), "editor", "a later restore does not yank the user back to the URL's layout");
+});
+
+test("Session 333: a long script survives the timeline hand-back and the reload whole", async (t) => {
+	const pageId = "pg_script_333";
+	const localStorage = makeMemoryStorage();
+	const sessionStorage = makeMemoryStorage();
+	const cookieJar = makeCookieJar();
+	const idb = makeMemoryIndexedDB();
+	let openedHref = "";
+
+	const table = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar, indexedDB: idb.factory, loadTimeline: true,
+		prepare(w) { w.open = (href) => { openedHref = String(href); return null; }; }
+	});
+	t.after(() => table.dom.window.close());
+	table.w.setStudioLayout("table");
+	const row = table.w.__BATCH_ROWS[0];
+	row.script = narration(table.w, "market dawn", 1400);
+	row.style = "Neon Night";
+	finishRow(table.w, row);
+	table.w.addBatchRow({ script: narration(table.w, "harbour lights", 1400), style: "Neon Night" });
+	table.w.renderBatchTable();
+	table.w.persistPipelineManagementState("seed-long-scripts");
+
+	const seeded = JSON.parse(localStorage.getItem("ytvs.pipeline-management.v1." + pageId));
+	assert.deepEqual(
+		seeded.quickBatch.rows.map((stored) => stored.script.length),
+		[1400, 1400],
+		"localStorage keeps the whole script before any edit"
+	);
+
+	table.w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="edit"]').click();
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	assert.match(openedHref, /layout=timeline/);
+
+	const tl = bootWindow({
+		url: "https://studio.test" + openedHref,
+		localStorage, sessionStorage, cookieJar, indexedDB: idb.factory, loadTimeline: true
+	});
+	t.after(() => tl.dom.window.close());
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	const api = tl.w.__TIMELINE_EDITOR__;
+	const media = tl.w.__TIMELINE_EDITOR_STATE__.tracks.find((track) => track.id === "background-media");
+	api.setItemTiming(media.items[0].id, 0, 8.5);
+	api.addTextElement("Morning Harvest");
+	assert.equal(api.save(), true);
+	tl.w.document.getElementById("timeline-back").click();
+	assert.equal(tl.w.__TIMELINE_EDIT_PUBLISH__.ok, true, JSON.stringify(tl.w.__TIMELINE_EDIT_PUBLISH__));
+
+	/* The hand-back is a summary: it must not carry the project a second time. */
+	const published = JSON.parse(localStorage.getItem("ytvs.pipeline-management.v1." + pageId));
+	const publishedRow = published.quickBatch.rows.find((stored) => String(stored.id) === String(row.id));
+	assert.equal(publishedRow.timeline.visuals, undefined, "the mirror keeps no text/graphic list");
+	assert.equal(publishedRow.timeline.audios, undefined, "the mirror keeps no audio list");
+	assert.equal(publishedRow.timeline.projectDetail, undefined, "the mirror keeps no project detail");
+	assert.equal(publishedRow.timeline.scenes.length, 12, "but it keeps the scene order and lengths");
+	assert.deepEqual(
+		published.quickBatch.rows.map((stored) => stored.script.length),
+		[1400, 1400],
+		"the edit did not cost either row its script"
+	);
+	for (let index = 1; index <= 4; index++) {
+		const name = "ytvs_pipeline_management_" + pageId + "_" + index;
+		const part = cookieJar.cookie.split("; ").find((entry) => entry.startsWith(name + "="));
+		assert.ok(part, "cookie chunk " + index + " was written");
+		assert.ok(part.length <= 3800, "cookie chunk " + index + " is inside the browser limit");
+	}
+
+	/* The reload the Back link performs. */
+	const returned = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar, indexedDB: idb.factory, loadTimeline: true
+	});
+	t.after(() => returned.dom.window.close());
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	assert.equal(activeLayoutOf(returned.w), "table", "the reload lands on the Quick Batch table");
+	const returnedRow = returned.w.getBatchRow(row.id);
+	assert.ok(returnedRow, "the edited row is back");
+	assert.equal(returnedRow.script.length, 1400, "the script came back whole, not a few characters");
+	assert.equal(returnedRow.script, row.script, "and it is the same text");
+	assert.equal(returnedRow.timelineEdited, true, "the timeline edit came back with it");
+	assert.equal(returnedRow.slides.length, 12, "its slides were composed from the edit");
+	const scriptCell = returned.w.document.querySelector('[data-batch-row="' + returnedRow.id + '"] [data-batch-field="script"]');
+	assert.equal(scriptCell.value.length, 1400, "the row's script box shows the whole script");
+});
+
+test("Session 333: when the snapshot outgrows four cookies the mirror sheds weight, never a script", (t) => {
+	const pageId = "pg_mirror_333";
+	const localStorage = makeMemoryStorage();
+	const cookieJar = makeCookieJar();
+	const { dom, w } = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, cookieJar
+	});
+	t.after(() => dom.window.close());
+
+	const store = w.__PIPELINE_MANAGEMENT_STORE_FACTORY__(w, pageId);
+	const rows = Array.from({ length: 8 }, (_, index) => {
+		const id = String(index + 1);
+		const slideItems = Array.from({ length: 12 }, (_, scene) => ({
+			id: "batch-" + id + "-img-" + scene, slideId: "batch-" + id + "-img-" + scene, i: scene,
+			a: "scene-" + (scene + 1), n: "Scene " + (scene + 1) + " of a finished video",
+			m: "pixabay-media-file-" + scene + ".jpg", src: "pixabay",
+			t: scene % 3 === 0 ? 1 : 0, s: scene * 5, d: 5, tr: 0, f: 0, v: 1
+		}));
+		return {
+			id, vid: pageId + "-row-" + id, script: narration(w, "row " + id, 2550), stage: "done",
+			style: "Neon Night", mp3: true, animated: true, finished: true, images: 12, slides: 12,
+			slideItems,
+			projectDetail: {
+				id, rowId: id, style: "Neon Night", sceneCount: 12, slideCount: 12, hasCompletedMedia: true,
+				scenes: Array.from({ length: 12 }, (_, scene) => ({ id: "scene-" + (scene + 1), index: scene, name: "Scene " + (scene + 1), durationSec: 5, effects: ["grain", "vignette"] }))
+			},
+			timeline: {
+				v: 1, updatedAt: Date.now(), key: "ytvs.timeline-editor.v1.timeline-" + pageId + "-row-" + id,
+				pageId: "timeline-" + pageId + "-row-" + id, sourcePageId: pageId, rowId: id,
+				durationSec: 60, sceneCount: 12, clipCount: 4, textCount: 1, videoStyle: "Neon Night",
+				scenes: Array.from({ length: 12 }, (_, scene) => [scene, 5, scene % 3 === 0 ? 1 : 0]),
+				sceneItems: slideItems,
+				visuals: [{ id: "text-1", k: "t", trId: "text-1", scId: "scene-1", s: 0, d: 4, tx: "Morning Harvest", v: 1 }],
+				audios: [{ id: "audio-1", trId: "soundtrack", a: "voiceover", n: "Row voiceover", s: 0, d: 60, vol: 1, m: 0 }],
+				projectDetail: { id, rowId: id, style: "Neon Night", sceneCount: 12 }
+			}
+		};
+	});
+
+	const saved = store.save({
+		version: 1, pageId, updatedAt: Date.now(), layout: "table",
+		quickBatch: { runBusy: false, queued: [], finishedCount: 8, rows },
+		editor: { projects: [] }
+	});
+	assert.equal(saved.ok, true, JSON.stringify(saved));
+	assert.equal(saved.cookies, 4, "all four chunks were written");
+	assert.equal(saved.timestampMatched, true, "both tiers verified");
+	assert.equal(saved.mirrorReduced, true, "the snapshot was bigger than the cookie budget");
+
+	const local = JSON.parse(localStorage.getItem(store.localStorageKey));
+	assert.deepEqual(
+		local.quickBatch.rows.map((stored) => stored.script.length),
+		rows.map((row) => row.script.length),
+		"localStorage kept all eight scripts in full"
+	);
+
+	const chunks = [];
+	for (let index = 1; index <= 4; index++) {
+		const name = store.cookieNames[index - 1];
+		const part = cookieJar.cookie.split("; ").find((entry) => entry.startsWith(name + "="));
+		assert.ok(part, "chunk " + index + " exists");
+		assert.ok(part.length <= 3800, "chunk " + index + " is inside the browser limit");
+		chunks.push(JSON.parse(decodeURIComponent(part.slice(name.length + 1))));
+	}
+	chunks.sort((a, b) => a.i - b.i);
+	const mirror = JSON.parse(chunks.map((chunk) => chunk.d).join(""));
+	assert.equal(mirror.quickBatch.rows.length, 8, "the mirror still lists every row");
+	const mirrorScripts = mirror.quickBatch.rows.map((stored) => stored.script.length);
+	assert.ok(
+		mirrorScripts.every((length) => length >= store.cookieScriptFloor),
+		"no script was cut below the floor: " + JSON.stringify(mirrorScripts)
+	);
+	assert.ok(
+		mirror.quickBatch.rows.every((stored) => Array.isArray(stored.timeline.scenes) && stored.timeline.scenes.length === 12),
+		"every row kept its edited scene order and lengths"
+	);
+
+	/* A reload with no localStorage at all still finds eight whole rows. */
+	localStorage.removeItem(store.localStorageKey);
+	const loaded = store.load();
+	assert.equal(loaded.source, "cookies");
+	assert.equal(loaded.debug.partial, true, "and it says the mirror had to shed weight");
+	assert.equal(loaded.snapshot.quickBatch.rows.length, 8);
+	assert.ok(
+		loaded.snapshot.quickBatch.rows.every((stored) => String(stored.script || "").length >= store.cookieScriptFloor),
+		"a cookie-only reload never shows a row with a shredded script"
+	);
+});
+
+test("Session 333: the hand-back finds its table page from the timeline page id alone", async (t) => {
+	const pageId = "pg_derived_333";
+	const localStorage = makeMemoryStorage();
+	const sessionStorage = makeMemoryStorage();
+	const cookieJar = makeCookieJar();
+
+	/*
+	 * A timeline tab that lost both the handoff payload and its saved project:
+	 * state.sourcePageId is empty, and only the page id still knows the way back.
+	 */
+	const tl = bootWindow({
+		url: "https://studio.test/free?layout=timeline&pipelinePage=timeline-" + pageId + "-row-2",
+		localStorage, sessionStorage, cookieJar, loadTimeline: true
+	});
+	t.after(() => tl.dom.window.close());
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	assert.equal(tl.w.__TIMELINE_EDITOR_STATE__.sourcePageId, "", "the saved project carries no source page");
+
+	const tableStore = tl.w.__PIPELINE_MANAGEMENT_STORE_FACTORY__(tl.w, pageId);
+	const seedSave = tableStore.save({
+		version: 1, pageId, updatedAt: Date.now(), layout: "table",
+		quickBatch: {
+			runBusy: false, queued: [], finishedCount: 0,
+			rows: [{ id: "2", vid: pageId + "-row-2", script: "The row this timeline was opened from.", stage: "ready" }]
+		},
+		editor: { projects: [] }
+	});
+	assert.equal(seedSave.ok, true, JSON.stringify(seedSave));
+
+	tl.w.document.getElementById("timeline-back").click();
+	const publish = tl.w.__TIMELINE_EDIT_PUBLISH__;
+	assert.ok(publish, "the Back button published");
+	assert.equal(publish.ok, true, JSON.stringify(publish));
+	assert.equal(publish.pageId, pageId, "the edit landed in the TABLE page's store");
+	assert.equal(publish.rows, 1, "into the row that was already there, not a new one");
+
+	const stored = JSON.parse(localStorage.getItem("ytvs.pipeline-management.v1." + pageId));
+	assert.equal(stored.quickBatch.rows.length, 1);
+	assert.ok(stored.quickBatch.rows[0].timeline, "the row carries the edit");
+	assert.equal(stored.quickBatch.rows[0].script, "The row this timeline was opened from.", "and keeps its script");
+	/* Realm note: an object built inside the JSDOM window has that realm's prototype. */
+	const derived = tl.w.splitTimelinePageId("timeline-" + pageId + "-row-2");
+	assert.equal(derived.pageId, pageId, "the table page id is read back out of the timeline page id");
+	assert.equal(derived.rowId, "2", "and so is the row id");
+});
