@@ -77,75 +77,876 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		} catch (editorError) { }
 	}
 
+	const BATCH_TIMELINE_STATE_PREFIX =
+		"ytvs.timeline-editor.v1.";
+
+	const BATCH_TIMELINE_COOKIE_PREFIX =
+		"ytvs_timeline_editor_";
+
+	const BATCH_TIMELINE_COOKIE_CHUNKS =
+		8;
+
+	function batchTimelineSafeId(value) {
+		return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "default";
+	}
+
+	function deleteBatchCookie(name) {
+		if (!name || typeof window === "undefined" || !window.document) return;
+		try {
+			window.document.cookie = name + "=; Max-Age=0; Path=/; SameSite=Lax";
+			window.document.cookie = name + "=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax";
+		} catch (error) { }
+	}
+
+	function batchTimelinePageIdForRow(rowOrId, explicitKey) {
+		const rawKey = String(
+			explicitKey ||
+			(rowOrId && typeof rowOrId === "object" ? (rowOrId.timelineKey || (rowOrId.timeline && rowOrId.timeline.key) || (rowOrId.timeline && rowOrId.timeline.pageId) || (rowOrId.projectDetail && rowOrId.projectDetail.targetPageId)) : "") ||
+			""
+		);
+		if (rawKey.indexOf(BATCH_TIMELINE_STATE_PREFIX) === 0) {
+			return rawKey.slice(BATCH_TIMELINE_STATE_PREFIX.length);
+		}
+		if (rawKey && rawKey.indexOf(".") === -1) return rawKey;
+		const id = rowOrId && typeof rowOrId === "object" ? rowOrId.id : rowOrId;
+		if (id == null || String(id).trim() === "") return "";
+		return ("timeline-" + String(pipelineManagementStore.pageId || "local") + "-row-" + String(id)).replace(/[^a-zA-Z0-9_-]/g, "");
+	}
+
+	function readTimelineCookiesForPageId(targetPageId) {
+		try {
+			if (!targetPageId || typeof window === "undefined" || !window.document) return null;
+			const safePage = batchTimelineSafeId(targetPageId);
+			const prefix = BATCH_TIMELINE_COOKIE_PREFIX + safePage + "_";
+			const parts = String(window.document.cookie || "").split(";");
+			const metas = [];
+			let total = 0;
+			for (const part of parts) {
+				const entry = part.trim();
+				const equal = entry.indexOf("=");
+				if (equal < 0) continue;
+				const name = entry.slice(0, equal);
+				if (name.indexOf(prefix) !== 0) continue;
+				const meta = JSON.parse(decodeURIComponent(entry.slice(equal + 1)));
+				if (!meta || meta.v !== 1 || meta.p !== safePage) return null;
+				if (!total) total = Number(meta.n) || 0;
+				if (Number(meta.n) !== total) return null;
+				metas.push(meta);
+			}
+			if (!total || metas.length !== total) return null;
+			metas.sort(function (a, b) { return a.i - b.i; });
+			const ts = metas[0].t;
+			const hash = metas[0].h;
+			let joined = "";
+			for (let i = 0; i < metas.length; i++) {
+				if (metas[i].i !== i + 1 || metas[i].t !== ts || metas[i].h !== hash) return null;
+				joined += String(metas[i].d || "");
+			}
+			const parsed = JSON.parse(joined);
+			return parsed && parsed.projectId === targetPageId ? parsed : null;
+		} catch (error) {
+			return null;
+		}
+	}
+
+	function readTimelineEditorStateForRow(row) {
+		if (!row) return null;
+		const targetPageId = batchTimelinePageIdForRow(row);
+		if (!targetPageId) return null;
+		let localState = null;
+		try {
+			localState = JSON.parse(window.localStorage.getItem(BATCH_TIMELINE_STATE_PREFIX + targetPageId) || "null");
+			if (!localState || localState.projectId !== targetPageId) localState = null;
+		} catch (error) { localState = null; }
+		const cookieState = readTimelineCookiesForPageId(targetPageId);
+		if (localState && cookieState) {
+			return Number(cookieState.updatedAt || 0) > Number(localState.updatedAt || 0) ? cookieState : localState;
+		}
+		return localState || cookieState || null;
+	}
+
+	function composeTimelineSummaryFromState(timelineState, row) {
+		if (!timelineState || typeof timelineState !== "object") return null;
+		const tracks = Array.isArray(timelineState.tracks) ? timelineState.tracks : [];
+		const mediaTrack = tracks.find(function (track) { return track && (track.id === "background-media" || track.kind === "media"); }) || null;
+		const mediaItems = (mediaTrack && Array.isArray(mediaTrack.items) ? mediaTrack.items : [])
+			.slice()
+			.sort(function (a, b) { return pipelineManagementNumber(a && a.startSec, 0) - pipelineManagementNumber(b && b.startSec, 0); });
+		const scenesList = Array.isArray(timelineState.scenes) ? timelineState.scenes : [];
+		const entries = [];
+		const sceneItems = [];
+		mediaItems.forEach(function (item, idx) {
+			if (!item) return;
+			let mediaIndex = trailingDigits(item.sceneId);
+			if (mediaIndex < 0) mediaIndex = trailingDigits(item.assetId);
+			if (mediaIndex > 0) mediaIndex -= 1;
+			else if (mediaIndex === 0) mediaIndex = -1;
+			const scene = scenesList.find(function (candidate) { return String(candidate && candidate.id || "") === String(item.sceneId || ""); }) || scenesList[idx] || null;
+			const mediaType = String(item.mediaType || (scene && scene.mediaType) || "image");
+			const typeCode = mediaType === "video" ? 1 : mediaType === "gif" ? 2 : 0;
+			const startSec = Math.round(Math.max(0, pipelineManagementNumber(item.startSec, 0)) * 1000) / 1000;
+			const durationSec = Math.round(Math.max(0.1, pipelineManagementNumber(item.durationSec, 1)) * 1000) / 1000;
+			entries.push([mediaIndex, durationSec, typeCode]);
+			sceneItems.push({
+				id: String(item.sceneId || (scene && scene.id) || ("scene-" + (idx + 1))),
+				slideId: String(item.id || ("slide-" + (idx + 1))),
+				i: mediaIndex,
+				a: String(item.assetId || (scene && scene.mediaAssetId) || ""),
+				n: String((scene && scene.name) || item.label || ("Scene " + (idx + 1))).slice(0, 60),
+				m: String(item.label || (scene && scene.mediaName) || "").slice(0, 60),
+				src: String(item.mediaSource || (scene && scene.mediaSource) || "").slice(0, 24),
+				t: typeCode,
+				s: startSec,
+				d: durationSec,
+				tr: Math.round(Math.max(0, pipelineManagementNumber(item.trimStartSec, 0)) * 1000) / 1000,
+				f: item.fit === "contain" ? 1 : 0,
+				v: item.visible === false ? 0 : 1
+			});
+		});
+		const visuals = [];
+		const audios = [];
+		tracks.forEach(function (track) {
+			if (!track || !Array.isArray(track.items)) return;
+			if (track.kind === "visual") {
+				track.items.forEach(function (item) {
+					if (!item) return;
+					visuals.push({
+						id: String(item.id || ""),
+						k: item.kind === "graphic" ? "g" : "t",
+						trId: String(track.id || ""),
+						scId: String(item.sceneId || ""),
+						pId: String(item.parentId || ""),
+						s: Math.round(Math.max(0, pipelineManagementNumber(item.startSec, 0)) * 1000) / 1000,
+						d: Math.round(Math.max(0.1, pipelineManagementNumber(item.durationSec, 1)) * 1000) / 1000,
+						x: pipelineManagementNumber(item.x, 50),
+						y: pipelineManagementNumber(item.y, item.kind === "graphic" ? 50 : 78),
+						sz: item.kind === "graphic" ? pipelineManagementNumber(item.size, 72) : pipelineManagementNumber(item.fontSize, 28),
+						c: String(item.color || ""),
+						v: item.visible === false ? 0 : 1,
+						tx: item.kind === "text" ? String(item.text || "").slice(0, 120) : undefined,
+						gr: item.kind === "graphic" ? String(item.graphic || "circle") : undefined
+					});
+				});
+			} else if (track.kind === "audio") {
+				track.items.forEach(function (item) {
+					if (!item) return;
+					audios.push({
+						id: String(item.id || ""),
+						trId: String(track.id || ""),
+						a: String(item.assetId || ""),
+						n: String(item.label || "").slice(0, 50),
+						s: Math.round(Math.max(0, pipelineManagementNumber(item.startSec, 0)) * 1000) / 1000,
+						d: Math.round(Math.max(0.1, pipelineManagementNumber(item.durationSec, 1)) * 1000) / 1000,
+						vol: pipelineManagementNumber(item.volume, 1),
+						m: item.muted ? 1 : 0
+					});
+				});
+			}
+		});
+		const pageId = String(timelineState.projectId || batchTimelinePageIdForRow(row) || "");
+		const totalDuration = Math.round(Math.max(0, pipelineManagementNumber(timelineState.durationSec, 0)) * 1000) / 1000;
+		return {
+			v: 1,
+			updatedAt: pipelineManagementNumber(timelineState.updatedAt, Date.now()),
+			key: pageId ? BATCH_TIMELINE_STATE_PREFIX + pageId : String(row && row.timelineKey || ""),
+			pageId: pageId,
+			sourcePageId: String(timelineState.sourcePageId || pipelineManagementStore.pageId || ""),
+			rowId: String(timelineState.sourceRowId || (row && row.id) || ""),
+			vid: String(timelineState.sourceVid || (row && row.vid) || ""),
+			durationSec: totalDuration,
+			sceneCount: entries.length,
+			clipCount: entries.filter(function (entry) { return entry[2] === 1; }).length,
+			textCount: visuals.length,
+			videoStyle: String(timelineState.videoStyle || (row && row.style) || ""),
+			frame: timelineState.frame || { width: 0, height: 0 },
+			scenes: entries,
+			sceneItems: sceneItems,
+			visuals: visuals,
+			audios: audios,
+			projectDetail: timelineState.projectDetail && typeof timelineState.projectDetail === "object"
+				? Object.assign({}, timelineState.projectDetail)
+				: undefined
+		};
+	}
+
+	function batchRowHasCompletedImages(row) {
+		if (!row) return false;
+		const images = Array.isArray(row.images) ? row.images : [];
+		if (images.length >= AUTO_MEDIA_TOTAL) return true;
+		if (row.timelineEdited && images.length > 0) return true;
+		if (Number(row._storedImagesCount) >= AUTO_MEDIA_TOTAL) return true;
+		if (row.projectDetail && row.projectDetail.hasCompletedMedia) return true;
+		if (row._storedFinished && Number(row._storedImagesCount) > 0) return true;
+		return false;
+	}
+
+	function batchRowTimelineUpdatedAt(row) {
+		if (!row) return 0;
+		return Math.max(
+			0,
+			Number(row.timelineUpdatedAt) || 0,
+			Number(row.timeline && row.timeline.updatedAt) || 0
+		);
+	}
+
+	function batchRowTimelinePendingRegen(row) {
+		if (!row || !row.timelineEdited) return false;
+		const updatedAt = batchRowTimelineUpdatedAt(row);
+		if (!updatedAt) return false;
+		const regeneratedAt = Number(row._timelineRegeneratedAt) || 0;
+		return updatedAt > regeneratedAt;
+	}
+
+	function composeBatchSlideItems(row) {
+		if (!row) return [];
+		const slides = Array.isArray(row.slides) ? row.slides : [];
+		if (slides.length) {
+			let cursor = 0;
+			return slides.map(function (slide, idx) {
+				const dur = Math.round(Math.max(0.1, slideDurationSec(slide)) * 1000) / 1000;
+				const startSec = slide && slide.startSec != null ? Math.round(Math.max(0, Number(slide.startSec) || 0) * 1000) / 1000 : Math.round(cursor * 1000) / 1000;
+				cursor = startSec + dur;
+				const namedIdx = Number.isInteger(slide && slide.imageIndex)
+					? Number(slide.imageIndex)
+					: (Number.isInteger(slide && slide.mediaIndex) ? Number(slide.mediaIndex) : trailingDigits(slide && slide.id));
+				const typeCode = slide && slide.type === "mp4" ? 1 : (slide && slide.type === "gif" ? 2 : 0);
+				return {
+					id: String(slide && slide.sceneId || ("scene-" + (idx + 1))),
+					slideId: String(slide && slide.id || ("slide-" + (idx + 1))),
+					i: namedIdx,
+					a: String(slide && slide.assetId || (namedIdx >= 0 ? "scene-" + (namedIdx + 1) : "")),
+					n: String(slide && slide.name || ("Scene " + (idx + 1))).slice(0, 60),
+					t: typeCode,
+					s: startSec,
+					d: dur,
+					tr: Math.round(Math.max(0, Number(slide && slide.trimStartSec) || 0) * 1000) / 1000,
+					f: slide && slide.fit === "contain" ? 1 : 0,
+					v: slide && slide.visible === false ? 0 : 1
+				};
+			});
+		}
+		if (row.timeline && Array.isArray(row.timeline.sceneItems) && row.timeline.sceneItems.length) {
+			return row.timeline.sceneItems.slice();
+		}
+		if (Array.isArray(row.slideItems) && row.slideItems.length) {
+			return row.slideItems.slice();
+		}
+		return [];
+	}
+
+	function composeBatchProjectDetail(row, timelineStateOverride) {
+		if (!row) return null;
+		const edit = row.timeline && typeof row.timeline === "object" ? row.timeline : null;
+		const editDetail = edit && edit.projectDetail && typeof edit.projectDetail === "object" ? edit.projectDetail : null;
+		const existing = row.projectDetail && typeof row.projectDetail === "object" ? row.projectDetail : null;
+		const style = String(
+			row.style ||
+			(timelineStateOverride && timelineStateOverride.videoStyle) ||
+			(edit && edit.videoStyle) ||
+			(editDetail && editDetail.style) ||
+			(existing && existing.style) ||
+			"Cinematic Film"
+		);
+		const effects = typeof window.__videoStyleEffects === "function" ? window.__videoStyleEffects(style) : [];
+		const effectLabelText = typeof window.__videoStyleEffectLabel === "function" ? window.__videoStyleEffectLabel(effects) : "";
+		const frame = (timelineStateOverride && timelineStateOverride.frame) ||
+			(edit && edit.frame && Number(edit.frame.width) > 0 && Number(edit.frame.height) > 0 ? edit.frame : null) ||
+			(typeof batchRowDimensions === "function" ? batchRowDimensions(row) : { width: 1024, height: 576 });
+		let detailScenes = [];
+		let slides = [];
+		let elements = [];
+		if (timelineStateOverride && Array.isArray(timelineStateOverride.scenes) && timelineStateOverride.scenes.length) {
+			detailScenes = timelineStateOverride.scenes.map(function (scene, idx) {
+				const sceneElements = Array.isArray(scene && scene.elements) ? scene.elements.slice() : [];
+				return {
+					id: String(scene && scene.id || ("scene-" + (idx + 1))),
+					index: Number(scene && scene.index != null ? scene.index : idx),
+					name: String(scene && scene.name || ("Scene " + (idx + 1))),
+					mediaType: String(scene && scene.mediaType || "image"),
+					mediaAssetId: String(scene && scene.mediaAssetId || ""),
+					mediaName: String(scene && scene.mediaName || ""),
+					mediaSource: String(scene && scene.mediaSource || ""),
+					startSec: Math.round(Math.max(0, pipelineManagementNumber(scene && scene.startSec, 0)) * 1000) / 1000,
+					durationSec: Math.round(Math.max(0, pipelineManagementNumber(scene && scene.durationSec, 0)) * 1000) / 1000,
+					fit: String(scene && scene.fit || "cover"),
+					trimStartSec: Math.round(Math.max(0, pipelineManagementNumber(scene && scene.trimStartSec, 0)) * 1000) / 1000,
+					visible: scene ? scene.visible !== false : true,
+					videoStyle: style,
+					effects: Array.isArray(scene && scene.effects) ? scene.effects.slice() : effects.slice(),
+					elements: sceneElements
+				};
+			});
+			const visualTracks = (Array.isArray(timelineStateOverride.tracks) ? timelineStateOverride.tracks : [])
+				.filter(function (track) { return track && track.kind === "visual"; });
+			visualTracks.forEach(function (track) {
+				(track.items || []).forEach(function (item) {
+					if (!item) return;
+					elements.push({
+						id: String(item.id || ""),
+						kind: String(item.kind || "text"),
+						trackId: String(track.id || ""),
+						sceneId: String(item.sceneId || ""),
+						startSec: pipelineManagementNumber(item.startSec, 0),
+						durationSec: pipelineManagementNumber(item.durationSec, 0),
+						text: item.kind === "text" ? String(item.text || "").slice(0, 120) : "",
+						graphic: item.kind === "graphic" ? String(item.graphic || "circle") : ""
+					});
+				});
+			});
+		} else {
+			const sceneItems = edit && Array.isArray(edit.sceneItems) && edit.sceneItems.length
+				? edit.sceneItems
+				: composeBatchSlideItems(row);
+			if (edit && Array.isArray(edit.visuals)) {
+				elements = edit.visuals.map(function (vis) {
+					return {
+						id: String(vis && vis.id || ""),
+						kind: vis && vis.k === "g" ? "graphic" : "text",
+						trackId: String(vis && vis.trId || "visual-1"),
+						sceneId: String(vis && vis.scId || ""),
+						startSec: pipelineManagementNumber(vis && vis.s, 0),
+						durationSec: pipelineManagementNumber(vis && vis.d, 0),
+						text: vis && vis.k === "g" ? "" : String(vis && vis.tx || ""),
+						graphic: vis && vis.k === "g" ? String(vis && vis.gr || "circle") : ""
+					};
+				});
+			} else if (editDetail && Array.isArray(editDetail.elements)) {
+				elements = editDetail.elements.slice();
+			} else if (existing && Array.isArray(existing.elements)) {
+				elements = existing.elements.slice();
+			}
+			if (sceneItems.length) {
+				let cursor = 0;
+				detailScenes = sceneItems.map(function (item, idx) {
+					const dur = Math.round(Math.max(0.1, pipelineManagementNumber(item && item.d, 1)) * 1000) / 1000;
+					const startSec = item && item.s != null ? Math.round(Math.max(0, pipelineManagementNumber(item.s, 0)) * 1000) / 1000 : Math.round(cursor * 1000) / 1000;
+					cursor = startSec + dur;
+					const sceneId = String(item && item.id || ("scene-" + (idx + 1)));
+					const mediaType = Number(item && item.t) === 1 ? "video" : Number(item && item.t) === 2 ? "gif" : "image";
+					const sceneElements = elements.filter(function (el) { return String(el.sceneId || "") === sceneId; });
+					return {
+						id: sceneId,
+						index: idx,
+						name: String(item && item.n || ("Scene " + (idx + 1))),
+						mediaType: mediaType,
+						mediaAssetId: String(item && item.a || ""),
+						mediaName: String(item && item.m || ""),
+						mediaSource: String(item && item.src || ""),
+						startSec: startSec,
+						durationSec: dur,
+						fit: Number(item && item.f) === 1 ? "contain" : "cover",
+						trimStartSec: Math.round(Math.max(0, pipelineManagementNumber(item && item.tr, 0)) * 1000) / 1000,
+						visible: Number(item && item.v) !== 0,
+						videoStyle: style,
+						effects: effects.slice(),
+						elements: sceneElements
+					};
+				});
+			} else if (edit && Array.isArray(edit.scenes) && edit.scenes.length) {
+				let cursor = 0;
+				detailScenes = edit.scenes.map(function (entry, idx) {
+					const dur = Math.round(Math.max(0.1, pipelineManagementNumber(entry && entry[1], 1)) * 1000) / 1000;
+					const startSec = Math.round(cursor * 1000) / 1000;
+					cursor += dur;
+					const typeCode = Number(entry && entry[2]);
+					const mediaIndex = Number(entry && entry[0]);
+					return {
+						id: mediaIndex >= 0 ? "scene-" + (mediaIndex + 1) : "scene-" + (idx + 1),
+						index: idx,
+						name: "Scene " + (idx + 1),
+						mediaType: typeCode === 1 ? "video" : typeCode === 2 ? "gif" : "image",
+						mediaAssetId: mediaIndex >= 0 ? "scene-" + (mediaIndex + 1) : "",
+						startSec: startSec,
+						durationSec: dur,
+						videoStyle: style,
+						effects: effects.slice(),
+						elements: []
+					};
+				});
+			} else if (editDetail && Array.isArray(editDetail.scenes) && editDetail.scenes.length) {
+				detailScenes = editDetail.scenes.map(function (scene) {
+					return Object.assign({}, scene, { videoStyle: style, effects: effects.slice() });
+				});
+			} else if (existing && Array.isArray(existing.scenes) && existing.scenes.length) {
+				detailScenes = existing.scenes.map(function (scene) {
+					return Object.assign({}, scene, { videoStyle: style, effects: effects.slice() });
+				});
+			}
+		}
+		slides = detailScenes.map(function (scene, idx) {
+			return {
+				id: "slide-" + (idx + 1),
+				index: idx,
+				sceneId: scene.id,
+				assetId: scene.mediaAssetId || "",
+				name: scene.name || ("Scene " + (idx + 1)),
+				mediaType: scene.mediaType || "image",
+				startSec: scene.startSec || 0,
+				durationSec: scene.durationSec || 0
+			};
+		});
+		const durationFromScenes = detailScenes.reduce(function (maxEnd, scene) {
+			return Math.max(maxEnd, pipelineManagementNumber(scene.startSec, 0) + pipelineManagementNumber(scene.durationSec, 0));
+		}, 0);
+		const durationSec = Math.round(Math.max(
+			0,
+			pipelineManagementNumber(
+				edit && edit.durationSec != null
+					? edit.durationSec
+					: (timelineStateOverride && timelineStateOverride.durationSec != null ? timelineStateOverride.durationSec : durationFromScenes),
+				durationFromScenes
+			)
+		) * 1000) / 1000;
+		const script = String(row.script || "");
+		const firstLine = script.split(/\\r?\\n/).find(function (line) { return line.trim(); }) || "";
+		const textCount = elements.filter(function (el) { return el.kind !== "graphic"; }).length;
+		const graphicCount = elements.filter(function (el) { return el.kind === "graphic"; }).length;
+		const audioCount = edit && Array.isArray(edit.audios)
+			? edit.audios.length
+			: (editDetail && Number(editDetail.audioCount)) || (existing && Number(existing.audioCount)) || (row.mp3 ? 1 : 0);
+		return {
+			id: String(row.id != null ? row.id : ""),
+			rowId: String(row.id != null ? row.id : ""),
+			vid: String(row.vid || ""),
+			title: String(row.title || firstLine || (editDetail && editDetail.title) || (existing && existing.title) || "").slice(0, 70),
+			topic: String(row.topic || firstLine || (editDetail && editDetail.topic) || (existing && existing.topic) || "").slice(0, 160),
+			sourcePageId: String(pipelineManagementStore.pageId || (editDetail && editDetail.sourcePageId) || (existing && existing.sourcePageId) || ""),
+			targetPageId: String(batchTimelinePageIdForRow(row) || (editDetail && editDetail.targetPageId) || (existing && existing.targetPageId) || ""),
+			style: style,
+			effects: effects.slice(),
+			effectLabel: effectLabelText,
+			resolution: String(row.resolution || (editDetail && editDetail.resolution) || ""),
+			orientation: String(row.orientation || (editDetail && editDetail.orientation) || ""),
+			quality: String(row.quality || (editDetail && editDetail.quality) || "balanced"),
+			frame: frame,
+			durationSec: durationSec,
+			hasCompletedMedia: Boolean(
+				batchRowHasCompletedImages(row) ||
+				(editDetail && editDetail.hasCompletedMedia) ||
+				(existing && existing.hasCompletedMedia)
+			),
+			sceneCount: detailScenes.length || (edit && Number(edit.sceneCount)) || (editDetail && Number(editDetail.sceneCount)) || AUTO_MEDIA_TOTAL,
+			slideCount: slides.length || (edit && Number(edit.sceneCount)) || 0,
+			clipCount: detailScenes.filter(function (scene) { return scene.mediaType === "video"; }).length,
+			textCount: textCount || (edit && Number(edit.textCount)) || 0,
+			graphicCount: graphicCount,
+			elementCount: elements.length || (edit && Number(edit.textCount)) || 0,
+			audioCount: audioCount,
+			updatedAt: Math.max(
+				batchRowTimelineUpdatedAt(row),
+				Number(editDetail && editDetail.updatedAt) || 0,
+				Number(existing && existing.updatedAt) || 0
+			) || Date.now(),
+			scenes: detailScenes,
+			slides: slides,
+			elements: elements
+		};
+	}
+
+	function purgeRowLocalAndCookieEntries(rowOrId, extra) {
+		const opts = extra && typeof extra === "object" ? extra : {};
+		const row = rowOrId && typeof rowOrId === "object" ? rowOrId : null;
+		const rowId = String(opts.rowId || (row ? row.id : rowOrId) || "").trim();
+		const vid = String(opts.vid || (row && row.vid) || "").trim();
+		const targetPageId = batchTimelinePageIdForRow(row || rowId, opts.key || opts.timelineKey);
+		const pageIds = new Set();
+		if (targetPageId) pageIds.add(targetPageId);
+		if (opts.pageId) pageIds.add(String(opts.pageId));
+		if (row && row.timeline && row.timeline.pageId) pageIds.add(String(row.timeline.pageId));
+		if (row && row.projectDetail && row.projectDetail.targetPageId) pageIds.add(String(row.projectDetail.targetPageId));
+		if (opts.key && String(opts.key).indexOf(BATCH_TIMELINE_STATE_PREFIX) === 0) {
+			pageIds.add(String(opts.key).slice(BATCH_TIMELINE_STATE_PREFIX.length));
+		}
+		try {
+			if (window.localStorage) {
+				const keys = [];
+				for (let i = 0; i < window.localStorage.length; i++) keys.push(window.localStorage.key(i));
+				for (const storageKey of keys) {
+					if (!storageKey) continue;
+					if (storageKey.indexOf(BATCH_TIMELINE_STATE_PREFIX) === 0) {
+						const candPageId = storageKey.slice(BATCH_TIMELINE_STATE_PREFIX.length);
+						let match = pageIds.has(candPageId) || Boolean(rowId && candPageId.endsWith("-row-" + rowId));
+						if (!match) {
+							try {
+								const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+								if (parsed && ((rowId && String(parsed.sourceRowId || "") === rowId) || (vid && String(parsed.sourceVid || "") === vid))) {
+									match = true;
+								}
+							} catch (parseError) { }
+						}
+						if (match) {
+							pageIds.add(candPageId);
+							try { window.localStorage.removeItem(storageKey); } catch (rmError) { }
+						}
+					} else if (storageKey.indexOf(MEDIA_TRANSITION_STORAGE_PREFIX) === 0) {
+						let matchTrans = false;
+						try {
+							const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+							if (parsed) {
+								const b = parsed.basicSettings || {};
+								const pd = parsed.projectDetail || {};
+								if ((rowId && (String(b.id || "") === rowId || String(pd.rowId || "") === rowId)) ||
+									(vid && (String(b.vid || "") === vid || String(pd.vid || "") === vid)) ||
+									(parsed.targetPageId && pageIds.has(String(parsed.targetPageId)))) {
+									matchTrans = true;
+								}
+							}
+						} catch (parseError) { }
+						if (matchTrans) {
+							try { window.localStorage.removeItem(storageKey); } catch (rmError) { }
+							const transKey = storageKey.slice(MEDIA_TRANSITION_STORAGE_PREFIX.length);
+							deleteBatchCookie("ytvs_transition_project_" + transKey.replace(/[^a-zA-Z0-9_-]/g, "_"));
+						}
+					}
+				}
+			}
+		} catch (storageScanError) { }
+		pageIds.forEach(function (pid) {
+			try { if (window.localStorage) window.localStorage.removeItem(BATCH_TIMELINE_STATE_PREFIX + pid); } catch (e) { }
+			const safe = batchTimelineSafeId(pid);
+			for (let c = 1; c <= BATCH_TIMELINE_COOKIE_CHUNKS; c++) {
+				deleteBatchCookie(BATCH_TIMELINE_COOKIE_PREFIX + safe + "_" + c);
+			}
+			try {
+				if (window.__TIMELINE_EDITOR__ && typeof window.__TIMELINE_EDITOR__.deleteProjectAssets === "function") {
+					window.__TIMELINE_EDITOR__.deleteProjectAssets(pid);
+				}
+			} catch (idbError) { }
+		});
+		try {
+			if (window.document && window.document.cookie) {
+				for (const part of String(window.document.cookie || "").split(";")) {
+					const entry = part.trim();
+					const eq = entry.indexOf("=");
+					if (eq < 0) continue;
+					const name = entry.slice(0, eq);
+					if (name.indexOf(BATCH_TIMELINE_COOKIE_PREFIX) === 0) {
+						if (rowId && name.indexOf("-row-" + batchTimelineSafeId(rowId) + "_") >= 0) {
+							deleteBatchCookie(name);
+						}
+					} else if (name.indexOf("ytvs_transition_project_") === 0) {
+						try {
+							const meta = JSON.parse(decodeURIComponent(entry.slice(eq + 1)));
+							if (meta && ((vid && String(meta.vid || "") === vid) || (meta.targetPageId && pageIds.has(String(meta.targetPageId))))) {
+								deleteBatchCookie(name);
+							}
+						} catch (cookieParseError) { }
+					}
+				}
+			}
+		} catch (cookieScanError) { }
+		if (rowId) {
+			try { if (typeof forgetCompletedBatchRow === "function") forgetCompletedBatchRow(rowId); } catch (forgetError) { }
+		}
+	}
+
+	function purgeBlankRowArtifactsInStorage(snapshot) {
+		let purged = 0;
+		const blankRowIds = new Set();
+		const qbRows = snapshot && snapshot.quickBatch && Array.isArray(snapshot.quickBatch.rows) ? snapshot.quickBatch.rows : [];
+		qbRows.forEach(function (stored) {
+			if (!stored || typeof stored !== "object") return;
+			if (String(stored.script || "").trim()) return;
+			blankRowIds.add(String(stored.id || ""));
+			purgeRowLocalAndCookieEntries(stored);
+			purged += 1;
+		});
+		const edProjects = snapshot && snapshot.editor && Array.isArray(snapshot.editor.projects) ? snapshot.editor.projects : [];
+		edProjects.forEach(function (project) {
+			if (!project || typeof project !== "object") return;
+			if (!String(project.script || "").trim()) purged += 1;
+		});
+		try {
+			if (window.localStorage) {
+				const keys = [];
+				for (let i = 0; i < window.localStorage.length; i++) keys.push(window.localStorage.key(i));
+				for (const storageKey of keys) {
+					if (!storageKey) continue;
+					if (storageKey.indexOf(BATCH_TIMELINE_STATE_PREFIX) === 0) {
+						try {
+							const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+							if (!parsed) continue;
+							const rowId = String(parsed.sourceRowId || "");
+							const hasBlankRowMatch = Boolean(rowId && blankRowIds.has(rowId));
+							const liveRow = rowId ? batchRows.find(function (r) { return String(r.id) === rowId; }) : null;
+							const blankInLive = Boolean(liveRow && !String(liveRow.script || "").trim());
+							const explicitBlankSource = parsed.sourceScript != null && !String(parsed.sourceScript).trim();
+							if (hasBlankRowMatch || blankInLive || explicitBlankSource) {
+								purgeRowLocalAndCookieEntries(rowId || parsed.projectId, {
+									key: storageKey,
+									pageId: parsed.projectId,
+									vid: parsed.sourceVid
+								});
+								purged += 1;
+							}
+						} catch (parseError) { }
+					} else if (storageKey.indexOf("ytvs.pipeline-management.v1.") === 0 && storageKey !== pipelineManagementStore.localStorageKey) {
+						try {
+							const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+							if (parsed && parsed.quickBatch && Array.isArray(parsed.quickBatch.rows)) {
+								const hadBlankRow = parsed.quickBatch.rows.some(function (r) { return r && !String(r.script || "").trim(); });
+								const hadBlankProj = Boolean(parsed.editor && Array.isArray(parsed.editor.projects) && parsed.editor.projects.some(function (p) { return p && !String(p.script || "").trim(); }));
+								if (hadBlankRow || hadBlankProj) {
+									parsed.quickBatch.rows.forEach(function (r) {
+										if (r && !String(r.script || "").trim()) purgeRowLocalAndCookieEntries(r);
+									});
+									const keptRows = parsed.quickBatch.rows.filter(function (r) { return Boolean(r && String(r.script || "").trim()); });
+									const keptProjs = parsed.editor && Array.isArray(parsed.editor.projects)
+										? parsed.editor.projects.filter(function (p) { return Boolean(p && String(p.script || "").trim()); })
+										: [];
+									const otherPid = String(parsed.pageId || storageKey.slice("ytvs.pipeline-management.v1.".length));
+									if (!keptRows.length && !keptProjs.length) {
+										window.localStorage.removeItem(storageKey);
+										const safeOther = otherPid.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48);
+										for (let c = 1; c <= 4; c++) deleteBatchCookie("ytvs_pipeline_management_" + safeOther + "_" + c);
+									} else if (typeof createPipelineManagementStore === "function") {
+										parsed.quickBatch.rows = keptRows;
+										if (parsed.editor) parsed.editor.projects = keptProjs;
+										createPipelineManagementStore(window, otherPid).save(parsed);
+									}
+									purged += 1;
+								}
+							}
+						} catch (pmErr) { }
+					} else if (storageKey.indexOf(MEDIA_TRANSITION_STORAGE_PREFIX) === 0) {
+						try {
+							const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+							const script = parsed && parsed.basicSettings ? String(parsed.basicSettings.script || "").trim() : "";
+							if (parsed && !script && parsed.projectDetail) {
+								const transKey = storageKey.slice(MEDIA_TRANSITION_STORAGE_PREFIX.length);
+								window.localStorage.removeItem(storageKey);
+								deleteBatchCookie("ytvs_transition_project_" + transKey.replace(/[^a-zA-Z0-9_-]/g, "_"));
+								purged += 1;
+							}
+						} catch (parseError) { }
+					}
+				}
+			}
+		} catch (scanError) { }
+		try {
+			if (window.document && window.document.cookie) {
+				const seenPages = new Set();
+				const seenPmPages = new Set();
+				for (const part of String(window.document.cookie || "").split(";")) {
+					const entry = part.trim();
+					const eq = entry.indexOf("=");
+					if (eq < 0) continue;
+					const name = entry.slice(0, eq);
+					if (name.indexOf("ytvs_pipeline_management_") === 0 && typeof createPipelineManagementStore === "function") {
+						try {
+							const meta = JSON.parse(decodeURIComponent(entry.slice(eq + 1)));
+							const otherPid = meta && meta.p ? String(meta.p) : "";
+							if (!otherPid || otherPid === pipelineManagementStore.pageId || seenPmPages.has(otherPid)) continue;
+							seenPmPages.add(otherPid);
+							const otherStore = createPipelineManagementStore(window, otherPid);
+							const otherLoaded = otherStore.load();
+							const otherSnap = otherLoaded && otherLoaded.snapshot;
+							if (otherSnap && otherSnap.quickBatch && Array.isArray(otherSnap.quickBatch.rows)) {
+								const hadBlank = otherSnap.quickBatch.rows.some(function (r) { return r && !String(r.script || "").trim(); });
+								const hadBlankProj = Boolean(otherSnap.editor && Array.isArray(otherSnap.editor.projects) && otherSnap.editor.projects.some(function (p) { return p && !String(p.script || "").trim(); }));
+								if (hadBlank || hadBlankProj) {
+									otherSnap.quickBatch.rows.forEach(function (r) {
+										if (r && !String(r.script || "").trim()) purgeRowLocalAndCookieEntries(r);
+									});
+									const keptRows = otherSnap.quickBatch.rows.filter(function (r) { return Boolean(r && String(r.script || "").trim()); });
+									const keptProjs = otherSnap.editor && Array.isArray(otherSnap.editor.projects)
+										? otherSnap.editor.projects.filter(function (p) { return Boolean(p && String(p.script || "").trim()); })
+										: [];
+									if (!keptRows.length && !keptProjs.length) {
+										otherStore.clear();
+									} else {
+										otherSnap.quickBatch.rows = keptRows;
+										if (otherSnap.editor) otherSnap.editor.projects = keptProjs;
+										otherStore.save(otherSnap);
+									}
+									purged += 1;
+								}
+							}
+						} catch (pmCookieErr) { }
+						continue;
+					}
+					if (name.indexOf(BATCH_TIMELINE_COOKIE_PREFIX) !== 0) continue;
+					try {
+						const meta = JSON.parse(decodeURIComponent(entry.slice(eq + 1)));
+						if (!meta || !meta.p || seenPages.has(meta.p)) continue;
+						seenPages.add(meta.p);
+						const cookieState = readTimelineCookiesForPageId(meta.p);
+						if (!cookieState) continue;
+						const rowId = String(cookieState.sourceRowId || "");
+						const liveRow = rowId ? batchRows.find(function (r) { return String(r.id) === rowId; }) : null;
+						if ((rowId && blankRowIds.has(rowId)) || (liveRow && !String(liveRow.script || "").trim()) ||
+							(cookieState.sourceScript != null && !String(cookieState.sourceScript).trim())) {
+							purgeRowLocalAndCookieEntries(rowId || cookieState.projectId, {
+								pageId: cookieState.projectId,
+								vid: cookieState.sourceVid
+							});
+							purged += 1;
+						}
+					} catch (cookieParseError) { }
+				}
+			}
+		} catch (cookieScanError) { }
+		return purged;
+	}
+
+	async function hydrateBatchRowAssetsFromTimeline(row) {
+		if (!row || row._hydratingAssets) return false;
+		if (!window.__TIMELINE_EDITOR__ || typeof window.__TIMELINE_EDITOR__.readProjectAssets !== "function") return false;
+		const targetPageId = batchTimelinePageIdForRow(row);
+		if (!targetPageId) return false;
+		row._hydratingAssets = true;
+		try {
+			const record = await window.__TIMELINE_EDITOR__.readProjectAssets(targetPageId);
+			if (!record) return false;
+			if (!row.mp3 && record.voiceover && record.voiceover instanceof Blob) {
+				row.mp3 = record.voiceover;
+				row.mp3Url = typeof createStudioObjectUrl === "function" ? createStudioObjectUrl(record.voiceover) : "";
+				if (row.mp3Url) row.objectUrls.push(row.mp3Url);
+				if (typeof decodeBatchAudio === "function") {
+					try { await decodeBatchAudio(row, record.voiceover); } catch (decodeErr) { }
+				}
+			}
+			const storedAssets = record.assets && typeof record.assets === "object" ? record.assets : {};
+			const byAssetId = Object.create(null);
+			const nextImages = [];
+			Object.keys(storedAssets).forEach(function (assetId) {
+				const asset = storedAssets[assetId];
+				if (!asset || !asset.blob) return;
+				const url = typeof createStudioObjectUrl === "function" ? createStudioObjectUrl(asset.blob) : "";
+				if (url) row.objectUrls.push(url);
+				const num = trailingDigits(assetId);
+				const idx = num > 0 ? num - 1 : nextImages.length;
+				const mediaObj = {
+					index: idx,
+					assetId: assetId,
+					blob: asset.blob,
+					url: url,
+					stockFilename: asset.name || (asset.blob && asset.blob.name) || "",
+					stockSource: asset.source || null
+				};
+				byAssetId[assetId] = mediaObj;
+				nextImages.push(mediaObj);
+			});
+			nextImages.sort(function (a, b) { return Number(a.index) - Number(b.index); });
+			if (nextImages.length && (!Array.isArray(row.images) || !row.images.length)) {
+				row.images = nextImages;
+			}
+			(Array.isArray(row.slides) ? row.slides : []).forEach(function (slide) {
+				if (!slide) return;
+				const assetKey = slide.assetId || (Number(slide.imageIndex) >= 0 ? "scene-" + (Number(slide.imageIndex) + 1) : "");
+				const mediaObj = assetKey ? byAssetId[assetKey] : null;
+				if (!mediaObj || !mediaObj.url) return;
+				if (slide.type === "mp4" && !slide.videoEl && typeof document !== "undefined") {
+					const video = document.createElement("video");
+					video.src = mediaObj.url;
+					slide.videoEl = video;
+					slide.img = video;
+				} else if (slide.type !== "mp4" && !slide.img && typeof Image === "function") {
+					const img = new Image();
+					img.src = mediaObj.url;
+					slide.img = img;
+				}
+			});
+			if (row.mp3 && (row.images.length || (row.slides && row.slides.length))) {
+				row.animated = true;
+			}
+			if (batchPreview && batchPreview.row === row && batchPreview.audio && row.mp3Url && !batchPreview.audio.src) {
+				batchPreview.audio.src = row.mp3Url;
+			}
+			return true;
+		} catch (error) {
+			return false;
+		} finally {
+			row._hydratingAssets = false;
+		}
+	}
+
 	function pipelineManagementSnapshot() {
 		ensurePipelineVideoIds();
 		let rows = [];
 		let projects = [];
 		let quickBatch = { runBusy: false, queued: [], finishedCount: 0, rows: rows };
 		try {
-			rows = batchRows.map(function (row) {
-				return {
-					id: String(row.id),
-					vid: String(row.vid || ""),
-					title: String(row.title || "").slice(0, 120),
-					topic: String(row.topic || "").slice(0, 160),
-					script: String(row.script || ""),
-					scriptLength: String(row.script || "").length,
-					style: String(row.style || ""),
-					minutes: pipelineManagementNumber(row.minutes, 1),
-					resolution: String(row.resolution || ""),
-					orientation: String(row.orientation || ""),
-					quality: String(row.quality || ""),
-					stage: String(row.stage || "ready"),
-					detail: String(row.detail || "").slice(0, 200),
-					attempt: pipelineManagementNumber(row.attempt, 0),
-					retrying: Boolean(row.retrying),
-					running: Boolean(row.running),
-					prompts: (row.prompts || []).length,
-					images: (row.images || []).length,
-					slides: (row.slides || []).length,
-					mediaFilenames: (row.mediaFilenames || []).length,
-					/*
-					 * Session 331 follow-up: the compact timeline hand-back travels with
-					 * the row, so a table save keeps the edit in localStorage and in
-					 * the four cookie chunks.
-					 */
-					timeline: row.timeline && typeof row.timeline === "object" ? row.timeline : undefined,
-					timelineKey: row.timeline ? String(row.timeline.key || "") : "",
-					mp3: Boolean(row.mp3),
-					animated: Boolean(row.animated),
-					finished: Boolean(row.animated && (row.slides || []).length)
-				};
-			});
+			const scriptedIds = new Set();
+			rows = batchRows
+				.filter(function (row) { return Boolean(row && String(row.script || "").trim()); })
+				.map(function (row) {
+					scriptedIds.add(String(row.id));
+					const slideItems = composeBatchSlideItems(row);
+					const projectDetail = composeBatchProjectDetail(row);
+					row.projectDetail = projectDetail;
+					const timelineUpdatedAt = batchRowTimelineUpdatedAt(row);
+					return {
+						id: String(row.id),
+						vid: String(row.vid || ""),
+						title: String(row.title || "").slice(0, 120),
+						topic: String(row.topic || "").slice(0, 160),
+						script: String(row.script || ""),
+						scriptLength: String(row.script || "").length,
+						style: String(row.style || ""),
+						minutes: pipelineManagementNumber(row.minutes, 1),
+						resolution: String(row.resolution || ""),
+						orientation: String(row.orientation || ""),
+						quality: String(row.quality || ""),
+						stage: String(row.stage || "ready"),
+						detail: String(row.detail || "").slice(0, 200),
+						attempt: pipelineManagementNumber(row.attempt, 0),
+						retrying: Boolean(row.retrying),
+						running: Boolean(row.running),
+						prompts: (row.prompts || []).length,
+						images: Math.max((row.images || []).length, Number(row._storedImagesCount) || 0),
+						slides: (row.slides || []).length || Number(row._storedSlidesCount) || slideItems.length,
+						slideItems: slideItems.length ? slideItems : undefined,
+						mediaFilenames: (row.mediaFilenames || []).length,
+						/*
+						 * Session 331 follow-up: the timeline hand-back travels with
+						 * the row, alongside composable slides/scenes and projectDetail,
+						 * so localStorage and cookies carry the full edited structure.
+						 */
+						timeline: row.timeline && typeof row.timeline === "object" ? row.timeline : undefined,
+						timelineKey: row.timeline ? String(row.timeline.key || row.timelineKey || "") : String(row.timelineKey || ""),
+						timelineUpdatedAt: timelineUpdatedAt || undefined,
+						timelineRegeneratedAt: Number(row._timelineRegeneratedAt) || undefined,
+						projectDetail: projectDetail || undefined,
+						mp3: Boolean(row.mp3 || row._storedMp3),
+						animated: Boolean(row.animated || row._storedAnimated),
+						finished: Boolean(batchRowFinished(row) || (row._storedFinished && !row._archived))
+					};
+				});
 			quickBatch = {
 				runBusy: Boolean(batchRunBusy),
-				queued: batchQueue.map(function (row) { return String(row.id); }),
+				queued: batchQueue.map(function (row) { return String(row.id); }).filter(function (id) { return scriptedIds.has(id); }),
 				finishedCount: pipelineManagementNumber(batchFinishedCount, 0),
 				rows: rows
 			};
 		} catch (batchError) { }
 		try {
-			projects = videoProjects.map(function (project, index) {
-				return {
-					n: index + 1,
-					vid: String(project._pipelineVid || ""),
-					name: String(project.name || "").slice(0, 120),
-					stage: project._scriptWriting ? "script" : project._imageFlowActive ? "media" : "ready",
-					script: String(project.script || ""),
-					scriptLength: String(project.script || "").length,
-					topic: String(project._seoTopic || "").slice(0, 160),
-					minutes: pipelineManagementNumber(project._seoMinutes, 1),
-					style: String(project.videoImageStyle || ""),
-					resolution: String(project.resolution || ""),
-					orientation: String(project.orientation || ""),
-					quality: String(project.quality || ""),
-					imageFlowActive: Boolean(project._imageFlowActive),
-					prompts: (project.imagePrompts || []).length,
-					images: (project.images || []).length,
-					slides: (project.slides || []).length,
-					mediaFilenames: (project.mediaFilenames || []).length
-				};
-			});
+			projects = videoProjects
+				.map(function (project, index) { return { project: project, index: index }; })
+				.filter(function (entry) { return Boolean(entry.project && String(entry.project.script || "").trim()); })
+				.map(function (entry) {
+					const project = entry.project;
+					const index = entry.index;
+					return {
+						n: index + 1,
+						vid: String(project._pipelineVid || ""),
+						name: String(project.name || "").slice(0, 120),
+						stage: project._scriptWriting ? "script" : project._imageFlowActive ? "media" : "ready",
+						script: String(project.script || ""),
+						scriptLength: String(project.script || "").length,
+						topic: String(project._seoTopic || "").slice(0, 160),
+						minutes: pipelineManagementNumber(project._seoMinutes, 1),
+						style: String(project.videoImageStyle || ""),
+						resolution: String(project.resolution || ""),
+						orientation: String(project.orientation || ""),
+						quality: String(project.quality || ""),
+						imageFlowActive: Boolean(project._imageFlowActive),
+						prompts: (project.imagePrompts || []).length,
+						images: (project.images || []).length,
+						slides: (project.slides || []).length,
+						mediaFilenames: (project.mediaFilenames || []).length
+					};
+				});
 		} catch (editorError) { }
 		return {
 			version: 1,
@@ -270,8 +1071,15 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			pageId: pipelineManagementStore.pageId,
 			debug: loaded.debug
 		};
-		if (!loaded.snapshot) return null;
-		const snapshot = loaded.snapshot;
+		const rawSnapshot = loaded.snapshot;
+		let purgedBlankCount = 0;
+		try {
+			purgedBlankCount = purgeBlankRowArtifactsInStorage(rawSnapshot);
+		} catch (purgeError) { }
+		if (!rawSnapshot) {
+			return null;
+		}
+		const snapshot = rawSnapshot;
 		window.__PIPELINE_MANAGEMENT_STATE__ = snapshot;
 		pipelineManagementRestoring = true;
 		try {
@@ -283,7 +1091,28 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				batchAttemptedRows.clear();
 				batchActivePromises.clear();
 			} catch (queueError) { }
-			const storedRows = ((snapshot.quickBatch && snapshot.quickBatch.rows) || []).slice(0, 8);
+			/* Blank-script rows in memory with stale stored details/timelines are purged too. */
+			for (let idx = batchRows.length - 1; idx >= 0; idx--) {
+				const existingRow = batchRows[idx];
+				if (!existingRow || String(existingRow.script || "").trim()) continue;
+				if (existingRow.timeline || existingRow.timelineEdited || existingRow.timelineKey || existingRow.projectDetail) {
+					try { resetClearedBatchRow(existingRow); } catch (resetErr) { }
+				} else {
+					try { purgeRowLocalAndCookieEntries(existingRow); } catch (purgeRowErr) { }
+				}
+			}
+			const storedRows = ((snapshot.quickBatch && snapshot.quickBatch.rows) || [])
+				.filter(function (stored) { return Boolean(stored && String(stored.script || "").trim()); })
+				.slice(0, 8);
+			if (
+				storedRows.length &&
+				batchRows.length === 1 &&
+				!String(batchRows[0].script || "").trim() &&
+				!batchRows[0].timeline &&
+				!batchRows[0].projectDetail
+			) {
+				batchRows.splice(0, batchRows.length);
+			}
 			for (const stored of storedRows) {
 				let row = null;
 				try {
@@ -318,23 +1147,56 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				row.resolution = stored.resolution || row.resolution || "";
 				row.orientation = stored.orientation || row.orientation || "";
 				row.quality = stored.quality || row.quality || "";
-				row.stage = ["empty", "writing", "ready", "queued"].indexOf(stored.stage || "") >= 0 ? stored.stage : "ready";
-				row.detail = "";
+				const storedHasLiveMedia = Boolean(
+					stored.finished ||
+					(stored.mp3 && stored.animated && (Number(stored.images) > 0 || (stored.projectDetail && stored.projectDetail.hasCompletedMedia)))
+				);
+				const liveHasMedia = Boolean(row.mp3 && row.animated && batchRowHasCompletedImages(row));
+				row._storedFinished = Boolean(row._storedFinished || storedHasLiveMedia);
+				row._storedImagesCount = Math.max(Number(row._storedImagesCount) || 0, Number(stored.images) || (stored.projectDetail && Number(stored.projectDetail.sceneCount)) || 0);
+				row._storedSlidesCount = Math.max(Number(row._storedSlidesCount) || 0, Number(stored.slides) || (Array.isArray(stored.slideItems) ? stored.slideItems.length : 0));
+				row._storedMp3 = Boolean(row._storedMp3 || stored.mp3);
+				row._storedAnimated = Boolean(row._storedAnimated || stored.animated || stored.finished);
+				if (stored.timelineRegeneratedAt != null) {
+					row._timelineRegeneratedAt = Math.max(Number(row._timelineRegeneratedAt) || 0, Number(stored.timelineRegeneratedAt) || 0);
+				}
+				if (liveHasMedia || storedHasLiveMedia) {
+					row.stage = "done";
+					row.detail = String(stored.detail || row.detail || (row._storedSlidesCount ? row._storedSlidesCount + " slides" : "Finished"));
+				} else {
+					row.stage = ["empty", "writing", "ready", "queued"].indexOf(stored.stage || "") >= 0 ? stored.stage : "ready";
+					row.detail = "";
+				}
 				row.error = "";
 				row.attempt = pipelineManagementNumber(stored.attempt, 0);
 				row.retrying = false;
 				row.running = false;
 				row.stopRequested = false;
+				if (Array.isArray(stored.slideItems) && stored.slideItems.length) {
+					row.slideItems = stored.slideItems.slice();
+				}
+				if (stored.projectDetail && typeof stored.projectDetail === "object") {
+					row.projectDetail = Object.assign({}, stored.projectDetail);
+				}
 				/*
 				 * Session 331 follow-up: the row's own timeline edit comes back with
 				 * it - the scene order and timing the user saved in the editor are
 				 * applied to this row's slides, so Preview and Export paint the edit.
 				 */
 				row.timeline = stored.timeline && typeof stored.timeline === "object" ? stored.timeline : null;
-				row.timelineKey = String(stored.timelineKey || "");
+				row.timelineKey = String(stored.timelineKey || (row.timeline && row.timeline.key) || "");
+				row.timelineUpdatedAt = Math.max(
+					Number(stored.timelineUpdatedAt) || 0,
+					Number(row.timeline && row.timeline.updatedAt) || 0
+				);
 				applyTimelineEditToBatchRow(row);
+				if (liveHasMedia || storedHasLiveMedia || row.timelineEdited) {
+					hydrateBatchRowAssetsFromTimeline(row);
+				}
 			}
-			const storedProjects = ((snapshot.editor && snapshot.editor.projects) || []).slice(0, 8);
+			const storedProjects = ((snapshot.editor && snapshot.editor.projects) || [])
+				.filter(function (stored) { return Boolean(stored && String(stored.script || "").trim()); })
+				.slice(0, 8);
 			for (const stored of storedProjects) {
 				const index = pipelineManagementNumber(stored.n, 1) - 1;
 				let project = null;
@@ -360,6 +1222,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			return snapshot;
 		} finally {
 			pipelineManagementRestoring = false;
+			if (purgedBlankCount > 0) {
+				try { persistPipelineManagementState("purge-blank-rows"); } catch (persistErr) { }
+			}
 		}
 	}
 
@@ -373,11 +1238,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	 * verified write the table itself performs: ONE localStorage entry plus the
 	 * FOUR cookie chunks. The table tab picks it up from its storage event (or
 	 * its next restore) and applies it to the row.
-	 *
-	 * The summary is deliberately small - one entry per background scene,
-	 * [mediaIndex, durationSec, typeCode] - because it shares the cookie budget
-	 * with every row's script. Media is addressed by the row's own image index
-	 * (scene-N -> N-1), never by a blob or an object URL.
 	 */
 	function timelineEditStoreFor(sourcePageId) {
 		const id = String(sourcePageId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48);
@@ -405,9 +1265,70 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		return digits ? Number(digits) : -1;
 	}
 
+	function cloneOrReuseBatchSlide(source, item, idx, style, effects) {
+		const durationSec = Math.min(MP4_MAX_DURATION_S, Math.max(0.1, Number(item.d) || Number(item.durationSec) || 1));
+		const mediaType = Number(item.t) === 1 || item.mediaType === "video"
+			? "mp4"
+			: (Number(item.t) === 2 || item.mediaType === "gif" ? "gif" : "image");
+		const assetId = String(item.a || item.assetId || (Number(item.i) >= 0 ? "scene-" + (Number(item.i) + 1) : ""));
+		const sceneId = String(item.id || item.sceneId || ("scene-" + (idx + 1)));
+		const mediaIndex = Number.isInteger(Number(item.i)) ? Number(item.i) : (Number.isInteger(Number(item.mediaIndex)) ? Number(item.mediaIndex) : -1);
+		if (source) {
+			const target = Object.assign({}, source);
+			target.id = String(item.slideId || (idx === 0 ? source.id : (source.id + "-copy-" + idx)));
+			target.sceneId = sceneId;
+			target.assetId = assetId || source.assetId || "";
+			target.mediaIndex = mediaIndex >= 0 ? mediaIndex : (source.imageIndex != null ? source.imageIndex : source.mediaIndex);
+			if (mediaIndex >= 0 && target.imageIndex == null) target.imageIndex = mediaIndex;
+			target.startSec = Math.max(0, Number(item.s) || 0);
+			target.durationSec = durationSec;
+			target._partialSec = durationSec;
+			target.trimStartSec = Math.max(0, Number(item.tr) || 0);
+			target.fit = Number(item.f) === 1 ? "contain" : "cover";
+			target.visible = Number(item.v) !== 0;
+			target.videoStyle = style;
+			target.effects = effects.slice();
+			return target;
+		}
+		return {
+			id: String(item.slideId || ("batch-scene-" + (idx + 1))),
+			cardId: "",
+			sceneId: sceneId,
+			assetId: assetId,
+			imageIndex: mediaIndex >= 0 ? mediaIndex : undefined,
+			mediaIndex: mediaIndex,
+			name: String(item.n || ("Scene " + (idx + 1))),
+			type: mediaType,
+			mediaType: mediaType === "mp4" ? "video" : mediaType,
+			startSec: Math.max(0, Number(item.s) || 0),
+			durationSec: durationSec,
+			duration: durationSec,
+			_partialSec: durationSec,
+			trimStartSec: Math.max(0, Number(item.tr) || 0),
+			fit: Number(item.f) === 1 ? "contain" : "cover",
+			visible: Number(item.v) !== 0,
+			videoStyle: style,
+			effects: effects.slice(),
+			img: null
+		};
+	}
+
 	function applyTimelineEditToBatchRow(row) {
 		if (!row) return false;
-		const edit = row.timeline && typeof row.timeline === "object" ? row.timeline : null;
+		let edit = row.timeline && typeof row.timeline === "object" ? row.timeline : null;
+		const persistedFull = readTimelineEditorStateForRow(row);
+		if (persistedFull) {
+			const persistedAt = Number(persistedFull.updatedAt) || 0;
+			const editAt = Number(edit && edit.updatedAt) || 0;
+			if (!edit || !Array.isArray(edit.sceneItems) || persistedAt >= editAt) {
+				const composedSummary = composeTimelineSummaryFromState(persistedFull, row);
+				if (composedSummary) {
+					edit = Object.assign({}, edit || {}, composedSummary);
+					row.timeline = edit;
+					if (composedSummary.key && !row.timelineKey) row.timelineKey = composedSummary.key;
+				}
+			}
+		}
 		row.timelineEdited = Boolean(edit);
 		if (!edit) {
 			row.timelineDurationSec = 0;
@@ -415,43 +1336,92 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			return false;
 		}
 		row.timelineDurationSec = Math.max(0, Number(edit.durationSec) || 0);
+		row.timelineUpdatedAt = Math.max(Number(row.timelineUpdatedAt) || 0, Number(edit.updatedAt) || 0);
+		if (edit.videoStyle && typeof SEO_IMAGE_STYLES !== "undefined" && SEO_IMAGE_STYLES.indexOf(String(edit.videoStyle)) !== -1) {
+			row.style = String(edit.videoStyle);
+		}
+		const style = String(row.style || edit.videoStyle || "Cinematic Film");
+		const effects = typeof window.__videoStyleEffects === "function" ? window.__videoStyleEffects(style) : [];
 		const entries = Array.isArray(edit.scenes) ? edit.scenes : [];
-		row.timelineSceneCount = entries.length;
+		const sceneItems = Array.isArray(edit.sceneItems) && edit.sceneItems.length
+			? edit.sceneItems
+			: (Array.isArray(row.slideItems) && row.slideItems.length ? row.slideItems : []);
+		row.timelineSceneCount = sceneItems.length || entries.length;
 		const slides = Array.isArray(row.slides) ? row.slides.slice() : [];
-		if (!slides.length || !entries.length) return true;
 		const byMedia = new Map();
+		const bySceneId = new Map();
+		const byAssetId = new Map();
 		slides.forEach(function (slide, position) {
-			const id = String(slide && slide.id || "");
+			if (!slide) return;
+			const id = String(slide.id || "");
 			const named = id.indexOf("-img-") >= 0 || id.indexOf("-clip-") >= 0 || id.indexOf("-gif-") >= 0;
-			/*
-			 * buildBatchSlides() names a slide after the image it paints
-			 * (batch-7-img-3 -> image 3). A slide without that name keeps its
-			 * position, which is the same image order for every finished row.
-			 */
-			const mediaIndex = named ? trailingDigits(id) : position;
+			const mediaIndex = slide.imageIndex != null
+				? Number(slide.imageIndex)
+				: (named ? trailingDigits(id) : (slide.mediaIndex != null && Number(slide.mediaIndex) >= 0 ? Number(slide.mediaIndex) : position));
 			if (mediaIndex >= 0 && !byMedia.has(mediaIndex)) byMedia.set(mediaIndex, slide);
+			if (slide.sceneId && !bySceneId.has(String(slide.sceneId))) bySceneId.set(String(slide.sceneId), slide);
+			if (slide.assetId && !byAssetId.has(String(slide.assetId))) byAssetId.set(String(slide.assetId), slide);
 		});
-		const ordered = [];
-		entries.forEach(function (entry) {
-			if (!Array.isArray(entry)) return;
-			const mediaIndex = Number(entry[0]);
-			const seconds = Number(entry[1]);
-			const slide = byMedia.get(mediaIndex);
-			if (!slide || ordered.indexOf(slide) !== -1) return;
-			if (Number.isFinite(seconds) && seconds > 0) {
-				/*
-				 * slideDurationSec() prefers this override, in the preview and in the
-				 * export. SLIDE_SECONDS_MIN is the 9-second default for an untimed
-				 * slide, NOT a floor for an edited one: clamping to it would flatten
-				 * every hand-back scene to 9 s and lose the edit.
-				 */
-				slide._partialSec = Math.min(MP4_MAX_DURATION_S, Math.max(0.1, seconds));
+
+		if (sceneItems.length) {
+			const usedSources = new Set();
+			const composedSlides = [];
+			sceneItems.forEach(function (item, idx) {
+				if (!item || typeof item !== "object") return;
+				const mediaIndex = item.i != null ? Number(item.i) : -1;
+				const candidate = (item.a && byAssetId.get(String(item.a))) ||
+					(item.id && bySceneId.get(String(item.id))) ||
+					(mediaIndex >= 0 ? byMedia.get(mediaIndex) : null) ||
+					null;
+				const isDuplicate = candidate && usedSources.has(candidate);
+				if (candidate) usedSources.add(candidate);
+				if (candidate && !isDuplicate && slides.length) {
+					const updated = cloneOrReuseBatchSlide(candidate, item, idx, style, effects);
+					/* Keep direct object identity for non-duplicated slides when matched by mediaIndex. */
+					Object.assign(candidate, updated);
+					composedSlides.push(candidate);
+				} else {
+					composedSlides.push(cloneOrReuseBatchSlide(candidate, item, idx, style, effects));
+				}
+			});
+			row.slides = composedSlides;
+			row.slideItems = composeBatchSlideItems(row);
+			row.projectDetail = composeBatchProjectDetail(row);
+			return true;
+		}
+
+		if (slides.length && entries.length) {
+			const ordered = [];
+			entries.forEach(function (entry) {
+				if (!Array.isArray(entry)) return;
+				const mediaIndex = Number(entry[0]);
+				const seconds = Number(entry[1]);
+				const slide = byMedia.get(mediaIndex);
+				if (!slide || ordered.indexOf(slide) !== -1) return;
+				if (Number.isFinite(seconds) && seconds > 0) {
+					slide._partialSec = Math.min(MP4_MAX_DURATION_S, Math.max(0.1, seconds));
+				}
+				ordered.push(slide);
+			});
+			if (ordered.length) {
+				row.slides = ordered.concat(slides.filter(function (slide) { return ordered.indexOf(slide) === -1; }));
 			}
-			ordered.push(slide);
-		});
-		if (!ordered.length) return true;
-		/* A slide the edit no longer places stays at the end rather than vanishing. */
-		row.slides = ordered.concat(slides.filter(function (slide) { return ordered.indexOf(slide) === -1; }));
+		} else if (!slides.length && entries.length) {
+			row.slides = entries.map(function (entry, idx) {
+				const mediaIndex = Number(entry[0]);
+				const seconds = Number(entry[1]);
+				const typeCode = Number(entry[2]);
+				return cloneOrReuseBatchSlide(null, {
+					id: mediaIndex >= 0 ? "scene-" + (mediaIndex + 1) : "scene-" + (idx + 1),
+					i: mediaIndex,
+					a: mediaIndex >= 0 ? "scene-" + (mediaIndex + 1) : "",
+					d: seconds,
+					t: typeCode
+				}, idx, style, effects);
+			});
+		}
+		row.slideItems = composeBatchSlideItems(row);
+		row.projectDetail = composeBatchProjectDetail(row);
 		return true;
 	}
 
@@ -494,18 +1464,66 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			if (rowId && String(candidate.id) === rowId) return true;
 			return Boolean(vid && String(candidate.vid) === vid);
 		}) || null;
+		const effectiveScript = String(
+			(row && row.script) ||
+			(payload && payload.script) ||
+			""
+		).trim();
+		if (!effectiveScript) {
+			/* Blank-script rows must never persist timeline/project details; purge them. */
+			quickBatch.rows = quickBatch.rows.filter(function (candidate) {
+				if (!candidate || typeof candidate !== "object") return false;
+				if (!String(candidate.script || "").trim()) return false;
+				if (rowId && String(candidate.id) === rowId) return false;
+				if (vid && String(candidate.vid) === vid) return false;
+				return true;
+			});
+			purgeRowLocalAndCookieEntries(rowId, {
+				vid: vid,
+				key: String(edit.key || payload.key || ""),
+				pageId: String(edit.pageId || "")
+			});
+			snapshot.updatedAt = Date.now();
+			store.save(snapshot);
+			result.reason = "blank script rows are not stored";
+			result.pageId = store.pageId;
+			result.rows = quickBatch.rows.length;
+			window.__TIMELINE_EDIT_PUBLISH__ = result;
+			return result;
+		}
 		if (!row) {
 			if (!rowId) {
 				result.reason = "the hand-off carries no row id";
 				window.__TIMELINE_EDIT_PUBLISH__ = result;
 				return result;
 			}
-			row = { id: rowId, vid: vid || store.pageId + "-row-" + rowId, stage: "ready" };
+			row = { id: rowId, vid: vid || store.pageId + "-row-" + rowId, script: String(payload.script || ""), stage: "ready" };
 			quickBatch.rows.push(row);
 		}
 		row.timeline = edit;
 		row.timelineKey = String(edit.key || payload.key || "");
 		row.timelineUpdatedAt = Number(edit.updatedAt) || Date.now();
+		if (edit.videoStyle) row.style = String(edit.videoStyle);
+		if (Array.isArray(edit.sceneItems) && edit.sceneItems.length) {
+			row.slideItems = edit.sceneItems.slice();
+			row.slides = edit.sceneItems.length;
+		}
+		if (edit.projectDetail && typeof edit.projectDetail === "object") {
+			row.projectDetail = Object.assign({}, edit.projectDetail);
+			if (edit.projectDetail.hasCompletedMedia) {
+				row.images = Math.max(Number(row.images) || 0, Number(edit.projectDetail.sceneCount) || 0);
+				if (Number(edit.projectDetail.audioCount) > 0 || (Array.isArray(edit.audios) && edit.audios.length > 0)) {
+					row.mp3 = true;
+				}
+				if (row.mp3 && Number(row.images) >= 12) {
+					row.stage = "done";
+					row.animated = true;
+					row.finished = true;
+				}
+			}
+		} else {
+			row.projectDetail = composeBatchProjectDetail(Object.assign({}, row, { timeline: edit }));
+		}
 		if (vid && !row.vid) row.vid = vid;
 		snapshot.updatedAt = Date.now();
 		const saved = store.save(snapshot);
@@ -527,8 +1545,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			if (live) {
 				live.timeline = row.timeline;
 				live.timelineKey = row.timelineKey;
+				live.timelineUpdatedAt = row.timelineUpdatedAt;
+				if (row.projectDetail) live.projectDetail = Object.assign({}, row.projectDetail);
 				applyTimelineEditToBatchRow(live);
 				try { paintBatchRowStatus(live); } catch (paintError) { }
+				try { renderBatchTable(); } catch (renderError) { }
 			}
 		}
 		return result;
@@ -544,17 +1565,37 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		let loaded = null;
 		try { loaded = pipelineManagementStore.load(); } catch (loadError) { return 0; }
 		const snapshot = loaded && loaded.snapshot;
+		try { purgeBlankRowArtifactsInStorage(snapshot); } catch (purgeError) { }
 		const storedRows = snapshot && snapshot.quickBatch && Array.isArray(snapshot.quickBatch.rows) ? snapshot.quickBatch.rows : [];
 		storedRows.forEach(function (stored) {
-			if (!stored || typeof stored !== "object") return;
+			if (!stored || typeof stored !== "object" || !String(stored.script || "").trim()) return;
 			const row = batchRows.find(function (candidate) { return String(candidate.id) === String(stored.id); });
 			if (!row) return;
-			const incoming = stored.timeline && typeof stored.timeline === "object" ? stored.timeline : null;
-			const incomingAt = Number(stored.timelineUpdatedAt) || Number(incoming && incoming.updatedAt) || 0;
-			const currentAt = Number(row.timeline && row.timeline.updatedAt) || 0;
+			let incoming = stored.timeline && typeof stored.timeline === "object" ? stored.timeline : null;
+			const fullEditorState = readTimelineEditorStateForRow(Object.assign({}, row, { timelineKey: stored.timelineKey || row.timelineKey }));
+			if (fullEditorState) {
+				const fullAt = Number(fullEditorState.updatedAt) || 0;
+				const storedAt = Number(stored.timelineUpdatedAt) || Number(incoming && incoming.updatedAt) || 0;
+				if (!incoming || fullAt > storedAt) {
+					const composed = composeTimelineSummaryFromState(fullEditorState, row);
+					if (composed) incoming = composed;
+				}
+			}
+			const incomingAt = Math.max(Number(stored.timelineUpdatedAt) || 0, Number(incoming && incoming.updatedAt) || 0);
+			const currentAt = batchRowTimelineUpdatedAt(row);
 			if (!incoming || incomingAt <= currentAt) return;
 			row.timeline = incoming;
-			row.timelineKey = String(stored.timelineKey || incoming.key || "");
+			row.timelineKey = String(stored.timelineKey || incoming.key || row.timelineKey || "");
+			row.timelineUpdatedAt = incomingAt;
+			if (stored.projectDetail && typeof stored.projectDetail === "object") {
+				row.projectDetail = Object.assign({}, stored.projectDetail);
+			}
+			if (stored.finished || (stored.mp3 && stored.animated && Number(stored.images) > 0)) {
+				row._storedFinished = true;
+				row._storedMp3 = Boolean(stored.mp3);
+				row._storedAnimated = Boolean(stored.animated || stored.finished);
+				row._storedImagesCount = Math.max(Number(row._storedImagesCount) || 0, Number(stored.images) || 0);
+			}
 			applyTimelineEditToBatchRow(row);
 			try { paintBatchRowStatus(row); } catch (paintError) { }
 			changed += 1;
@@ -571,6 +1612,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	window.__PUBLISH_TIMELINE_EDIT__ = publishTimelineEdit;
 	window.applyTimelineEditToBatchRow = applyTimelineEditToBatchRow;
 	window.reconcileTimelineEdits = reconcileTimelineEdits;
+	window.composeBatchProjectDetail = composeBatchProjectDetail;
+	window.composeBatchSlidesFromTimeline = function (row) {
+		applyTimelineEditToBatchRow(row);
+		return Array.isArray(row && row.slides) ? row.slides : [];
+	};
+	window.purgeBlankRowStorage = purgeBlankRowArtifactsInStorage;
+	window.hydrateBatchRowAssetsFromTimeline = hydrateBatchRowAssetsFromTimeline;
 
 	// =========================================================
 	// DATA
@@ -7816,6 +8864,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		if (studioLayout === "table") {
 
+			if (!pipelineManagementRestoring && typeof reconcileTimelineEdits === "function") {
+				try { reconcileTimelineEdits(); } catch (reconcileError) { }
+			}
+
 			renderBatchTable();
 
 		}
@@ -9444,12 +10496,17 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
-	/* mp3 + Pixabay images + animation - the one definition of "finished". */
+	/* mp3 + Pixabay images + animation - or a timeline-edited row with completed media. */
 	function batchRowFinished(row) {
 
-		if (!row || !row.mp3 || !row.animated) return false;
-		const images = Array.isArray(row.images) ? row.images : [];
+		if (!row) return false;
 		const slides = Array.isArray(row.slides) ? row.slides : [];
+		if (row.timelineEdited && slides.length > 0 && batchRowHasCompletedImages(row)) {
+			if (row.mp3 && row.animated) return true;
+			if (!row._archived && row._storedFinished && row._storedMp3 && row._storedAnimated) return true;
+		}
+		if (!row.mp3 || !row.animated) return false;
+		const images = Array.isArray(row.images) ? row.images : [];
 		if (images.length !== AUTO_MEDIA_TOTAL || slides.length !== AUTO_MEDIA_TOTAL) return false;
 		const clips = images.filter(function (media) { return media && media.blob && media.blob.type === "video/mp4"; });
 		const filenames = new Set(images.map(function (media) { return media && (media.stockFilename || (media.blob && media.blob.stockFilename)); }));
@@ -9530,12 +10587,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			return;
 		}
 
+		const removedRow = batchRows[index];
+
 		cancelScriptWriteRetryWait(
-			batchRows[index]
+			removedRow
 		);
 
 		revokeBatchRow(
-			batchRows[index]
+			removedRow
 		);
 
 		batchRows.splice(index, 1);
@@ -9547,7 +10606,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		batchAttemptedRows.delete(String(id));
 
-		/* A row the user removes is gone for good: drop its 24 h archive copy. */
+		/* A row the user removes is gone for good: drop its 24 h archive copy and timeline/cookie storage. */
+		try { purgeRowLocalAndCookieEntries(removedRow); } catch (purgeError) { }
 		try { forgetCompletedBatchRow(id); } catch (forgetError) { }
 
 		if (!batchRows.length) {
@@ -9950,15 +11010,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		 */
 		const videoStyle = row.style || "Cinematic Film";
 		const styleEffects = window.__videoStyleEffects(videoStyle);
-		/*
-		 * Subtitles are cue DATA, never timeline clips. The cues ride along in
-		 * timelineState.subtitles so the timeline preview can burn them onto
-		 * the canvas exactly where the voiceover says them, while the dock keeps
-		 * them on a hidden, read-only layer (they follow the music, so they are
-		 * not editable). The text lane still opens with one dummy text at 0:00
-		 * instead of mirroring the caption cues, so no caption clip is ever
-		 * created here.
-		 */
 		const subtitles = (Array.isArray(row && row.subtitles) ? row.subtitles : [])
 			.map(function (cue) {
 				if (!cue) return null;
@@ -9970,6 +11021,25 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			})
 			.filter(function (cue) { return Boolean(cue && cue.text && cue.endMs > cue.startMs); })
 			.slice(0, 400);
+
+		const savedTimeline = readTimelineEditorStateForRow(row);
+		if (savedTimeline && Array.isArray(savedTimeline.tracks) && savedTimeline.tracks.length &&
+			Array.isArray(savedTimeline.scenes) && savedTimeline.scenes.length) {
+			const cloned = JSON.parse(JSON.stringify(savedTimeline));
+			cloned.videoStyle = videoStyle;
+			cloned.videoStyleEffects = styleEffects.slice();
+			cloned.scenes = cloned.scenes.map(function (scene) {
+				return Object.assign({}, scene, {
+					videoStyle: videoStyle,
+					effects: styleEffects.slice()
+				});
+			});
+			if ((!Array.isArray(cloned.subtitles) || !cloned.subtitles.length) && subtitles.length) {
+				cloned.subtitles = subtitles;
+			}
+			return cloned;
+		}
+
 		const requestedMinutes = Number(row && row.minutes) > 0 ? Number(row.minutes) : 1;
 		const slideSpan = slides.reduce(function (sum, slide) {
 			return sum + slideDurationSec(slide);
@@ -9983,51 +11053,131 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const visualItems = [];
 		let cursor = 0;
 
-		for (let index = 0; index < AUTO_MEDIA_TOTAL; index++) {
-			const slide = slides[index] || null;
-			const media = images.find(function (candidate) { return Number(candidate && candidate.index) === index; }) || null;
-			const sceneSpan = slide ? slideDurationSec(slide) : defaultSceneSpan;
-			const startSec = cursor;
-			const endSec = startSec + Math.max(0.25, sceneSpan);
-			const sceneId = "scene-" + (index + 1);
-			const blobType = String(media && media.blob && media.blob.type || "");
-			const mediaType = blobType === "video/mp4" || (slide && slide.type === "mp4")
-				? "video"
-				: blobType === "image/gif" ? "gif" : "image";
-			const assetId = media ? "scene-" + (index + 1) : "";
-			const scene = {
-				id: sceneId,
-				index: index,
-				name: "Scene " + (index + 1),
-				startSec: startSec,
-				durationSec: Math.max(0.25, sceneSpan),
-				mediaType: mediaType,
-				mediaAssetId: assetId,
-				mediaName: String(media && (media.stockFilename || media.blob && media.blob.stockFilename) || ""),
-				mediaSource: media && media.stockSource && media.stockSource.provider ? String(media.stockSource.provider) : (media ? "Pixabay" : "pending"),
-				prompt: String(prompts[index] || ""),
-				/* Every scene carries the row style's template-modal effects. */
-				effects: styleEffects.slice(),
-				videoStyle: videoStyle,
-				elements: []
-			};
-			mediaItems.push({
-				id: "media-" + (index + 1),
-				kind: "media",
-				sceneId: sceneId,
-				assetId: assetId,
-				label: scene.mediaName || (scene.name + " · " + (media ? mediaType : "media pending")),
-				mediaType: mediaType,
-				mediaSource: scene.mediaSource,
-				startSec: startSec,
-				durationSec: Math.max(0.25, sceneSpan),
-				trimStartSec: 0,
-				fit: "cover",
-				visible: true
+		const edit = row && row.timeline && typeof row.timeline === "object" ? row.timeline : null;
+		if (edit && Array.isArray(edit.sceneItems) && edit.sceneItems.length) {
+			edit.sceneItems.forEach(function (item, index) {
+				const dur = Math.max(0.25, pipelineManagementNumber(item && item.d, defaultSceneSpan));
+				const startSec = item && item.s != null ? Math.max(0, pipelineManagementNumber(item.s, cursor)) : cursor;
+				const endSec = startSec + dur;
+				const sceneId = String(item && item.id || ("scene-" + (index + 1)));
+				const assetId = String(item && item.a || (Number(item && item.i) >= 0 ? "scene-" + (Number(item.i) + 1) : ""));
+				const mediaType = Number(item && item.t) === 1 ? "video" : Number(item && item.t) === 2 ? "gif" : "image";
+				const mediaIdx = item && item.i != null ? Number(item.i) : index;
+				const media = mediaIdx >= 0
+					? images.find(function (candidate) { return Number(candidate && candidate.index) === mediaIdx; }) || null
+					: null;
+				const sceneName = String(item && item.n || ("Scene " + (index + 1)));
+				const mediaName = String(item && item.m || (media && (media.stockFilename || media.blob && media.blob.stockFilename)) || "");
+				const mediaSource = String(item && item.src || (media && media.stockSource && media.stockSource.provider ? media.stockSource.provider : (media ? "Pixabay" : "pending")));
+				const scene = {
+					id: sceneId,
+					index: index,
+					name: sceneName,
+					startSec: startSec,
+					durationSec: dur,
+					mediaType: mediaType,
+					mediaAssetId: assetId,
+					mediaName: mediaName,
+					mediaSource: mediaSource,
+					prompt: mediaIdx >= 0 ? String(prompts[mediaIdx] || "") : "",
+					effects: styleEffects.slice(),
+					videoStyle: videoStyle,
+					elements: []
+				};
+				mediaItems.push({
+					id: String(item && item.slideId || ("media-" + (index + 1))),
+					kind: "media",
+					sceneId: sceneId,
+					assetId: assetId,
+					label: mediaName || (sceneName + " · " + (assetId ? mediaType : "media pending")),
+					mediaType: mediaType,
+					mediaSource: mediaSource,
+					startSec: startSec,
+					durationSec: dur,
+					trimStartSec: Math.max(0, pipelineManagementNumber(item && item.tr, 0)),
+					fit: Number(item && item.f) === 1 ? "contain" : "cover",
+					visible: Number(item && item.v) !== 0
+				});
+				scenes.push(scene);
+				cursor = Math.max(cursor, endSec);
 			});
+			if (Array.isArray(edit.visuals)) {
+				edit.visuals.forEach(function (vis) {
+					if (!vis) return;
+					const el = {
+						id: String(vis.id || ("vis-" + (visualItems.length + 1))),
+						kind: vis.k === "g" ? "graphic" : "text",
+						type: vis.k === "g" ? "graphic" : "text",
+						name: vis.k === "g" ? String(vis.gr || "Circle") : "Text",
+						label: vis.k === "g" ? String(vis.gr || "Circle") : String(vis.tx || "Text"),
+						text: vis.k === "g" ? "" : String(vis.tx || ""),
+						graphic: vis.k === "g" ? String(vis.gr || "circle") : undefined,
+						sceneId: String(vis.scId || ""),
+						parentId: String(vis.pId || ""),
+						startSec: Math.max(0, pipelineManagementNumber(vis.s, 0)),
+						durationSec: Math.max(0.25, pipelineManagementNumber(vis.d, 3)),
+						x: pipelineManagementNumber(vis.x, 50),
+						y: pipelineManagementNumber(vis.y, vis.k === "g" ? 50 : 78),
+						fontSize: vis.k === "g" ? undefined : pipelineManagementNumber(vis.sz, 28),
+						size: vis.k === "g" ? pipelineManagementNumber(vis.sz, 72) : undefined,
+						color: String(vis.c || "#ffffff"),
+						font: String(vis.fn || "sans"),
+						align: String(vis.al || "center"),
+						visible: Number(vis.v) !== 0,
+						dummy: Boolean(vis.dm)
+					};
+					visualItems.push(el);
+					const targetScene = scenes.find(function (s) { return s.id === el.sceneId; });
+					if (targetScene) targetScene.elements.push(Object.assign({}, el));
+				});
+			}
+		} else {
+			for (let index = 0; index < AUTO_MEDIA_TOTAL; index++) {
+				const slide = slides[index] || null;
+				const media = images.find(function (candidate) { return Number(candidate && candidate.index) === index; }) || null;
+				const sceneSpan = slide ? slideDurationSec(slide) : defaultSceneSpan;
+				const startSec = cursor;
+				const endSec = startSec + Math.max(0.25, sceneSpan);
+				const sceneId = "scene-" + (index + 1);
+				const blobType = String(media && media.blob && media.blob.type || "");
+				const mediaType = blobType === "video/mp4" || (slide && slide.type === "mp4")
+					? "video"
+					: blobType === "image/gif" ? "gif" : "image";
+				const assetId = media ? "scene-" + (index + 1) : "";
+				const scene = {
+					id: sceneId,
+					index: index,
+					name: "Scene " + (index + 1),
+					startSec: startSec,
+					durationSec: Math.max(0.25, sceneSpan),
+					mediaType: mediaType,
+					mediaAssetId: assetId,
+					mediaName: String(media && (media.stockFilename || media.blob && media.blob.stockFilename) || ""),
+					mediaSource: media && media.stockSource && media.stockSource.provider ? String(media.stockSource.provider) : (media ? "Pixabay" : "pending"),
+					prompt: String(prompts[index] || ""),
+					/* Every scene carries the row style's template-modal effects. */
+					effects: styleEffects.slice(),
+					videoStyle: videoStyle,
+					elements: []
+				};
+				mediaItems.push({
+					id: "media-" + (index + 1),
+					kind: "media",
+					sceneId: sceneId,
+					assetId: assetId,
+					label: scene.mediaName || (scene.name + " · " + (media ? mediaType : "media pending")),
+					mediaType: mediaType,
+					mediaSource: scene.mediaSource,
+					startSec: startSec,
+					durationSec: Math.max(0.25, sceneSpan),
+					trimStartSec: 0,
+					fit: "cover",
+					visible: true
+				});
 
-			scenes.push(scene);
-			cursor = endSec;
+				scenes.push(scene);
+				cursor = endSec;
+			}
 		}
 
 		/*
@@ -10061,7 +11211,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			visualItems.push(dummyText);
 		}
 
-		durationSec = Math.max(durationSec, cursor);
+		durationSec = cursor > 0 ? cursor : Math.max(durationSec, cursor);
 		return {
 			version: 3,
 			frame: batchRowDimensions(row),
@@ -10089,49 +11239,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	}
 
 	/*
-	 * The project detail of the Edit handoff: everything the timeline page
-	 * needs to describe the project without running the pipeline. The video
-	 * style lives here (and in basicSettings and in timelineState.videoStyle)
-	 * together with the template-modal effect names resolved from it, so the
-	 * timeline editor receives the row's style as project data rather than
-	 * re-deriving it.
+	 * The project detail of the Edit handoff: composed directly from the row's
+	 * current timeline scenes, elements, video style, and template-modal effects.
 	 */
 	function batchProjectDetail(row, timelineState) {
-		const style =
-			String(row && row.style || "Cinematic Film");
-		const frame =
-			timelineState && timelineState.frame ? timelineState.frame : batchRowDimensions(row);
-		return {
-			id: String(row && row.id != null ? row.id : ""),
-			rowId: String(row && row.id != null ? row.id : ""),
-			vid: String(row && row.vid || ""),
-			title: String(row && row.title || "").slice(0, 70),
-			topic: String(row && row.topic || "").slice(0, 160),
-			style: style,
-			effects: window.__videoStyleEffects(style),
-			effectLabel: window.__videoStyleEffectLabel(window.__videoStyleEffects(style)),
-			resolution: String(row && row.resolution || ""),
-			orientation: String(row && row.orientation || ""),
-			quality: String(row && row.quality || "balanced"),
-			frame: frame,
-			sceneCount: timelineState && Array.isArray(timelineState.scenes) ? timelineState.scenes.length : AUTO_MEDIA_TOTAL,
-			/*
-			 * Every scene keeps its own copy of the resolved effect list, so
-			 * the detail view can promise the treatment on all scenes without
-			 * walking the timeline model.
-			 */
-			scenes: (timelineState && Array.isArray(timelineState.scenes) ? timelineState.scenes : [])
-				.map(function (scene) {
-					return {
-						id: String(scene && scene.id || ""),
-						index: Number(scene && scene.index) || 0,
-						mediaType: String(scene && scene.mediaType || "image"),
-						startSec: Number(scene && scene.startSec) || 0,
-						durationSec: Number(scene && scene.durationSec) || 0,
-						effects: Array.isArray(scene && scene.effects) ? scene.effects.slice() : window.__videoStyleEffects(style)
-					};
-				})
-		};
+		return composeBatchProjectDetail(row, timelineState);
 	}
 
 	function batchProjectJson(row) {
@@ -10139,6 +11251,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const script = String(row.script || "");
 		const firstLine = script.split(/\\r?\\n/).find(function (line) { return line.trim(); }) || "";
 		const timelineState = batchTimelineState(row);
+		const detail = batchProjectDetail(row, timelineState);
+		row.projectDetail = detail;
 		return {
 			version: 1,
 			transitionOnly: true,
@@ -10155,12 +11269,16 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				orientation: row.orientation || "",
 				quality: row.quality || "balanced"
 			},
-			projectDetail: batchProjectDetail(row, timelineState),
+			projectDetail: detail,
 			timelineState: timelineState
 		};
 	}
 
 	function openBatchEditPage(row) {
+		if (!row || !batchRowHasScript(row)) {
+			if (row) try { purgeRowLocalAndCookieEntries(row); } catch (purgeError) { }
+			return null;
+		}
 		const payload = batchProjectJson(row);
 		if (!payload) return null;
 		const key = "edit-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
@@ -10354,6 +11472,32 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	function refreshBatchRowCells() {
 
 		for (const row of batchRows) {
+
+			const tr =
+				document.querySelector('[data-batch-row="' + row.id + '"]');
+
+			if (tr) {
+				const scriptEl =
+					tr.querySelector('[data-batch-field="script"]');
+				if (
+					scriptEl &&
+					document.activeElement !== scriptEl &&
+					(pipelineManagementRestoring || (String(row.script || "") && scriptEl.value === ""))
+				) {
+					scriptEl.value = String(row.script || "");
+				}
+				const styleEl =
+					tr.querySelector('[data-batch-field="style"]');
+				if (styleEl && row.style && document.activeElement !== styleEl) {
+					const prevSynced = styleEl._syncedStyle != null
+						? styleEl._syncedStyle
+						: (styleEl.options && styleEl.options[0] ? styleEl.options[0].value : "");
+					if (pipelineManagementRestoring || (!styleEl._batchTouched && styleEl.value === prevSynced)) {
+						styleEl.value = row.style;
+						styleEl._syncedStyle = row.style;
+					}
+				}
+			}
 
 			const status =
 				document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="status"]');
@@ -12264,6 +13408,16 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			row.finishedAt =
 				Date.now();
 
+			row._timelineRegeneratedAt =
+				Math.max(batchRowTimelineUpdatedAt(row), row.finishedAt);
+
+			row._storedFinished = false;
+			row._storedImagesCount = 0;
+			row._storedSlidesCount = 0;
+			row._storedMp3 = false;
+			row._storedAnimated = false;
+			row.projectDetail = composeBatchProjectDetail(row);
+
 			setBatchStage(
 				row,
 				"done",
@@ -12310,14 +13464,24 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	function batchRowReadyForGeneration(row) {
 
-		return !!(
-			row &&
-			batchRowHasScript(row) &&
+		if (
+			!row ||
+			!batchRowHasScript(row) ||
+			row.running ||
+			row.retrying ||
+			row.stopRequested ||
+			batchRowBusy(row)
+		) {
+			return false;
+		}
+		if (batchRowTimelinePendingRegen(row)) {
+			return (
+				BATCH_GENERATABLE_STAGES.indexOf(row.stage) !== -1 ||
+				row.stage === "done"
+			);
+		}
+		return (
 			!batchRowFinished(row) &&
-			!row.running &&
-			!row.retrying &&
-			!row.stopRequested &&
-			!batchRowBusy(row) &&
 			BATCH_GENERATABLE_STAGES.indexOf(row.stage) !== -1
 		);
 
@@ -12667,7 +13831,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			const row =
 				batchQueue.shift();
 
-			if (!row || row.running || batchRowFinished(row) || batchAttemptedRows.has(String(row.id))) {
+			if (!row || row.running || (!batchRowTimelinePendingRegen(row) && batchRowFinished(row)) || batchAttemptedRows.has(String(row.id))) {
 				continue;
 			}
 
@@ -12876,7 +14040,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		const audio =
 			typeof Audio === "function"
-				? new Audio(row.mp3Url)
+				? (row.mp3Url ? new Audio(row.mp3Url) : new Audio())
 				: null;
 
 		if (audio) {
@@ -12900,15 +14064,28 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			canvas: canvas,
 			context: context,
 			audio: audio,
-			playing: !!audio,
+			playing: Boolean(audio && row.mp3Url),
 			manualMs: 0,
 			raf: 0
 		};
 
-		if (audio) {
+		if (audio && row.mp3Url) {
 
 			batchPreviewPlay(audio);
 
+		}
+
+		if (
+			(!row.mp3Url || !(Array.isArray(row.slides) && row.slides.some(function (s) { return s && s.img; }))) &&
+			typeof hydrateBatchRowAssetsFromTimeline === "function"
+		) {
+			hydrateBatchRowAssetsFromTimeline(row).then(function (ok) {
+				if (ok && batchPreview && batchPreview.row === row && batchPreview.audio && row.mp3Url) {
+					if (!batchPreview.audio.src) batchPreview.audio.src = row.mp3Url;
+					batchPreview.playing = true;
+					batchPreviewPlay(batchPreview.audio);
+				}
+			});
 		}
 
 		modal.addEventListener(
@@ -13016,7 +14193,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			while (index < row.slides.length - 1 && localSeconds >= sceneStart + durations[index]) { sceneStart += durations[index]; index++; }
 			const slide = row.slides[index];
 			const phase = (localSeconds - sceneStart) / durations[index];
-			if (slide.type === "mp4" && !slide.videoEl.seeking) {
+			if (slide && slide.type === "mp4" && slide.videoEl && !slide.videoEl.seeking) {
 				const targetTime = Math.min(localSeconds - sceneStart, Math.max(0, slide.duration - 0.001));
 				if (Math.abs(slide.videoEl.currentTime - targetTime) > 0.1) { try { slide.videoEl.currentTime = targetTime; } catch (_) {} }
 			}
@@ -13037,7 +14214,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			if (
 				slide &&
 				slide.img &&
-				(slide.img.naturalWidth || slide.img.videoWidth) && (slide.type !== "mp4" || slide.videoEl.readyState >= 2)
+				(slide.img.naturalWidth || slide.img.videoWidth) && (slide.type !== "mp4" || (slide.videoEl && slide.videoEl.readyState >= 2))
 			) {
 
 				const sourceWidth =
@@ -13282,6 +14459,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				true
 		};
 
+		if (
+			(!row.audio || !(Array.isArray(row.slides) && row.slides.some(function (s) { return s && s.img; }))) &&
+			typeof hydrateBatchRowAssetsFromTimeline === "function"
+		) {
+			try { await hydrateBatchRowAssetsFromTimeline(row); } catch (hydrateErr) { }
+		}
+
 		if (titleInputEl) {
 
 			/* The table has no title column: no overlay text. */
@@ -13473,6 +14657,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		}
 
 		revokeBatchRow(row);
+		try { purgeRowLocalAndCookieEntries(row); } catch (purgeError) { }
 
 		row.mp3 =
 			null;
@@ -13492,11 +14677,53 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		row.slides =
 			[];
 
+		row.slideItems =
+			[];
+
 		row.subtitles =
 			[];
 
 		row.animated =
 			false;
+
+		row.timeline =
+			null;
+
+		row.timelineKey =
+			"";
+
+		row.timelineUpdatedAt =
+			0;
+
+		row.timelineEdited =
+			false;
+
+		row.timelineDurationSec =
+			0;
+
+		row.timelineSceneCount =
+			0;
+
+		row.projectDetail =
+			null;
+
+		row._storedFinished =
+			false;
+
+		row._storedImagesCount =
+			0;
+
+		row._storedSlidesCount =
+			0;
+
+		row._storedMp3 =
+			false;
+
+		row._storedAnimated =
+			false;
+
+		row._timelineRegeneratedAt =
+			0;
 
 		row.retrying =
 			false;
@@ -13512,6 +14739,16 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		paintBatchRowStatus(row);
 
+		const actions =
+			document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-slot="actions"]');
+
+		if (actions) {
+
+			actions.innerHTML =
+				batchActionsHTML(row);
+
+		}
+
 		for (const kind of ["preview", "export"]) {
 
 			const cell =
@@ -13526,6 +14763,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		}
 
+		persistPipelineManagementState("row-cleared");
+
 	}
 
 	function syncBatchScriptStatus(row) {
@@ -13536,7 +14775,17 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		if (
 			!batchRowHasScript(row) &&
-			(batchRowFinished(row) || row.stage === "done" || row.stage === "error")
+			(
+				batchRowFinished(row) ||
+				row.stage === "done" ||
+				row.stage === "error" ||
+				row.timeline ||
+				row.timelineEdited ||
+				row.timelineKey ||
+				row.projectDetail ||
+				row._storedFinished ||
+				row._storedImagesCount
+			)
 		) {
 
 			resetClearedBatchRow(row);
@@ -13544,6 +14793,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			updateBatchToolbar();
 
 			return;
+
+		}
+
+		if (!batchRowHasScript(row)) {
+
+			try { purgeRowLocalAndCookieEntries(row); } catch (purgeError) { }
+			persistPipelineManagementState("blank-script");
 
 		}
 
@@ -24668,8 +25924,13 @@ async function retryImagePromptFlow(n) {
 		/* The timeline is a standalone client layout: do not bind or restore the pipeline/video-studio shell. */
 		applyTransitionProject();
 	} else {
-		initVideoStudio();
-		bindStudioShell();
+		pipelineManagementRestoring = true;
+		try {
+			initVideoStudio();
+			bindStudioShell();
+		} finally {
+			pipelineManagementRestoring = false;
+		}
 		restorePipelineManagementState();
 		/*
 		 * Session 331: rows that finished a render or export in the last 24 h

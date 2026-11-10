@@ -103,9 +103,13 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 		}
 
 		function fitsCookies(text, updatedAt) {
-			var values = cookieValues(text, updatedAt, "0");
+			var values = cookieValues(text, updatedAt, "00000000");
 			for (var i = 0; i < values.length; i++) if (values[i].length > MAX_COOKIE_VALUE) return false;
 			return true;
+		}
+
+		function hasNonBlankText(value) {
+			return Boolean(String(value || "").trim());
 		}
 
 		function normalizeRow(row, index) {
@@ -126,6 +130,59 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			return out;
 		}
 
+		function compactTimelineFields(rows, stripLabels) {
+			rows.forEach(function (row) {
+				if (!row || typeof row !== "object") return;
+				if (row.projectDetail && typeof row.projectDetail === "object") {
+					/* Re-composed cleanly from slides/slideItems/timeline on restore. */
+					delete row.projectDetail.scenes;
+					delete row.projectDetail.slides;
+					delete row.projectDetail.elements;
+					if (stripLabels) {
+						row.projectDetail.title = String(row.projectDetail.title || "").slice(0, 40);
+						row.projectDetail.topic = String(row.projectDetail.topic || "").slice(0, 40);
+					}
+				}
+				if (stripLabels && Array.isArray(row.slideItems)) {
+					row.slideItems.forEach(function (item) {
+						if (!item || typeof item !== "object") return;
+						delete item.n;
+						delete item.m;
+						delete item.src;
+					});
+				}
+				if (row.timeline && typeof row.timeline === "object") {
+					if (row.timeline.projectDetail && typeof row.timeline.projectDetail === "object") {
+						delete row.timeline.projectDetail.scenes;
+						delete row.timeline.projectDetail.slides;
+						delete row.timeline.projectDetail.elements;
+					}
+					if (Array.isArray(row.timeline.sceneItems)) {
+						delete row.slideItems;
+					}
+					if (stripLabels && Array.isArray(row.timeline.sceneItems)) {
+						row.timeline.sceneItems.forEach(function (item) {
+							if (!item || typeof item !== "object") return;
+							delete item.n;
+							delete item.m;
+							delete item.src;
+						});
+					}
+					if (stripLabels && Array.isArray(row.timeline.visuals)) {
+						row.timeline.visuals.forEach(function (vis) {
+							if (!vis || typeof vis !== "object") return;
+							if (typeof vis.tx === "string" && vis.tx.length > 24) vis.tx = vis.tx.slice(0, 24);
+						});
+					}
+				}
+				if (stripLabels) {
+					row.detail = "";
+					row.title = String(row.title || "").slice(0, 40);
+					row.topic = String(row.topic || "").slice(0, 40);
+				}
+			});
+		}
+
 		function boundedSnapshot(snapshot) {
 			var clone = deepCopy(snapshot) || {};
 			clone.version = VERSION;
@@ -134,11 +191,23 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			clone.layout = String(clone.layout || "editor");
 			var qb = clone.quickBatch || {};
 			var ed = clone.editor || {};
-			var rows = (Array.isArray(qb.rows) ? qb.rows : []).slice(0, MAX_ITEMS).map(normalizeRow);
-			var projects = (Array.isArray(ed.projects) ? ed.projects : []).slice(0, MAX_ITEMS).map(normalizeProject);
+			/* Blank-script rows never belong in pipeline localStorage or cookies. */
+			var rows = (Array.isArray(qb.rows) ? qb.rows : [])
+				.filter(function (row) { return Boolean(row && hasNonBlankText(row.script)); })
+				.slice(0, MAX_ITEMS)
+				.map(normalizeRow);
+			var projects = (Array.isArray(ed.projects) ? ed.projects : [])
+				.filter(function (project) { return Boolean(project && hasNonBlankText(project.script)); })
+				.slice(0, MAX_ITEMS)
+				.map(normalizeProject);
+			var keptIds = Object.create(null);
+			rows.forEach(function (row) { keptIds[String(row.id)] = true; });
 			clone.quickBatch = {
 				runBusy: Boolean(qb.runBusy),
-				queued: (Array.isArray(qb.queued) ? qb.queued : []).slice(0, MAX_ITEMS).map(String),
+				queued: (Array.isArray(qb.queued) ? qb.queued : [])
+					.map(String)
+					.filter(function (id) { return keptIds[id] === true; })
+					.slice(0, MAX_ITEMS),
 				finishedCount: num(qb.finishedCount, 0),
 				rows: rows
 			};
@@ -146,11 +215,61 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			clone.videoIds = rows.map(function (row) { return row.vid; }).concat(projects.map(function (project) { return project.vid; }));
 
 			var text = JSON.stringify(clone);
+			if (!fitsCookies(text, clone.updatedAt)) {
+				compactTimelineFields(rows, false);
+				text = JSON.stringify(clone);
+			}
 			var scriptCap = MAX_SCRIPT_CHARS;
-			while (!fitsCookies(text, clone.updatedAt) && scriptCap > 0) {
-				scriptCap = Math.floor(scriptCap / 2);
+			while (!fitsCookies(text, clone.updatedAt) && scriptCap > 32) {
+				scriptCap = Math.max(32, Math.floor(scriptCap / 2));
 				rows.forEach(function (row) { row.script = String(row.script || "").slice(0, scriptCap); });
 				projects.forEach(function (project) { project.script = String(project.script || "").slice(0, scriptCap); });
+				text = JSON.stringify(clone);
+			}
+			if (!fitsCookies(text, clone.updatedAt)) {
+				compactTimelineFields(rows, true);
+				text = JSON.stringify(clone);
+			}
+			while (!fitsCookies(text, clone.updatedAt) && scriptCap > 0) {
+				scriptCap = Math.floor(scriptCap / 2);
+				var floorCap = scriptCap > 0 ? scriptCap : 1;
+				rows.forEach(function (row) {
+					var s = String(row.script || "").trim();
+					row.script = s ? s.slice(0, floorCap) : "";
+				});
+				projects.forEach(function (project) {
+					var s = String(project.script || "").trim();
+					project.script = s ? s.slice(0, floorCap) : "";
+				});
+				text = JSON.stringify(clone);
+				if (scriptCap === 0) break;
+			}
+			if (!fitsCookies(text, clone.updatedAt)) {
+				rows.forEach(function (row) {
+					if (!row || !row.timeline || typeof row.timeline !== "object") return;
+					delete row.timeline.visuals;
+					delete row.timeline.audios;
+					delete row.timeline.projectDetail;
+				});
+				text = JSON.stringify(clone);
+			}
+			if (!fitsCookies(text, clone.updatedAt)) {
+				rows.forEach(function (row) {
+					if (!row || typeof row !== "object") return;
+					if (row.timeline && typeof row.timeline === "object") {
+						if (Array.isArray(row.timeline.scenes) && row.timeline.scenes.length) {
+							delete row.timeline.sceneItems;
+						}
+					}
+				});
+				text = JSON.stringify(clone);
+			}
+			if (!fitsCookies(text, clone.updatedAt)) {
+				rows.forEach(function (row) {
+					if (!row || typeof row !== "object") return;
+					delete row.projectDetail;
+					delete row.slideItems;
+				});
 				text = JSON.stringify(clone);
 			}
 			while (!fitsCookies(text, clone.updatedAt) && (rows.length || projects.length)) {
