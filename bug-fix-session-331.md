@@ -3711,3 +3711,154 @@ this section added tests to:
 - **The URL layout request is spent once.** Applying it on every restore would fight the `[data-layout]` switch and the `storage`-event restore.
 - **One unexplained flake, stated plainly.** The first cold run of `timeline-quick-batch-sync` in this session failed once; the following nine runs on this branch and five on the untouched baseline were all green, and the failing assertion was never captured. Nothing in this change touches that file's earlier tests, but it is not accounted for.
 - **No real browser** (no Chromium, no `playwright-core` in devDependencies): everything above is JSDOM against the real client modules. The `window.close()` branch of the Back handler is unchanged and was not exercised in a browser — please click ← Quick Batch once in Chrome and confirm the table comes up.
+
+## 30. Render-first "Add video from template", NaN-free durations/status, and per-scene template `projectDetail` across Editor & Timeline (2026-11-10)
+
+**Status: coded and verified.** Branch: `arena/0f59abf4-text-to-image-template` (branched from `ac2a76684cd4ff9967968ac41c17c5cfb0c0dde5`).
+
+Scope of this pass:
+
+- Fix "Add video from template" in the Editor layout accordion (`#va-template-link-{n}` → `#tpl-modal` → `#tpl-add`) so the modal renders the MP4 **first** before adding the clip to the accordion gallery, and ensure the same render-first flow runs in the Timeline editor (`+ Add Clips` → `#tpl-modal` → `#tpl-add` / `#tpl-export`).
+- Eliminate the modal/gallery/timeline `NaN` error/status output when adding a composed template video.
+- Record added template videos in `projectDetail` as individual scenes (`isTemplateScene: true`) with their child graphics and text elements and individual scene/element transitions and styles across Editor, Timeline, and Quick Batch sync, without breaking existing behaviour.
+
+### 30.1 What the code actually did (reproduced against `createHTML()` and `mp4-muxer@5.1.3`)
+
+Five concrete root causes were reproduced in end-to-end JSDOM traces against `createHTML()` and inspected directly in `mp4-muxer@5.1.3` (`build/mp4-muxer.mjs`):
+
+| # | Where | What happened |
+|---|---|---|
+| 1 | `src/client/template-composer-js.ts` — `exportMP4()` + `mp4-muxer@5.1.3` | `new VideoFrame(canvas, { timestamp })` omitted `duration`, so browser `VideoEncoder` output emitted `EncodedVideoChunk` objects with `chunk.duration === null`. `mp4-muxer@5.1.3`'s `addVideoChunk()` delegates `chunk.duration` straight into `addVideoChunkRaw(..., duration)`, which validates `typeof duration !== "number" \|\| !Number.isInteger(duration) \|\| duration < 0` and threw `TypeError: duration must be a non-negative integer.` during render. In addition, `exportMP4()` hardcoded `avc1.42001f` / Level 4.0 without `VideoEncoder.isConfigSupported(...)` fallback for portrait `1080×1920` (which exceeds H.264 Level 4.0 frame-height limits and requires Level 4.2 `avc1.4d002a`), wired `exportBtn.addEventListener("click", exportMP4)` directly (passing a `MouseEvent` as `options`), and named exported files from `VARIATIONS[0]` even in Reel Scene mode. |
+| 2 | `src/client/template-scene-editor.ts` — `REEL_SCENE_IMAGES_READY` & `document.fonts.ready` | `exportMP4` awaited `REEL_SCENE_IMAGES_READY` and `document.fonts.ready` with no timeout, so a single stalled image/font decode hung the render-first `addTemplateToVideo()` path before frame `0`. |
+| 3 | `src/client/template-composer-js.ts` & `src/client/app-js.ts` — `<video>` probe + `formatSeconds()` + `#tpl-duration` | `addTemplateToVideo()` created a detached `<video>` element (never attached to `document.body`, no timeout guard) and read `probed.duration` directly on `loadedmetadata`. For freshly muxed in-memory `blob:` URLs, Chromium/WebKit frequently report `NaN` or `Infinity` on `probed.duration` before demuxer duration settles. `probed.duration` flowed unguarded into `formatSeconds(probed.duration)` (`Math.round(NaN)` → `"NaN:NaN"`), `asset.duration = NaN`, `#tpl-status` (`"Added to Video 1 (NaN:NaN)"`), `#va-summary-1` (`"1 MP4 (NaN:NaN)"`), `.va-card-label` (`"... | NaN:NaN"`), and `handClipToTimeline()`. Clearing `#tpl-duration` while typing also set `duration = NaN` in `durationEl`'s `input` listener. |
+| 4 | `src/client/app-js.ts` — `#va-template-link-{n}` binding | `videoAccordionHTML(n)` relied only on an inline `onclick="openTemplateModal(n); return false;"` attribute instead of binding a DOM click listener in `addVideoAccordion(n)` and `restoreVideoAccordionState(n, state)`. |
+| 5 | `src/client/template-composer-js.ts`, `src/client/template-scene-editor.ts`, `src/client/app-js.ts`, `src/client/timeline-editor.ts`, `src/client/pipeline-management-store.ts` — missing per-scene template `projectDetail` | Composed template MP4s carried only `{ blob, url, duration, name }`. Editor `videoProjects` had no `projectDetail` composer at all; Timeline `appendQueuedClips()` created bare media clips with empty `elements: []`, ignored template scene styles/effects/transitions, created no child `text`/`graphic` items in `TEXT & GRAPHICS`, and Quick Batch sync (`composeTimelineSummaryFromState()` / `composeBatchProjectDetail()`) dropped per-scene transitions/styles and child element metadata. |
+
+### 30.2 The fix
+
+**A — Render-first WebCodecs + `mp4-muxer@5.1.3` pipeline (`src/client/template-composer-js.ts`, `src/client/template-scene-editor.ts`).**
+
+- `addTemplateToVideo()` always renders the MP4 **first** via `await exportMP4({ download: false })` before probing or mutating either the Editor accordion gallery (`#va-gallery-{n}`) or the Timeline `Scene Media` sink (`window.__TIMELINE_TEMPLATE_CLIP__`), updating `#tpl-status` with explicit `"Rendering template video before adding…"` progress.
+- Every `new VideoFrame(canvas, { timestamp, duration: frameDurationUs })` now carries an explicit integer microsecond `duration` (`Math.round(1_000_000 / TPL_FPS)`). In `VideoEncoder`'s `output(chunk, meta)` callback, if a browser encoder still emits `chunk.duration == null` or a non-finite duration, the chunk bytes are copied and muxed via `muxer.addVideoChunkRaw(bytes, chunk.type, safeTimestamp, frameDurationUs, meta)` so `mp4-muxer@5.1.3` always receives non-negative integer timestamps and durations.
+- `selectTemplateEncoderCodec(TPL_W, TPL_H)` probes `VideoEncoder.isConfigSupported(...)` across `["avc1.4d002a", "avc1.4d0032", "avc1.640032", "avc1.42002a", "avc1.420032", "avc1.42001f"]`, selecting H.264 Main Profile Level 4.2 (`avc1.4d002a`) cleanly for portrait `1080×1920` as well as landscape `1920×1080`.
+- Bounded waits: `REEL_SCENE_IMAGES_READY` and `document.fonts.ready` race against `2500 ms` timeouts, `videoEncoder.encodeQueueSize` backpressure has a `15 s` stall guard, and `videoEncoder.flush()` has a `30 s` timeout guard.
+- `exportBtn` and `addBtn` click handlers invoke `exportMP4({ download: true })` and `addTemplateToVideo()` explicitly (never passing `MouseEvent` as `options`), and exported filenames derive from the active Reel Scene / Ring Carousel / Classic template title (`template_<slug>_<portrait|landscape>.mp4`).
+- `addVideoAccordion(n)` and `restoreVideoAccordionState(n, state)` remove the inline `onclick` attribute on `#va-template-link-{n}` and bind a single `addEventListener("click", ...)` listener calling `window.openTemplateModal(n)` (preventing duplicate firing in browsers while working identically under strict CSP and JSDOM `outside-only`).
+
+**B — `NaN` / `Infinity`-proof duration probing and formatting (`src/client/template-composer-js.ts`, `src/client/app-js.ts`).**
+
+- `safeTemplateDuration(fallback)` clamps `#tpl-duration` and fallback durations to finite integers in `[1, TPL_MAX_DURATION]` (`25 s`), keeping `duration` valid even while the user clears `#tpl-duration` mid-edit.
+- `probeRenderedTemplateMp4(url, expectedSeconds)` mounts a hidden off-screen `1×1` host in `document.body`, listens for `loadedmetadata` / `durationchange` / `loadeddata` / `error` with a `1200 ms` timeout, detaches the host in `finally`, and falls back to `safeTemplateDuration(expectedSeconds)` whenever `probed.duration` is `NaN`, `Infinity`, `<= 0`, or unreasonable.
+- `tplFormatSeconds(value)` and `APP_JS`'s `formatSeconds(s)` + `updateVideoStatus(n)` MP4 duration reducer coerce non-finite or negative inputs to `0`, guaranteeing `"NaN"` / `"Infinity"` never appear in `#tpl-status`, `#va-summary-{n}`, `.va-card-label`, `.va-card-tip`, or `#timeline-status`.
+
+**C — Structured per-scene `templateScene` & `projectDetail` across Editor, Timeline, and Quick Batch (`src/client/template-composer-js.ts`, `src/client/template-scene-editor.ts`, `src/client/app-js.ts`, `src/client/timeline-editor.ts`, `src/client/pipeline-management-store.ts`).**
+
+- `captureActiveTemplateScene(clipDuration)` captures full template scene metadata at render time across all three template modes:
+  - **Classic variations** (`mode: "variation"`): scene `style`, `videoStyle`, `effects`, `transition` (`type`, `speed`, `effect`, `motionSpeed`, `background`), and visible text/motif child elements.
+  - **14 Interactive Reel Scenes** (`mode: "reel-scene"`): scene `style`, `videoStyle`, `effects` (`duotone`, `neon`, `vhs`), background `transition` (`type`, `speed`, `effect`, `motionSpeed`, `image`), and every visible non-deleted child `text` and `graphic` element (including user-added `+ Text` / `+ Graphic` items and all 13 `motion:*` shape animations) with per-element `x`, `y`, `size`/`fontSize`, `rotation`, `color`, `accent`, `font`, `align`, `anim`, `speed`, `transition`, `transitionSpeed`, and `style`.
+  - **15th scene — 3D Ring Carousel** (`mode: "ring-carousel"`): `style: "carousel"`, `carousel` summary (`count`, `uploadedCount`, `imageNames`, `speed`, `radius`, `size`, `tilt`, `rotation`), and a `ring-carousel` child `graphic` element.
+- **Editor layout (`src/client/app-js.ts`, `src/client/pipeline-management-store.ts`)**:
+  - `composeEditorProjectDetail(project, n)` and `syncEditorProjectDetail(n, reason)` (`window.syncEditorProjectDetail`, `window.getEditorProjectDetail`) build `project.projectDetail` with every gallery asset in order and each template MP4 represented as an individual scene (`isTemplateScene: true`, `style`, `videoStyle`, `effects`, `transition`, and child `elements` with individual `transition` and `style`).
+  - Wired into `addTemplateToVideo()`, `updateVideoStatus()`, `syncVaOrder()` (drag-reorder), `restoreVideoAccordionState()` (Delete Video renumbering), `collectVideoPayload()`, `pipelineManagementSnapshot()`, and `restorePipelineManagementState()`.
+  - `cookieMirror()` in `pipeline-management-store.ts` compacts `proj.projectDetail` (`scenes`/`slides`/`elements`) on `editor.projects` when fitting the 4-cookie mirror while keeping full `projectDetail` in `localStorage` and preserving blank-script exclusion.
+- **Timeline layout & Quick Batch sync (`src/client/timeline-editor.ts`, `src/client/app-js.ts`)**:
+  - `appendTemplateClip()` / `appendQueuedClips()` attach `isTemplateScene`, `templateId`, `style`, `videoStyle`, `effects`, `transition`, and `templateElements` to the new scene and media item, and materialize child `text` and `graphic` items in `TEXT & GRAPHICS` (`parentId` bound to the template media clip, placed via `ensureTemplateVisualTrackAt()` within `MAX_VISUAL_TRACKS = 4` with zero per-lane overlap). If a template scene has more than 4 child elements, visual lanes remain capped at `4` while all child elements remain preserved in `scene.elements` / `projectDetail`.
+  - **Anti-double-paint + live promotion (`bakedInTemplateClip`)**: because the rendered template MP4 already has its initial text, graphics, and style effects baked into its video frames, fresh template child items carry `bakedInTemplateClip: true`, and `drawPreview()` / `paintTimelineFrameAt()` skip re-painting `drawStyleEffects()` and unedited `bakedInTemplateClip` children while a decoded template `<video>` frame is drawn (selection boxes still draw on hover/select). Editing any property of a child item in `#timeline-inspector` / `#timeline-child-panel`, dragging it on the preview canvas (`moveCanvasDrag`), or duplicating a child item (`duplicateSelectedItem`) deletes `bakedInTemplateClip` so user edits immediately render live on preview and MP4 export.
+  - `composeProjectDetail()`, `timelineEditSummary()`, `composeTimelineSummaryFromState()`, and `composeBatchProjectDetail()` preserve each template video's `isTemplateScene`, `style`, `videoStyle`, `effects`, `transition`, and child `text`/`graphic` elements end-to-end back to Quick Batch.
+
+### 30.3 Tests added
+
+| File | Tests | Asserts |
+|---|---|---|
+| `tests/template-composer.test.mjs` (`20 → 22`) | `render-first MP4 muxes finite microsecond durations (mp4-muxer@5.1.3), falls back to Level 4.2 in portrait, and never emits NaN on NaN/Infinity probes` · `templateScene captures individual scene style, transition, child text, graphics, motion shapes, and 3D Ring Carousel` | Strict `addVideoChunkRaw` integer duration validation with `chunk.duration = null`, portrait `1080×1920` Level 4.2 codec selection (`avc1.4d002a`), `NaN`/`Infinity` `<video>` probes & blank `#tpl-duration` never emitting `NaN`, `#tpl-export` DOM `MouseEvent` download, and `templateScene` capture across Reel Scenes (`+ Text`, `+ Graphic`, `motion:*` animations, hidden-element exclusion) and `3D Ring Carousel` (5 uploaded cards) |
+| `tests/template-add-project-detail.test.mjs` (`3` new end-to-end tests on `createHTML()`) | Editor accordion render-first + multi-scene `projectDetail` + reorder + pipeline store/cookies · Timeline `+ Add Clips` render-first + child lanes + `bakedInTemplateClip` anti-double-paint & live edit/duplicate promotion + Quick Batch sync · Accordion Delete Video renumbering + Timeline `Download MP4` 7-element `MAX_VISUAL_TRACKS = 4` cap with full `projectDetail` retention | Real assembled `createHTML()` bundle across `?layout=editor` and `?layout=timeline`, confirming mux finalization happens strictly before gallery/timeline insertion, zero `NaN`/`Infinity` strings anywhere in DOM or state, full per-scene child text/graphics and transitions/styles, `localStorage` + 4-cookie budget compliance, and anti-double-paint promotion |
+
+### 30.4 Verification
+
+```text
+npx tsc --noEmit                 30 diagnostics, all in src/index.ts (unchanged pre-existing baseline)
+npx wrangler deploy --dry-run    bundles clean, 3257.28 KiB / gzip: 1424.32 KiB
+new Function(inlineScripts)      assembled createHTML() inline scripts parse cleanly
+
+Targeted regression suites (all green):
+  template-composer                 22 / 22   (was 20 / 20 — 2 new tests)
+  template-add-project-detail        3 /  3   (new full-page Editor + Timeline + Store suite)
+  timeline-editor                   37 / 37
+  timeline-quick-batch-sync         10 / 10
+  final-media-cap-actions           14 / 14
+  quick-batch-table                 15 / 15
+  session-331-fixes                 10 / 10
+  pixabay-media + public-entry-points + api-relay + account-rows  113 / 113
+```
+
+### 30.5 Small print and invariants preserved
+
+- **Template-literal safety (§14.7, §22.14)**: no unescaped backticks or `${...}` expressions were introduced inside `APP_JS`, `TEMPLATE_COMPOSER_JS`, `REEL_SCENE_EDITOR_JS`, `TIMELINE_EDITOR_JS`, or `PIPELINE_MANAGEMENT_STORE_JS`; assembled `createHTML()` scripts were verified with `new Function(...)` and `public-entry-points.test.mjs`.
+- **Standalone composer harness compatibility**: calls from `TEMPLATE_COMPOSER_JS` into `APP_JS` (`window.syncEditorProjectDetail`, `formatSeconds`, `addVideoAccordion`) are guarded with `typeof ... === "function"`, keeping `tests/composer-harness.mjs` self-contained.
+- **Existing timeline & pipeline invariants preserved**: `exportMP4({ download: true })` on `?layout=timeline` still both downloads the MP4 and hands the clip (now carrying `templateScene`) to `Scene Media`; `#tpl-status` keeps its `Scene Media` wording; `dummy-text-1` at `0:00`, `MAX_VISUAL_TRACKS = 4`, zero per-lane overlap, and blank-script exclusion in `pipeline-management-store.ts` all remain intact.
+- **Node heap note for `tests/timeline-editor.test.mjs`**: `timeline-editor.test.mjs` boots 37 full `JSDOM(createHTML())` windows in one process (near Node's default ~2 GB heap limit when combined with other heavy JSDOM suites in a single invocation); running it per-file (or with `NODE_OPTIONS="--max-old-space-size=4096"`) completes all 37 subtests cleanly in ~46 s.
+
+---
+
+## 31. Quick Batch Table Video (`vid`), `projectDetail`, Browser Storages & Row Action Buttons (`▶` Preview / `⚙` Export / `✎` Edit) Sync After Timeline Edits
+
+### 31.1 Root causes
+
+1. **Cross-tab & reload blank-row purge wiped active Timeline project storages (`ytvs.timeline-editor.v1.<targetPageId>` + cookies)**:
+   - On `?layout=timeline` boot, `APP_JS` initialized 3 default blank starter rows (`id: 1, 2, 3`) before `TIMELINE_EDITOR_JS` booted, and `purgeBlankRowArtifactsInStorage()` checked `batchRows.find(r => String(r.id) === rowId)` without checking `parsed.sourcePageId === pipelineManagementStore.pageId` or timeline-tab mode — wiping saved Timeline projects (`localStorage` + 8 cookies) for rows `1..3`.
+   - On Quick Batch table reload (`restorePipelineManagementState()`), both `purgeBlankRowArtifactsInStorage(rawSnapshot)` and the pre-restore `batchRows` cleanup loop ran *before* `storedRows` populated `batchRows`, matching the uninitialized blank starter rows `1..3` in `batchRows` and deleting `ytvs.timeline-editor.v1.<targetPageId>` + cookies even when `rawSnapshot.quickBatch.rows` had full scripts for those rows.
+   - `forgetCompletedBatchRow(id)` also filtered by bare `id` instead of `vid`, allowing blank-row cleanup on one page to evict another page's `vid` from `ytvs.quick-batch-completed.v1`.
+2. **Incomplete `publishTimelineEdit` & `compactTimelineEditForStorage` storage sync for `row.vid`**:
+   - `publishTimelineEdit()` in `src/client/app-js.ts` deleted `row.projectDetail` instead of persisting an updated compact `row.projectDetail` (keyed to `vid`, `rowId`, `sourcePageId`, `targetPageId`, `style`, `effects`, `durationSec`, `sceneCount`, `slideCount`, `clipCount`, `textCount`, `graphicCount`, `elementCount`, `audioCount`, `updatedAt`) into `ytvs.pipeline-management.v1.<sourcePageId>` + its 4-cookie mirror.
+   - `compactTimelineEditForStorage()` omitted template scene metadata (`tpl`, `st`, `sc`, `ef`, `trn`, `m`, `src`), and `syncCompletedBatchRowFromTimeline(row)` did not exist, leaving `ytvs.quick-batch-completed.v1` stale (and allowing `markBatchRowCompleted()` on reload to demote a live timeline-edited row to `_archived = true`, locking `▶` Preview and `⚙` Export).
+   - Closing or hiding the Timeline tab without clicking `#timeline-back` (`pagehide` / `visibilitychange: hidden` / `beforeunload`) only saved `ytvs.timeline-editor.v1.<targetPageId>` without flushing `publishTimelineEdit(true)`, and `reconcileTimelineEdits()` on the open Quick Batch tab did not check `readTimelineEditorStateForRow(row)` directly when `ytvs.timeline-editor.v1.*` fired a cross-tab `StorageEvent`.
+3. **IndexedDB asset hydration skipped newly uploaded (`upload-*`), template (`template-*`), and swapped assets on live Quick Batch rows**:
+   - `hydrateBatchRowAssetsFromTimeline(row)` was only called when `!row.slides.length` after reload. On an already-open Quick Batch tab where original Pixabay scenes (`scene-1..12`) already had `slide.img`, any newly uploaded image/video/GIF (`upload-*`), rendered template clip (`template-*`), or extra audio (`audio-*`) stored in IndexedDB `ytvs-timeline-editor-assets-v1` remained `img: null` / `videoEl: null`.
+   - `persistBatchRowMedia(row)` re-keyed every `row.images` entry as `scene-1..N`, overwriting `upload-*` / `template-*` keys when re-opening `✎` Edit.
+4. **Quick Batch `▶` Preview (`openBatchPreview` / `batchPreviewTick`) and `⚙` Export (`exportBatchRow` / `generateMP4` / `getSlideSequence`) ignored Timeline edits**:
+   - Neither `openBatchPreview()` nor `exportBatchRow()` painted Timeline `visual` track text/graphic overlays (`x`, `y`, `size`/`fontSize`, `color`, `accent`, `font`, `align`, `rotation`, `transition`, `anim`, `visible`), respected scene `startSec` gaps, `trimStartSec`, `fit: "contain"`, or `visible: false`, honored per-scene template `videoStyle`/`effects` or `bakedInTemplateClip` anti-double-paint, respected muted/trimmed Timeline audio tracks, or stopped at the edited Timeline `durationSec` (`getSlideSequence()` looped shortened slides out to the old unedited voiceover MP3 duration, and `batchPreviewTick()` wrapped `timestampMs % totalSeconds`).
+
+### 31.2 Fixes applied
+
+- **All five browser storage layers synchronized for row `vid` (`src/client/timeline-editor.ts`, `src/client/app-js.ts`, `src/client/pipeline-management-store.ts`)**:
+  1. **`ytvs.timeline-editor.v1.<targetPageId>` + 8 cookies `ytvs_timeline_editor_<targetPageId>_1..8`**: `timelineEditSummary()` stamps monotonic `updatedAt` + `bakedInTemplateClip` (`bk: 1`), and `flushTimelineHandback()` flushes both `persistNow()` and `publishTimelineEdit(true)` on `pagehide`, `visibilitychange` (`hidden`), and `beforeunload`.
+  2. **`ytvs.pipeline-management.v1.<pageId>` + 4 cookies `ytvs_pipeline_management_<pageId>_1..4`**: `publishTimelineEdit()` updates `row.vid`, `row.style`, `row.resolution`, `row.orientation`, `row.slides`, compact `row.timeline` (`compactTimelineEditForStorage()` keeping `visuals`/`audios`/`projectDetail` undefined on `row.timeline` per the Session 333 mirror contract while preserving `tpl`/`st`/`sc`/`ef`/`trn`), and `row.projectDetail` for `row.vid`. Live tabs reconcile immediately on `storage`, `focus`, and `visibilitychange` (`visible`), reading both `pipelineManagementStore` and `readTimelineEditorStateForRow(row)` and persisting back when `ytvs.timeline-editor.v1.*` is newer.
+  3. **IndexedDB `ytvs-timeline-editor-assets-v1` (`projects` store)**: `batchRowNeedsTimelineAssetHydration(row)` detects any slide missing `img`/`videoEl`, swapped `_hydratedAssetId`, or missing `_timelineAudioUrls`; `hydrateBatchRowAssetsFromTimeline(row)` hydrates `scene-*`, `upload-*`, `template-*`, and `audio-*` assets non-blockingly (with `_runEpoch` guard so hydration never races `runBatchRow`), and `persistBatchRowMedia(row)` preserves explicit `upload-*` / `template-*` asset IDs.
+  4. **`ytvs.quick-batch-completed.v1`**: `completedBatchEntry()` and `syncCompletedBatchRowFromTimeline(row)` keep the 24h archive entry's `vid`, `style`, `slides`, `timelineEdited`, `timelineUpdatedAt`, and `projectDetail` in step with Timeline edits, and `markBatchRowCompleted()` never sets `_archived = true` or overwrites `row.detail` when a row has restored/live or Timeline-edited media.
+  5. **`ytvs.transition-project.v1.<key>` + cookie `ytvs_transition_project_<key>`**: `openBatchEditPage(row)` reconciles Timeline edits before building the handoff payload, and `batchTimelineState(row)` preserves per-scene `isTemplateScene`, `videoStyle`, `style`, `effects`, and `transition` in both full-state and compact-summary paths.
+- **Safe blank-row storage hygiene (`src/client/app-js.ts`)**:
+  - `purgeBlankRowArtifactsInStorage(snapshot)` and `restorePipelineManagementState()` never treat uninitialized starter rows on `?layout=timeline` tabs, rows belonging to another `sourcePageId`, or rows carrying non-blank scripts in `snapshot.quickBatch.rows` as blank; `forgetCompletedBatchRow(id, vid)` scopes removals by `vid` when present.
+- **Timeline-faithful Quick Batch `▶` Preview & `⚙` Export (`src/client/app-js.ts`)**:
+  - Added `paintTimelineVisualElements()`, `resolveBatchRowTimelineElements()`, `resolveBatchRowTimelineAudios()`, and `batchPreviewSeek(seconds)`.
+  - `openBatchPreview(id)` and `batchPreviewTick()` reconcile Timeline edits, trigger background IndexedDB hydration for any new `upload-*` / `template-*` / `audio-*` assets, size the preview canvas from `row.projectDetail.frame`, respect scene `startSec` / `durationSec` / `trimStartSec` / `fit` (`cover` vs `contain`) / `visible`, skip double-applying row style effects and `bakedInTemplateClip` children on rendered template MP4 scenes, sync Timeline audio mute/volume/windowing (falling back cleanly to wall-clock when `<audio>` is paused), and stop cleanly at the edited Timeline `durationSec` instead of looping.
+  - `exportBatchRow(id)`, `getSlideSequence()`, and `generateMP4()` reconcile and hydrate Timeline assets before encoding, disable slide-looping when `renderContext.timelineEdited` is true, size frames to `row.projectDetail.frame`, apply `trimStartSec` (`clipTrimSec` in `captureClipFrameAt`), `fit: "contain"`, `visible !== false`, per-scene template styles/anti-double-paint, and paint all Timeline text & graphic overlays into every exported MP4 frame.
+
+### 31.3 Tests added
+
+| File | Tests | Asserts |
+|---|---|---|
+| `tests/timeline-quick-batch-sync.test.mjs` (`10 → 11`) | `Session 331 §31: live Quick Batch table row vid, both browser storage sets, completed archive, projectDetail, and ▶ Preview reflect Timeline edits including uploaded media, rendered template clips, trims, fit, hidden scenes, and text/graphic overlays` | Full two-tab Quick Batch (`?layout=table`) + Timeline (`?layout=timeline`) workflow: style change (`Retro Poster`), scene delete/trim (`trimStartSec: 1.75`)/`fit: "contain"`/hide (`visible: false`), `+ Add media` (`upload-*` PNG), `+ Add Clips` (`template-*` MP4 with `Neon Night` style & `bakedInTemplateClip` children), edited `dummy-text-1` + added text & `#ff3366` star graphic, tab-hide flush + cross-tab `StorageEvent` reconcile across all 5 storage layers, `row.projectDetail` (`vid`), `▶` Preview 2D canvas draw verification across all 5 regions + non-looping end stop, `⚙` Export sequence verification, full table reload with `ytvs.quick-batch-completed.v1` (no `_archived` demotion), and re-opening `✎` Edit round-trip preservation |
+
+### 31.4 Verification
+
+```text
+npx tsc --noEmit                 30 diagnostics, all in src/index.ts (unchanged pre-existing baseline)
+npx wrangler deploy --dry-run    bundles clean, 3297.70 KiB / gzip: 1433.14 KiB
+new Function(inlineScripts)      assembled createHTML() inline scripts parse cleanly
+
+Targeted regression suites (all green):
+  timeline-quick-batch-sync         11 / 11   (was 10 / 10 — new end-to-end 2-tab + storage + preview/export/reload test)
+  timeline-editor                   37 / 37
+  final-media-cap-actions           14 / 14
+  quick-batch-table                 15 / 15
+  template-add-project-detail        3 /  3
+  template-composer                 22 / 22
+```
+
+### 31.5 Small print and invariants preserved
+
+- **Session 333 compact mirror contract preserved**: `publishedRow.timeline` in `ytvs.pipeline-management.v1.<pageId>` keeps `visuals: undefined`, `audios: undefined`, and `projectDetail: undefined` so scripts are never crowded out of `localStorage` or the 4-cookie mirror (`<= 3800` chars/chunk), while `row.projectDetail` (for `row.vid`) is stored cleanly on the row and hydrated in full (`scenes`, `slides`, `elements`) from `ytvs.timeline-editor.v1.<targetPageId>` (+ its 8-cookie mirror).
+- **Regenerate-after-edit invariant preserved**: `row._timelineRegeneratedAt` guards all Timeline state lookups so clicking `Generate` on a Timeline-edited row builds a fresh 12-scene video cleanly and locks `Generate` again until the next Timeline edit.
+- **Template-literal safety (§14.7, §22.14)**: zero unescaped backticks or `${...}` expressions inside TS template-literal client bundles, verified via `new Function(...)` on `createHTML()` and `wrangler deploy --dry-run`.
+
+

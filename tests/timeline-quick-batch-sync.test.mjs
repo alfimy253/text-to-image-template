@@ -1097,3 +1097,410 @@ test("Session 333: the hand-back finds its table page from the timeline page id 
 	assert.equal(derived.pageId, pageId, "the table page id is read back out of the timeline page id");
 	assert.equal(derived.rowId, "2", "and so is the row id");
 });
+
+test("Session 331 §31: live Quick Batch table row vid, both browser storage sets, completed archive, projectDetail, and ▶ Preview reflect Timeline edits including uploaded media, rendered template clips, trims, fit, hidden scenes, and text/graphic overlays", async (t) => {
+	const localStorage = makeMemoryStorage();
+	const sessionStorage = makeMemoryStorage();
+	const cookieJar = makeCookieJar();
+	const idb = makeMemoryIndexedDB();
+	const pageId = "page-session331-31";
+	let openedHref = "";
+
+	const table = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar, indexedDB: idb.factory, loadTimeline: true,
+		prepare(w) {
+			mockBatchGenerationRoutes(w);
+			Object.defineProperty(w.HTMLVideoElement.prototype, "videoWidth", { configurable: true, get: () => 1024 });
+			Object.defineProperty(w.HTMLVideoElement.prototype, "videoHeight", { configurable: true, get: () => 576 });
+			w.open = (href) => { openedHref = String(href || ""); return null; };
+		}
+	});
+	t.after(() => table.dom.window.close());
+
+	table.w.setStudioLayout("table");
+	const row = table.w.__BATCH_ROWS[0];
+	row.script = "Golden sunlight warms the greenhouse tomatoes every morning while birds sing outside.";
+	row.style = "Cinematic Film";
+	finishRow(table.w, row);
+	table.w.eval("recordCompletedBatchRow(getBatchRow(" + row.id + "), 'render')");
+	table.w.renderBatchTable();
+
+	const expectedVid = pageId + "-row-" + row.id;
+	assert.equal(row.vid, expectedVid, "Quick Batch table row has canonical vid");
+
+	table.w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="edit"]').click();
+	await new Promise((resolve) => setTimeout(resolve, 35));
+	assert.match(openedHref, /\?layout=timeline&pipelinePage=timeline-/, "Edit opens timeline page for row vid");
+
+	/* Open Timeline Editor in a second tab sharing browser storages + IndexedDB. */
+	const tl = bootWindow({
+		url: "https://studio.test" + openedHref,
+		localStorage, sessionStorage, cookieJar, indexedDB: idb.factory, loadTimeline: true,
+		prepare: mockBatchGenerationRoutes
+	});
+	t.after(() => tl.dom.window.close());
+	await new Promise((resolve) => setTimeout(resolve, 40));
+
+	const api = tl.w.__TIMELINE_EDITOR__;
+	const tlState = tl.w.__TIMELINE_EDITOR_STATE__;
+	const targetPageId = tlState.projectId;
+	assert.equal(targetPageId, "timeline-" + expectedVid);
+
+	/* 1. Change project video style to Retro Poster (carries VHS scanline effect). */
+	tlState.videoStyle = "Retro Poster";
+	tlState.videoStyleEffects = api.getStyleEffects("Retro Poster");
+	tlState.scenes.forEach((sc) => {
+		if (!sc.isTemplateScene) {
+			sc.videoStyle = "Retro Poster";
+			sc.effects = api.getStyleEffects("Retro Poster");
+		}
+	});
+
+	/* 2. Trim/hide/delete scenes so only 3 original scenes remain (0..10s). */
+	const mediaTrack = tlState.tracks.find((tr) => tr.id === "background-media");
+	assert.equal(mediaTrack.items.length, 12);
+	mediaTrack.items.splice(3);
+	mediaTrack.items[0].startSec = 0;
+	mediaTrack.items[0].durationSec = 4;
+	mediaTrack.items[0].trimStartSec = 1.75;
+	mediaTrack.items[0].fit = "contain";
+	mediaTrack.items[0].visible = true;
+
+	mediaTrack.items[1].startSec = 4;
+	mediaTrack.items[1].durationSec = 3;
+	mediaTrack.items[1].visible = false;
+
+	mediaTrack.items[2].startSec = 7;
+	mediaTrack.items[2].durationSec = 3;
+	mediaTrack.items[2].visible = true;
+
+	/* 3. Upload a new background image (10..14s -> upload-* in IndexedDB). */
+	const uploadedFile = new tl.w.File(["uploaded-png-bytes"], "uploaded-hero.png", { type: "image/png" });
+	api.addMediaFiles([uploadedFile]);
+	await new Promise((resolve) => setTimeout(resolve, 25));
+	assert.equal(mediaTrack.items.length, 4, "uploaded image appended as Scene 4");
+	const uploadedItem = mediaTrack.items[3];
+	assert.match(uploadedItem.assetId, /^upload-/, "uploaded scene has upload-* assetId");
+	uploadedItem.startSec = 10;
+	uploadedItem.durationSec = 4;
+
+	/* 4. Append a rendered template clip (14..19s -> template-* with bakedInTemplateClip children). */
+	const appended = api.appendTemplateClip({
+		blob: new tl.w.Blob(["rendered-template-mp4"], { type: "video/mp4" }),
+		name: "Neon-Intro.mp4",
+		durationSec: 5,
+		templateScene: {
+			name: "Neon Intro",
+			style: "neon",
+			videoStyle: "Neon Night",
+			effects: ["grain", "dust"],
+			transition: { type: "fade", speed: 1, effect: "zoomIn", motionSpeed: 1 },
+			elements: [
+				{ kind: "text", label: "Intro Title", text: "BAKED INTRO TEXT", x: 50, y: 50, fontSize: 42, color: "#ffffff" },
+				{ kind: "graphic", label: "Intro Ring", graphic: "circle", x: 50, y: 50, size: 80, color: "#00ffff" }
+			]
+		}
+	});
+	assert.equal(appended, 1, "rendered template clip appended as Scene 5");
+	await new Promise((resolve) => setTimeout(resolve, 25));
+	assert.equal(mediaTrack.items.length, 5);
+	const templateItem = mediaTrack.items[4];
+	assert.match(templateItem.assetId, /^template-/, "template scene has template-* assetId");
+	assert.equal(templateItem.startSec, 14);
+	assert.equal(templateItem.durationSec, 5);
+
+	/* 5. Edit dummy-text-1 and add a custom text + star graphic on Scene 1 (0..4s). */
+	let editedDummy = null;
+	tlState.tracks.filter((tr) => tr.kind === "visual").forEach((tr) => {
+		tr.items.forEach((it) => {
+			if (it.id === "dummy-text-1") {
+				it.text = "EDITED HERO TITLE";
+				it.startSec = 0;
+				it.durationSec = 4;
+				it.visible = true;
+				editedDummy = it;
+			}
+		});
+	});
+	assert.ok(editedDummy, "dummy-text-1 found and edited");
+	const addedText = api.addTextElement("CTA BANNER");
+	addedText.startSec = 0;
+	addedText.durationSec = 4;
+	addedText.y = 82;
+	const addedGraphic = api.addGraphicElement();
+	addedGraphic.graphic = "star";
+	addedGraphic.color = "#ff3366";
+	addedGraphic.startSec = 0;
+	addedGraphic.durationSec = 4;
+	addedGraphic.x = 22;
+	addedGraphic.y = 24;
+
+	/* Trim voiceover track item to match edited 19s timeline end. */
+	const voiceoverTrack = tlState.tracks.find((tr) => tr.id === "voiceover");
+	if (voiceoverTrack && voiceoverTrack.items[0]) {
+		voiceoverTrack.items[0].durationSec = 19;
+	}
+
+	/* 6. Switch tabs WITHOUT clicking Back: visibilitychange(hidden) flushes Timeline -> StorageEvent updates Table tab! */
+	Object.defineProperty(tl.w.document, "visibilityState", { configurable: true, get: () => "hidden" });
+	tl.w.document.dispatchEvent(new tl.w.Event("visibilitychange"));
+	const tlStorageKey = "ytvs.timeline-editor.v1." + targetPageId;
+	const tlRaw = localStorage.getItem(tlStorageKey);
+	assert.ok(tlRaw, "Timeline storage Set 1 written on visibilitychange(hidden)");
+
+	/* Deliver cross-tab StorageEvent to the open Quick Batch Table window. */
+	table.w.dispatchEvent(new table.w.StorageEvent("storage", {
+		key: tlStorageKey,
+		newValue: tlRaw
+	}));
+	await new Promise((resolve) => setTimeout(resolve, 45));
+
+	/* Verify Browser Storage Set 1 (Timeline localStorage + cookies + IndexedDB). */
+	const parsedTl = JSON.parse(tlRaw);
+	assert.equal(parsedTl.videoStyle, "Retro Poster");
+	assert.equal(parsedTl.projectDetail.style, "Retro Poster");
+	assert.equal(parsedTl.projectDetail.sceneCount, 5);
+	assert.ok(cookieJar.cookie.includes("ytvs_timeline_editor_" + targetPageId.replace(/[^a-zA-Z0-9_-]/g, "_") + "_1="), "Timeline cookie mirror updated");
+
+	/* Verify Browser Storage Set 2 (Quick Batch pipeline-management localStorage + 4 cookies). */
+	const pmKey = "ytvs.pipeline-management.v1." + pageId;
+	const parsedPm = JSON.parse(localStorage.getItem(pmKey));
+	const storedPmRow = parsedPm.quickBatch.rows.find((r) => String(r.id) === String(row.id));
+	assert.ok(storedPmRow, "row exists in pipeline-management store");
+	assert.equal(storedPmRow.vid, expectedVid, "stored row keeps vid");
+	assert.equal(storedPmRow.style, "Retro Poster", "stored row style updated");
+	assert.equal(storedPmRow.slides, 5, "stored row slide count updated to 5");
+	assert.ok(storedPmRow.projectDetail, "stored row carries updated projectDetail");
+	assert.equal(storedPmRow.projectDetail.vid, expectedVid, "stored projectDetail carries row vid");
+	assert.equal(storedPmRow.projectDetail.style, "Retro Poster", "stored projectDetail style updated");
+	assert.equal(storedPmRow.projectDetail.sceneCount, 5, "stored projectDetail sceneCount updated");
+	assert.equal(storedPmRow.projectDetail.durationSec, 19, "stored projectDetail durationSec updated to 19s");
+	assert.equal(storedPmRow.timeline.visuals, undefined, "compact timeline summary keeps no duplicate visuals list");
+	assert.ok(cookieJar.cookie.includes("ytvs_pipeline_management_" + pageId + "_1="), "Quick Batch cookie mirror updated");
+
+	/* Verify Completed Batch Archive (ytvs.quick-batch-completed.v1). */
+	const completedArchive = JSON.parse(localStorage.getItem("ytvs.quick-batch-completed.v1"));
+	const archivedEntry = (completedArchive.rows || []).find((entry) => entry.vid === expectedVid);
+	assert.ok(archivedEntry, "completed archive entry exists for vid");
+	assert.equal(archivedEntry.timelineEdited, true, "completed archive marks row timelineEdited");
+	assert.equal(archivedEntry.style, "Retro Poster", "completed archive style updated");
+	assert.equal(archivedEntry.slides, 5, "completed archive slide count updated");
+	assert.equal(archivedEntry.projectDetail.vid, expectedVid, "completed archive projectDetail updated for vid");
+	assert.equal(archivedEntry.projectDetail.style, "Retro Poster");
+
+	/* Verify Live Quick Batch Row + row.projectDetail in memory. */
+	assert.equal(row.timelineEdited, true);
+	assert.equal(row.style, "Retro Poster");
+	assert.equal(row.slides.length, 5, "live row.slides updated from 12 to 5 edited scenes");
+	assert.equal(row.projectDetail.vid, expectedVid, "live row.projectDetail.vid matches row.vid");
+	assert.equal(row.projectDetail.style, "Retro Poster");
+	assert.deepEqual(Array.from(row.projectDetail.effects), ["vhs"]);
+	assert.equal(row.projectDetail.durationSec, 19);
+	assert.equal(row.projectDetail.sceneCount, 5);
+	assert.equal(row.projectDetail.slideCount, 5);
+	assert.ok(row.projectDetail.textCount >= 3, "projectDetail counts edited/added text overlays");
+	assert.ok(row.projectDetail.graphicCount >= 2, "projectDetail counts added graphic overlays");
+	assert.equal(row.projectDetail.scenes[3].mediaAssetId, uploadedItem.assetId, "projectDetail scene 4 tracks uploaded asset");
+	assert.equal(row.projectDetail.scenes[4].mediaAssetId, templateItem.assetId, "projectDetail scene 5 tracks template asset");
+	assert.equal(row.projectDetail.scenes[4].isTemplateScene, true, "projectDetail scene 5 preserves isTemplateScene");
+	assert.equal(row.projectDetail.scenes[4].videoStyle, "Neon Night", "projectDetail scene 5 preserves template Neon Night style");
+	const elementTexts = Array.from(row.projectDetail.elements).filter((el) => el.kind === "text").map((el) => el.text);
+	assert.ok(elementTexts.includes("EDITED HERO TITLE"), "projectDetail elements include edited hero title");
+	assert.ok(elementTexts.includes("CTA BANNER"), "projectDetail elements include added CTA banner");
+
+	/* Install 2D Canvas spy on #batch-preview-canvas and click ▶ Preview on the row! */
+	const ops = [];
+	const mockCtx = {
+		save() { ops.push({ op: "save" }); },
+		restore() { ops.push({ op: "restore" }); },
+		fillRect(x, y, w, h) { ops.push({ op: "fillRect", fillStyle: this.fillStyle, x, y, w, h }); },
+		strokeRect(x, y, w, h) { ops.push({ op: "strokeRect", strokeStyle: this.strokeStyle, x, y, w, h }); },
+		clearRect() {},
+		beginPath() { ops.push({ op: "beginPath" }); },
+		closePath() { ops.push({ op: "closePath" }); },
+		moveTo(x, y) { ops.push({ op: "moveTo", x, y }); },
+		lineTo(x, y) { ops.push({ op: "lineTo", x, y }); },
+		arc(x, y, r) { ops.push({ op: "arc", x, y, r, fillStyle: this.fillStyle }); },
+		ellipse(x, y, rx, ry) { ops.push({ op: "ellipse", x, y, rx, ry }); },
+		quadraticCurveTo() {},
+		fill() { ops.push({ op: "fill", fillStyle: this.fillStyle }); },
+		stroke() { ops.push({ op: "stroke", strokeStyle: this.strokeStyle }); },
+		clip() { ops.push({ op: "clip" }); },
+		translate(x, y) { ops.push({ op: "translate", x, y }); },
+		rotate(r) { ops.push({ op: "rotate", r }); },
+		scale(x, y) { ops.push({ op: "scale", x, y }); },
+		drawImage(src, dx, dy, dw, dh) { ops.push({ op: "drawImage", src, dx, dy, dw, dh }); },
+		fillText(text, x, y) { ops.push({ op: "fillText", text: String(text), x, y, fillStyle: this.fillStyle }); },
+		strokeText(text, x, y) { ops.push({ op: "strokeText", text: String(text), x, y }); },
+		measureText(text) { return { width: String(text || "").length * 12 }; },
+		createLinearGradient() { return { addColorStop() {} }; },
+		createRadialGradient() { return { addColorStop() {} }; },
+		setLineDash() {},
+		fillStyle: "#000",
+		strokeStyle: "#fff",
+		lineWidth: 1,
+		globalAlpha: 1,
+		globalCompositeOperation: "source-over",
+		font: "24px sans-serif",
+		textAlign: "center",
+		textBaseline: "middle",
+		lineJoin: "round",
+		lineCap: "round",
+		shadowColor: "transparent",
+		shadowBlur: 0,
+		filter: "none"
+	};
+	table.w.HTMLCanvasElement.prototype.getContext = function (kind) {
+		return kind === "2d" ? mockCtx : null;
+	};
+	table.w.requestAnimationFrame = () => 1;
+	table.w.cancelAnimationFrame = () => {};
+
+	const previewBtn = table.w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="preview"]');
+	assert.equal(previewBtn.disabled, false, "▶ Preview button is enabled on the edited row");
+	previewBtn.click();
+	await new Promise((resolve) => setTimeout(resolve, 50));
+
+	/* Confirm background IndexedDB hydration populated BOTH uploaded image & template MP4 slides! */
+	assert.ok(row.slides[3].img, "uploaded image slide hydrated its Image element from IndexedDB");
+	assert.ok(row.slides[4].videoEl, "rendered template MP4 slide hydrated its Video element from IndexedDB");
+	assert.equal(row.slides[4].isTemplateScene, true, "template slide marked isTemplateScene");
+
+	/* Region A (t = 0.5s): Scene 1 (trimStartSec = 1.75, fit = contain) + edited text + added text + star graphic! */
+	ops.length = 0;
+	table.w.batchPreviewSeek(0.5);
+	table.w.batchPreviewTick();
+
+	const scene1Draws = ops.filter((o) => o.op === "drawImage");
+	assert.ok(scene1Draws.length >= 1, "Scene 1 drew media frame");
+	if (row.slides[0].videoEl) {
+		assert.ok(Math.abs(row.slides[0].videoEl.currentTime - 2.25) < 0.15, "Scene 1 video respected trimStartSec (0.5 + 1.75 = 2.25s)");
+	}
+	const drawnTextsAt05 = ops.filter((o) => o.op === "fillText").map((o) => o.text);
+	assert.ok(drawnTextsAt05.includes("EDITED HERO TITLE"), "▶ Preview painted EDITED HERO TITLE from Timeline");
+	assert.ok(drawnTextsAt05.includes("CTA BANNER"), "▶ Preview painted added CTA BANNER from Timeline");
+	const starFill = ops.find((o) => o.op === "fill" && String(o.fillStyle).toLowerCase() === "#ff3366");
+	assert.ok(starFill, "▶ Preview painted added #ff3366 star graphic from Timeline");
+
+	/* Region B (t = 5.0s): Scene 2 has visible = false -> must NOT draw background media! */
+	assert.equal(row.slides[1].visible, false);
+	ops.length = 0;
+	table.w.batchPreviewSeek(5.0);
+	table.w.batchPreviewTick();
+	assert.equal(
+		ops.filter((o) => o.op === "drawImage").length,
+		0,
+		"hidden Scene 2 (visible: false) does not draw media"
+	);
+
+	/* Region C (t = 11.0s): Scene 4 uploaded image (upload-*) draws hydrated Image! */
+	ops.length = 0;
+	table.w.batchPreviewSeek(11.0);
+	table.w.batchPreviewTick();
+	const uploadDraws = ops.filter((o) => o.op === "drawImage" && o.src === row.slides[3].img);
+	assert.equal(uploadDraws.length, 1, "▶ Preview drew uploaded image hydrated from IndexedDB at t=11s");
+
+	/* Region D (t = 15.0s): Scene 5 rendered template clip (template-*) draws MP4 WITHOUT double-baking text! */
+	ops.length = 0;
+	table.w.batchPreviewSeek(15.0);
+	table.w.batchPreviewTick();
+	const templateDraws = ops.filter((o) => o.op === "drawImage" && o.src === row.slides[4].videoEl);
+	assert.equal(templateDraws.length, 1, "▶ Preview drew rendered template clip MP4 at t=15s");
+	const drawnTextsAt15 = ops.filter((o) => o.op === "fillText").map((o) => o.text);
+	assert.equal(drawnTextsAt15.includes("BAKED INTRO TEXT"), false, "bakedInTemplateClip child text is not painted a second time");
+
+	/* Region E (t = 19.2s): edited duration is 19s (NOT old 60s MP3), so preview stops cleanly instead of looping! */
+	ops.length = 0;
+	table.w.batchPreviewSeek(19.2);
+	table.w.batchPreviewTick();
+	const timeTextAtEnd = table.w.document.getElementById("batch-preview-time").textContent;
+	assert.match(timeTextAtEnd, /^0:19\b/, "▶ Preview reaches 0:19 end cleanly instead of looping out to old 60s MP3");
+	/* Once stopped at 19s, subsequent ticks without seeking stay at 0:19! */
+	table.w.batchPreviewTick();
+	assert.match(
+		table.w.document.getElementById("batch-preview-time").textContent,
+		/^0:19\b/,
+		"▶ Preview stays stopped at 0:19"
+	);
+	table.w.closeBatchPreview();
+
+	/* Click ⚙ Export button on the row and confirm exportBatchRow passes the 5 edited slides without looping! */
+	let capturedExportSlides = null;
+	table.w.generateMP4 = async function () {
+		capturedExportSlides = table.w.getSlideSequence().slice();
+		table.w.__lastRenderBlob = new table.w.Blob(["exported-mp4"], { type: "video/mp4" });
+	};
+	const exportBtn = table.w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="export"]');
+	assert.equal(exportBtn.disabled, false, "⚙ Export button is enabled on the edited row");
+	exportBtn.click();
+	await new Promise((resolve) => setTimeout(resolve, 40));
+	assert.ok(Array.isArray(capturedExportSlides), "⚙ Export invoked generateMP4 with edited slide sequence");
+	assert.equal(capturedExportSlides.length, 5, "⚙ Export sequence contains the 5 edited scenes without looping");
+	assert.ok(capturedExportSlides[3].img, "⚙ Export sequence carries hydrated uploaded image");
+	assert.ok(capturedExportSlides[4].videoEl, "⚙ Export sequence carries hydrated template MP4");
+
+	/* Full reload of Quick Batch Table with ytvs.quick-batch-completed.v1 present! */
+	let reopenedHref = "";
+	const reloaded = bootWindow({
+		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
+		localStorage, sessionStorage, cookieJar, indexedDB: idb.factory, loadTimeline: true,
+		prepare(w) {
+			mockBatchGenerationRoutes(w);
+			w.open = (href) => { reopenedHref = String(href || ""); return null; };
+		}
+	});
+	t.after(() => reloaded.dom.window.close());
+	await new Promise((resolve) => setTimeout(resolve, 60));
+
+	const reloadedRow = reloaded.w.getBatchRow(row.id);
+	assert.ok(reloadedRow, "edited row restored after full reload");
+	assert.notEqual(reloadedRow._archived, true, "completed archive must NOT demote live timeline-edited row to _archived");
+	assert.equal(reloadedRow.timelineEdited, true, "reloaded row keeps timelineEdited = true");
+	assert.match(reloadedRow.detail, /^Edited in timeline/, "reloaded row keeps Edited in timeline status detail");
+	assert.equal(reloadedRow.projectDetail.vid, expectedVid, "reloaded row keeps updated projectDetail for vid");
+	assert.equal(reloadedRow.projectDetail.style, "Retro Poster");
+	assert.equal(reloadedRow.slides.length, 5, "reloaded row keeps 5 edited slides");
+	assert.ok(reloadedRow.slides[3].img, "reloaded row hydrated uploaded image from IndexedDB");
+	assert.ok(reloadedRow.slides[4].videoEl, "reloaded row hydrated rendered template MP4 from IndexedDB");
+
+	for (const act of ["preview", "export", "edit"]) {
+		const btn = reloaded.w.document.querySelector('[data-batch-row="' + reloadedRow.id + '"] [data-batch-action="' + act + '"]');
+		assert.ok(btn, act + " button exists after reload");
+		assert.equal(btn.disabled, false, act + " button stays enabled after reload");
+	}
+
+	/* Re-open ✎ Edit from the reloaded table row -> confirm uploaded & template asset IDs and styles survive round-trip! */
+	reloaded.w.document.querySelector('[data-batch-row="' + reloadedRow.id + '"] [data-batch-action="edit"]').click();
+	await new Promise((resolve) => setTimeout(resolve, 40));
+
+	const tlReopened = bootWindow({
+		url: "https://studio.test" + reopenedHref,
+		localStorage, sessionStorage, cookieJar, indexedDB: idb.factory, loadTimeline: true,
+		prepare: mockBatchGenerationRoutes
+	});
+	t.after(() => tlReopened.dom.window.close());
+	await new Promise((resolve) => setTimeout(resolve, 40));
+
+	const reopenedMedia = tlReopened.w.__TIMELINE_EDITOR_STATE__.tracks.find((tr) => tr.id === "background-media");
+	assert.equal(reopenedMedia.items.length, 5, "re-opened Timeline keeps all 5 edited scenes");
+	assert.equal(reopenedMedia.items[3].assetId, uploadedItem.assetId, "re-opened Timeline keeps uploaded image assetId");
+	assert.equal(reopenedMedia.items[4].assetId, templateItem.assetId, "re-opened Timeline keeps rendered template assetId");
+	assert.equal(
+		reopenedMedia.items[4].videoStyle,
+		"Neon Night",
+		"re-opened Timeline keeps per-scene Neon Night style on template clip: " + JSON.stringify(reopenedMedia.items[4])
+	);
+	assert.equal(tlReopened.w.__TIMELINE_EDITOR_STATE__.videoStyle, "Retro Poster", "re-opened Timeline keeps project Retro Poster style");
+	assert.equal(tlReopened.w.__TIMELINE_EDITOR_STATE__.projectDetail.vid, expectedVid, "re-opened Timeline keeps row vid in projectDetail");
+	const reopenedVisualItems = tlReopened.w.__TIMELINE_EDITOR_STATE__.tracks
+		.filter((tr) => tr.kind === "visual")
+		.flatMap((tr) => tr.items);
+	assert.ok(
+		reopenedVisualItems.some((it) => it.text === "EDITED HERO TITLE"),
+		"re-opened Timeline keeps EDITED HERO TITLE: saved=" + Boolean(localStorage.getItem(tlStorageKey)) + " items=" + JSON.stringify(reopenedVisualItems)
+	);
+	assert.ok(reopenedVisualItems.some((it) => it.text === "CTA BANNER"), "re-opened Timeline keeps added CTA BANNER");
+	assert.ok(reopenedVisualItems.some((it) => it.graphic === "star" && it.color === "#ff3366"), "re-opened Timeline keeps added star graphic");
+});
+

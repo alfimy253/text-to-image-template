@@ -363,7 +363,12 @@ export const TIMELINE_EDITOR_JS = `
 			var style = String(source.style || fallback.style || "Cinematic Film");
 			var effects = normalizeEffects(source.effects, style);
 			var detailScenes = scenes.map(function (scene) {
-				return {
+				var isTpl = Boolean(scene && (scene.isTemplateScene || scene.templateScene || String(scene.mediaSource || "") === "template composer"));
+				var sceneStyle = String(scene && scene.videoStyle || style);
+				var sceneEffects = isTpl && Array.isArray(scene && scene.effects)
+					? scene.effects.slice()
+					: normalizeEffects(scene && scene.effects, sceneStyle);
+				var outScene = {
 					id: String(scene && scene.id || ""),
 					index: Number(scene && scene.index) || 0,
 					name: String(scene && scene.name || ""),
@@ -376,10 +381,17 @@ export const TIMELINE_EDITOR_JS = `
 					fit: String(scene && scene.fit || "cover"),
 					trimStartSec: roundTimelineSec(scene && scene.trimStartSec),
 					visible: scene ? scene.visible !== false : true,
-					videoStyle: String(scene && scene.videoStyle || style),
-					effects: normalizeEffects(scene && scene.effects, style),
+					style: String(scene && scene.style || sceneStyle),
+					videoStyle: sceneStyle,
+					effects: sceneEffects,
+					transition: scene && scene.transition && typeof scene.transition === "object"
+						? Object.assign({}, scene.transition)
+						: { type: "none", speed: 1, effect: "none", motionSpeed: 1 },
+					isTemplateScene: isTpl,
 					elements: Array.isArray(scene && scene.elements) ? scene.elements.slice() : []
 				};
+				if (scene && scene.templateId) outScene.templateId = String(scene.templateId);
+				return outScene;
 			});
 			return {
 				id: String(source.id || fallback.id || ""),
@@ -509,13 +521,28 @@ export const TIMELINE_EDITOR_JS = `
 						visualItems.push({
 							id: String(item.id || ""),
 							kind: String(item.kind || "text"),
+							label: String(item.label || ""),
 							trackId: String(track.id || ""),
 							sceneId: String(item.sceneId || ""),
 							parentId: String(item.parentId || ""),
+							templateKey: String(item.templateKey || ""),
 							startSec: roundTimelineSec(item.startSec),
 							durationSec: roundTimelineSec(item.durationSec),
 							text: item.kind === "text" ? String(item.text || "").slice(0, 120) : "",
 							graphic: item.kind === "graphic" ? String(item.graphic || "circle") : "",
+							size: item.kind === "graphic" ? number(item.size, 72) : number(item.fontSize, 28),
+							fontSize: item.kind === "text" ? number(item.fontSize, 28) : 0,
+							rotation: number(item.rotation, 0),
+							color: String(item.color || ""),
+							accent: String(item.accent || ""),
+							font: item.kind === "text" ? String(item.font || "sans") : "",
+							align: item.kind === "text" ? String(item.align || "center") : "",
+							transition: String(item.transition || "none"),
+							transitionSpeed: number(item.transitionSpeed, 1),
+							anim: String(item.anim || "none"),
+							speed: number(item.speed, 1),
+							style: String(item.style || ""),
+							layerOrder: number(item.layerOrder, 0),
 							x: number(item.x, 50),
 							y: number(item.y, item.kind === "graphic" ? 50 : 78),
 							visible: item.visible !== false
@@ -534,9 +561,83 @@ export const TIMELINE_EDITOR_JS = `
 					if (mediaItem && el.parentId && el.parentId === String(mediaItem.id)) return true;
 					return false;
 				});
-				var sceneStyle = String(scene && scene.videoStyle || style);
-				var sceneEffects = normalizeEffects(scene && scene.effects, sceneStyle);
-				return {
+				var tplMeta = (mediaItem && mediaItem.templateScene) || (scene && scene.templateScene) || null;
+				var sceneStart = roundTimelineSec(mediaItem ? mediaItem.startSec : (scene && scene.startSec));
+				var sceneDur = roundTimelineSec(mediaItem ? mediaItem.durationSec : (scene && scene.durationSec));
+				if (tplMeta && Array.isArray(tplMeta.elements) && tplMeta.elements.length) {
+					var existingKeys = Object.create(null);
+					sceneElements.forEach(function (el) {
+						if (el.templateKey) existingKeys[String(el.templateKey)] = true;
+					});
+					tplMeta.elements.forEach(function (tplEl, tplIdx) {
+						if (!tplEl) return;
+						var tKey = String(tplEl.key || ("tpl-el-" + tplIdx));
+						if (existingKeys[tKey]) return;
+						var extraKind = tplEl.kind === "graphic" ? "graphic" : "text";
+						var extraItem = {
+							id: sceneId + "-" + tKey,
+							kind: extraKind,
+							label: String(tplEl.label || tKey),
+							trackId: "template-layer",
+							sceneId: sceneId,
+							parentId: mediaItem ? String(mediaItem.id) : "",
+							templateKey: tKey,
+							startSec: sceneStart,
+							durationSec: sceneDur,
+							text: extraKind === "text" ? String(tplEl.text || "").slice(0, 120) : "",
+							graphic: extraKind === "graphic" ? String(tplEl.graphic || "circle") : "",
+							size: number(tplEl.size, extraKind === "graphic" ? 64 : 28),
+							fontSize: extraKind === "text" ? number(tplEl.fontSize || tplEl.size, 28) : 0,
+							rotation: number(tplEl.rotation, 0),
+							color: String(tplEl.color || ""),
+							accent: String(tplEl.accent || ""),
+							font: extraKind === "text" ? String(tplEl.font || "sans") : "",
+							align: extraKind === "text" ? String(tplEl.align || "center") : "",
+							transition: String(tplEl.transition || "none"),
+							transitionSpeed: number(tplEl.transitionSpeed, 1),
+							anim: String(tplEl.anim || "none"),
+							speed: number(tplEl.speed, 1),
+							style: String(tplEl.style || (tplMeta && tplMeta.style) || ""),
+							layerOrder: number(tplEl.layerOrder, tplIdx),
+							x: number(tplEl.x, 50),
+							y: number(tplEl.y, extraKind === "graphic" ? 50 : 78),
+							visible: tplEl.visible !== false
+						};
+						sceneElements.push(extraItem);
+						visualItems.push(extraItem);
+						if (extraKind === "graphic") graphicCount += 1;
+						else textCount += 1;
+					});
+				}
+				var isTpl = Boolean(
+					tplMeta ||
+					(mediaItem && mediaItem.isTemplateScene) ||
+					(scene && scene.isTemplateScene) ||
+					String((mediaItem && mediaItem.mediaSource) || (scene && scene.mediaSource) || "") === "template composer"
+				);
+				var sceneStyle = String(
+					(mediaItem && mediaItem.videoStyle) ||
+					(scene && scene.videoStyle) ||
+					(tplMeta && tplMeta.videoStyle) ||
+					style
+				);
+				var sceneStyleCode = String(
+					(mediaItem && mediaItem.style) ||
+					(scene && scene.style) ||
+					(tplMeta && tplMeta.style) ||
+					sceneStyle
+				);
+				var rawSceneEffects = (mediaItem && Array.isArray(mediaItem.effects))
+					? mediaItem.effects
+					: (scene && Array.isArray(scene.effects) ? scene.effects : (tplMeta && Array.isArray(tplMeta.effects) ? tplMeta.effects : null));
+				var sceneEffects = isTpl && Array.isArray(rawSceneEffects)
+					? rawSceneEffects.slice()
+					: normalizeEffects(scene && scene.effects, sceneStyle);
+				var rawTransition = (mediaItem && mediaItem.transition) || (scene && scene.transition) || (tplMeta && tplMeta.transition) || null;
+				var sceneTransition = rawTransition && typeof rawTransition === "object"
+					? Object.assign({}, rawTransition)
+					: { type: "none", speed: 1, effect: "none", motionSpeed: 1 };
+				var composedScene = {
 					id: sceneId,
 					index: index,
 					name: String(scene && scene.name || (mediaItem && mediaItem.label) || ("Scene " + (index + 1))),
@@ -544,15 +645,21 @@ export const TIMELINE_EDITOR_JS = `
 					mediaAssetId: String((mediaItem && mediaItem.assetId) || (scene && scene.mediaAssetId) || ""),
 					mediaName: String((mediaItem && mediaItem.label) || (scene && scene.mediaName) || ""),
 					mediaSource: String((mediaItem && mediaItem.mediaSource) || (scene && scene.mediaSource) || ""),
-					startSec: roundTimelineSec(mediaItem ? mediaItem.startSec : (scene && scene.startSec)),
-					durationSec: roundTimelineSec(mediaItem ? mediaItem.durationSec : (scene && scene.durationSec)),
+					startSec: sceneStart,
+					durationSec: sceneDur,
 					fit: String((mediaItem && mediaItem.fit) || (scene && scene.fit) || "cover"),
 					trimStartSec: roundTimelineSec((mediaItem && mediaItem.trimStartSec) || (scene && scene.trimStartSec)),
 					visible: mediaItem ? mediaItem.visible !== false : (scene ? scene.visible !== false : true),
+					style: sceneStyleCode,
 					videoStyle: sceneStyle,
 					effects: sceneEffects,
+					transition: sceneTransition,
+					isTemplateScene: isTpl,
 					elements: sceneElements
 				};
+				var tplId = String((tplMeta && tplMeta.templateId) || (mediaItem && mediaItem.templateId) || (scene && scene.templateId) || "");
+				if (tplId) composedScene.templateId = tplId;
+				return composedScene;
 			});
 			var slides = composeSlidesFromTimeline(targetState);
 			targetState.slides = slides;
@@ -665,6 +772,9 @@ export const TIMELINE_EDITOR_JS = `
 					if (!scene || typeof scene !== "object") return;
 					delete scene.prompt;
 					delete scene.note;
+					if (scene.templateScene && typeof scene.templateScene === "object") {
+						delete scene.templateScene.elements;
+					}
 					if (typeof scene.mediaName === "string") scene.mediaName = scene.mediaName.slice(0, 32);
 					if (typeof scene.name === "string") scene.name = scene.name.slice(0, 32);
 				});
@@ -675,6 +785,9 @@ export const TIMELINE_EDITOR_JS = `
 						if (!item || typeof item !== "object") return;
 						if (typeof item.label === "string") item.label = item.label.slice(0, 32);
 						if (typeof item.text === "string") item.text = item.text.slice(0, 80);
+						if (item.templateScene && typeof item.templateScene === "object") {
+							delete item.templateScene.elements;
+						}
 					});
 				});
 			}
@@ -903,6 +1016,13 @@ export const TIMELINE_EDITOR_JS = `
 				out.color = String(out.color || "#ffffff");
 				out.font = String(out.font || "sans");
 				out.align = String(out.align || "center");
+				out.rotation = number(out.rotation, 0);
+				out.transition = String(out.transition || "none");
+				out.transitionSpeed = number(out.transitionSpeed, 1);
+				out.anim = String(out.anim || "none");
+				out.speed = number(out.speed, 1);
+				out.style = String(out.style || "");
+				out.layerOrder = number(out.layerOrder, 0);
 			}
 			if (out.kind === "graphic") {
 				out.graphic = String(out.graphic || "circle");
@@ -910,6 +1030,22 @@ export const TIMELINE_EDITOR_JS = `
 				out.x = clamp(out.x, 0, 100);
 				out.y = clamp(out.y, 0, 100);
 				out.color = String(out.color || "#7aac2b");
+				out.accent = String(out.accent || "");
+				out.rotation = number(out.rotation, 0);
+				out.transition = String(out.transition || "none");
+				out.transitionSpeed = number(out.transitionSpeed, 1);
+				out.anim = String(out.anim || "none");
+				out.speed = number(out.speed, 1);
+				out.style = String(out.style || "");
+				out.layerOrder = number(out.layerOrder, 0);
+			}
+			if (out.kind === "media") {
+				if (out.transition && typeof out.transition === "object") {
+					out.transition = Object.assign({}, out.transition);
+				}
+				if (Array.isArray(out.effects)) {
+					out.effects = out.effects.slice();
+				}
 			}
 			if (out.kind === "audio") {
 				out.volume = clamp(out.volume, 0, 1);
@@ -1243,8 +1379,36 @@ export const TIMELINE_EDITOR_JS = `
 					scene.fit = mediaItem.fit || scene.fit || "cover";
 					scene.trimStartSec = number(mediaItem.trimStartSec, number(scene.trimStartSec, 0));
 					scene.visible = mediaItem.visible !== false;
-					scene.videoStyle = String(scene.videoStyle || state.videoStyle || "Cinematic Film");
-					scene.effects = normalizeEffects(scene.effects, scene.videoStyle);
+					if (mediaItem.templateScene && !scene.templateScene) {
+						scene.templateScene = deepCopy(mediaItem.templateScene);
+					}
+					var isTplScene = Boolean(
+						mediaItem.isTemplateScene ||
+						mediaItem.templateScene ||
+						scene.isTemplateScene ||
+						scene.templateScene ||
+						String(scene.mediaSource || "") === "template composer"
+					);
+					scene.isTemplateScene = isTplScene;
+					if (mediaItem.templateId || (mediaItem.templateScene && mediaItem.templateScene.templateId)) {
+						scene.templateId = String(mediaItem.templateId || (mediaItem.templateScene && mediaItem.templateScene.templateId) || "");
+					}
+					if (mediaItem.style) scene.style = String(mediaItem.style);
+					else if (scene.templateScene && scene.templateScene.style && !scene.style) scene.style = String(scene.templateScene.style);
+					if (mediaItem.videoStyle) scene.videoStyle = String(mediaItem.videoStyle);
+					else scene.videoStyle = String(scene.videoStyle || state.videoStyle || "Cinematic Film");
+					if (mediaItem.transition && typeof mediaItem.transition === "object") {
+						scene.transition = Object.assign({}, mediaItem.transition);
+					} else if (!scene.transition && scene.templateScene && scene.templateScene.transition) {
+						scene.transition = Object.assign({}, scene.templateScene.transition);
+					}
+					if (isTplScene && Array.isArray(mediaItem.effects)) {
+						scene.effects = mediaItem.effects.slice();
+					} else if (isTplScene && Array.isArray(scene.effects)) {
+						scene.effects = scene.effects.slice();
+					} else {
+						scene.effects = normalizeEffects(scene.effects, scene.videoStyle);
+					}
 					scene.elements = sceneElementEntries(scene.id).map(function (entry) { return Object.assign({}, entry.item); });
 					nextScenes.push(scene);
 				});
@@ -1569,7 +1733,7 @@ export const TIMELINE_EDITOR_JS = `
 					var startSec = roundTimelineSec(item.startSec);
 					var durationSec = roundTimelineSec(item.durationSec);
 					entries.push([mediaIndex, durationSec, typeCode]);
-					sceneItems.push({
+					var sceneRec = {
 						id: String(item.sceneId || (scene && scene.id) || ("scene-" + (idx + 1))),
 						slideId: String(item.id || ("slide-" + (idx + 1))),
 						i: mediaIndex,
@@ -1583,7 +1747,27 @@ export const TIMELINE_EDITOR_JS = `
 						tr: roundTimelineSec(item.trimStartSec),
 						f: item.fit === "contain" ? 1 : 0,
 						v: item.visible === false ? 0 : 1
-					});
+					};
+					var isTplRec = Boolean(item.isTemplateScene || item.templateScene || (scene && scene.isTemplateScene) || sceneRec.src === "template composer");
+					if (isTplRec) {
+						sceneRec.tpl = 1;
+						var sStyle = String(item.videoStyle || (scene && scene.videoStyle) || "");
+						var sCode = String(item.style || (scene && scene.style) || "");
+						if (sStyle) sceneRec.st = sStyle.slice(0, 40);
+						if (sCode) sceneRec.sc = sCode.slice(0, 24);
+						var sEff = Array.isArray(item.effects) ? item.effects : (scene && Array.isArray(scene.effects) ? scene.effects : null);
+						if (Array.isArray(sEff)) sceneRec.ef = sEff.slice(0, 4);
+						var sTrn = item.transition || (scene && scene.transition) || null;
+						if (sTrn && typeof sTrn === "object") {
+							sceneRec.trn = {
+								type: String(sTrn.type || "none").slice(0, 20),
+								speed: number(sTrn.speed, 1),
+								effect: String(sTrn.effect || "none").slice(0, 20),
+								motionSpeed: number(sTrn.motionSpeed, 1)
+							};
+						}
+					}
+					sceneItems.push(sceneRec);
 				});
 			var visuals = [];
 			var audios = [];
@@ -1595,6 +1779,7 @@ export const TIMELINE_EDITOR_JS = `
 						var rec = {
 							id: String(item.id || ""),
 							k: item.kind === "graphic" ? "g" : "t",
+							lb: String(item.label || "").slice(0, 40),
 							trId: String(track.id || ""),
 							scId: String(item.sceneId || ""),
 							pId: String(item.parentId || ""),
@@ -1606,6 +1791,13 @@ export const TIMELINE_EDITOR_JS = `
 							c: String(item.color || ""),
 							v: item.visible === false ? 0 : 1
 						};
+						if (item.transition && item.transition !== "none") rec.trn = String(item.transition).slice(0, 20);
+						if (item.transitionSpeed != null && number(item.transitionSpeed, 1) !== 1) rec.ts = number(item.transitionSpeed, 1);
+						if (item.anim && item.anim !== "none") rec.an = String(item.anim).slice(0, 24);
+						if (item.speed != null && number(item.speed, 1) !== 1) rec.sp = number(item.speed, 1);
+						if (item.style) rec.st = String(item.style).slice(0, 24);
+						if (item.rotation) rec.rot = number(item.rotation, 0);
+						if (item.layerOrder != null) rec.lo = number(item.layerOrder, 0);
 						if (item.kind === "text") {
 							rec.tx = String(item.text || "").slice(0, 120);
 							if (item.font) rec.fn = String(item.font);
@@ -1614,6 +1806,7 @@ export const TIMELINE_EDITOR_JS = `
 							rec.gr = String(item.graphic || "circle");
 						}
 						if (item.dummy) rec.dm = 1;
+						if (item.bakedInTemplateClip) rec.bk = 1;
 						visuals.push(rec);
 					});
 				} else if (track.kind === "audio") {
@@ -1633,7 +1826,7 @@ export const TIMELINE_EDITOR_JS = `
 				}
 			});
 			var pd = state.projectDetail && typeof state.projectDetail === "object" ? Object.assign({}, state.projectDetail) : composeProjectDetail(state);
-			var now = Date.now();
+			var now = Math.max(Date.now(), number(state.updatedAt, 0));
 			var identity = tableHandoffIdentity();
 			return {
 				v: 1,
@@ -2238,24 +2431,24 @@ export const TIMELINE_EDITOR_JS = `
 			}
 			if (item.kind === "text") {
 				addSectionTitle(inspector, "Text element");
-				addText(inspector, "Text", item.text || "", 500, function (value) { item.text = value; item.label = item.name || "Text"; renderTimeline(); drawPreview(); scheduleSave(); });
-				addRange(inspector, "Font size", item.fontSize || 28, 10, 140, 1, function (value) { item.fontSize = value; drawPreview(); scheduleSave(); }, "px");
-				addColor(inspector, "Color", item.color || "#ffffff", function (value) { item.color = value; drawPreview(); scheduleSave(); });
-				addSelect(inspector, "Font", [["Sans", "sans"], ["Serif", "serif"], ["Mono", "mono"]], item.font || "sans", function (value) { item.font = value; drawPreview(); scheduleSave(); });
-				addSelect(inspector, "Alignment", [["Left", "left"], ["Center", "center"], ["Right", "right"]], item.align || "center", function (value) { item.align = value; drawPreview(); scheduleSave(); });
-				tagPositionControl(addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { item.x = value; drawPreview(); scheduleSave(); }, "%"), "x");
-				tagPositionControl(addRange(inspector, "Y position", item.y == null ? 78 : item.y, 0, 100, 1, function (value) { item.y = value; drawPreview(); scheduleSave(); }, "%"), "y");
-				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { item.visible = value; drawPreview(); scheduleSave(); });
+				addText(inspector, "Text", item.text || "", 500, function (value) { delete item.bakedInTemplateClip; item.text = value; item.label = item.name || "Text"; renderTimeline(); drawPreview(); scheduleSave(); });
+				addRange(inspector, "Font size", item.fontSize || 28, 10, 140, 1, function (value) { delete item.bakedInTemplateClip; item.fontSize = value; drawPreview(); scheduleSave(); }, "px");
+				addColor(inspector, "Color", item.color || "#ffffff", function (value) { delete item.bakedInTemplateClip; item.color = value; drawPreview(); scheduleSave(); });
+				addSelect(inspector, "Font", [["Sans", "sans"], ["Serif", "serif"], ["Mono", "mono"]], item.font || "sans", function (value) { delete item.bakedInTemplateClip; item.font = value; drawPreview(); scheduleSave(); });
+				addSelect(inspector, "Alignment", [["Left", "left"], ["Center", "center"], ["Right", "right"]], item.align || "center", function (value) { delete item.bakedInTemplateClip; item.align = value; drawPreview(); scheduleSave(); });
+				tagPositionControl(addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { delete item.bakedInTemplateClip; item.x = value; drawPreview(); scheduleSave(); }, "%"), "x");
+				tagPositionControl(addRange(inspector, "Y position", item.y == null ? 78 : item.y, 0, 100, 1, function (value) { delete item.bakedInTemplateClip; item.y = value; drawPreview(); scheduleSave(); }, "%"), "y");
+				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { delete item.bakedInTemplateClip; item.visible = value; drawPreview(); scheduleSave(); });
 				return;
 			}
 			if (item.kind === "graphic") {
 				addSectionTitle(inspector, "Graphic element");
-				addSelect(inspector, "Graphic", [["Circle", "circle"], ["Square", "square"], ["Triangle", "triangle"], ["Star", "star"], ["Heart", "heart"], ["Arrow", "arrow"]], item.graphic || "circle", function (value) { item.graphic = value; drawPreview(); scheduleSave(); });
-				addRange(inspector, "Size", item.size || 72, 12, 500, 1, function (value) { item.size = value; drawPreview(); scheduleSave(); }, "px");
-				addColor(inspector, "Color", item.color || "#7aac2b", function (value) { item.color = value; drawPreview(); scheduleSave(); });
-				tagPositionControl(addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { item.x = value; drawPreview(); scheduleSave(); }, "%"), "x");
-				tagPositionControl(addRange(inspector, "Y position", item.y == null ? 50 : item.y, 0, 100, 1, function (value) { item.y = value; drawPreview(); scheduleSave(); }, "%"), "y");
-				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { item.visible = value; drawPreview(); scheduleSave(); });
+				addSelect(inspector, "Graphic", [["Circle", "circle"], ["Square", "square"], ["Triangle", "triangle"], ["Star", "star"], ["Heart", "heart"], ["Arrow", "arrow"]], item.graphic || "circle", function (value) { delete item.bakedInTemplateClip; item.graphic = value; drawPreview(); scheduleSave(); });
+				addRange(inspector, "Size", item.size || 72, 12, 500, 1, function (value) { delete item.bakedInTemplateClip; item.size = value; drawPreview(); scheduleSave(); }, "px");
+				addColor(inspector, "Color", item.color || "#7aac2b", function (value) { delete item.bakedInTemplateClip; item.color = value; drawPreview(); scheduleSave(); });
+				tagPositionControl(addRange(inspector, "X position", item.x == null ? 50 : item.x, 0, 100, 1, function (value) { delete item.bakedInTemplateClip; item.x = value; drawPreview(); scheduleSave(); }, "%"), "x");
+				tagPositionControl(addRange(inspector, "Y position", item.y == null ? 50 : item.y, 0, 100, 1, function (value) { delete item.bakedInTemplateClip; item.y = value; drawPreview(); scheduleSave(); }, "%"), "y");
+				addCheckbox(inspector, "Visible", item.visible !== false, function (value) { delete item.bakedInTemplateClip; item.visible = value; drawPreview(); scheduleSave(); });
 			}
 		}
 
@@ -2671,6 +2864,7 @@ export const TIMELINE_EDITOR_JS = `
 					entry.track.items.push(childCopy);
 				});
 			} else {
+				delete copy.bakedInTemplateClip;
 				var ownIndex = track.items.indexOf(source);
 				track.items.splice(ownIndex === -1 ? track.items.length : ownIndex + 1, 0, copy);
 				if (source.parentId) {
@@ -2794,7 +2988,18 @@ export const TIMELINE_EDITOR_JS = `
 			try { url = URL.createObjectURL(blob); } catch (error) {}
 			var info = metadata || {};
 			var type = String(info.type || blob.type || "");
-			var record = { id: String(id), blob: blob, url: url, name: String(info.name || blob.name || ""), type: type, source: info.source || null, durationSec: number(info.durationSec, 0), image: null, video: null };
+			var record = {
+				id: String(id),
+				blob: blob,
+				url: url,
+				name: String(info.name || blob.name || ""),
+				type: type,
+				source: info.source || null,
+				durationSec: number(info.durationSec, 0),
+				templateScene: info.templateScene && typeof info.templateScene === "object" ? deepCopy(info.templateScene) : null,
+				image: null,
+				video: null
+			};
 			if (type.indexOf("image/") === 0 && url) {
 				var image = new Image();
 				image.onload = function () { drawPreview(); };
@@ -2927,10 +3132,19 @@ export const TIMELINE_EDITOR_JS = `
 			var file = clip.file && typeof clip.file === "object" && clip.file.name ? clip.file : new File([blob], name, { type: "video/mp4" });
 			var duration = clamp(number(clip.durationSec, 0) || 5, MIN_CLIP_SEC, MAX_DURATION_SEC);
 			var assetId = makeId("template");
-			registerAsset(assetId, file, { name: name, type: "video/mp4", source: "template composer", durationSec: duration });
-			api.storeAsset(pageId, assetId, file, { name: name, type: "video/mp4", source: "template composer" }).then(function (result) { if (!result || !result.ok) setStatus("The composed clip works now but could not be kept for reloads in this browser.", true); });
+			var tplMeta = clip.templateScene && typeof clip.templateScene === "object" ? deepCopy(clip.templateScene) : null;
+			registerAsset(assetId, file, { name: name, type: "video/mp4", source: String(clip.source || "template composer"), durationSec: duration, templateScene: tplMeta });
+			api.storeAsset(pageId, assetId, file, { name: name, type: "video/mp4", source: String(clip.source || "template composer") }).then(function (result) { if (!result || !result.ok) setStatus("The composed clip works now but could not be kept for reloads in this browser.", true); });
 			if (!clipsQueued(assetId)) clipsQueue.push(assetId);
 			return appendQueuedClips();
+		}
+		function ensureTemplateVisualTrackAt(laneIndex) {
+			var lanes = visualTracks();
+			while (lanes.length <= laneIndex && lanes.length < MAX_VISUAL_TRACKS) {
+				addVisualTrack();
+				lanes = visualTracks();
+			}
+			return lanes[Math.min(laneIndex, lanes.length - 1)] || null;
 		}
 		function appendQueuedClips() {
 			var track = mediaTrack();
@@ -2958,10 +3172,105 @@ export const TIMELINE_EDITOR_JS = `
 				var sceneId = makeId("scene");
 				var itemId = makeId("media");
 				var source = String(asset.source || "template composer");
-				var scene = { id: sceneId, index: state.scenes.length, name: "Scene " + (state.scenes.length + 1) + " · " + name, startSec: nextStart, durationSec: duration, mediaType: kind, mediaAssetId: String(assetId), mediaName: name, mediaSource: source, prompt: "", effects: (state.videoStyleEffects || []).slice(), videoStyle: state.videoStyle, elements: [] };
-				var item = { id: itemId, kind: "media", sceneId: sceneId, assetId: String(assetId), label: name, mediaType: kind, mediaSource: source, startSec: nextStart, durationSec: duration, trimStartSec: 0, fit: "cover", visible: true };
+				var tpl = asset.templateScene && typeof asset.templateScene === "object" ? deepCopy(asset.templateScene) : null;
+				var sceneDisplayName = tpl && tpl.name ? String(tpl.name) : name;
+				var sceneStyle = tpl && (tpl.videoStyle || tpl.style)
+					? String(tpl.videoStyle || tpl.style)
+					: String(state.videoStyle || "Cinematic Film");
+				var sceneStyleCode = tpl && tpl.style ? String(tpl.style) : sceneStyle;
+				var sceneEffects = tpl && Array.isArray(tpl.effects)
+					? tpl.effects.slice()
+					: (state.videoStyleEffects || []).slice();
+				var sceneTransition = tpl && tpl.transition && typeof tpl.transition === "object"
+					? Object.assign({}, tpl.transition)
+					: { type: "none", speed: 1, effect: "none", motionSpeed: 1 };
+				var isTpl = Boolean(tpl || source === "template composer");
+				var scene = {
+					id: sceneId,
+					index: state.scenes.length,
+					name: "Scene " + (state.scenes.length + 1) + " \u00b7 " + sceneDisplayName,
+					startSec: nextStart,
+					durationSec: duration,
+					mediaType: kind,
+					mediaAssetId: String(assetId),
+					mediaName: name,
+					mediaSource: source,
+					prompt: "",
+					style: sceneStyleCode,
+					videoStyle: sceneStyle,
+					effects: sceneEffects,
+					transition: sceneTransition,
+					isTemplateScene: isTpl,
+					templateId: tpl && tpl.templateId ? String(tpl.templateId) : "",
+					templateScene: tpl,
+					elements: []
+				};
+				var item = {
+					id: itemId,
+					kind: "media",
+					sceneId: sceneId,
+					assetId: String(assetId),
+					label: name,
+					mediaType: kind,
+					mediaSource: source,
+					startSec: nextStart,
+					durationSec: duration,
+					trimStartSec: 0,
+					fit: "cover",
+					visible: true,
+					style: sceneStyleCode,
+					videoStyle: sceneStyle,
+					effects: sceneEffects.slice(),
+					transition: Object.assign({}, sceneTransition),
+					isTemplateScene: isTpl,
+					templateId: tpl && tpl.templateId ? String(tpl.templateId) : "",
+					templateScene: tpl ? deepCopy(tpl) : null
+				};
 				state.scenes.push(scene);
 				track.items.push(item);
+				if (tpl && Array.isArray(tpl.elements) && tpl.elements.length) {
+					var tplChildren = tpl.elements.slice(0, MAX_VISUAL_TRACKS);
+					for (var cIdx = 0; cIdx < tplChildren.length; cIdx++) {
+						var tplEl = tplChildren[cIdx];
+						if (!tplEl) continue;
+						var targetLane = ensureTemplateVisualTrackAt(cIdx);
+						if (!targetLane) continue;
+						var isGraphicEl = tplEl.kind === "graphic";
+						var childItem = {
+							id: makeId(isGraphicEl ? "graphic" : "text"),
+							kind: isGraphicEl ? "graphic" : "text",
+							label: String(tplEl.label || (isGraphicEl ? "Template graphic" : "Template text")).slice(0, 60),
+							templateKey: String(tplEl.key || ("tpl-el-" + cIdx)),
+							parentId: itemId,
+							sceneId: sceneId,
+							startSec: nextStart,
+							durationSec: duration,
+							x: clamp(number(tplEl.x, 50), 0, 100),
+							y: clamp(number(tplEl.y, isGraphicEl ? 50 : 78), 0, 100),
+							rotation: number(tplEl.rotation, 0),
+							color: String(tplEl.color || (isGraphicEl ? "#7aac2b" : "#ffffff")),
+							accent: String(tplEl.accent || ""),
+							transition: String(tplEl.transition || "none"),
+							transitionSpeed: number(tplEl.transitionSpeed, 1),
+							anim: String(tplEl.anim || "none"),
+							speed: number(tplEl.speed, 1),
+							style: String(tplEl.style || sceneStyleCode || ""),
+							layerOrder: number(tplEl.layerOrder, cIdx),
+							visible: tplEl.visible !== false,
+							bakedInTemplateClip: true
+						};
+						if (isGraphicEl) {
+							childItem.graphic = String(tplEl.graphic || "circle");
+							childItem.size = clamp(number(tplEl.size, 64), 12, 500);
+						} else {
+							childItem.text = String(tplEl.text || "");
+							childItem.fontSize = clamp(number(tplEl.fontSize || tplEl.size, 28), 10, 140);
+							childItem.font = String(tplEl.font || "sans");
+							childItem.align = String(tplEl.align || "center");
+						}
+						targetLane.items.push(childItem);
+					}
+				}
 				nextStart += duration;
 				added += 1;
 				lastItem = item;
@@ -3269,18 +3578,28 @@ export const TIMELINE_EDITOR_JS = `
 			 * Template-modal image effects (double gradient / neon / VHS) ride on
 			 * the background layer of EVERY scene, resolved from the scene itself.
 			 */
-			drawStyleEffects(context, width, height, state.playheadSec, scene);
+			var isRenderedTemplateVideo = Boolean(drawn && asset && asset.video && ((active && active.isTemplateScene) || (scene && scene.isTemplateScene)));
+			if (!isRenderedTemplateVideo) {
+				drawStyleEffects(context, width, height, state.playheadSec, scene);
+			}
 			/* Layers 1..4 — every text and graphic clip paints above the background. */
 			visualTracks().forEach(function (track) {
 				track.items.forEach(function (item) {
 					var live = state.playheadSec >= item.startSec && state.playheadSec < item.startSec + item.durationSec;
 					if (!live) return;
+					var skipBaked = Boolean(isRenderedTemplateVideo && item.bakedInTemplateClip && active && String(item.parentId || "") === String(active.id));
 					if (item.kind === "graphic" && item.visible !== false) {
-						drawGraphic(context, item, width, height);
+						if (!skipBaked) drawGraphic(context, item, width, height);
 						/* The dashed box is the drag affordance; exports never carry it. */
 						if (!recorder && !isExporting && String(item.id) === String(state.selectedItemId)) drawSelectionBox(context, item, width, height);
 					}
-					if (item.kind === "text") drawText(context, item, width, height, !recorder && !isExporting && String(item.id) === String(state.selectedItemId));
+					if (item.kind === "text") {
+						if (!skipBaked) {
+							drawText(context, item, width, height, !recorder && !isExporting && String(item.id) === String(state.selectedItemId));
+						} else if (!recorder && !isExporting && String(item.id) === String(state.selectedItemId)) {
+							drawSelectionBox(context, item, width, height);
+						}
+					}
 				});
 			});
 			/*
@@ -3427,6 +3746,7 @@ export const TIMELINE_EDITOR_JS = `
 			var found = findItem(canvasDrag.id);
 			if (!found) { canvasDrag = null; return; }
 			canvasDrag.moved = true;
+			delete found.item.bakedInTemplateClip;
 			found.item.x = Math.round(clamp(canvasDrag.originX + deltaX, 0, 100) * 10) / 10;
 			found.item.y = Math.round(clamp(canvasDrag.originY + deltaY, 0, 100) * 10) / 10;
 			state.selectedTrackId = found.track.id;
@@ -3651,12 +3971,17 @@ export const TIMELINE_EDITOR_JS = `
 				targetCtx.restore();
 			}
 			if (!drawn && active) drawPlaceholder(targetCtx, width, height, scene);
+			var isRenderedTemplateFrame = Boolean(drawn && asset && asset.video && ((active && active.isTemplateScene) || (scene && scene.isTemplateScene)));
 			/* Exported frames carry the same per-scene treatments as the preview. */
-			drawStyleEffects(targetCtx, width, height, seconds, scene);
+			if (!isRenderedTemplateFrame) {
+				drawStyleEffects(targetCtx, width, height, seconds, scene);
+			}
 			visualTracks().forEach(function (track) {
 				track.items.forEach(function (item) {
 					var live = seconds >= item.startSec && seconds < item.startSec + item.durationSec;
 					if (!live) return;
+					var skipBaked = Boolean(isRenderedTemplateFrame && item.bakedInTemplateClip && active && String(item.parentId || "") === String(active.id));
+					if (skipBaked) return;
 					if (item.kind === "graphic" && item.visible !== false) drawGraphic(targetCtx, item, width, height);
 					if (item.kind === "text") drawText(targetCtx, item, width, height, false);
 				});
@@ -4259,9 +4584,17 @@ export const TIMELINE_EDITOR_JS = `
 					window.location.href = url.pathname + url.search + url.hash;
 				}
 			});
-			window.addEventListener("beforeunload", function () {
+			function flushTimelineHandback() {
+				if (saveTimer) { clearTimeout(saveTimer); saveTimer = 0; }
 				persistNow();
 				try { publishTimelineEdit(true); } catch (publishError) { }
+			}
+			window.addEventListener("pagehide", flushTimelineHandback);
+			document.addEventListener("visibilitychange", function () {
+				if (document.visibilityState === "hidden") flushTimelineHandback();
+			});
+			window.addEventListener("beforeunload", function () {
+				flushTimelineHandback();
 				if (previewFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(previewFrame);
 				objectUrls.forEach(function (url) { try { URL.revokeObjectURL(url); } catch (error) {} });
 				Object.keys(audioMap).forEach(function (key) { try { audioMap[key].pause(); } catch (error) {} });
@@ -4405,6 +4738,7 @@ export const TIMELINE_EDITOR_JS = `
 			return parentItem ? childItemsFor(parentItem).map(function (entry) { return entry.item; }) : [];
 		};
 		api.setItemTiming = setItemTiming;
+		api.setPlayhead = function (sec) { if (state) setPlayhead(sec, true); };
 		/* Undo / redo of the editable project data, exposed for tests and tooling. */
 		api.undo = function () { return state ? undo() : false; };
 		api.redo = function () { return state ? redo() : false; };

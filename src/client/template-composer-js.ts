@@ -1804,19 +1804,177 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		// Add to Video renders the same MP4 without saving to disk.
 		// -------------------------------------------------
 
+		function safeTemplateDuration(fallback) {
+			const fallbackNum = Number(fallback);
+			const baseFallback = Number.isFinite(fallbackNum) && fallbackNum > 0
+				? fallbackNum
+				: (Number.isFinite(Number(duration)) && Number(duration) > 0 ? Number(duration) : 6);
+			const fromInput = durationEl && durationEl.value !== undefined && String(durationEl.value).trim() !== ""
+				? Number(durationEl.value)
+				: baseFallback;
+			const picked = Number.isFinite(fromInput) && fromInput > 0 ? fromInput : baseFallback;
+			return clamp(Math.round(picked), 1, TPL_MAX_DURATION);
+		}
+
+		function safeModalVideoNumber() {
+			const parsed = Math.floor(Number(modalVideo));
+			return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+		}
+
+		function tplFormatSeconds(value) {
+			const num = Number(value);
+			const totalSecs = Number.isFinite(num) && num > 0
+				? Math.max(0, Math.round(num))
+				: 0;
+			if (typeof formatSeconds === "function") {
+				const formatted = String(formatSeconds(totalSecs) || "");
+				if (formatted && formatted.indexOf("NaN") === -1 && formatted.indexOf("Infinity") === -1) {
+					return formatted;
+				}
+			}
+			const mins = Math.floor(totalSecs / 60);
+			const secs = totalSecs % 60;
+			return mins + ":" + (secs < 10 ? "0" + secs : secs);
+		}
+
+		function tplPosCoords(posCode) {
+			const code = String(posCode || "mc");
+			const x = code.charAt(1) === "l" ? 18 : code.charAt(1) === "r" ? 82 : 50;
+			const y = code.charAt(0) === "t" ? 20 : code.charAt(0) === "b" ? 80 : 50;
+			const align = code.charAt(1) === "l" ? "left" : code.charAt(1) === "r" ? "right" : "center";
+			return { x: x, y: y, align: align };
+		}
+
+		let captureActiveTemplateScene = function (clipDuration) {
+			const v = currentVarDef() || { n: 1, name: "Template", cat: "Motion", vw: 9 };
+			const st = current() || { layers: [], imageEntry: "none", entrySpeed: 1, imageMotion: "none", bg: "none", speed: 1 };
+			const dur = Number.isFinite(Number(clipDuration)) && Number(clipDuration) > 0
+				? Math.round(Number(clipDuration) * 1000) / 1000
+				: safeTemplateDuration(duration);
+			const catLower = String(v.cat || "").toLowerCase();
+			const effects = [];
+			if (catLower.indexOf("duotone") !== -1 || st.bg === "duotone") effects.push("duotone");
+			if (catLower.indexOf("neon") !== -1) effects.push("neon");
+			if (catLower.indexOf("glitch") !== -1) effects.push("vhs");
+			const elements = (Array.isArray(st.layers) ? st.layers : []).map(function (layer, idx) {
+				const coords = tplPosCoords(layer && layer.pos);
+				const sizeVw = Number(layer && layer.size) || Number(v.vw) || 9;
+				const fontPx = clamp(Math.round(sizeVw * 4.5), 14, 120);
+				return {
+					key: "layer_" + (idx + 1),
+					kind: "text",
+					label: layerTitle(layer || {}),
+					layerOrder: idx,
+					visible: true,
+					x: coords.x,
+					y: coords.y,
+					size: fontPx,
+					fontSize: fontPx,
+					rotation: 0,
+					color: String((layer && layer.color) || "#ffffff"),
+					accent: "",
+					font: "sans",
+					align: coords.align,
+					text: String((layer && layer.text) || ""),
+					graphic: "",
+					graphicName: "",
+					anim: String((layer && layer.anim) || "none"),
+					speed: Number(st.speed) || 1,
+					transition: String(st.imageEntry || "fade"),
+					transitionSpeed: Number(st.entrySpeed) || 1,
+					style: String(v.cat || "motion").toLowerCase()
+				};
+			});
+			if (st.bg && st.bg !== "none") {
+				elements.push({
+					key: "bg_graphic",
+					kind: "graphic",
+					label: String(v.name || "Template") + " graphic",
+					layerOrder: elements.length,
+					visible: true,
+					x: 50,
+					y: 50,
+					size: 72,
+					rotation: 0,
+					color: String((st.layers && st.layers[0] && st.layers[0].color) || "#7aac2b"),
+					accent: "",
+					font: "",
+					align: "",
+					text: "",
+					graphic: String(st.bg || "circle"),
+					graphicName: String(st.bg || "Background motif"),
+					anim: String(st.imageMotion || "none"),
+					speed: Number(st.speed) || 1,
+					transition: String(st.imageEntry || "none"),
+					transitionSpeed: Number(st.entrySpeed) || 1,
+					style: String(v.cat || "motion").toLowerCase()
+				});
+			}
+			return {
+				isTemplateScene: true,
+				mode: "variation",
+				templateId: "variation-" + String(v.n || 1),
+				variationIndex: Number(currentVar) || 0,
+				name: String(v.name || "Template"),
+				orientation: tplLandscape ? "landscape" : "portrait",
+				width: TPL_W,
+				height: TPL_H,
+				durationSec: dur,
+				style: String(v.cat || "motion").toLowerCase(),
+				videoStyle: String(v.cat || v.name || "Motion Template"),
+				effects: effects,
+				transition: {
+					type: String(st.imageEntry || "none"),
+					speed: Number(st.entrySpeed) || 1,
+					effect: String(st.imageMotion || "none"),
+					motionSpeed: Number(st.speed) || 1,
+					background: String(st.bg || "none")
+				},
+				elements: elements
+			};
+		};
+
+		async function selectTemplateEncoderCodec(width, height) {
+			const candidates = [
+				"avc1.4d002a",
+				"avc1.4d0032",
+				"avc1.640032",
+				"avc1.42002a",
+				"avc1.420032",
+				"avc1.42001f"
+			];
+			if (typeof VideoEncoder === "undefined" || typeof VideoEncoder.isConfigSupported !== "function") {
+				return candidates[0];
+			}
+			for (let c = 0; c < candidates.length; c++) {
+				try {
+					const check = await VideoEncoder.isConfigSupported({
+						codec: candidates[c],
+						width: width,
+						height: height,
+						bitrate: TPL_VIDEO_BITRATE,
+						framerate: TPL_FPS
+					});
+					if (check && check.supported) return candidates[c];
+				}
+				catch (codecCheckErr) { }
+			}
+			return candidates[0];
+		}
+
 		async function exportMP4(options) {
 			const shouldDownload = !options || options.download !== false;
 			if (typeof VideoEncoder === "undefined") {
 				alert(
 					"Your browser does not support WebCodecs. Please use modern Chrome, Edge, or Safari."
 				);
-				return;
+				return null;
 			}
 			if (typeof Mp4Muxer === "undefined") {
 				alert(
 					"The MP4 muxer failed to load. Reload the page and try again."
 				);
-				return;
+				return null;
 			}
 
 			exporting = true;
@@ -1831,7 +1989,13 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			try {
 				const v = currentVarDef();
 				const st = current();
-				const total = Math.ceil(duration * TPL_FPS);
+				const renderDuration = safeTemplateDuration(duration);
+				duration = renderDuration;
+				if (durationEl) {
+					durationEl.value = String(renderDuration);
+				}
+				const total = Math.max(1, Math.ceil(renderDuration * TPL_FPS));
+				const frameDurationUs = Math.round(1_000_000 / TPL_FPS);
 				statusEl.textContent = "Rendering " + total + " frames\\u2026";
 
 				/*
@@ -1854,9 +2018,29 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				});
 
 				let encoderError = null;
+				let chunkIndex = 0;
 
 				videoEncoder = new VideoEncoder({
 					output: (chunk, meta) => {
+						const fallbackTs = Math.round((chunkIndex * 1_000_000) / TPL_FPS);
+						chunkIndex += 1;
+						const rawDur = chunk && chunk.duration;
+						const hasValidDuration = rawDur !== null && rawDur !== undefined && Number.isFinite(Number(rawDur)) && Number(rawDur) >= 0;
+						if (!hasValidDuration && typeof muxer.addVideoChunkRaw === "function" && chunk && typeof chunk.copyTo === "function") {
+							const bytes = new Uint8Array(Number(chunk.byteLength) || 0);
+							chunk.copyTo(bytes);
+							const safeTs = Number.isFinite(Number(chunk.timestamp)) && Number(chunk.timestamp) >= 0
+								? Number(chunk.timestamp)
+								: fallbackTs;
+							muxer.addVideoChunkRaw(
+								bytes,
+								chunk.type === "delta" ? "delta" : "key",
+								safeTs,
+								frameDurationUs,
+								meta
+							);
+							return;
+						}
 						muxer.addVideoChunk(chunk, meta);
 					},
 					error: (error) => {
@@ -1865,8 +2049,9 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 					}
 				});
 
+				const selectedCodec = await selectTemplateEncoderCodec(TPL_W, TPL_H);
 				videoEncoder.configure({
-					codec: "avc1.4d002a",
+					codec: selectedCodec,
 					width: TPL_W,
 					height: TPL_H,
 					bitrate: TPL_VIDEO_BITRATE,
@@ -1883,18 +2068,25 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				for (let i = 0; i < total; i++) {
 					drawScene(ctx, TPL_W, TPL_H, i / TPL_FPS, v, st);
 
-					const timestamp = (i * 1_000_000) / TPL_FPS;
+					const timestamp = Math.round((i * 1_000_000) / TPL_FPS);
 					const frame = new VideoFrame(canvas, {
-						timestamp: timestamp
+						timestamp: timestamp,
+						duration: frameDurationUs
 					});
 					videoEncoder.encode(frame, {
 						keyFrame: i % KEYFRAME_INTERVAL === 0
 					});
 					frame.close();
 
+					const queueWaitStart = Date.now();
 					while (
-						videoEncoder.encodeQueueSize > MAX_ENCODE_QUEUE
+						videoEncoder.encodeQueueSize > MAX_ENCODE_QUEUE &&
+						!encoderError &&
+						videoEncoder.state !== "closed"
 					) {
+						if (Date.now() - queueWaitStart > 15000) {
+							throw new Error("The video encoder stalled while rendering template frames.");
+						}
 						await new Promise((resolve) =>
 							setTimeout(resolve, 8)
 						);
@@ -1919,21 +2111,30 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				}
 
 				statusEl.textContent = "Finalizing MP4\\u2026";
-				await videoEncoder.flush();
+				await Promise.race([
+					videoEncoder.flush(),
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error("Finalizing the template MP4 timed out.")), 30000)
+					)
+				]);
 				if (encoderError) {
 					throw encoderError;
 				}
 				muxer.finalize();
 
+				const templateScene = captureActiveTemplateScene(renderDuration);
+				const rawSceneName = String((templateScene && templateScene.name) || (v && v.name) || "scene");
+				const safeSlug = rawSceneName
+					.toLowerCase()
+					.replace(/&/g, "and")
+					.replace(/[^a-z0-9]+/g, "_")
+					.replace(/^_+|_+$/g, "") || "scene";
 				const blob = new Blob([muxer.target.buffer], {
 					type: "video/mp4"
 				});
 				const name =
 					"template_" +
-					v.name
-						.toLowerCase()
-						.replaceAll(" ", "_")
-						.replaceAll("&", "and") +
+					safeSlug +
 					"_" +
 					(tplLandscape ? "landscape" : "portrait") +
 					".mp4";
@@ -1948,8 +2149,9 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				lastVideo = {
 					blob: blob,
 					url: url,
-					duration: duration,
-					name: name
+					duration: renderDuration,
+					name: name,
+					templateScene: templateScene
 				};
 
 				if (shouldDownload) {
@@ -2062,7 +2264,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		 * the clip goes to, and its gallery behaviour is unchanged.
 		 */
 		function timelineClipTarget(n) {
-			return timelineClipSink() ? "Video" : "Video " + n;
+			return timelineClipSink() ? "Video" : "Video " + safeModalVideoNumber();
 		}
 
 		/*
@@ -2072,37 +2274,109 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		 */
 		function handClipToTimeline(renderedVideo, clipDuration) {
 			const sink = timelineClipSink();
-			if (!sink || !renderedVideo || !renderedVideo.blob) {
-				return 0;
-			}
+			if (!sink || !renderedVideo || !renderedVideo.blob) return 0;
 			const name = String(renderedVideo.name || "Template clip");
-			const seconds =
-				Number(clipDuration || renderedVideo.duration || duration) || 5;
+			const raw = Number(clipDuration || renderedVideo.duration || duration);
+			const seconds = Number.isFinite(raw) && raw > 0 ? Math.round(raw * 1000) / 1000 : safeTemplateDuration(duration);
 			try {
-				return Number(
-					sink({
-						blob: renderedVideo.blob,
-						file: new File([renderedVideo.blob], name, {
-							type: "video/mp4"
-						}),
-						name: name,
-						durationSec: seconds
-					})
-				) || 0;
+				return Number(sink({
+					blob: renderedVideo.blob,
+					file: new File([renderedVideo.blob], name, { type: "video/mp4" }),
+					name: name,
+					durationSec: seconds,
+					source: "template composer",
+					templateScene: renderedVideo.templateScene || captureActiveTemplateScene(seconds)
+				})) || 0;
 			}
 			catch (sinkError) {
 				return 0;
 			}
 		}
 
+		async function probeRenderedTemplateMp4(url, expectedSeconds) {
+			const fallbackDuration = safeTemplateDuration(expectedSeconds);
+			const probed = document.createElement("video");
+			probed.muted = true;
+			probed.playsInline = true;
+			probed.preload = "auto";
+			let host = null;
+			try {
+				if (document && document.body) {
+					host = document.createElement("div");
+					host.setAttribute("aria-hidden", "true");
+					host.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden;";
+					host.appendChild(probed);
+					document.body.appendChild(host);
+				}
+			}
+			catch (attachErr) {
+				host = null;
+			}
+
+			let mediaErrored = false;
+			try {
+				await new Promise((resolve) => {
+					let settled = false;
+					const finish = (errored) => {
+						if (settled) return;
+						settled = true;
+						if (errored) mediaErrored = true;
+						clearTimeout(timer);
+						try {
+							probed.removeEventListener("loadedmetadata", onReady);
+							probed.removeEventListener("durationchange", onReady);
+							probed.removeEventListener("loadeddata", onReady);
+							probed.removeEventListener("error", onError);
+						}
+						catch (listenerErr) { }
+						resolve();
+					};
+					const onReady = () => finish(false);
+					const onError = () => finish(true);
+					const timer = setTimeout(() => finish(false), 1200);
+					probed.addEventListener("loadedmetadata", onReady);
+					probed.addEventListener("durationchange", onReady);
+					probed.addEventListener("loadeddata", onReady);
+					probed.addEventListener("error", onError);
+					probed.src = url;
+				});
+			}
+			finally {
+				if (host && host.parentNode) {
+					try {
+						if (probed.parentNode === host) host.removeChild(probed);
+						host.parentNode.removeChild(host);
+					}
+					catch (detachErr) { }
+				}
+			}
+
+			const rawDuration = Number(probed.duration);
+			const validProbed = Number.isFinite(rawDuration) && rawDuration > 0 && rawDuration <= MP4_MAX_DURATION_S * 4;
+			const resolvedDuration = validProbed
+				? Math.round(rawDuration * 1000) / 1000
+				: fallbackDuration;
+			return {
+				videoEl: probed,
+				duration: resolvedDuration,
+				errored: mediaErrored && !validProbed
+			};
+		}
+
 		async function addTemplateToVideo() {
 			if (exporting) return;
-			const n = modalVideo;
-			const project = videoProjects[n - 1];
-			if (!project) {
+			const n = safeModalVideoNumber();
+			modalVideo = n;
+			const sink = timelineClipSink();
+			let project = videoProjects[n - 1] || null;
+			if (!sink && !project && typeof addVideoAccordion === "function" && Array.isArray(videoProjects) && !videoProjects.length) {
+				addVideoAccordion();
+				modalVideo = 1;
+				project = videoProjects[0] || null;
+			}
+			if (!sink && !project) {
 				return;
 			}
-			const sink = timelineClipSink();
 			if (!sink) {
 				const counts = videoCounts(project);
 				if (counts.clips >= MAX_MP4_UPLOADS) {
@@ -2116,10 +2390,24 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				}
 			}
 
+			if (statusEl) {
+				statusEl.textContent = sink
+					? "Rendering template video before adding to timeline\\u2026"
+					: "Rendering template video before adding to Video " + n + "\\u2026";
+			}
+
 			const renderedVideo = await exportMP4({ download: false });
-			if (!renderedVideo) return;
+			if (!renderedVideo || !renderedVideo.blob) return;
+
+			if (!renderedVideo.blob.size) {
+				addBtn.disabled = false;
+				statusEl.textContent = "Export failed: rendered MP4 was empty";
+				alert("The composed file could not be read as an MP4 clip.");
+				return;
+			}
 
 			addBtn.disabled = true;
+			exportBtn.disabled = true;
 			statusEl.textContent = sink
 				? "Adding the composed MP4 to the timeline\\u2026"
 				: "Adding the composed MP4 to Video " + n + "\\u2026";
@@ -2129,23 +2417,17 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				renderedVideo.name,
 				{ type: "video/mp4" }
 			);
-			const probed = document.createElement("video");
-			probed.muted = true;
-			probed.playsInline = true;
-			probed.src = renderedVideo.url;
 
+			let probeResult = null;
 			try {
-				await new Promise((resolve, reject) => {
-					probed.addEventListener("loadedmetadata", resolve, {
-						once: true
-					});
-					probed.addEventListener("error", reject, {
-						once: true
-					});
-				});
+				probeResult = await probeRenderedTemplateMp4(
+					renderedVideo.url,
+					renderedVideo.duration
+				);
 			}
 			catch (probeError) {
 				addBtn.disabled = false;
+				exportBtn.disabled = false;
 				statusEl.textContent = "MP4 ready";
 				alert(
 					"The composed file could not be read as an MP4 clip."
@@ -2153,15 +2435,22 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				return;
 			}
 
-			const clipDuration = probed.duration;
+			const probed = probeResult.videoEl;
+			const clipDuration = Number.isFinite(Number(probeResult.duration)) && Number(probeResult.duration) > 0
+				? Number(probeResult.duration)
+				: safeTemplateDuration(renderedVideo.duration);
+			if (renderedVideo.templateScene && typeof renderedVideo.templateScene === "object") {
+				renderedVideo.templateScene.durationSec = clipDuration;
+			}
 			if (clipDuration > MP4_MAX_DURATION_S) {
 				addBtn.disabled = false;
+				exportBtn.disabled = false;
 				statusEl.textContent = "MP4 ready";
 				alert(
 					"The composed file is " +
-					formatSeconds(clipDuration) +
+					tplFormatSeconds(clipDuration) +
 					" long. Each MP4 clip must be at most " +
-					formatSeconds(MP4_MAX_DURATION_S) +
+					tplFormatSeconds(MP4_MAX_DURATION_S) +
 					"."
 				);
 				return;
@@ -2178,25 +2467,40 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			if (sink) {
 				const landed = handClipToTimeline(renderedVideo, clipDuration);
 				addBtn.disabled = false;
+				exportBtn.disabled = false;
 				statusEl.textContent = landed
 					? "Added to the Scene Media layer (" +
-						formatSeconds(clipDuration) +
+						tplFormatSeconds(clipDuration) +
 						") \\u2014 at the right-most end of the timeline"
 					: "The timeline could not take this clip; nothing was added";
 				return;
 			}
 
+			project = videoProjects[n - 1] || project;
+			if (!project) {
+				addBtn.disabled = false;
+				exportBtn.disabled = false;
+				return;
+			}
+
+			const templateScene = renderedVideo.templateScene || captureActiveTemplateScene(clipDuration);
 			const asset = {
 				kind: "mp4",
+				name: renderedVideo.name,
 				file: file,
 				videoEl: probed,
 				duration: clipDuration,
 				url: renderedVideo.url,
-				card: null
+				card: null,
+				source: "template composer",
+				templateScene: templateScene
 			};
 			project.assets.push(asset);
 			buildVaCard(n, asset);
 			updateVideoStatus(n);
+			if (typeof window.syncEditorProjectDetail === "function") {
+				try { window.syncEditorProjectDetail(n, "template-clip-added"); } catch (detailErr) { }
+			}
 
 			/*
 			 * Make sure the new card is
@@ -2213,10 +2517,12 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				toggleGalleryScroll(n);
 			}
 
+			addBtn.disabled = false;
+			exportBtn.disabled = false;
 			addBtn.textContent = "\\u2705 Added to " + timelineClipTarget(n);
 			statusEl.textContent =
 				"Added to Video " + n +
-				" (" + formatSeconds(clipDuration) + ")" +
+				" (" + tplFormatSeconds(clipDuration) + ")" +
 				" \\u2014 it plays in the final render like any other MP4 clip";
 		}
 
@@ -2357,13 +2663,15 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				setOrientation(orientEl.value === "landscape");
 			});
 
+			durationEl.addEventListener("input", () => {
+				const liveVal = Number(durationEl.value);
+				if (Number.isFinite(liveVal) && liveVal > 0) {
+					duration = clamp(Math.round(liveVal), 1, TPL_MAX_DURATION);
+				}
+			});
 			durationEl.addEventListener("change", () => {
-				duration = clamp(
-					Math.round(Number(durationEl.value) || 6),
-					1,
-					TPL_MAX_DURATION
-				);
-				durationEl.value = duration;
+				duration = safeTemplateDuration(duration);
+				durationEl.value = String(duration);
 			});
 
 			const stWired = (id, key, numeric) => {
@@ -2390,8 +2698,8 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			stWired("tm-bg", "bg", false);
 			stWired("tm-speed", "speed", true);
 
-			exportBtn.addEventListener("click", exportMP4);
-			addBtn.addEventListener("click", addTemplateToVideo);
+			exportBtn.addEventListener("click", () => exportMP4({ download: true }));
+			addBtn.addEventListener("click", () => addTemplateToVideo());
 			document.getElementById("tpl-close")
 				.addEventListener("click", closeTemplateModal);
 			document.getElementById("tpl-x")
@@ -2415,19 +2723,23 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		}
 
 		function openTemplateModal(n) {
-			const project = videoProjects[n - 1];
+			const safeN = Math.floor(Number(n));
+			if (!Number.isFinite(safeN) || safeN < 1) {
+				return;
+			}
+			const project = videoProjects[safeN - 1];
 			if (!project) {
 				return;
 			}
-			modalVideo = n;
+			modalVideo = safeN;
 			if (!modal) {
-				buildModal(n);
+				buildModal(safeN);
 			}
 			else {
 				titleEl.textContent =
-					"\\ud83c\\udfac Add Video from Template \\u2014 Video " + n;
+					"\\ud83c\\udfac Add Video from Template \\u2014 Video " + safeN;
 				addBtn.textContent =
-					"\\u2795 Add to " + timelineClipTarget(n);
+					"\\u2795 Add to " + timelineClipTarget(safeN);
 			}
 			modal.style.display = "flex";
 			showGallery();

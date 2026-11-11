@@ -371,3 +371,155 @@ test("on the timeline page Download MP4 also appends the clip to the end of Scen
 	await h.api.addToVideo();
 	assert.equal(h.window.videoProjects[0].assets.length, 1, "and its gallery path still fills the accordion");
 });
+
+test("render-first MP4 muxes finite microsecond durations (mp4-muxer@5.1.3), falls back to Level 4.2 in portrait, and never emits NaN on NaN/Infinity probes", async (t) => {
+	const h = harness(t, null);
+	h.api.openScene(h.api.scenes.findIndex((s) => s.name === "Shape Study"));
+	const frameDurations = [];
+	const muxedDurations = [];
+	const configuredCodecs = [];
+
+	/* Reproduce mp4-muxer@5.1.3's strict addVideoChunkRaw duration check and null chunk.duration from VideoEncoder. */
+	h.window.VideoFrame = class {
+		constructor(canvas, options) {
+			this.timestamp = options.timestamp;
+			this.duration = options.duration;
+			frameDurations.push(options.duration);
+			h.frames.push({ canvas, timestamp: this.timestamp, duration: this.duration });
+		}
+		close() {}
+	};
+	h.window.VideoEncoder = class {
+		state = "unconfigured";
+		encodeQueueSize = 0;
+		static async isConfigSupported(cfg) {
+			/* Reject Level 4.0 (*28) at 1080x1920 portrait; accept Level 4.2 (*2a). */
+			if (cfg.height > 1088 && cfg.codec.endsWith("28")) return { supported: false };
+			return { supported: true, config: cfg };
+		}
+		constructor(config) { this.config = config; }
+		configure(cfg) { this.state = "configured"; configuredCodecs.push(cfg.codec); }
+		encode(frame, opts) {
+			const chunk = {
+				type: opts?.keyFrame ? "key" : "delta",
+				timestamp: frame.timestamp,
+				duration: null,
+				byteLength: 16,
+				copyTo(dest) { new Uint8Array(dest.buffer || dest).fill(7); }
+			};
+			this.config.output(chunk, { decoderConfig: { codec: configuredCodecs.at(-1) || "avc1.4d002a" } });
+		}
+		async flush() {}
+		close() { this.state = "closed"; }
+	};
+	h.window.Mp4Muxer.Muxer = class {
+		constructor(config) { this.target = config.target; }
+		addVideoChunk(chunk, meta) {
+			return this.addVideoChunkRaw(new Uint8Array(chunk.byteLength || 8), chunk.type, chunk.timestamp, chunk.duration, meta);
+		}
+		addVideoChunkRaw(_data, _type, timestamp, duration) {
+			if (!Number.isInteger(timestamp) || timestamp < 0) throw new TypeError("timestamp must be a non-negative integer.");
+			if (!Number.isInteger(duration) || duration < 0) throw new TypeError("duration must be a non-negative integer.");
+			muxedDurations.push(duration);
+		}
+		finalize() {
+			this.target.buffer = new Uint8Array(64).buffer;
+		}
+	};
+
+	/* Hostile detached <video> probe returning NaN on editor add, then Infinity on timeline add, plus blank duration input. */
+	let probeCycle = 0;
+	Object.defineProperty(h.window.HTMLMediaElement.prototype, "duration", {
+		configurable: true,
+		get() { return probeCycle++ % 2 === 0 ? Number.NaN : Number.POSITIVE_INFINITY; }
+	});
+
+	const orient = h.document.querySelector("#tpl-orientation");
+	h.change(orient, "portrait", "change");
+	const durationInput = h.document.querySelector("#tpl-duration");
+	h.change(durationInput, "", "input");
+	assert.doesNotMatch(h.document.querySelector("#tpl-status").textContent, /NaN/);
+	h.change(durationInput, 2, "change");
+
+	/* Clicking Add to Video renders MP4 first, then adds to Video 1 with finite duration and Reel Scene filename. */
+	h.document.querySelector("#tpl-add").click();
+	for (let i = 0; i < 30 && h.window.videoProjects[0].assets.length === 0; i++) {
+		await new Promise((r) => setTimeout(r, 10));
+	}
+
+	assert.equal(configuredCodecs[0], "avc1.4d002a", "portrait 1080x1920 selects Level 4.2 Main Profile");
+	assert.equal(frameDurations.length, 60, "2s @ 30fps renders 60 frames before adding");
+	assert.ok(frameDurations.every((d) => Number.isInteger(d) && d > 0), "every VideoFrame carries finite integer microsecond duration");
+	assert.equal(muxedDurations.length, 60, "all 60 chunks muxed cleanly through strict addVideoChunkRaw");
+	assert.equal(h.downloads.length, 0, "Add to Video never downloads");
+	assert.equal(h.window.videoProjects[0].assets.length, 1);
+	const added = h.window.videoProjects[0].assets[0];
+	assert.equal(added.duration, 2, "NaN probe falls back to the rendered clip duration");
+	assert.match(added.name, /^template_shape_study_portrait\.mp4$/, "filename reflects active Reel Scene and orientation");
+	assert.doesNotMatch(h.document.querySelector("#tpl-status").textContent, /NaN|Infinity/);
+
+	/* Real DOM click on #tpl-export passes a MouseEvent and must still trigger a download. */
+	h.document.querySelector("#tpl-export").click();
+	for (let i = 0; i < 30 && h.downloads.length === 0; i++) {
+		await new Promise((r) => setTimeout(r, 10));
+	}
+	assert.equal(h.downloads.length, 1, "DOM click on Download MP4 downloads the rendered file");
+});
+
+test("templateScene captures individual scene style, transition, child text, graphics, motion shapes, and 3D Ring Carousel", async (t) => {
+	const h = harness(t, null);
+	h.api.openScene(h.api.scenes.findIndex((s) => s.name === "Shape Study"));
+	const durationInput = h.document.querySelector("#tpl-duration");
+	h.change(durationInput, 2, "change");
+
+	/* Customize Shape Study: add a custom text element, add a custom motion graphic element, and hide eyebrow. */
+	h.api.state().elements.eyebrow.visible = false;
+	h.api.select("headline");
+	h.document.querySelector("#tm-scene-add-text").click();
+	const motionKey = Object.keys(h.api.graphics)[0];
+	h.api.select("graphic");
+	h.document.querySelector("#tm-scene-add-text").click();
+	h.change(h.field("Graphics").querySelector("select"), motionKey, "change");
+
+	await h.api.addToVideo();
+	const reelAsset = h.window.videoProjects[0].assets[0];
+	assert.ok(reelAsset.templateScene, "added MP4 asset carries templateScene metadata");
+	assert.equal(reelAsset.templateScene.isTemplateScene, true);
+	assert.equal(reelAsset.templateScene.mode, "reel-scene");
+	assert.equal(reelAsset.templateScene.name, "Shape Study");
+	assert.equal(reelAsset.templateScene.style, "duotone");
+	assert.equal(reelAsset.templateScene.videoStyle, "Duotone");
+	assert.ok(reelAsset.templateScene.effects.includes("duotone"));
+	assert.equal(reelAsset.templateScene.transition.type, "zoom");
+	assert.equal(reelAsset.templateScene.transition.effect, "duotone");
+	assert.ok(!reelAsset.templateScene.elements.some((el) => el.key === "eyebrow"), "hidden elements are omitted");
+	assert.ok(reelAsset.templateScene.elements.some((el) => el.kind === "text" && el.key === "text1"), "custom + Text element is captured");
+	const motionChild = reelAsset.templateScene.elements.find((el) => el.key === "graphic2");
+	assert.ok(motionChild, "custom + Graphic motion element is captured");
+	assert.equal(motionChild.kind, "graphic");
+	assert.equal(motionChild.graphic, motionKey);
+	assert.equal(motionChild.motionKind, motionKey.slice("motion:".length));
+	assert.ok(typeof motionChild.transition === "string" && motionChild.transition.length > 0, "child graphic carries its own transition");
+	assert.equal(motionChild.style, "duotone", "child graphic carries its own style");
+
+	/* 15th scene: 3D Ring Carousel captures ring-carousel child graphic metadata. */
+	h.api.openScene(14);
+	await h.api.upload(h.files(5, "ringcard"));
+	await h.api.addToVideo();
+	const ringAsset = h.window.videoProjects[0].assets[1];
+	assert.equal(ringAsset.templateScene.isTemplateScene, true);
+	assert.equal(ringAsset.templateScene.mode, "ring-carousel");
+	assert.equal(ringAsset.templateScene.style, "carousel");
+	assert.equal(ringAsset.templateScene.elements.length, 1);
+	assert.equal(ringAsset.templateScene.elements[0].kind, "graphic");
+	assert.equal(ringAsset.templateScene.elements[0].graphic, "ring-carousel");
+	assert.equal(ringAsset.templateScene.elements[0].imageCount, 5);
+	assert.deepEqual(Array.from(ringAsset.templateScene.elements[0].imageNames), [
+		"ringcard-1.png",
+		"ringcard-2.png",
+		"ringcard-3.png",
+		"ringcard-4.png",
+		"ringcard-5.png"
+	]);
+});
+
