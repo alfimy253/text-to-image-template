@@ -15180,7 +15180,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
-t	function openBatchPreview(id) {
+	function openBatchPreview(id) {
 
 			try { reconcileTimelineEdits(); } catch (reconcileErr) { }
 
