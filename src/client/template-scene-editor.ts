@@ -23,8 +23,13 @@ export const REEL_SCENE_EDITOR_JS = `
 					resolve();
 					return;
 				}
-				image.onload = resolve;
-				image.onerror = resolve;
+				const timer = setTimeout(resolve, 2500);
+				const done = function () {
+					clearTimeout(timer);
+					resolve();
+				};
+				image.onload = done;
+				image.onerror = done;
 			});
 		}));
 
@@ -1490,11 +1495,157 @@ export const REEL_SCENE_EDITOR_JS = `
 			reelSetGalleryCategory(reelGalleryCategory);
 		};
 
+		function reelStyleDisplayLabel(styleCode) {
+			const code = String(styleCode || "kinetic");
+			for (let i = 0; i < REEL_STYLE_OPTIONS.length; i++) {
+				if (REEL_STYLE_OPTIONS[i][1] === code) return REEL_STYLE_OPTIONS[i][0];
+			}
+			if (code === "carousel") return "3D Ring Carousel";
+			return code.charAt(0).toUpperCase() + code.slice(1);
+		}
+
+		const reelBaseCaptureTemplateScene = captureActiveTemplateScene;
+		captureActiveTemplateScene = function (clipDuration) {
+			if (!reelSceneMode) {
+				return reelBaseCaptureTemplateScene(clipDuration);
+			}
+			const sceneDef = REEL_SCENES[reelSceneIndex] || { name: "Template Scene", style: "kinetic" };
+			const state = reelSelectedState() || reelSceneDefaultState(0);
+			const bg = state && state.background
+				? state.background
+				: { image: "mood:0", effect: "none", speed: 1, transition: "none", transitionSpeed: 1 };
+			const isRingCarousel = Boolean(sceneDef && sceneDef.ringCarousel);
+			const styleCode = String((state && state.style) || sceneDef.style || "kinetic");
+			const styleLabel = isRingCarousel ? "3D Ring Carousel" : reelStyleDisplayLabel(styleCode);
+			const dur = Number.isFinite(Number(clipDuration)) && Number(clipDuration) > 0
+				? Math.round(Number(clipDuration) * 1000) / 1000
+				: safeTemplateDuration(duration);
+			const effects = [];
+			if (styleCode === "duotone" || bg.effect === "duotone") effects.push("duotone");
+			if (styleCode === "neon" || bg.effect === "glow") effects.push("neon");
+			if (styleCode === "glitch" || bg.effect === "scanlines") effects.push("vhs");
+
+			const orderedKeys = reelElementKeys(state);
+			const elements = [];
+			if (!isRingCarousel) {
+				for (let k = 0; k < orderedKeys.length; k++) {
+					const key = orderedKeys[k];
+					const element = state.elements && state.elements[key];
+					if (!element || element.deleted || element.visible === false) continue;
+					const isGraphic = element.type === "graphic";
+					const graphicKind = isGraphic ? String(element.kind || "circle") : "";
+					const motionObj = isGraphic && REEL_GRAPHIC_OBJECTS[graphicKind] ? REEL_GRAPHIC_OBJECTS[graphicKind] : null;
+					const motionKind = graphicKind.indexOf("motion:") === 0 ? graphicKind.slice("motion:".length) : "";
+					elements.push({
+						key: String(key),
+						kind: isGraphic ? "graphic" : "text",
+						label: String(reelNameForElement(key, element) || key),
+						layerOrder: elements.length,
+						visible: true,
+						x: reelClamp(Number(element.x) || 0, 0, 100),
+						y: reelClamp(Number(element.y) || 0, 0, 100),
+						size: Number(element.size) || (isGraphic ? 64 : 28),
+						fontSize: isGraphic ? 0 : (Number(element.size) || 28),
+						rotation: Number(element.rotation) || 0,
+						color: String(element.color || (isGraphic ? "#7aac2b" : "#ffffff")),
+						accent: element.accent ? String(element.accent) : (motionObj && motionObj.accent ? String(motionObj.accent) : ""),
+						font: isGraphic ? "" : String(element.font || "sans"),
+						align: isGraphic ? "" : String(element.align || "center"),
+						text: isGraphic ? "" : String(element.text || ""),
+						graphic: graphicKind,
+						graphicName: motionObj ? String(motionObj.name || graphicKind) : graphicKind,
+						motionKind: motionKind,
+						anim: String(element.anim || "none"),
+						speed: Number(element.speed) || 1,
+						transition: String(element.transition || "none"),
+						transitionSpeed: Number(element.transitionSpeed) || 1,
+						style: styleCode
+					});
+				}
+			}
+
+			let carouselMeta = null;
+			if (isRingCarousel) {
+				const carouselEl = state && state.elements ? state.elements.carousel : null;
+				const ringImgs = Array.isArray(state && state.ringImages) ? state.ringImages : [];
+				const cardCount = ringImgs.length || 5;
+				carouselMeta = {
+					count: cardCount,
+					uploadedCount: ringImgs.length,
+					imageNames: ringImgs.map(function (entry) { return String((entry && entry.name) || "card"); }),
+					speed: Number(carouselEl && carouselEl.speed) || 1,
+					radius: Number(carouselEl && carouselEl.radius) || 100,
+					size: Number(carouselEl && carouselEl.size) || 100,
+					tilt: Number(carouselEl && carouselEl.tilt) || 0,
+					rotation: Number(carouselEl && carouselEl.rotation) || 0
+				};
+				if (!carouselEl || (!carouselEl.deleted && carouselEl.visible !== false)) {
+					elements.push({
+						key: "carousel",
+						kind: "graphic",
+						label: "3D Ring Carousel",
+						layerOrder: elements.length,
+						visible: true,
+						x: reelClamp(Number(carouselEl ? carouselEl.x : 50) || 50, 0, 100),
+						y: reelClamp(Number(carouselEl ? carouselEl.y : 52) || 52, 0, 100),
+						size: Number(carouselEl && carouselEl.size) || 100,
+						fontSize: 0,
+						rotation: Number(carouselEl && carouselEl.rotation) || 0,
+						color: "#c8ff00",
+						accent: "#38bdf8",
+						font: "",
+						align: "",
+						text: "",
+						graphic: "ring-carousel",
+						graphicName: "3D Ring Carousel (" + cardCount + " cards)",
+						imageCount: ringImgs.length,
+						imageNames: carouselMeta.imageNames,
+						radius: carouselMeta.radius,
+						tilt: carouselMeta.tilt,
+						anim: "ring-spin",
+						speed: carouselMeta.speed,
+						transition: String(bg.transition || "none"),
+						transitionSpeed: Number(bg.transitionSpeed) || 1,
+						style: "carousel"
+					});
+				}
+			}
+
+			return {
+				isTemplateScene: true,
+				mode: isRingCarousel ? "ring-carousel" : "reel-scene",
+				templateId: "reel-scene-" + String(reelSceneIndex + 1),
+				sceneIndex: Number(reelSceneIndex) || 0,
+				name: String(sceneDef.name || "Template Scene"),
+				orientation: tplLandscape ? "landscape" : "portrait",
+				width: TPL_W,
+				height: TPL_H,
+				durationSec: dur,
+				style: isRingCarousel ? "carousel" : styleCode,
+				videoStyle: styleLabel,
+				effects: effects,
+				transition: {
+					type: String(bg.transition || "none"),
+					speed: Number(bg.transitionSpeed) || 1,
+					effect: String(bg.effect || "none"),
+					motionSpeed: Number(bg.speed) || 1,
+					image: String(bg.image || "mood:0")
+				},
+				carousel: carouselMeta,
+				elements: elements
+			};
+		};
+
 		const reelBaseExportMP4 = exportMP4;
 		exportMP4 = async function (options) {
 			if (reelSceneMode) {
 				await REEL_SCENE_IMAGES_READY;
-				if (document.fonts && document.fonts.ready) await document.fonts.ready;
+				if (document.fonts && document.fonts.ready) {
+					await Promise.race([
+						document.fonts.ready,
+						new Promise(function (resolve) { setTimeout(resolve, 2500); })
+					]);
+				}
 			}
 			return reelBaseExportMP4(options);
 		};

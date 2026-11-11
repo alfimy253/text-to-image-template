@@ -317,6 +317,12 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 			reduced = true;
 
 			compactTimelineFields(rows, false);
+			projects.forEach(function (proj) {
+				if (!proj || !proj.projectDetail || typeof proj.projectDetail !== "object") return;
+				delete proj.projectDetail.scenes;
+				delete proj.projectDetail.slides;
+				delete proj.projectDetail.elements;
+			});
 			text = JSON.stringify(clone);
 			if (fitsCookies(text, updatedAt)) return settle();
 
@@ -337,6 +343,10 @@ export const PIPELINE_MANAGEMENT_STORE_JS = `
 				if (!row || typeof row !== "object") return;
 				delete row.projectDetail;
 				delete row.slideItems;
+			});
+			projects.forEach(function (proj) {
+				if (!proj || typeof proj !== "object") return;
+				delete proj.projectDetail;
 			});
 			text = JSON.stringify(clone);
 			if (fitsCookies(text, updatedAt)) return settle();
