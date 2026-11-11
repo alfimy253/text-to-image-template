@@ -11431,6 +11431,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
+	function batchRowHasMinWords(row, min = WORD_COUNT_MIN) {
+		return batchRowWordCount(row) >= min;
+	}
+
 	/* mp3 + Pixabay images + animation - or a timeline-edited row with completed media. */
 	function batchRowFinished(row) {
 
@@ -14279,35 +14283,47 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					}
 				);
 
-			/* Subtitles come from the same plain text the voice read. */
-			row.subtitles =
-				buildScriptCues(
-					row.script,
-					spanMs
-				);
+	/* Subtitles come from the same plain text the voice read. */
+	row.subtitles =
+		buildScriptCues(
+			row.script,
+			spanMs
+		);
 
+	/*
+	 * FINAL RULE - QUICK BATCH TABLE LAYOUT: prompt planning keeps the
+	 * browser's silent stage ladder. Inside each render chunk, failed
+	 * photos/clips are retried INDIVIDUALLY; a stage retry never resets
+	 * media that already arrived.
+	 */
+	await batchRunPipelineStage(
+		row,
+		"prompts",
+		"Planning and selecting 12 distinct Pixabay scenes for every script length",
+		async function (retry) {
 			/*
-			 * FINAL RULE - QUICK BATCH TABLE LAYOUT: prompt planning keeps the
-			 * browser's silent stage ladder. Inside each render chunk, failed
-			 * photos/clips are retried INDIVIDUALLY; a stage retry never resets
-			 * media that already arrived.
+			 * Requirement 3 (Session 331): Preserve timeline edits.
+			 * If timelineEdited is true, skip Pixabay search (prompts/images stages)
+			 * and preserve existing scenes/graphics from timeline.
 			 */
-			await batchRunPipelineStage(
-				row,
-				"prompts",
-				"Planning and selecting 12 distinct Pixabay scenes for every script length",
-				async function (retry) {
-					row.prompts = [];
-					row.slides = [];
-					row.error = "";
-					row.retrying = false;
-					row._imagePipelineWarning = "";
-					row._missingMediaScenes = [];
-					row._promptOwner = null;
-					row.controller = null;
-					const expectedImageCount = AUTO_MEDIA_TOTAL;
-					const rowImageCaps = await studioOffload.capabilities();
-					try {
+			if (row.timelineEdited && batchRowTimelinePendingRegen(row)) {
+				/* Skip prompts/images generation, preserve existing projectDetail/timeline scenes */
+				row.error = "";
+				row.retrying = false;
+				return row.prompts || (row.timeline && row.timeline.sceneItems) || [];
+			}
+
+			row.prompts = [];
+			row.slides = [];
+			row.error = "";
+			row.retrying = false;
+			row._imagePipelineWarning = "";
+			row._missingMediaScenes = [];
+			row._promptOwner = null;
+			row.controller = null;
+			const expectedImageCount = AUTO_MEDIA_TOTAL;
+			const rowImageCaps = await studioOffload.capabilities();
+			try {
 						await runProgressiveImagePipeline({
 							total: expectedImageCount,
 							isCancelled: function () { return Boolean(row.stopRequested); },
@@ -14471,11 +14487,20 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		"queued"
 	];
 
+	const WORD_COUNT_MIN = 50;
+
+	function batchRowWordCount(row) {
+		const text = String(row.script || "").trim();
+		if (!text) return 0;
+		return text.split(/\s+/).filter(Boolean).length;
+	}
+
 	function batchRowReadyForGeneration(row) {
 
 		if (
 			!row ||
 			!batchRowHasScript(row) ||
+			batchRowWordCount(row) < WORD_COUNT_MIN ||
 			row.running ||
 			row.retrying ||
 			row.stopRequested ||
@@ -14666,6 +14691,25 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 			return;
 
+		}
+
+		/*
+		 * Check for rows with script but < 50 words
+		 */
+		const insufficientWords = scripted.filter(function (row) {
+			return batchRowWordCount(row) > 0 && batchRowWordCount(row) < WORD_COUNT_MIN;
+		});
+
+		if (insufficientWords.length > 0) {
+			const rowIds = insufficientWords.map(function (r) { return r.id; }).join(", ");
+			const counts = insufficientWords.map(function (r) { return batchRowWordCount(r); });
+			showRequiredModal([
+				"Generate skipped: Row(s) " + rowIds + " script is less than " + WORD_COUNT_MIN + " words (currently " + counts.join(", ") + " words). Please expand the script to at least " + WORD_COUNT_MIN + " words.",
+				"Rows with sufficient words and Ready stage will still proceed if any exist."
+			]);
+			// Filter out insufficient words from targets later, but we can also just let the filter handle it
+			// and show this warning if targets are empty or if we want to block specific rows.
+			// The requirement says "skip generating it" and "make error message".
 		}
 
 		/*
@@ -15136,34 +15180,43 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
-	function openBatchPreview(id) {
+t	function openBatchPreview(id) {
 
-		try { reconcileTimelineEdits(); } catch (reconcileErr) { }
+			try { reconcileTimelineEdits(); } catch (reconcileErr) { }
 
-		const row =
-			getBatchRow(id);
+			const row =
+				getBatchRow(id);
 
-		if (!row) {
-			return;
-		}
+			if (!row) {
 
-		if (row.timelineEdited) {
-			applyTimelineEditToBatchRow(row);
-		} else if (!row.projectDetail) {
-			row.projectDetail = composeBatchProjectDetail(row);
-		}
+				return;
 
-		if (!batchRowFinished(row)) {
+			}
 
-			setBatchStage(
-				row,
-				row.stage,
-				"Preview unlocks when the row is finished"
-			);
+			/* Requirement 1 (Session 331): Sync preview/export to timeline editor state */
+			if (row.timelineEdited) {
+				applyTimelineEditToBatchRow(row);
+				/* Ensure projectDetail and slideItems are fully reconciled from timeline */
+				if (row.timeline && Array.isArray(row.timeline.sceneItems)) {
+					row.projectDetail = row.projectDetail || {};
+					row.projectDetail.scenes = row.timeline.sceneItems;
+					row.slideItems = row.timeline.sceneItems;
+				}
+			} else if (!row.projectDetail) {
+				row.projectDetail = composeBatchProjectDetail(row);
+			}
 
-			return;
+			if (!batchRowFinished(row)) {
 
-		}
+				setBatchStage(
+					row,
+					row.stage,
+					"Preview unlocks when the row is finished"
+				);
+
+				return;
+
+			}
 
 		closeBatchPreview();
 
@@ -15719,6 +15772,19 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 			return;
 
+		}
+
+		/* Requirement 1 (Session 331): Sync preview/export to timeline editor state */
+		if (row.timelineEdited) {
+			applyTimelineEditToBatchRow(row);
+			/* Ensure projectDetail and slideItems are fully reconciled from timeline */
+			if (row.timeline && Array.isArray(row.timeline.sceneItems)) {
+				row.projectDetail = row.projectDetail || {};
+				row.projectDetail.scenes = row.timeline.sceneItems;
+				row.slideItems = row.timeline.sceneItems;
+			}
+		} else if (!row.projectDetail) {
+			row.projectDetail = composeBatchProjectDetail(row);
 		}
 
 		if (!batchRowFinished(row)) {
