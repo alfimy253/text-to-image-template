@@ -14487,7 +14487,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		"queued"
 	];
 
-	const WORD_COUNT_MIN = 50;
+	const WORD_COUNT_MIN = 10;
 
 	function batchRowWordCount(row) {
 		const text = String(row.script || "").trim();
@@ -14694,7 +14694,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		}
 
 		/*
-		 * Check for rows with script but < 50 words
+		 * Check for rows with script but fewer than the 10-word minimum.
 		 */
 		const insufficientWords = scripted.filter(function (row) {
 			return batchRowWordCount(row) > 0 && batchRowWordCount(row) < WORD_COUNT_MIN;
@@ -16634,6 +16634,16 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const runnable =
 			batchRows.filter(batchRowReadyForGeneration).length;
 
+		/*
+		 * Keep Generate clickable for scripted rows below the 10-word gate.
+		 * The click handler must be reachable so it can explain the validation
+		 * failure (and allow other valid rows to proceed); using only runnable
+		 * here made the button appear dead for short scripts.
+		 */
+		const needsWordCountFeedback = batchRows.some(function (row) {
+			return batchRowHasScript(row) && !batchRowHasMinWords(row);
+		});
+
 		const generate =
 			document.getElementById(
 				"batch-generate"
@@ -16644,7 +16654,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			generate.disabled =
 				batchRunBusy
 					? false
-					: runnable === 0;
+					: runnable === 0 && !needsWordCountFeedback;
 
 			generate.textContent =
 				batchRunBusy
