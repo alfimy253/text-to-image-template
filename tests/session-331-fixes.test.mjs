@@ -48,6 +48,15 @@ test("the editor layout has no Pixabay link left (Session 331)", () => {
 	assert.match(PAGE_MARKUP, /Stock photos and clips from Pixabay/, "the attribution sentence is kept as plain text");
 });
 
+/* Table Generate remains actionable for validation feedback ---------------- */
+
+test("short scripted rows keep Generate clickable and enforce the documented 10-word minimum", () => {
+	assert.match(APP_JS, /const WORD_COUNT_MIN = 10;/, "the current minimum is ten words");
+	assert.match(APP_JS, /const needsWordCountFeedback = batchRows\.some\(function \(row\) \{[\s\S]*?batchRowHasScript\(row\) && !batchRowHasMinWords\(row\)/);
+	assert.match(APP_JS, /runnable === 0 && !needsWordCountFeedback/, "button disables only when neither work nor word-count feedback is available");
+	assert.match(APP_JS, /Generate skipped: Row\(s\)[\s\S]*?at least " \+ WORD_COUNT_MIN/, "clicking surfaces the minimum-word validation");
+});
+
 /* 4 ----------------------------------------------------------------------- */
 
 const SOLAR_SCRIPT = "Solar panels harvest sunlight. Batteries store electricity overnight. Inverters convert direct current.";
