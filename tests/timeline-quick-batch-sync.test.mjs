@@ -61,27 +61,19 @@ function makeMemoryIndexedDB() {
 						objectStoreNames: { contains: (n) => n === "projects" && storeCreated },
 						createObjectStore: () => { storeCreated = true; return {}; },
 						transaction() {
+							let pending=0, aborted=false;
 							const tx = {
+								abort() { aborted=true; setTimeout(()=>tx.onabort?.(),0); },
 								objectStore() {
+									function request(run) {
+										const r={}; pending++;
+										setTimeout(()=>{ if (!aborted) { run(r); r.onsuccess?.({target:r}); } pending--; if (!pending && !aborted) tx.oncomplete?.(); },0);
+										return r;
+									}
 									return {
-										get(key) {
-											const r = {};
-											setTimeout(() => {
-												r.result = records.get(String(key)) || null;
-												r.onsuccess?.({ target: r });
-												tx.oncomplete?.();
-											}, 0);
-											return r;
-										},
-										put(record) {
-											const r = {};
-											setTimeout(() => {
-												records.set(String(record.id), record);
-												r.onsuccess?.({ target: r });
-												tx.oncomplete?.();
-											}, 0);
-											return r;
-										}
+										get(key) { return request(r=>{r.result=records.get(String(key))||null;}); },
+										put(record) { return request(()=>records.set(String(record.id),record)); },
+										delete(key) { return request(()=>records.delete(String(key))); }
 									};
 								}
 							};
@@ -97,6 +89,22 @@ function makeMemoryIndexedDB() {
 			}
 		}
 	};
+}
+
+const browserLocksByStorage = new WeakMap();
+function testBrowserLocks(storage) {
+	if (!storage) return null;
+	if (!browserLocksByStorage.has(storage)) {
+		const queues = new Map(), busy = new Map();
+		browserLocksByStorage.set(storage, { query() { return Promise.resolve({held:Array.from(busy.keys(),name=>({name})),pending:[]}); }, request(name, options, fn) {
+			if (typeof options === "function") { fn = options; options = {}; }
+			if (options && options.ifAvailable && busy.get(name)) return Promise.resolve().then(() => fn(null));
+			busy.set(name, (busy.get(name) || 0) + 1);
+			const result = (queues.get(name) || Promise.resolve()).catch(() => {}).then(() => fn({name}));
+			queues.set(name, result.finally(() => { const n=busy.get(name)-1; if(n) busy.set(name,n); else busy.delete(name); }).catch(() => {})); return result;
+		} });
+	}
+	return browserLocksByStorage.get(storage);
 }
 
 function bootWindow({ url, localStorage, sessionStorage, cookieJar, indexedDB, loadTimeline = false, prepare }) {
@@ -129,6 +137,7 @@ function bootWindow({ url, localStorage, sessionStorage, cookieJar, indexedDB, l
 		});
 	}
 	if (indexedDB) Object.defineProperty(w, "indexedDB", { configurable: true, value: indexedDB });
+	if (localStorage) Object.defineProperty(w.navigator, "locks", { configurable: true, value: testBrowserLocks(localStorage) });
 	if (prepare) prepare(w);
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
 	if (loadTimeline) {
@@ -282,14 +291,14 @@ test("Req 1 & 2 & 3: editing a finished row in timeline updates projectDetail, c
 		indexedDB: idb.factory,
 		loadTimeline: true,
 		prepare(w) {
-			w.open = (href) => { openedHref = String(href); return null; };
+			w.open = () => ({ location: { replace(href) { openedHref = String(href); } }, close() {} });
 		}
 	});
 	t.after(() => table1.dom.window.close());
 
 	table1.w.setStudioLayout("table");
 	const row = table1.w.__BATCH_ROWS[0];
-	row.script = "Golden sunlight warms the greenhouse tomatoes every morning.";
+	row.script = "Golden sunlight warms the greenhouse tomatoes and herbs every beautiful morning.";
 	row.style = "Neon Night";
 	finishRow(table1.w, row);
 
@@ -354,8 +363,11 @@ test("Req 1 & 2 & 3: editing a finished row in timeline updates projectDetail, c
 		"timeline cookies were written"
 	);
 
+	/* jsdom does not send pagehide on close; real browsers release the open-view lock then. */
+	tl.w.dispatchEvent(new tl.w.Event("pagehide"));
 	/* Click Back (← Quick Batch) to publish hand-back into the table store. */
 	tl.w.document.getElementById("timeline-back").click();
+	for (let i=0;i<100;i++) { const r=JSON.parse(localStorage.getItem("ytvs.timeline-edit-session.v1."+tlState.projectId) || "null"); if (r && !r.owner) break; await new Promise(resolve=>setTimeout(resolve,10)); }
 	assert.equal(tl.w.__TIMELINE_EDIT_PUBLISH__.ok, true);
 
 	/* 3. Return to the Quick Batch table layout in a fresh window (simulating navigation back). */
@@ -396,7 +408,7 @@ test("Req 1 & 2 & 3: editing a finished row in timeline updates projectDetail, c
 	mockBatchGenerationRoutes(table2.w);
 	await table2.w.generateBatchRows();
 	assert.equal(table2.w.batchRowFinished(returnedRow), true);
-	assert.equal(returnedRow.slides.length, 12);
+	assert.equal(returnedRow.slides.length, 14, "voiceover regeneration preserves edited composition");
 	assert.equal(table2.w.batchRowReadyForGeneration(returnedRow), false, "after regenerating, row does not endlessly regenerate");
 	assert.equal(table2.w.document.getElementById("batch-generate").disabled, true);
 });
@@ -405,16 +417,18 @@ test("Req 3: all timeline slides, scenes, and projectDetail compose cleanly from
 	const localStorage = makeMemoryStorage();
 	const sessionStorage = makeMemoryStorage();
 	const cookieJar = makeCookieJar();
+	const indexedDB = makeMemoryIndexedDB();
 
 	/* Run timeline editor and write edits to localStorage + cookies. */
 	const tl1 = bootWindow({
 		url: "https://studio.test/free?layout=timeline&pipelinePage=timeline-pg_cookie_only-row-3",
 		localStorage,
 		sessionStorage,
-		cookieJar,
+		cookieJar, indexedDB: indexedDB.factory,
 		loadTimeline: true
 	});
 	t.after(() => tl1.dom.window.close());
+	for (let i=0;i<100 && !tl1.w.__TIMELINE_EDITOR_STATE__;i++) await new Promise(resolve=>setTimeout(resolve,10));
 	const api = tl1.w.__TIMELINE_EDITOR__;
 	const media = tl1.w.__TIMELINE_EDITOR_STATE__.tracks.find((tr) => tr.id === "background-media");
 	api.setItemTiming(media.items[1].id, 5, 9.25);
@@ -430,13 +444,15 @@ test("Req 3: all timeline slides, scenes, and projectDetail compose cleanly from
 		version: 1, pageId: "pg_cookie_only", updatedAt: Date.now(), layout: "table",
 		quickBatch: {
 			runBusy: false, queued: [], finishedCount: 0,
-			rows: [{ id: "3", vid: "pg_cookie_only-row-3", script: "Cookie composition test script", stage: "done", mp3: true, animated: true, finished: true, images: 12, slides: 12 }]
+			rows: [{ id: "3", vid: "pg_cookie_only-row-3", script: "This cookie composition test script has enough words to regenerate safely.", stage: "done", mp3: true, animated: true, finished: true, images: 12, slides: 12 }]
 		},
 		editor: { projects: [] }
 	}).ok, true);
 	tl1.w.__TIMELINE_EDITOR_STATE__.sourcePageId = "pg_cookie_only";
 	tl1.w.__TIMELINE_EDITOR_STATE__.sourceRowId = "3";
+	tl1.w.dispatchEvent(new tl1.w.Event("pagehide"));
 	tl1.w.document.getElementById("timeline-back").click();
+	for (let i=0;i<100;i++) { const r=JSON.parse(localStorage.getItem("ytvs.timeline-edit-session.v1.timeline-pg_cookie_only-row-3") || "null"); if (r && !r.owner) break; await new Promise(resolve=>setTimeout(resolve,10)); }
 
 	/* Wipe localStorage completely — ONLY cookies remain! */
 	localStorage.clear();
@@ -447,13 +463,18 @@ test("Req 3: all timeline slides, scenes, and projectDetail compose cleanly from
 		url: "https://studio.test/free?layout=timeline&pipelinePage=timeline-pg_cookie_only-row-3",
 		localStorage,
 		sessionStorage,
-		cookieJar,
+		cookieJar, indexedDB: indexedDB.factory,
 		loadTimeline: true
 	});
 	t.after(() => tl2.dom.window.close());
+	for (let i=0;i<100 && !tl2.w.__TIMELINE_EDITOR_STATE__;i++) await new Promise(resolve=>setTimeout(resolve,10));
 	assert.equal(tl2.w.__TIMELINE_EDITOR_STATE__.scenes.length, 13, "timeline editor restored all 13 scenes from cookies");
 	assert.equal(tl2.w.__TIMELINE_EDITOR__.getSlides().length, 13, "timeline editor composed all 13 slides from cookies");
 	assert.equal(tl2.w.__TIMELINE_EDITOR__.getProjectDetail().sceneCount, 13);
+	assert.equal(JSON.parse(localStorage.getItem("ytvs.timeline-edit-session.v1.timeline-pg_cookie_only-row-3")).ownerCount, 0);
+	tl2.w.dispatchEvent(new tl2.w.Event("pagehide"));
+	tl2.w.document.getElementById("timeline-back").click();
+	for (let i=0;i<100;i++) { const r=JSON.parse(localStorage.getItem("ytvs.timeline-edit-session.v1.timeline-pg_cookie_only-row-3") || "null"); if (r && !r.owner) break; await new Promise(resolve=>setTimeout(resolve,10)); }
 
 	/* Reopen Quick Batch table from cookies alone: all 13 slides, scenes, projectDetail, and enabled buttons restore! */
 	const tableCookie = bootWindow({
@@ -551,7 +572,7 @@ test("Regenerate fix: a finished row whose media cannot be found is demoted to a
 		version: 1, pageId, updatedAt: Date.now(), layout: "table",
 		quickBatch: {
 			runBusy: false, queued: [], finishedCount: 1,
-			rows: [{ id: "2", vid: pageId + "-row-2", script: "Media that was never stored.", stage: "done", mp3: true, animated: true, finished: true, images: 12, slides: 12 }]
+			rows: [{ id: "2", vid: pageId + "-row-2", script: "This is a finished row whose generated media was never stored.", stage: "done", mp3: true, animated: true, finished: true, images: 12, slides: 12 }]
 		},
 		editor: { projects: [] }
 	}).ok, true);
@@ -888,7 +909,7 @@ test("Session 333: a long script survives the timeline hand-back and the reload 
 	const table = bootWindow({
 		url: "https://studio.test/free?layout=table&pipelinePage=" + pageId,
 		localStorage, sessionStorage, cookieJar, indexedDB: idb.factory, loadTimeline: true,
-		prepare(w) { w.open = (href) => { openedHref = String(href); return null; }; }
+		prepare(w) { w.open = () => ({ location: { replace(href) { openedHref = String(href); } }, close() {} }); }
 	});
 	t.after(() => table.dom.window.close());
 	table.w.setStudioLayout("table");
@@ -1113,7 +1134,7 @@ test("Session 331 §31: live Quick Batch table row vid, both browser storage set
 			mockBatchGenerationRoutes(w);
 			Object.defineProperty(w.HTMLVideoElement.prototype, "videoWidth", { configurable: true, get: () => 1024 });
 			Object.defineProperty(w.HTMLVideoElement.prototype, "videoHeight", { configurable: true, get: () => 576 });
-			w.open = (href) => { openedHref = String(href || ""); return null; };
+			w.open = () => ({ location: { replace(href) { openedHref = String(href || ""); } }, close() {} });
 		}
 	});
 	t.after(() => table.dom.window.close());
@@ -1130,7 +1151,7 @@ test("Session 331 §31: live Quick Batch table row vid, both browser storage set
 	assert.equal(row.vid, expectedVid, "Quick Batch table row has canonical vid");
 
 	table.w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="edit"]').click();
-	await new Promise((resolve) => setTimeout(resolve, 35));
+	for (let i=0;i<200 && !openedHref;i++) await new Promise(resolve=>setTimeout(resolve,10));
 	assert.match(openedHref, /\?layout=timeline&pipelinePage=timeline-/, "Edit opens timeline page for row vid");
 
 	/* Open Timeline Editor in a second tab sharing browser storages + IndexedDB. */
@@ -1447,7 +1468,7 @@ test("Session 331 §31: live Quick Batch table row vid, both browser storage set
 		localStorage, sessionStorage, cookieJar, indexedDB: idb.factory, loadTimeline: true,
 		prepare(w) {
 			mockBatchGenerationRoutes(w);
-			w.open = (href) => { reopenedHref = String(href || ""); return null; };
+			w.open = () => ({ location: { replace(href) { reopenedHref = String(href || ""); } }, close() {} });
 		}
 	});
 	t.after(() => reloaded.dom.window.close());
@@ -1473,6 +1494,9 @@ test("Session 331 §31: live Quick Batch table row vid, both browser storage set
 	/* Re-open ✎ Edit from the reloaded table row -> confirm uploaded & template asset IDs and styles survive round-trip! */
 	reloaded.w.document.querySelector('[data-batch-row="' + reloadedRow.id + '"] [data-batch-action="edit"]').click();
 	await new Promise((resolve) => setTimeout(resolve, 40));
+	/* The in-memory storage shim does not emit cross-window storage events. */
+	tl.w.dispatchEvent(new tl.w.StorageEvent("storage", { key: "ytvs.timeline-edit-session.v1." + targetPageId }));
+	await new Promise((resolve) => setTimeout(resolve, 40));
 
 	const tlReopened = bootWindow({
 		url: "https://studio.test" + reopenedHref,
@@ -1481,6 +1505,8 @@ test("Session 331 §31: live Quick Batch table row vid, both browser storage set
 	});
 	t.after(() => tlReopened.dom.window.close());
 	await new Promise((resolve) => setTimeout(resolve, 40));
+	tl.w.dispatchEvent(new tl.w.StorageEvent("storage", { key: "ytvs.timeline-edit-session.v1." + targetPageId }));
+	await new Promise((resolve) => setTimeout(resolve, 80));
 
 	const reopenedMedia = tlReopened.w.__TIMELINE_EDITOR_STATE__.tracks.find((tr) => tr.id === "background-media");
 	assert.equal(reopenedMedia.items.length, 5, "re-opened Timeline keeps all 5 edited scenes");

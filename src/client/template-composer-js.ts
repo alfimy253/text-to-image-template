@@ -2419,6 +2419,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			);
 
 			let probeResult = null;
+			exporting = true;
 			try {
 				probeResult = await probeRenderedTemplateMp4(
 					renderedVideo.url,
@@ -2426,6 +2427,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				);
 			}
 			catch (probeError) {
+				exporting = false;
 				addBtn.disabled = false;
 				exportBtn.disabled = false;
 				statusEl.textContent = "MP4 ready";
@@ -2435,6 +2437,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				return;
 			}
 
+			exporting = false;
 			const probed = probeResult.videoEl;
 			const clipDuration = Number.isFinite(Number(probeResult.duration)) && Number(probeResult.duration) > 0
 				? Number(probeResult.duration)
@@ -2750,7 +2753,9 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			if (!modal) {
 				return;
 			}
+			if (exporting) { if (statusEl) statusEl.textContent = "Wait for rendering to finish before closing."; return; }
 			modal.style.display = "none";
+			window.dispatchEvent(new Event("timeline-template-closed"));
 			if (previewRaf) {
 				cancelAnimationFrame(previewRaf);
 				previewRaf = 0;

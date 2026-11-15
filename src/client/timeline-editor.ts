@@ -154,26 +154,31 @@ export const TIMELINE_EDITOR_JS = `
 			var id = String(projectId || "");
 			if (!id) return Promise.resolve({ ok: false, reason: "missing timeline project id" });
 			var incoming = transfer || {};
-			return readAssetRecord(id).catch(function () { return null; }).then(function (existing) {
-				var assets = Object.assign({}, existing && existing.assets || {});
-				(Array.isArray(incoming.assets) ? incoming.assets : []).forEach(function (asset) {
-					if (!asset || !asset.blob || !asset.id) return;
-					assets[String(asset.id)] = {
-						id: String(asset.id),
-						blob: asset.blob,
-						name: String(asset.name || asset.blob.name || ""),
-						type: String(asset.type || asset.blob.type || ""),
-						source: asset.source || null
+			/* Read and merge within one readwrite transaction so concurrent tabs do not lose assets. */
+			return openAssetDb().then(function (db) {
+				return new Promise(function (resolve, reject) {
+					var tx = db.transaction(DB_STORE, "readwrite");
+					var store = tx.objectStore(DB_STORE);
+					var request = store.get(id);
+					var record = null;
+					request.onsuccess = function () {
+						if (typeof incoming._canWrite === "function" && !incoming._canWrite()) { tx.abort(); return; }
+						var existing = request.result;
+						var assets = Object.assign({}, existing && existing.assets || {});
+						(Array.isArray(incoming.assets) ? incoming.assets : []).forEach(function (asset) {
+							if (!asset || !asset.blob || !asset.id) return;
+							if (incoming.preserveExisting && assets[String(asset.id)]) return;
+							assets[String(asset.id)] = { id: String(asset.id), blob: asset.blob,
+								name: String(asset.name || asset.blob.name || ""), type: String(asset.type || asset.blob.type || ""), source: asset.source || null };
+						});
+						record = { id: id, assets: assets, voiceover: (incoming.preserveExisting && existing && existing.voiceover) || incoming.voiceover || (existing && existing.voiceover) || null, updatedAt: Date.now() };
+						store.put(record);
 					};
+					tx.oncomplete = function () { db.close(); resolve({ ok: true, id: id, assets: Object.keys(record.assets || {}).length, updatedAt: record.updatedAt }); };
+					tx.onerror = function () { db.close(); reject(tx.error || new Error("Could not save local media")); };
+					tx.onabort = function () { db.close(); reject(tx.error || new Error("Local media save was aborted")); };
 				});
-				var voiceover = incoming.voiceover || (existing && existing.voiceover) || null;
-				var record = { id: id, assets: assets, voiceover: voiceover, updatedAt: Date.now() };
-				return writeAssetRecord(record).catch(function (error) {
-					return { ok: false, id: id, reason: String(error && error.message || error) };
-				});
-			}).catch(function (error) {
-				return { ok: false, id: id, reason: String(error && error.message || error) };
-			});
+			}).catch(function (error) { return { ok: false, id: id, reason: String(error && error.message || error) }; });
 		}
 
 		function storeOneAsset(projectId, assetId, blob, metadata) {
@@ -185,12 +190,98 @@ export const TIMELINE_EDITOR_JS = `
 			});
 		}
 
+		/* Session ownership is separate from the eight-part project-detail cookies. */
+		var SESSION_PREFIX = "ytvs.timeline-edit-session.v1.";
+		function sessionKey(id) { return SESSION_PREFIX + String(id); }
+		function sessionCookieName(id) { return "ytvs_timeline_edit_counter_" + encodeURIComponent(String(id)); }
+		function readSession(id) {
+			var raw = window.localStorage.getItem(sessionKey(id));
+			if (!raw) return null;
+			var value = JSON.parse(raw);
+			if (!value || value.projectId !== id || !Number.isSafeInteger(value.count) || value.count < 0) throw new Error("Invalid edit session record");
+			return value;
+		}
+		function writeSession(id, value) { window.localStorage.setItem(sessionKey(id), JSON.stringify(value)); }
+		function writeCounterCookie(id, count) {
+			var name = sessionCookieName(id);
+			var value = encodeURIComponent(JSON.stringify({ v: 1, projectId: id, count: count }));
+			window.document.cookie = name + "=" + value + "; Path=/; SameSite=Lax" + (window.location.protocol === "https:" ? "; Secure" : "");
+			var match = String(window.document.cookie || "").split(";").map(function (p) { return p.trim(); }).find(function (p) { return p.indexOf(name + "=") === 0; });
+			if (!match || match.slice(name.length + 1) !== value) throw new Error("The edit counter cookie could not be saved");
+		}
+		function readCounterCookie(id) {
+			var name = sessionCookieName(id);
+			var entry = String(window.document.cookie || "").split(";").map(function (p) { return p.trim(); }).find(function (p) { return p.indexOf(name + "=") === 0; });
+			if (!entry) return null;
+			var value = JSON.parse(decodeURIComponent(entry.slice(name.length + 1)));
+			if (!value || value.v !== 1 || value.projectId !== id || !Number.isSafeInteger(value.count) || value.count < 0) throw new Error("Invalid edit counter cookie");
+			return value.count;
+		}
+		function reserveEditSession(id, token, activate) {
+			if (!window.navigator.locks || typeof window.navigator.locks.request !== "function") return Promise.reject(new Error("Cross-tab locking is unavailable"));
+			return window.navigator.locks.request("ytvs-edit-counter:" + id, function () {
+				var record = readSession(id) || { projectId: id, count: 0, owner: "", request: "" };
+				var cookieCount = readCounterCookie(id);
+				var highWater = Math.max(record.count, cookieCount === null ? 0 : cookieCount);
+				if (highWater >= Number.MAX_SAFE_INTEGER) throw new Error("Edit counter limit reached");
+				var next = Object.assign({}, record, { count: highWater + 1 });
+				if (activate !== false) {
+					if (next.revoked) { next.owner = ""; next.ownerCount = 0; next.revoked = false; }
+					next.request = token; next.requestCount = next.count;
+				}
+				/* Local record is the durable high-water mark; cookie is its small mirror. */
+				writeCounterCookie(id, next.count);
+				writeSession(id, next);
+				return next.count;
+			});
+		}
+
+		function prepareEditSession(id, token, count) {
+			return window.navigator.locks.request("ytvs-edit-counter:" + id, function () {
+				var record = readSession(id);
+				if (!record || record.revoked || count > record.count || count <= (record.candidateCount || 0) || count <= (record.requestCount || 0)) return false;
+				record.candidate = token; record.candidateCount = count; record.candidateAt = Date.now();
+				writeSession(id, record); return true;
+			});
+		}
+		function activateEditSession(id, token, count) {
+			return window.navigator.locks.request("ytvs-edit-counter:" + id, function () {
+				var record = readSession(id);
+				if (!record || record.revoked || record.candidate !== token || record.candidateCount !== count || (record.candidateAt && Date.now() - record.candidateAt > 60000) || count <= (record.requestCount || 0)) return false;
+				record.request = token; record.requestCount = count; record.requestActive = true; record.requestHasPresence = true;
+				record.candidate = ""; record.candidateCount = 0; record.candidateAt = 0;
+				writeSession(id, record); return true;
+			});
+		}
+		function cancelEditCandidate(id, token, count) {
+			return window.navigator.locks.request("ytvs-edit-counter:" + id, function () {
+				var record = readSession(id);
+				if (record && record.candidate === token && record.candidateCount === count) {
+					record.candidate = ""; record.candidateCount = 0; record.candidateAt = 0; writeSession(id, record);
+				}
+			});
+		}
+		function cancelEditRequest(id, token, count) {
+			return window.navigator.locks.request("ytvs-edit-counter:" + id, function () {
+				var record = readSession(id);
+				if (record && record.request === token && record.requestCount === count && record.owner !== token) {
+					record.request = ""; record.requestCount = 0; record.requestActive = false; record.requestHasPresence = false;
+					writeSession(id, record);
+				}
+			});
+		}
 		var api = {
 			storeProjectAssets: storeProjectAssets,
+			cancelEditRequest: cancelEditRequest,
+			prepareEditSession: prepareEditSession,
+			activateEditSession: activateEditSession,
+			cancelEditCandidate: cancelEditCandidate,
+			reserveEditSession: reserveEditSession,
 			readProjectAssets: readAssetRecord,
 			deleteProjectAssets: deleteAssetRecord,
 			storeAsset: storeOneAsset,
-			getState: function () { return window.__TIMELINE_EDITOR_STATE__ || null; }
+			getState: function () { return window.__TIMELINE_EDITOR_STATE__ || null; },
+			paintFrame: paintSharedTimelineFrame
 		};
 		window.__TIMELINE_EDITOR__ = api;
 
@@ -198,13 +289,61 @@ export const TIMELINE_EDITOR_JS = `
 			try { return new URLSearchParams(window.location.search || "").get("layout") === "timeline"; }
 			catch (error) { return false; }
 		}
-		if (!routeRequested()) return;
+		if (!routeRequested()) {
+			var tableMediaLocks = new Set();
+			api.runWithTableMediaLock = function (id, work) {
+				if (!window.navigator.locks || typeof window.navigator.locks.request !== "function") return Promise.resolve({ ok: false, reason: "Browser locking is unavailable" });
+				return window.navigator.locks.request("ytvs-edit-owner:" + id, { ifAvailable: true }, async function (lock) {
+					if (!lock) return { ok: false, reason: "Close the timeline editor before changing Quick Batch media." };
+					if (typeof window.navigator.locks.query !== "function") return { ok: false, reason: "Cannot verify whether timeline tabs are open." };
+					try {
+						var snapshot = await window.navigator.locks.query();
+						var prefix = "ytvs-edit-open:" + id + ":";
+						if ((snapshot.held || []).concat(snapshot.pending || []).some(function (entry) { return entry && String(entry.name).indexOf(prefix) === 0; })) return { ok: false, reason: "Close all timeline editor tabs before changing Quick Batch media." };
+					} catch (error) { return { ok: false, reason: "Cannot verify whether timeline tabs are open." }; }
+					var record;
+					try {
+						record = await window.navigator.locks.request("ytvs-edit-counter:" + id, function () {
+							var current = readSession(id);
+							if (current && current.candidate && current.candidateAt && Date.now() - current.candidateAt > 60000) {
+								current.candidate = ""; current.candidateCount = 0; current.candidateAt = 0; writeSession(id, current);
+							}
+							return current;
+						});
+					} catch (error) { return { ok: false, reason: "Cannot verify timeline ownership" }; }
+					if (record && (record.owner || record.candidate || record.requestActive)) return { ok: false, reason: "Close the timeline editor before changing Quick Batch media." };
+					tableMediaLocks.add(id);
+					try { return await work(); } finally { tableMediaLocks.delete(id); }
+				});
+			};
+			api.storeProjectAssets = function (id, transfer) {
+				if (tableMediaLocks.has(id)) return storeProjectAssets(id, transfer);
+				return api.runWithTableMediaLock(id, function () { return storeProjectAssets(id, transfer); });
+			};
+			api.storeAsset = function (id, assetId, blob, metadata) {
+				if (!blob) return Promise.resolve({ ok: false, reason: "No media provided" });
+				return api.storeProjectAssets(id, { assets: [{ id: assetId, blob: blob, name: metadata && metadata.name, type: metadata && metadata.type, source: metadata && metadata.source }] });
+			};
+			return;
+		}
 
 		var params = new URLSearchParams(window.location.search || "");
 		var transition = window.__TIMELINE_PROJECT__ || window.__TRANSITION_PROJECT__ || window.__BATCH_EDIT_PROJECT__ || null;
 		var pageId = String(params.get("pipelinePage") || transition && transition.targetPageId || "").replace(/[^a-zA-Z0-9_-]/g, "");
 		if (!pageId) pageId = "t" + Date.now().toString(36) + "x" + Math.random().toString(36).slice(2, 9);
 		var storageKey = STATE_PREFIX + pageId;
+		/* Track every open timeline view, including stale/read-only tabs, separately from ownership. */
+		var openViewRelease = null;
+		var openViewToken = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+		function registerOpenView() {
+			if (!window.navigator.locks || typeof window.navigator.locks.request !== "function") return;
+			window.navigator.locks.request("ytvs-edit-open:" + pageId + ":" + openViewToken, function () {
+				return new Promise(function (resolve) { openViewRelease = resolve; });
+			}).catch(function () { });
+		}
+		registerOpenView();
+		window.addEventListener("pagehide", function () { if (openViewRelease) { openViewRelease(); openViewRelease = null; } });
+		window.addEventListener("pageshow", function (event) { if (event.persisted && !openViewRelease) registerOpenView(); });
 		var controlUI = window.__REEL_SCENE_CONTROL_UI__ || null;
 		var state = null;
 		var assetMap = Object.create(null);
@@ -214,6 +353,81 @@ export const TIMELINE_EDITOR_JS = `
 		var previewFrame = 0;
 		var previousFrameAt = 0;
 		var saveTimer = 0;
+		var loadedStorageValue = null;
+		var invalidStoredProject = false;
+		var timelineDirty = false;
+		var sessionToken = String(params.get("editSession") || "");
+		var sessionCount = Number(params.get("editCount")) || 0;
+		var sessionManaged = Boolean(sessionToken && sessionCount);
+		var sessionLeaseHeld = false;
+		var sessionFrozen = sessionManaged;
+		var releaseSessionLease = null;
+		var pendingSessionTasks = new Set();
+		var sessionAssetFailure = "";
+		var failedAssetWrites = new Map();
+		var assetWriteVersions = new Map();
+
+		function sessionMessage(message) {
+			var banner = document.getElementById("timeline-session-warning");
+			if (banner) { banner.textContent = String(message || ""); banner.hidden = !message; }
+		}
+		function sessionMayWrite() {
+			try {
+				var record = readSession(pageId);
+				if (!sessionManaged) return !record;
+				return sessionLeaseHeld && !!record && !record.revoked && record.owner === sessionToken && record.ownerCount === sessionCount;
+			} catch (error) { return false; }
+		}
+		function trackSessionTask(promise, assetWrite) {
+			var tracked = Promise.resolve(promise).then(function (value) {
+				if (assetWrite && value && value.ok === false) sessionAssetFailure = String(value.reason || "Media could not be saved");
+				return value;
+			}, function (error) {
+				if (assetWrite) sessionAssetFailure = String(error && error.message || error);
+				throw error;
+			});
+			pendingSessionTasks.add(tracked);
+			tracked.then(function () { pendingSessionTasks.delete(tracked); }, function () { pendingSessionTasks.delete(tracked); });
+			return tracked;
+		}
+		/* Retain the actual failed blobs for targeted retry, rather than clearing unrelated failures. */
+		var unguardedStoreAssets = api.storeProjectAssets;
+		api.storeProjectAssets = function (id, transfer) {
+			if (!sessionMayWrite()) return Promise.resolve({ ok: false, reason: "This editor is no longer active" });
+			var input = transfer || {};
+			var keys = (Array.isArray(input.assets) ? input.assets : []).filter(function (a) { return a && a.id && a.blob; }).map(function (a) { return "asset:" + String(a.id); });
+			if (input.voiceover) keys.push("voiceover");
+			var versions = {};
+			keys.forEach(function (key) { var v = (assetWriteVersions.get(key) || 0) + 1; assetWriteVersions.set(key, v); versions[key] = v; });
+			var guardedTransfer = Object.assign({}, input, { _canWrite: sessionMayWrite });
+			var result = unguardedStoreAssets(id, guardedTransfer).then(function (value) {
+				keys.forEach(function (key) {
+					if (assetWriteVersions.get(key) !== versions[key]) return;
+					if (value && value.ok) failedAssetWrites.delete(key);
+					else {
+						var part = key === "voiceover" ? { voiceover: input.voiceover } : { assets: (input.assets || []).filter(function (a) { return "asset:" + String(a.id) === key; }) };
+						failedAssetWrites.set(key, { projectId: id, transfer: part, reason: String(value && value.reason || "Media could not be saved") });
+					}
+				});
+				sessionAssetFailure = failedAssetWrites.size ? failedAssetWrites.values().next().value.reason : "";
+				return value;
+			});
+			return trackSessionTask(result, false);
+		};
+		async function retryFailedMedia() {
+			for (var failure of Array.from(failedAssetWrites.values())) {
+				await api.storeProjectAssets(failure.projectId, failure.transfer);
+			}
+			return failedAssetWrites.size === 0;
+		}
+		api.storeAsset = function (id, assetId, blob, metadata) {
+			if (!sessionMayWrite()) return Promise.resolve({ ok: false, reason: "This editor is no longer active" });
+			if (!blob) return Promise.resolve({ ok: false, reason: "no browser file was supplied" });
+			var info = metadata || {};
+			var key = String(assetId || "asset-" + Date.now().toString(36));
+			return api.storeProjectAssets(id, { assets: [{ id: key, blob: blob, name: info.name || blob.name || "", type: info.type || blob.type || "", source: info.source || null }] });
+		};
+
 		/* Session 331 follow-up: the edit hand-back to the Quick Batch table. */
 		var publishReady = false;
 		var publishTimer = 0;
@@ -330,6 +544,13 @@ export const TIMELINE_EDITOR_JS = `
 			return Math.round(Math.max(0, number(value, 0)) * 1000) / 1000;
 		}
 		function timelineSafeId(value) {
+			var original = String(value || ""), clean = original.replace(/[^a-zA-Z0-9_-]/g, "_");
+			if (clean === original && clean.length <= 64) return clean || "default";
+			var a = 2166136261, b = 2246822507;
+			for (var i = 0; i < original.length; i++) { a = Math.imul(a ^ original.charCodeAt(i), 16777619); b = Math.imul(b ^ original.charCodeAt(i), 3266489909); }
+			return (clean.slice(0, 40) || "project") + "_h" + (a >>> 0).toString(36) + "_" + (b >>> 0).toString(36);
+		}
+		function timelineLegacySafeId(value) {
 			return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "default";
 		}
 		function timelineCookieNames(targetId) {
@@ -716,7 +937,7 @@ export const TIMELINE_EDITOR_JS = `
 					var chunk = chars.slice(i * size, (i + 1) * size).join("");
 					var meta = encodeURIComponent(JSON.stringify({
 						v: 1,
-						p: safe,
+						p: safe, pid: pageId,
 						n: count,
 						i: i + 1,
 						t: updatedAt,
@@ -742,6 +963,7 @@ export const TIMELINE_EDITOR_JS = `
 			var text = JSON.stringify(clone);
 			var values = timelineCookieChunks(text, clone.updatedAt, timelineCookieDigest(text));
 			if (values) return { snapshot: clone, text: text, values: values };
+			clone.cookieBackupReduced = true;
 			/* Step 1: drop duplicate projectDetail arrays (re-composed from scenes/tracks on restore). */
 			if (clone.projectDetail && typeof clone.projectDetail === "object") {
 				delete clone.projectDetail.scenes;
@@ -806,8 +1028,19 @@ export const TIMELINE_EDITOR_JS = `
 			var names = timelineCookieNames(pageId);
 			try {
 				if (!window.document) return 0;
+				var existingFirst = String(window.document.cookie || "").split(";").map(function (p) { return p.trim(); }).find(function (p) { return p.indexOf(names[0] + "=") === 0; });
+				if (existingFirst) {
+					try {
+						var firstMeta = JSON.parse(decodeURIComponent(existingFirst.slice(names[0].length + 1)));
+						if (firstMeta.pid && firstMeta.pid !== pageId) return 0;
+						if (!firstMeta.pid) { var priorBackup = readTimelineCookies(timelineSafeId(pageId), true); if (!priorBackup || priorBackup.projectId !== pageId) return 0; }
+					} catch (error) { return 0; }
+				}
 				var built = buildTimelineCookieSnapshot(currentState);
-				if (!built || !built.values) return 0;
+				if (!built || !built.values) {
+					names.forEach(function (name) { window.document.cookie = name + "=; Max-Age=0; Path=/; SameSite=Lax"; });
+					return 0;
+				}
 				var written = 0;
 				for (var i = 0; i < names.length; i++) {
 					if (i < built.values.length) {
@@ -818,17 +1051,29 @@ export const TIMELINE_EDITOR_JS = `
 						window.document.cookie = names[i] + "=; Max-Age=0; Path=/; SameSite=Lax";
 					}
 				}
-				return written;
+				var verified = readTimelineCookies(timelineSafeId(pageId));
+				if (verified && number(verified.updatedAt, 0) === number(currentState.updatedAt, 0)) return written;
+				names.forEach(function (name) { window.document.cookie = name + "=; Max-Age=0; Path=/; SameSite=Lax"; });
+				return 0;
 			} catch (error) {
 				return 0;
 			}
 		}
 
-		function readTimelineCookies() {
+		function readTimelineCookies(safeOverride, allowForeign) {
+			if (!safeOverride) {
+				var primary = readTimelineCookies(timelineSafeId(pageId));
+				if (primary) return primary;
+				var primaryNames = timelineCookieNames(pageId);
+				if (String(window.document.cookie || "").split(";").some(function (part) { return primaryNames.indexOf(part.trim().split("=")[0]) >= 0; })) return null;
+				var legacy = timelineLegacySafeId(pageId);
+				return legacy !== timelineSafeId(pageId) ? readTimelineCookies(legacy) : null;
+			}
 			try {
 				if (!window.document) return null;
-				var names = timelineCookieNames(pageId);
-				var safePage = timelineSafeId(pageId);
+				var safePage = safeOverride;
+				var names = [];
+				for (var ni = 1; ni <= TIMELINE_COOKIE_CHUNKS; ni++) names.push(TIMELINE_COOKIE_PREFIX + safePage + "_" + ni);
 				var parts = String(window.document.cookie || "").split(";");
 				var byName = Object.create(null);
 				for (var p = 0; p < parts.length; p++) {
@@ -848,7 +1093,7 @@ export const TIMELINE_EDITOR_JS = `
 					if (Number(meta.n) !== total) return null;
 					metas.push(meta);
 				}
-				if (!total || metas.length !== total) return null;
+				if (!Number.isInteger(total) || total < 1 || total > TIMELINE_COOKIE_CHUNKS || metas.length !== total) return null;
 				metas.sort(function (a, b) { return a.i - b.i; });
 				var expectedTs = metas[0].t;
 				var expectedHash = metas[0].h;
@@ -860,7 +1105,7 @@ export const TIMELINE_EDITOR_JS = `
 				var text = joined;
 				if (timelineCookieDigest(text) !== expectedHash) return null;
 				var parsed = JSON.parse(text);
-				return parsed && parsed.projectId === pageId ? parsed : null;
+				return parsed && (allowForeign || parsed.projectId === pageId) ? parsed : null;
 			} catch (error) {
 				return null;
 			}
@@ -871,9 +1116,7 @@ export const TIMELINE_EDITOR_JS = `
 			try { localSaved = JSON.parse(window.localStorage.getItem(storageKey) || "null"); } catch (error) { localSaved = null; }
 			if (!localSaved || localSaved.projectId !== pageId) localSaved = null;
 			var cookieSaved = readTimelineCookies();
-			if (localSaved && cookieSaved) {
-				return number(cookieSaved.updatedAt, 0) > number(localSaved.updatedAt, 0) ? cookieSaved : localSaved;
-			}
+			/* Cookie snapshots can be compacted and must not outrank a full project. */
 			return localSaved || cookieSaved || null;
 		}
 
@@ -1054,7 +1297,7 @@ export const TIMELINE_EDITOR_JS = `
 			return out;
 		}
 
-		function normalizeState(raw) {
+		function normalizeState(raw, isNewProject) {
 			var base = deepCopy(raw) || defaultTimeline();
 			var originalTracks = Array.isArray(base.tracks) ? base.tracks : [];
 			var byId = Object.create(null);
@@ -1170,7 +1413,7 @@ export const TIMELINE_EDITOR_JS = `
 				copy.elements = Array.isArray(copy.elements) ? copy.elements.map(function (item) { return normalizeItem(item, { kind: "visual" }); }) : [];
 				return copy;
 			});
-			if (!scenes.length) scenes = defaultTimeline().scenes;
+			if (!Array.isArray(base.scenes)) scenes = defaultTimeline().scenes;
 			/*
 			 * A timeline with no text and no graphic of its own opens with the
 			 * dummy text at 0:00 in the first text/graphics lane.
@@ -1178,7 +1421,7 @@ export const TIMELINE_EDITOR_JS = `
 			var hasVisualClip = visualLayers.some(function (layer) {
 				return (layer.items || []).some(function (item) { return item.kind === "text" || item.kind === "graphic"; });
 			});
-			if (!hasVisualClip) {
+			if (!hasVisualClip && isNewProject) {
 				var firstVisualLayer = visualLayers[0];
 				if (firstVisualLayer) firstVisualLayer.items.push(dummyTextItem(scenes));
 			}
@@ -1210,7 +1453,7 @@ export const TIMELINE_EDITOR_JS = `
 					},
 					scenes
 				),
-				subtitles: normalizeSubtitles(base.subtitles && base.subtitles.length
+				subtitles: normalizeSubtitles(Array.isArray(base.subtitles)
 					? base.subtitles
 					: transition && transition.timelineState && transition.timelineState.subtitles),
 				durationSec: duration,
@@ -1826,7 +2069,7 @@ export const TIMELINE_EDITOR_JS = `
 				}
 			});
 			var pd = state.projectDetail && typeof state.projectDetail === "object" ? Object.assign({}, state.projectDetail) : composeProjectDetail(state);
-			var now = Math.max(Date.now(), number(state.updatedAt, 0));
+			var now = number(state.updatedAt, Date.now());
 			var identity = tableHandoffIdentity();
 			return {
 				v: 1,
@@ -1855,7 +2098,9 @@ export const TIMELINE_EDITOR_JS = `
 			};
 		}
 		function publishTimelineEdit(force) {
-			if (!publishReady || !state) return null;
+			if (!publishReady || !state || !sessionMayWrite()) return null;
+			try { if (window.localStorage.getItem(storageKey) !== loadedStorageValue) return null; }
+			catch (error) { return null; }
 			var publish = window.__PUBLISH_TIMELINE_EDIT__;
 			if (typeof publish !== "function") return null;
 			var summary = timelineEditSummary();
@@ -1895,15 +2140,39 @@ export const TIMELINE_EDITOR_JS = `
 
 		function persistNow() {
 			if (!state) return false;
+			if (!sessionMayWrite()) {
+				setSaveStatus("A newer editor controls this project. Changes in this tab cannot be saved.", true);
+				window.__TIMELINE_EDITOR_SAVE__ = { ok: false, key: storageKey, reason: "stale editor session" };
+				return false;
+			}
+			if (invalidStoredProject) {
+				setSaveStatus("The saved project is invalid and was not replaced. Restore a backup before editing.", true);
+				window.__TIMELINE_EDITOR_SAVE__ = { ok: false, key: storageKey, reason: "invalid saved project" };
+				return false;
+			}
+			try {
+				if (window.localStorage.getItem(storageKey) !== loadedStorageValue) {
+					if (publishTimer) { clearTimeout(publishTimer); publishTimer = 0; }
+					setSaveStatus("This project changed in another tab. Your changes were not saved; copy them before reloading.", true);
+					window.__TIMELINE_EDITOR_SAVE__ = { ok: false, key: storageKey, reason: "project changed in another tab" };
+					return false;
+				}
+			} catch (error) {
+				setSaveStatus("Timing could not be saved", true);
+				return false;
+			}
 			/* Session 331: the saved length is the last placed item's end. */
 			state.durationSec = maxTimelineEnd();
-			state.updatedAt = Date.now();
+			state.updatedAt = Math.max(Date.now(), number(state.updatedAt, 0) + 1);
 			syncScenesFromTracks();
 			if (!suppressHistory) recordHistoryEntry();
 			try {
-				window.localStorage.setItem(storageKey, JSON.stringify(state));
+				var serializedState = JSON.stringify(state);
+				window.localStorage.setItem(storageKey, serializedState);
+				loadedStorageValue = serializedState;
+				timelineDirty = false;
 				var cookiesWritten = writeTimelineCookies(state);
-				setSaveStatus("Timing saved in this browser", false);
+				setSaveStatus(cookiesWritten ? "Timing saved in this browser" : "Timing saved locally; cookie backup unavailable or too large", !cookiesWritten);
 				window.__TIMELINE_EDITOR_SAVE__ = { ok: true, key: storageKey, updatedAt: state.updatedAt, scenes: state.scenes.length, slides: (state.slides || []).length, tracks: state.tracks.length, cookies: cookiesWritten };
 				/* Session 331 follow-up: keep the table's own store in step with the edit. */
 				try { schedulePublish(false); } catch (publishError) { }
@@ -1915,6 +2184,7 @@ export const TIMELINE_EDITOR_JS = `
 			}
 		}
 		function scheduleSave() {
+			timelineDirty = true;
 			if (state) composeProjectDetail(state);
 			if (saveTimer) clearTimeout(saveTimer);
 			setSaveStatus("Saving timing locally…", false);
@@ -2924,6 +3194,10 @@ export const TIMELINE_EDITOR_JS = `
 			if (removed.assetId && assetMap[removed.assetId]) {
 				var stillUsed = state.tracks.some(function (candidateTrack) { return candidateTrack.items.some(function (candidate) { return candidate.assetId === removed.assetId; }); });
 				if (!stillUsed) {
+					var failureKey = removed.assetId === "voiceover" ? "voiceover" : "asset:" + String(removed.assetId);
+					failedAssetWrites.delete(failureKey);
+					assetWriteVersions.set(failureKey, (assetWriteVersions.get(failureKey) || 0) + 1);
+					sessionAssetFailure = failedAssetWrites.size ? failedAssetWrites.values().next().value.reason : "";
 					var old = assetMap[removed.assetId];
 					if (old.url) { try { URL.revokeObjectURL(old.url); } catch (error) {} }
 					delete assetMap[removed.assetId];
@@ -3122,7 +3396,7 @@ export const TIMELINE_EDITOR_JS = `
 		 * composer reads the return value as "how many clips landed".
 		 */
 		function appendTemplateClip(clip) {
-			if (!state || !clip) return 0;
+			if (sessionFrozen || !sessionMayWrite() || !state || !clip) return 0;
 			var blob = clip.blob || clip.file || null;
 			if (!blob) { setStatus("The composed clip arrived without any media bytes.", true); return 0; }
 			if (isExporting || recorder) { setStatus("Wait for the export to finish before adding a clip.", true); return 0; }
@@ -3498,9 +3772,10 @@ export const TIMELINE_EDITOR_JS = `
 		 * like the template modal paints them. Guards keep bare canvas test
 		 * doubles safe.
 		 */
-		function drawStyleEffects(context, width, height, seconds, scene) {
-			if (!context || !state) return [];
-			var style = String(scene && scene.videoStyle || state.videoStyle || "");
+		function drawStyleEffects(context, width, height, seconds, scene, renderState) {
+			renderState = renderState || state;
+			if (!context || !renderState) return [];
+			var style = String(scene && scene.videoStyle || renderState.videoStyle || "");
 			/*
 			 * Every scene carries its own resolved effect list, so the treatment
 			 * is applied to ALL scenes: a cinematic row paints the double
@@ -3510,7 +3785,7 @@ export const TIMELINE_EDITOR_JS = `
 			 */
 			var effects = scene && Array.isArray(scene.effects)
 				? normalizeEffects(scene.effects, style)
-				: normalizeEffects(state.videoStyleEffects, style);
+				: normalizeEffects(renderState.videoStyleEffects, style);
 			if (!effects.length) return [];
 			var scale = Math.max(0.5, height / 720);
 			if (effects.indexOf("duotone") !== -1 && typeof context.createLinearGradient === "function") {
@@ -3556,58 +3831,20 @@ export const TIMELINE_EDITOR_JS = `
 			if (!canvas || !canvasContext || !state) return;
 			var width = canvas.width || 720; var height = canvas.height || 1280;
 			var context = canvasContext;
-			context.clearRect(0, 0, width, height);
 			var active = activeMediaAt(state.playheadSec);
 			var scene = active && active.sceneId ? sceneById(active.sceneId) : null;
 			var asset = active && active.assetId ? assetMap[active.assetId] : null;
-			context.fillStyle = "#08090c"; context.fillRect(0, 0, width, height);
-			var drawn = false;
-		syncVideoPreview(active, active && active.visible !== false ? asset : null, state.playheadSec);
-			/* Layer 0 — the background layer. Pixabay stock and uploads land here. */
-			if (active && active.visible !== false && asset) {
-				context.save();
-				if (window.__videoStyleFilter && "filter" in context) context.filter = window.__videoStyleFilter(state.videoStyle);
-				if (asset.video) {
-					drawn = asset.video.readyState >= 2 && drawImageCover(context, asset.video, width, height, active.fit || "cover");
+			syncVideoPreview(active, active && active.visible !== false ? asset : null, state.playheadSec);
+			var drawn = paintSharedTimelineFrame(context, width, height, state.playheadSec, {
+				state: state, active: active, scene: scene, asset: asset,
+				visuals: visualTracks().reduce(function (items, track) { return items.concat(track.items); }, []),
+				isSelected: function (item) { return !recorder && !isExporting && String(item.id) === String(state.selectedItemId); },
+				onItem: function (item, skipBaked) {
+					if (!recorder && !isExporting && item.visible !== false && String(item.id) === String(state.selectedItemId) && (item.kind === "graphic" || skipBaked)) {
+						drawSelectionBox(context, item, width, height);
+					}
 				}
-				else if (asset.image && asset.image.complete) drawn = drawImageCover(context, asset.image, width, height, active.fit || "cover");
-				context.restore();
-			}
-			if (!drawn && active) drawPlaceholder(context, width, height, scene);
-			/*
-			 * Template-modal image effects (double gradient / neon / VHS) ride on
-			 * the background layer of EVERY scene, resolved from the scene itself.
-			 */
-			var isRenderedTemplateVideo = Boolean(drawn && asset && asset.video && ((active && active.isTemplateScene) || (scene && scene.isTemplateScene)));
-			if (!isRenderedTemplateVideo) {
-				drawStyleEffects(context, width, height, state.playheadSec, scene);
-			}
-			/* Layers 1..4 — every text and graphic clip paints above the background. */
-			visualTracks().forEach(function (track) {
-				track.items.forEach(function (item) {
-					var live = state.playheadSec >= item.startSec && state.playheadSec < item.startSec + item.durationSec;
-					if (!live) return;
-					var skipBaked = Boolean(isRenderedTemplateVideo && item.bakedInTemplateClip && active && String(item.parentId || "") === String(active.id));
-					if (item.kind === "graphic" && item.visible !== false) {
-						if (!skipBaked) drawGraphic(context, item, width, height);
-						/* The dashed box is the drag affordance; exports never carry it. */
-						if (!recorder && !isExporting && String(item.id) === String(state.selectedItemId)) drawSelectionBox(context, item, width, height);
-					}
-					if (item.kind === "text") {
-						if (!skipBaked) {
-							drawText(context, item, width, height, !recorder && !isExporting && String(item.id) === String(state.selectedItemId));
-						} else if (!recorder && !isExporting && String(item.id) === String(state.selectedItemId)) {
-							drawSelectionBox(context, item, width, height);
-						}
-					}
-				});
 			});
-			/*
-			 * Burned-in script subtitles paint last, above the user's own text
-			 * and graphics, exactly where the voiceover says them. They are
-			 * cue data from the Quick Batch row, never timeline clips.
-			 */
-			drawTimelineSubtitles(context, state.subtitles, state.playheadSec * 1000, width, height);
 			var placeholder = document.getElementById("timeline-preview-placeholder");
 			if (placeholder) placeholder.hidden = drawn;
 			var note = document.getElementById("timeline-preview-note");
@@ -3761,6 +3998,7 @@ export const TIMELINE_EDITOR_JS = `
 			canvasDrag = null;
 			if (canvas) canvas.style.cursor = "";
 			if (!moved) return;
+			timelineDirty = true;
 			renderInspector();
 			persistNow();
 		}
@@ -3952,17 +4190,20 @@ export const TIMELINE_EDITOR_JS = `
 				} catch (error) { finish(); }
 			});
 		}
-		function paintTimelineFrameAt(targetCtx, width, height, seconds) {
+		/* The editor and the table preview share this painter; only media hydration
+		 * and playback clocks belong to their respective players. */
+		function paintSharedTimelineFrame(targetCtx, width, height, seconds, frame) {
+			var renderState = frame.state || {};
+			var active = frame.active || null;
+			var scene = frame.scene || null;
+			var asset = frame.asset || null;
 			targetCtx.clearRect(0, 0, width, height);
 			targetCtx.fillStyle = "#08090c";
 			targetCtx.fillRect(0, 0, width, height);
-			var active = activeMediaAt(seconds);
-			var scene = active && active.sceneId ? sceneById(active.sceneId) : null;
-			var asset = active && active.assetId ? assetMap[active.assetId] : null;
 			var drawn = false;
 			if (active && active.visible !== false && asset) {
 				targetCtx.save();
-				if (window.__videoStyleFilter && "filter" in targetCtx) targetCtx.filter = window.__videoStyleFilter(state.videoStyle);
+				if (window.__videoStyleFilter && "filter" in targetCtx) targetCtx.filter = window.__videoStyleFilter(renderState.videoStyle);
 				if (asset.video) {
 					drawn = (asset.video.readyState >= 2 || Number(asset.video.videoWidth || 0) > 0) && drawImageCover(targetCtx, asset.video, width, height, active.fit || "cover");
 				} else if (asset.image && (asset.image.complete || Number(asset.image.naturalWidth || 0) > 0)) {
@@ -3972,22 +4213,25 @@ export const TIMELINE_EDITOR_JS = `
 			}
 			if (!drawn && active) drawPlaceholder(targetCtx, width, height, scene);
 			var isRenderedTemplateFrame = Boolean(drawn && asset && asset.video && ((active && active.isTemplateScene) || (scene && scene.isTemplateScene)));
-			/* Exported frames carry the same per-scene treatments as the preview. */
-			if (!isRenderedTemplateFrame) {
-				drawStyleEffects(targetCtx, width, height, seconds, scene);
-			}
-			visualTracks().forEach(function (track) {
-				track.items.forEach(function (item) {
-					var live = seconds >= item.startSec && seconds < item.startSec + item.durationSec;
-					if (!live) return;
-					var skipBaked = Boolean(isRenderedTemplateFrame && item.bakedInTemplateClip && active && String(item.parentId || "") === String(active.id));
-					if (skipBaked) return;
-					if (item.kind === "graphic" && item.visible !== false) drawGraphic(targetCtx, item, width, height);
-					if (item.kind === "text") drawText(targetCtx, item, width, height, false);
-				});
+			if (!isRenderedTemplateFrame) drawStyleEffects(targetCtx, width, height, seconds, scene, renderState);
+			(frame.visuals || []).forEach(function (item) {
+				if (!item || !(seconds >= item.startSec && seconds < item.startSec + item.durationSec)) return;
+				var skipBaked = Boolean(isRenderedTemplateFrame && item.bakedInTemplateClip && active && String(item.parentId || "") === String(active.id));
+				if (!skipBaked && item.kind === "graphic" && item.visible !== false) drawGraphic(targetCtx, item, width, height);
+				if (!skipBaked && item.kind === "text") drawText(targetCtx, item, width, height, Boolean(frame.isSelected && frame.isSelected(item)));
+				if (frame.onItem) frame.onItem(item, skipBaked);
 			});
-			/* The exported frame carries the same burned-in subtitles as the preview. */
-			drawTimelineSubtitles(targetCtx, state.subtitles, seconds * 1000, width, height);
+			drawTimelineSubtitles(targetCtx, renderState.subtitles, seconds * 1000, width, height);
+			return drawn;
+		}
+		function paintTimelineFrameAt(targetCtx, width, height, seconds) {
+			var active = activeMediaAt(seconds);
+			return paintSharedTimelineFrame(targetCtx, width, height, seconds, {
+				state: state, active: active,
+				scene: active && active.sceneId ? sceneById(active.sceneId) : null,
+				asset: active && active.assetId ? assetMap[active.assetId] : null,
+				visuals: visualTracks().reduce(function (items, track) { return items.concat(track.items); }, [])
+			});
 		}
 		async function mixTimelineAudioForExport(durationSec) {
 			var AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -4528,9 +4772,9 @@ export const TIMELINE_EDITOR_JS = `
 				canvas.addEventListener("pointercancel", function () { endCanvasDrag(); });
 			}
 			document.addEventListener("pointerup", function () {
-				if (canvasDrag) endCanvasDrag();
+				if (canvasDrag) { if (canvasDrag.moved) timelineDirty = true; endCanvasDrag(); }
 				if (!activeDrag) return;
-				if (activeDrag.moved) { persistNow(); setTimeout(function () { suppressClick = false; }, 0); }
+				if (activeDrag.moved) { timelineDirty = true; persistNow(); setTimeout(function () { suppressClick = false; }, 0); }
 				activeDrag = null;
 			});
 			var zoom = document.getElementById("timeline-zoom");
@@ -4550,8 +4794,15 @@ export const TIMELINE_EDITOR_JS = `
 			 */
 			window.__TIMELINE_TEMPLATE_CLIP__ = function (clip) { return appendTemplateClip(clip); };
 			var back = document.getElementById("timeline-back");
-			if (back) back.addEventListener("click", function () {
-				persistNow();
+			if (back) back.addEventListener("click", async function () {
+				if (sessionLeaseHeld && pendingSessionTasks.size) {
+					setSaveStatus("Waiting for media to finish saving…", false);
+					try { while (pendingSessionTasks.size) await Promise.all(Array.from(pendingSessionTasks)); }
+					catch (error) { setSaveStatus("Media could not be saved; this tab remains open.", true); return; }
+				}
+				if (sessionLeaseHeld && sessionAssetFailure) await retryFailedMedia();
+				if (sessionLeaseHeld && sessionAssetFailure) { setSaveStatus("Media could not be saved; this tab remains open. Restore browser storage and try Back again.", true); return; }
+				if (timelineDirty && !persistNow()) return;
 				/*
 				 * Session 331 follow-up: the edit is stored in the TABLE page's own
 				 * store (one localStorage entry + four cookie chunks) before the tab
@@ -4559,6 +4810,12 @@ export const TIMELINE_EDITOR_JS = `
 				 * reopen the edited timeline.
 				 */
 				try { publishTimelineEdit(true); } catch (publishError) { }
+				if (sessionLeaseHeld && releaseSessionLease) {
+					try { if (!await clearSessionOwner()) { setSaveStatus("Could not close the editor safely.", true); return; } }
+					catch (error) { setSaveStatus("Could not close the editor safely.", true); return; }
+					sessionLeaseHeld = false;
+					var release = releaseSessionLease; releaseSessionLease = null; release();
+				}
 				try { window.close(); } catch (error) {}
 				if (!window.closed) {
 					var url = new URL(window.location.href);
@@ -4586,8 +4843,7 @@ export const TIMELINE_EDITOR_JS = `
 			});
 			function flushTimelineHandback() {
 				if (saveTimer) { clearTimeout(saveTimer); saveTimer = 0; }
-				persistNow();
-				try { publishTimelineEdit(true); } catch (publishError) { }
+				if (timelineDirty && persistNow()) try { publishTimelineEdit(true); } catch (publishError) { }
 			}
 			window.addEventListener("pagehide", flushTimelineHandback);
 			document.addEventListener("visibilitychange", function () {
@@ -4617,20 +4873,35 @@ export const TIMELINE_EDITOR_JS = `
 		}
 		async function waitForStoredAssets() {
 			var count = 0;
-				for (var attempt = 0; attempt < 80; attempt++) {
+			var expected = [];
+			if (state) {
+				(state.tracks || []).forEach(function (track) {
+					(track.items || []).forEach(function (item) {
+						if (item.assetId && expected.indexOf(String(item.assetId)) < 0) expected.push(String(item.assetId));
+					});
+				});
+			}
+			for (var attempt = 0; attempt < 80; attempt++) {
 				try {
 					var record = await readAssetRecord(pageId);
-					if (record) { count = registerStoredAssets(record); break; }
+					if (record) {
+						var fresh = { assets: {} };
+						Object.keys(record.assets || {}).forEach(function (id) { if (!assetMap[id]) fresh.assets[id] = record.assets[id]; });
+						if (!assetMap.voiceover) fresh.voiceover = record.voiceover;
+						count += registerStoredAssets(fresh);
+						if (count) drawPreview();
+						if (!expected.length || expected.every(function (id) { return !!assetMap[id]; })) break;
+					}
 				} catch (error) { break; }
 				await new Promise(function (resolve) { setTimeout(resolve, 150); });
 			}
-			if (count) {
-				if (state) {
-					composeProjectDetail(state);
-					updateProjectHeading();
-				}
-				setStatus(count + (count === 1 ? " local media asset loaded." : " local media assets loaded."), false);
-			} else setStatus("No transferred media file was available. Timing still works; use + Add media or upload audio.", false);
+			var missing = expected.filter(function (id) { return !assetMap[id]; });
+			var retry = document.getElementById("timeline-retry-media");
+			if (retry) retry.hidden = !missing.length;
+			if (count && state) { composeProjectDetail(state); updateProjectHeading(); }
+			if (missing.length) setStatus("Missing " + missing.length + " media asset(s): " + missing.join(", ") + ". Retry loading or restore the original media.", true);
+			else if (count) setStatus(count + (count === 1 ? " local media asset loaded." : " local media assets loaded."), false);
+			else if (!Object.keys(assetMap).length) setStatus("No transferred media file was available. Timing still works; use + Add media or upload audio.", false);
 			drawPreview();
 		}
 
@@ -4665,14 +4936,32 @@ export const TIMELINE_EDITOR_JS = `
 				galleryEl.style.display = "none";
 				galleryEl.innerHTML = "";
 			}
+			try {
+				loadedStorageValue = window.localStorage.getItem(storageKey);
+				if (loadedStorageValue !== null) {
+					var parsedStored = JSON.parse(loadedStorageValue);
+					invalidStoredProject = !parsedStored || parsedStored.projectId !== pageId || !Array.isArray(parsedStored.tracks);
+				}
+			} catch (error) { invalidStoredProject = true; }
 			var saved = loadPersistedTimelineState();
+			if (loadedStorageValue === null && !saved) {
+				var backupNames = timelineCookieNames(pageId);
+				var legacyName = timelineLegacySafeId(pageId);
+				if (legacyName !== timelineSafeId(pageId)) {
+					var legacyBackup = readTimelineCookies(legacyName, true);
+					if (!legacyBackup || legacyBackup.projectId === pageId) for (var li = 1; li <= TIMELINE_COOKIE_CHUNKS; li++) backupNames.push(TIMELINE_COOKIE_PREFIX + legacyName + "_" + li);
+				}
+				invalidStoredProject = String(window.document.cookie || "").split(";").some(function (part) {
+					return backupNames.indexOf(part.trim().split("=")[0]) >= 0;
+				});
+			}
 			var initial = saved && saved.projectId === pageId ? saved : transition && transition.timelineState || null;
-			state = normalizeState(initial || defaultTimeline());
+			state = normalizeState(initial || defaultTimeline(), !saved);
 			/*
 			 * Session 331: a project saved before the overlap rule existed is
 			 * cleaned on load, so nobody opens a timeline full of stacked boxes.
 			 */
-			try { resolveTimelineOverlaps(); } catch (overlapError) { }
+			if (!saved) try { resolveTimelineOverlaps(); } catch (overlapError) { }
 			if (transition) {
 				state.sourcePageId = String(transition.sourcePageId || state.sourcePageId || "");
 				state.sourceRowId = String(transition.basicSettings && transition.basicSettings.id || state.sourceRowId || "");
@@ -4702,7 +4991,10 @@ export const TIMELINE_EDITOR_JS = `
 			renderTimeline();
 			renderInspector();
 			drawPreview();
-			persistNow();
+			var recoveredReducedBackup = Boolean(saved && loadedStorageValue === null && saved.cookieBackupReduced);
+			if (invalidStoredProject) setSaveStatus("The saved project is invalid and was not replaced. Restore a backup before editing.", true);
+			else if (!saved || loadedStorageValue === null) persistNow();
+			else if (sessionMayWrite() && !writeTimelineCookies(saved)) setSaveStatus("Project loaded locally; cookie backup unavailable or too large", true);
 			/*
 			 * Session 331 follow-up: only real edits are handed back to the table -
 			 * opening the project must not rewrite the table's store.
@@ -4714,6 +5006,7 @@ export const TIMELINE_EDITOR_JS = `
 			 * normalisation.
 			 */
 			resetHistory();
+			if (recoveredReducedBackup) setSaveStatus("Recovered a reduced cookie backup; some project details may be missing.", true);
 			if (isPlaying || shouldAnimatePreview()) schedulePreviewFrame();
 			waitForStoredAssets();
 		}
@@ -4768,8 +5061,195 @@ export const TIMELINE_EDITOR_JS = `
 		api.freeVisualWindow = function (duration) { return state ? freeVisualWindow(duration == null ? 4 : duration) : null; };
 		api.occupiedVisualWindows = function () { return state ? occupiedVisualWindows() : []; };
 		api.exportTimeline = exportTimeline;
+		api.retryMedia = waitForStoredAssets;
+		var retryMediaButton = document.getElementById("timeline-retry-media");
+		if (retryMediaButton) retryMediaButton.addEventListener("click", function () { retryMediaButton.hidden = true; waitForStoredAssets(); });
 		api.booted = true;
 
-		boot();
+		function blockStaleInput(event) {
+			if (!sessionFrozen) return;
+			var target = event.target;
+			if (target && target.id === "timeline-back" && !sessionLeaseHeld) return;
+			event.preventDefault(); event.stopImmediatePropagation();
+		}
+		["click", "input", "change", "keydown", "pointerdown"].forEach(function (type) {
+			document.addEventListener(type, blockStaleInput, true);
+		});
+		var rawAddMediaFiles = addMediaFiles;
+		var rawAddAudioFile = addAudioFile;
+		addMediaFiles = function (files) {
+			if (sessionFrozen || !sessionMayWrite()) return Promise.resolve();
+			return trackSessionTask(rawAddMediaFiles(files), false);
+		};
+		addAudioFile = function (trackId, file) {
+			if (sessionFrozen || !sessionMayWrite()) return Promise.resolve();
+			return trackSessionTask(rawAddAudioFile(trackId, file), false);
+		};
+		api.addMediaFiles = addMediaFiles;
+		api.addAudioFile = addAudioFile;
+
+		async function clearSessionOwner() {
+			return window.navigator.locks.request("ytvs-edit-counter:" + pageId, function () {
+				var record = readSession(pageId);
+				if (!record || record.owner !== sessionToken) return false;
+				record.owner = ""; record.ownerCount = 0;
+				writeSession(pageId, record);
+				return true;
+			});
+		}
+		async function requestIsPresent(record) {
+			if (!record.requestHasPresence) return true;
+			return window.navigator.locks.request("ytvs-edit-presence:" + pageId + ":" + record.request, { ifAvailable: true }, function (lock) { return !lock; });
+		}
+		async function cancelAbsentRequest(record) {
+			return window.navigator.locks.request("ytvs-edit-counter:" + pageId, function () {
+				var latest = readSession(pageId);
+				if (latest && latest.request === record.request && latest.requestCount === record.requestCount && latest.owner === sessionToken) {
+					latest.request = sessionToken; latest.requestCount = sessionCount; latest.requestActive = false; latest.requestHasPresence = false;
+					writeSession(pageId, latest);
+				}
+			});
+		}
+		var handoffInProgress = false;
+		async function checkForNewSession() {
+			if (!sessionManaged) {
+				try {
+					if (readSession(pageId)) {
+						sessionFrozen = true;
+						sessionMessage("A managed editor has opened. This legacy tab is read-only; unsaved changes here were not handed over.");
+					}
+				} catch (error) { sessionFrozen = true; sessionMessage("Project control could not be verified. This tab is read-only."); }
+				return;
+			}
+			if (!sessionLeaseHeld || handoffInProgress) return;
+			var record;
+			try { record = readSession(pageId); } catch (error) { record = null; }
+			if (!record || record.revoked || record.owner !== sessionToken) {
+				sessionFrozen = true;
+				sessionMessage("This editor has lost project control. Unsaved changes cannot be written here.");
+				try { while (pendingSessionTasks.size) await Promise.allSettled(Array.from(pendingSessionTasks)); } catch (error) { }
+				sessionLeaseHeld = false;
+				if (releaseSessionLease) { var revokeRelease = releaseSessionLease; releaseSessionLease = null; revokeRelease(); }
+				return;
+			}
+			if (!record.request || record.request === sessionToken) return;
+			handoffInProgress = true;
+			if (!await requestIsPresent(record)) { await cancelAbsentRequest(record); sessionMessage("The newer editor closed before takeover. This editor remains active."); handoffInProgress = false; return; }
+			var templateModal = document.getElementById("tpl-modal");
+			if (templateModal && templateModal.style.display !== "none") {
+				sessionMessage("A newer editor is waiting. Finish or close the template composer to save your work and hand over.");
+				handoffInProgress = false; return;
+			}
+			handoffInProgress = true;
+			sessionFrozen = true;
+			sessionMessage("A newer editor is opening. Saving this tab's pending changes before handing over…");
+			try {
+				if (canvasDrag) endCanvasDrag();
+				if (activeDrag && activeDrag.moved) { activeDrag = null; timelineDirty = true; }
+				while (pendingSessionTasks.size) await Promise.all(Array.from(pendingSessionTasks));
+				if (sessionAssetFailure) await retryFailedMedia();
+				if (sessionAssetFailure) throw new Error(sessionAssetFailure);
+				if (saveTimer) { clearTimeout(saveTimer); saveTimer = 0; }
+				if (timelineDirty && !persistNow()) throw new Error("Pending timeline changes could not be saved");
+				if (publishTimer) { clearTimeout(publishTimer); publishTimer = 0; }
+				try { publishTimelineEdit(true); } catch (error) { }
+				var latestRequest = readSession(pageId);
+				if (!latestRequest || !latestRequest.request || latestRequest.request === sessionToken) {
+					sessionFrozen = false; sessionMessage("The newer editor cancelled its request. This editor remains active."); return;
+				}
+				if (latestRequest && latestRequest.request !== sessionToken && !await requestIsPresent(latestRequest)) {
+					await cancelAbsentRequest(latestRequest); sessionFrozen = false;
+					sessionMessage("The newer editor closed before takeover. This editor remains active."); return;
+				}
+				if (!await clearSessionOwner()) throw new Error("The editor ownership record could not be cleared");
+				sessionLeaseHeld = false;
+				sessionMessage("A newer editor controls this project. This tab is read-only; any later edits here will not be saved.");
+				if (releaseSessionLease) { var release = releaseSessionLease; releaseSessionLease = null; release(); }
+			} catch (error) {
+				sessionFrozen = false;
+				sessionMessage("The newer editor is waiting: " + String(error && error.message || error) + ". Resolve the problem and click Edit again.");
+			} finally { handoffInProgress = false; }
+		}
+		window.addEventListener("timeline-template-closed", checkForNewSession);
+		window.addEventListener("storage", function (event) { if (event && (!event.key || event.key === sessionKey(pageId))) checkForNewSession(); });
+		window.addEventListener("focus", checkForNewSession);
+		document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") checkForNewSession(); });
+
+		async function startManagedSession() {
+			window.addEventListener("pagehide", function () {
+				if (!sessionLeaseHeld && window.navigator.locks) {
+					cancelEditRequest(pageId, sessionToken, sessionCount).catch(function () { });
+					cancelEditCandidate(pageId, sessionToken, sessionCount).catch(function () { });
+				}
+			});
+			if (!window.navigator.locks || typeof window.navigator.locks.request !== "function") {
+				sessionMessage("This browser cannot safely coordinate editor tabs. Return to Quick Batch and use a supported browser.");
+				return;
+			}
+			sessionMessage("Waiting for the previous editor to save its changes…");
+			try {
+				await window.navigator.locks.request("ytvs-edit-presence:" + pageId + ":" + sessionToken, async function () {
+				var startRecord = readSession(pageId);
+				if (startRecord && startRecord.candidate === sessionToken && startRecord.candidateCount === sessionCount) {
+					if (!await activateEditSession(pageId, sessionToken, sessionCount)) { sessionMessage("This editor request was cancelled or superseded."); return; }
+				} else if (!startRecord || startRecord.revoked || startRecord.request !== sessionToken || startRecord.requestCount !== sessionCount) {
+					sessionMessage(startRecord && startRecord.revoked ? "This project was deleted. This editor cannot be opened." : "This editor request was cancelled or superseded."); return;
+				}
+				await window.navigator.locks.request("ytvs-edit-owner:" + pageId, async function () {
+					var prior = await window.navigator.locks.request("ytvs-edit-counter:" + pageId, function () {
+						var record = readSession(pageId);
+						if (!record || record.revoked || record.request !== sessionToken || record.requestCount !== sessionCount) return null;
+						return { owner: String(record.owner || "") };
+					});
+					if (!prior) { var current = readSession(pageId); sessionMessage(current && current.revoked ? "This project was deleted. This editor cannot be opened." : "A newer editor was opened. This tab is read-only."); return; }
+					if (prior.owner) {
+						sessionMessage("The previous editor closed without confirming its last save. Unsaved changes may be missing.");
+						if (!window.confirm("The previous editor did not confirm a clean handoff. Unsaved changes may be missing. Open the last saved project?")) return;
+					}
+					var granted = await window.navigator.locks.request("ytvs-edit-counter:" + pageId, function () {
+						var record = readSession(pageId);
+						if (!record || record.revoked || record.request !== sessionToken || record.requestCount !== sessionCount || String(record.owner || "") !== prior.owner) return false;
+						record.owner = sessionToken; record.ownerCount = sessionCount; record.requestActive = false;
+						writeSession(pageId, record);
+						return true;
+					});
+					if (!granted) { sessionMessage("A newer editor was opened. This tab is read-only."); return; }
+					sessionLeaseHeld = true; sessionFrozen = false; sessionMessage("");
+					boot();
+					await new Promise(function (resolve) {
+						releaseSessionLease = resolve;
+						Promise.resolve().then(checkForNewSession);
+					});
+				});
+				});
+			} catch (error) { sessionMessage("The editor could not obtain safe project control: " + String(error && error.message || error)); }
+		}
+		async function startStandaloneSession() {
+			/* A direct route is not an Edit click, but it must still hold the same project lock. */
+			sessionManaged = true; sessionFrozen = true; sessionCount = 0;
+			sessionToken = "direct-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+			if (!window.navigator.locks || typeof window.navigator.locks.request !== "function") {
+				sessionMessage("This browser cannot safely coordinate editor tabs. This direct editor is read-only."); boot(); return;
+			}
+			try {
+				await window.navigator.locks.request("ytvs-edit-owner:" + pageId, { ifAvailable: true }, async function (lock) {
+					if (!lock) { sessionMessage("Another editor or Quick Batch is using this project. This direct editor is read-only."); boot(); return; }
+					var existing = readSession(pageId);
+					if (existing && (existing.revoked || existing.candidate || existing.requestActive)) { sessionMessage("This project is deleted or another editor is opening. This direct editor is read-only."); boot(); return; }
+					if (existing && existing.owner && !window.confirm("The previous editor did not confirm a clean handoff. Unsaved changes may be missing. Open the last saved project?")) { sessionMessage("Recovery was cancelled. This direct editor is read-only."); boot(); return; }
+					var granted = await window.navigator.locks.request("ytvs-edit-counter:" + pageId, function () {
+						var current = readSession(pageId) || { projectId: pageId, count: 0 };
+						if (current.revoked || current.candidate || current.requestActive || (existing && current.owner !== existing.owner)) return false;
+						current.owner = sessionToken; current.ownerCount = 0; current.request = sessionToken; current.requestCount = current.count; current.requestActive = false;
+						writeSession(pageId, current); return true;
+					});
+					if (!granted) { sessionMessage("Another editor is opening. This direct editor is read-only."); boot(); return; }
+					sessionLeaseHeld = true; sessionFrozen = false; sessionMessage(""); boot();
+					await new Promise(function (resolve) { releaseSessionLease = resolve; Promise.resolve().then(checkForNewSession); });
+				});
+			} catch (error) { sessionFrozen = true; sessionMessage("Could not verify project control. This direct editor is read-only."); if (!state) boot(); }
+		}
+		if (sessionManaged) startManagedSession();
+		else startStandaloneSession();
 	})();
 `;
