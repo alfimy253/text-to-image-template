@@ -87,6 +87,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		8;
 
 	function batchTimelineSafeId(value) {
+		var original = String(value || ""), clean = original.replace(/[^a-zA-Z0-9_-]/g, "_");
+		if (clean === original && clean.length <= 64) return clean || "default";
+		var a = 2166136261, b = 2246822507;
+		for (var i = 0; i < original.length; i++) { a = Math.imul(a ^ original.charCodeAt(i), 16777619); b = Math.imul(b ^ original.charCodeAt(i), 3266489909); }
+		return (clean.slice(0, 40) || "project") + "_h" + (a >>> 0).toString(36) + "_" + (b >>> 0).toString(36);
+	}
+	function batchTimelineLegacySafeId(value) {
 		return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "default";
 	}
 
@@ -113,10 +120,28 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		return ("timeline-" + String(pipelineManagementStore.pageId || "local") + "-row-" + String(id)).replace(/[^a-zA-Z0-9_-]/g, "");
 	}
 
-	function readTimelineCookiesForPageId(targetPageId) {
+	function batchTimelineCookieDigest(text) {
+		let hash = 2166136261;
+		const value = String(text || "");
+		for (let i = 0; i < value.length; i++) {
+			hash ^= value.charCodeAt(i);
+			hash = (hash * 16777619) >>> 0;
+		}
+		return hash.toString(36);
+	}
+
+	function readTimelineCookiesForPageId(targetPageId, safeOverride, allowForeign) {
+		if (!safeOverride) {
+			const primary = readTimelineCookiesForPageId(targetPageId, batchTimelineSafeId(targetPageId));
+			if (primary) return primary;
+			const prefix = BATCH_TIMELINE_COOKIE_PREFIX + batchTimelineSafeId(targetPageId) + "_";
+			if (String(window.document.cookie || "").split(";").some(function (part) { const name = part.trim().split("=")[0]; return name.indexOf(prefix) === 0 && /^[1-8]$/.test(name.slice(prefix.length)); })) return null;
+			const legacy = batchTimelineLegacySafeId(targetPageId);
+			return legacy !== batchTimelineSafeId(targetPageId) ? readTimelineCookiesForPageId(targetPageId, legacy) : null;
+		}
 		try {
 			if (!targetPageId || typeof window === "undefined" || !window.document) return null;
-			const safePage = batchTimelineSafeId(targetPageId);
+			const safePage = safeOverride;
 			const prefix = BATCH_TIMELINE_COOKIE_PREFIX + safePage + "_";
 			const parts = String(window.document.cookie || "").split(";");
 			const metas = [];
@@ -126,14 +151,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				const equal = entry.indexOf("=");
 				if (equal < 0) continue;
 				const name = entry.slice(0, equal);
-				if (name.indexOf(prefix) !== 0) continue;
+				if (!/^([1-8])$/.test(name.slice(prefix.length)) || name.indexOf(prefix) !== 0) continue;
 				const meta = JSON.parse(decodeURIComponent(entry.slice(equal + 1)));
 				if (!meta || meta.v !== 1 || meta.p !== safePage) return null;
 				if (!total) total = Number(meta.n) || 0;
 				if (Number(meta.n) !== total) return null;
 				metas.push(meta);
 			}
-			if (!total || metas.length !== total) return null;
+			if (!Number.isInteger(total) || total < 1 || total > BATCH_TIMELINE_COOKIE_CHUNKS || metas.length !== total) return null;
 			metas.sort(function (a, b) { return a.i - b.i; });
 			const ts = metas[0].t;
 			const hash = metas[0].h;
@@ -142,8 +167,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				if (metas[i].i !== i + 1 || metas[i].t !== ts || metas[i].h !== hash) return null;
 				joined += String(metas[i].d || "");
 			}
+			if (batchTimelineCookieDigest(joined) !== hash) return null;
 			const parsed = JSON.parse(joined);
-			return parsed && parsed.projectId === targetPageId ? parsed : null;
+			return parsed && (allowForeign || parsed.projectId === targetPageId) ? parsed : null;
 		} catch (error) {
 			return null;
 		}
@@ -159,9 +185,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			if (!localState || localState.projectId !== targetPageId) localState = null;
 		} catch (error) { localState = null; }
 		const cookieState = readTimelineCookiesForPageId(targetPageId);
-		if (localState && cookieState) {
-			return Number(cookieState.updatedAt || 0) > Number(localState.updatedAt || 0) ? cookieState : localState;
-		}
+		/* The complete local project is authoritative; cookie mirrors may be reduced. */
 		return localState || cookieState || null;
 	}
 
@@ -376,7 +400,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				return out;
 			});
 		}
-		if (row.timeline && Array.isArray(row.timeline.sceneItems) && row.timeline.sceneItems.length) {
+		if (row.timeline && Array.isArray(row.timeline.sceneItems)) {
 			return row.timeline.sceneItems.slice();
 		}
 		if (Array.isArray(row.slideItems) && row.slideItems.length) {
@@ -395,7 +419,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		let resolvedTimeline = timelineStateOverride || null;
 		if (!resolvedTimeline && (edit || row.timelineEdited || row.timelineKey)) {
 			const storedTl = readTimelineEditorStateForRow(row);
-			if (storedTl && (!regenAt || Number(storedTl.updatedAt || 0) > regenAt)) {
+			if (storedTl && Array.isArray(storedTl.tracks)) {
 				resolvedTimeline = storedTl;
 			}
 		}
@@ -415,7 +439,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		let detailScenes = [];
 		let slides = [];
 		let elements = [];
-		if (resolvedTimeline && Array.isArray(resolvedTimeline.scenes) && resolvedTimeline.scenes.length) {
+		if (resolvedTimeline && Array.isArray(resolvedTimeline.scenes)) {
 			detailScenes = resolvedTimeline.scenes.map(function (scene, idx) {
 				const sceneElements = Array.isArray(scene && scene.elements) ? scene.elements.slice() : [];
 				const isTplScene = Boolean(scene && (scene.isTemplateScene || scene.templateScene || String(scene.mediaSource || "") === "template composer"));
@@ -869,7 +893,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const row = rowOrId && typeof rowOrId === "object" ? rowOrId : null;
 		const rowId = String(opts.rowId || (row ? row.id : rowOrId) || "").trim();
 		const vid = String(opts.vid || (row && row.vid) || "").trim();
-		const targetPageId = batchTimelinePageIdForRow(row || rowId, opts.key || opts.timelineKey);
+		const sourcePageId = String(opts.sourcePageId || pipelineManagementStore.pageId || "");
+		const explicitId = opts.key || opts.timelineKey || (row && (row.timelineKey || row.timeline && (row.timeline.key || row.timeline.pageId) || row.projectDetail && row.projectDetail.targetPageId));
+		const targetPageId = explicitId ? batchTimelinePageIdForRow(row || rowId, explicitId) : (rowId ? ("timeline-" + sourcePageId + "-row-" + rowId).replace(/[^a-zA-Z0-9_-]/g, "") : "");
 		const pageIds = new Set();
 		if (targetPageId) pageIds.add(targetPageId);
 		if (opts.pageId) pageIds.add(String(opts.pageId));
@@ -886,11 +912,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					if (!storageKey) continue;
 					if (storageKey.indexOf(BATCH_TIMELINE_STATE_PREFIX) === 0) {
 						const candPageId = storageKey.slice(BATCH_TIMELINE_STATE_PREFIX.length);
-						let match = pageIds.has(candPageId) || Boolean(rowId && candPageId.endsWith("-row-" + rowId));
+						let match = pageIds.has(candPageId);
 						if (!match) {
 							try {
 								const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
-								if (parsed && ((rowId && String(parsed.sourceRowId || "") === rowId) || (vid && String(parsed.sourceVid || "") === vid))) {
+								if (parsed && String(parsed.sourcePageId || "") === sourcePageId && ((rowId && String(parsed.sourceRowId || "") === rowId) || (vid && String(parsed.sourceVid || "") === vid))) {
 									match = true;
 								}
 							} catch (parseError) { }
@@ -906,9 +932,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 							if (parsed) {
 								const b = parsed.basicSettings || {};
 								const pd = parsed.projectDetail || {};
-								if ((rowId && (String(b.id || "") === rowId || String(pd.rowId || "") === rowId)) ||
-									(vid && (String(b.vid || "") === vid || String(pd.vid || "") === vid)) ||
-									(parsed.targetPageId && pageIds.has(String(parsed.targetPageId)))) {
+								if (pageIds.has(String(parsed.targetPageId || "")) || (String(parsed.sourcePageId || "") === sourcePageId && ((rowId && (String(b.id || "") === rowId || String(pd.rowId || "") === rowId)) || (vid && (String(b.vid || "") === vid || String(pd.vid || "") === vid))))) {
 									matchTrans = true;
 								}
 							}
@@ -923,9 +947,28 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			}
 		} catch (storageScanError) { }
 		pageIds.forEach(function (pid) {
+			try {
+				const sessionKey = "ytvs.timeline-edit-session.v1." + pid;
+				const session = JSON.parse(window.localStorage.getItem(sessionKey) || "null");
+				if (session && session.projectId === pid) {
+					session.revoked = true;
+					window.localStorage.setItem(sessionKey, JSON.stringify(session));
+				}
+			} catch (e) { }
 			try { if (window.localStorage) window.localStorage.removeItem(BATCH_TIMELINE_STATE_PREFIX + pid); } catch (e) { }
 			const safe = batchTimelineSafeId(pid);
-			for (let c = 1; c <= BATCH_TIMELINE_COOKIE_CHUNKS; c++) {
+			const legacy = batchTimelineLegacySafeId(pid);
+			if (legacy !== safe && readTimelineCookiesForPageId(pid, legacy)) {
+				for (let c = 1; c <= BATCH_TIMELINE_COOKIE_CHUNKS; c++) deleteBatchCookie(BATCH_TIMELINE_COOKIE_PREFIX + legacy + "_" + c);
+			}
+			const safeBackup = readTimelineCookiesForPageId(pid, safe, true);
+			let foreign = Boolean(safeBackup && safeBackup.projectId !== pid);
+			try {
+				const firstName = BATCH_TIMELINE_COOKIE_PREFIX + safe + "_1=";
+				const first = String(window.document.cookie || "").split(";").map(function (part) { return part.trim(); }).find(function (part) { return part.indexOf(firstName) === 0; });
+				if (first) { const meta = JSON.parse(decodeURIComponent(first.slice(firstName.length))); if (meta.pid && meta.pid !== pid) foreign = true; }
+			} catch (e) { foreign = true; }
+			if (!foreign) for (let c = 1; c <= BATCH_TIMELINE_COOKIE_CHUNKS; c++) {
 				deleteBatchCookie(BATCH_TIMELINE_COOKIE_PREFIX + safe + "_" + c);
 			}
 			try {
@@ -941,14 +984,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					const eq = entry.indexOf("=");
 					if (eq < 0) continue;
 					const name = entry.slice(0, eq);
-					if (name.indexOf(BATCH_TIMELINE_COOKIE_PREFIX) === 0) {
-						if (rowId && name.indexOf("-row-" + batchTimelineSafeId(rowId) + "_") >= 0) {
-							deleteBatchCookie(name);
-						}
-					} else if (name.indexOf("ytvs_transition_project_") === 0) {
+					if (name.indexOf("ytvs_transition_project_") === 0) {
 						try {
 							const meta = JSON.parse(decodeURIComponent(entry.slice(eq + 1)));
-							if (meta && ((vid && String(meta.vid || "") === vid) || (meta.targetPageId && pageIds.has(String(meta.targetPageId))))) {
+							if (meta && ((meta.targetPageId && pageIds.has(String(meta.targetPageId))) || (String(meta.sourcePageId || "") === sourcePageId && vid && String(meta.vid || "") === vid))) {
 								deleteBatchCookie(name);
 							}
 						} catch (cookieParseError) { }
@@ -1013,8 +1052,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 								? batchRows.find(function (r) { return String(r.id) === rowId; })
 								: null;
 							const blankInLive = Boolean(liveRow && !String(liveRow.script || "").trim());
-							const explicitBlankSource = parsed.sourceScript != null && !String(parsed.sourceScript).trim();
-							if (hasBlankRowMatch || blankInLive || explicitBlankSource) {
+							const explicitBlankSource = Boolean(rowId && !scriptedSnapshotRowIds.has(rowId) && parsed.sourceScript != null && !String(parsed.sourceScript).trim());
+							if (belongsToCurrentTable && (hasBlankRowMatch || blankInLive || explicitBlankSource)) {
 								purgeRowLocalAndCookieEntries(rowId || parsed.projectId, {
 									key: storageKey,
 									pageId: parsed.projectId,
@@ -1031,7 +1070,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 								const hadBlankProj = Boolean(parsed.editor && Array.isArray(parsed.editor.projects) && parsed.editor.projects.some(function (p) { return p && !String(p.script || "").trim(); }));
 								if (hadBlankRow || hadBlankProj) {
 									parsed.quickBatch.rows.forEach(function (r) {
-										if (r && !String(r.script || "").trim()) purgeRowLocalAndCookieEntries(r);
+										if (r && !String(r.script || "").trim()) purgeRowLocalAndCookieEntries(r, { sourcePageId: String(parsed.pageId || storageKey.slice("ytvs.pipeline-management.v1.".length)) });
 									});
 									const keptRows = parsed.quickBatch.rows.filter(function (r) { return Boolean(r && String(r.script || "").trim()); });
 									const keptProjs = parsed.editor && Array.isArray(parsed.editor.projects)
@@ -1055,7 +1094,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 						try {
 							const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
 							const script = parsed && parsed.basicSettings ? String(parsed.basicSettings.script || "").trim() : "";
-							if (parsed && !script && parsed.projectDetail) {
+							if (parsed && String(parsed.sourcePageId || "") === currentPageId && !script && parsed.projectDetail) {
 								const transKey = storageKey.slice(MEDIA_TRANSITION_STORAGE_PREFIX.length);
 								window.localStorage.removeItem(storageKey);
 								deleteBatchCookie("ytvs_transition_project_" + transKey.replace(/[^a-zA-Z0-9_-]/g, "_"));
@@ -1089,7 +1128,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 								const hadBlankProj = Boolean(otherSnap.editor && Array.isArray(otherSnap.editor.projects) && otherSnap.editor.projects.some(function (p) { return p && !String(p.script || "").trim(); }));
 								if (hadBlank || hadBlankProj) {
 									otherSnap.quickBatch.rows.forEach(function (r) {
-										if (r && !String(r.script || "").trim()) purgeRowLocalAndCookieEntries(r);
+										if (r && !String(r.script || "").trim()) purgeRowLocalAndCookieEntries(r, { sourcePageId: otherPid });
 									});
 									const keptRows = otherSnap.quickBatch.rows.filter(function (r) { return Boolean(r && String(r.script || "").trim()); });
 									const keptProjs = otherSnap.editor && Array.isArray(otherSnap.editor.projects)
@@ -1113,7 +1152,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 						const meta = JSON.parse(decodeURIComponent(entry.slice(eq + 1)));
 						if (!meta || !meta.p || seenPages.has(meta.p)) continue;
 						seenPages.add(meta.p);
-						const cookieState = readTimelineCookiesForPageId(meta.p);
+						const cookieState = readTimelineCookiesForPageId(meta.pid || meta.p);
 						if (!cookieState) continue;
 						const rowId = String(cookieState.sourceRowId || "");
 						const currentPageId = String(pipelineManagementStore && pipelineManagementStore.pageId || "");
@@ -1130,7 +1169,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 							? batchRows.find(function (r) { return String(r.id) === rowId; })
 							: null;
 						if ((belongsToCurrentTable && rowId && blankRowIds.has(rowId)) || (liveRow && !String(liveRow.script || "").trim()) ||
-							(cookieState.sourceScript != null && !String(cookieState.sourceScript).trim())) {
+							(belongsToCurrentTable && rowId && !scriptedSnapshotRowIds.has(rowId) && cookieState.sourceScript != null && !String(cookieState.sourceScript).trim())) {
 							purgeRowLocalAndCookieEntries(rowId || cookieState.projectId, {
 								pageId: cookieState.projectId,
 								vid: cookieState.sourceVid
@@ -1171,7 +1210,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		if (!row) return false;
 		if (row._hydratingPromise) return row._hydratingPromise;
 		if (!window.__TIMELINE_EDITOR__ || typeof window.__TIMELINE_EDITOR__.readProjectAssets !== "function") return false;
-		const targetPageId = batchRowMediaPageId(row) || batchTimelinePageIdForRow(row);
+		const targetPageId = batchTimelinePageIdForRow(row) || batchRowMediaPageId(row);
 		if (!targetPageId) return false;
 		row._hydratingAssets = true;
 		const startEpoch = Number(row._runEpoch) || 0;
@@ -1261,7 +1300,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					const assetKey = String(slide.assetId || (Number.isInteger(Number(slide.imageIndex)) && Number(slide.imageIndex) >= 0 ? "scene-" + (Number(slide.imageIndex) + 1) : ""));
 					const mediaObj = assetKey ? byAssetId[assetKey] : null;
 					if (!mediaObj || !mediaObj.url) continue;
-					const assetSwapped = Boolean(slide._hydratedAssetId && slide._hydratedAssetId !== assetKey);
+					const assetSwapped = Boolean(slide._hydratedAssetId && (slide._hydratedAssetId !== assetKey || (slide._hydratedAssetUrl && slide._hydratedAssetUrl !== mediaObj.url)));
 					if (slide.type === "mp4" && (!slide.videoEl || assetSwapped) && typeof document !== "undefined") {
 						const video = document.createElement("video");
 						video.muted = true;
@@ -1282,6 +1321,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 						slide.videoEl = video;
 						slide.img = video;
 						slide._hydratedAssetId = assetKey;
+						slide._hydratedAssetUrl = mediaObj.url;
 					} else if (slide.type !== "mp4" && (!slide.img || assetSwapped) && typeof Image === "function") {
 						const img = new Image();
 						img.onload = function () {
@@ -1292,6 +1332,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 						img.src = mediaObj.url;
 						slide.img = img;
 						slide._hydratedAssetId = assetKey;
+						slide._hydratedAssetUrl = mediaObj.url;
 						if (slide.type === "gif" && !slide.gif && mediaObj.blob && typeof decodeGifFrames === "function") {
 							try { slide.gif = await decodeGifFrames(mediaObj.blob); } catch (gifErr) { }
 						}
@@ -1916,13 +1957,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			edit = null;
 		}
 		const rawPersistedFull = readTimelineEditorStateForRow(row);
-		const persistedFull = rawPersistedFull && (!regenAt || Number(rawPersistedFull.updatedAt || 0) > regenAt)
-			? rawPersistedFull
-			: null;
+		const persistedFull = rawPersistedFull && Array.isArray(rawPersistedFull.tracks) ? rawPersistedFull : null;
 		if (persistedFull) {
 			const persistedAt = Number(persistedFull.updatedAt) || 0;
 			const editAt = Number(edit && edit.updatedAt) || 0;
-			if (!edit || !Array.isArray(edit.sceneItems) || persistedAt >= editAt) {
+			if (!edit || !Array.isArray(edit.sceneItems) || persistedAt !== editAt) {
 				const composedSummary = composeTimelineSummaryFromState(persistedFull, row);
 				if (composedSummary) {
 					edit = Object.assign({}, edit || {}, composedSummary);
@@ -1954,7 +1993,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const style = String(row.style || edit.videoStyle || "Cinematic Film");
 		const effects = typeof window.__videoStyleEffects === "function" ? window.__videoStyleEffects(style) : [];
 		const entries = Array.isArray(edit.scenes) ? edit.scenes : [];
-		const sceneItems = Array.isArray(edit.sceneItems) && edit.sceneItems.length
+		const sceneItems = Array.isArray(edit.sceneItems)
 			? edit.sceneItems
 			: (Array.isArray(row.slideItems) && row.slideItems.length ? row.slideItems : []);
 		row.timelineSceneCount = sceneItems.length || entries.length;
@@ -1974,7 +2013,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			if (slide.assetId && !byAssetId.has(String(slide.assetId))) byAssetId.set(String(slide.assetId), slide);
 		});
 
-		if (sceneItems.length) {
+		if (Array.isArray(edit.sceneItems) || sceneItems.length) {
 			const usedSources = new Set();
 			const composedSlides = [];
 			sceneItems.forEach(function (item, idx) {
@@ -2202,6 +2241,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			""
 		).trim();
 		if (!effectiveScript) {
+			/* A standalone editor with no matching row is not a blank table row to purge. */
+			if (!row) { result.reason = "Blank script and no matching Quick Batch row"; result.pageId = store.pageId; window.__TIMELINE_EDIT_PUBLISH__ = result; return result; }
 			/* Blank-script rows must never persist timeline/project details; purge them. */
 			quickBatch.rows = quickBatch.rows.filter(function (candidate) {
 				if (!candidate || typeof candidate !== "object") return false;
@@ -2356,17 +2397,16 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				timelineKey: (stored && stored.timelineKey) || row.timelineKey
 			}));
 			const fullAt = Number(fullEditorState && fullEditorState.updatedAt) || 0;
-			if (fullEditorState && (!regenAt || fullAt > regenAt) && (!incoming || fullAt >= storedAt)) {
+			if (fullEditorState && Array.isArray(fullEditorState.tracks) && (!incoming || fullAt !== storedAt)) {
 				const composed = composeTimelineSummaryFromState(fullEditorState, row);
 				if (composed) {
 					incoming = composed;
 					if (fullAt > storedAt) needsStoreSync = true;
 				}
 			}
-			const incomingAt = Math.max(storedAt, Number(incoming && incoming.updatedAt) || 0);
+			const incomingAt = fullEditorState ? fullAt : Math.max(storedAt, Number(incoming && incoming.updatedAt) || 0);
 			const currentAt = batchRowTimelineUpdatedAt(row);
-			if (!incoming || incomingAt <= currentAt) return;
-			if (regenAt > 0 && incomingAt <= regenAt) return;
+			if (!incoming || incomingAt === currentAt || (!fullEditorState && (incomingAt < currentAt || (regenAt > 0 && incomingAt <= regenAt)))) return;
 			row.timeline = incoming;
 			row.timelineKey = String((stored && stored.timelineKey) || incoming.key || row.timelineKey || "");
 			row.timelineUpdatedAt = incomingAt;
@@ -11440,7 +11480,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		if (!row) return false;
 		const slides = Array.isArray(row.slides) ? row.slides : [];
-		if (row.timelineEdited && slides.length > 0 && batchRowHasCompletedImages(row)) {
+		if (row.timelineEdited && batchRowHasCompletedImages(row)) {
 			if (row.mp3 && row.animated) return true;
 			if (!row._archived && row._storedFinished && row._storedMp3 && row._storedAnimated) return true;
 		}
@@ -11961,33 +12001,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			.filter(function (cue) { return Boolean(cue && cue.text && cue.endMs > cue.startMs); })
 			.slice(0, 400);
 
-		const regenAt = Number(row && row._timelineRegeneratedAt) || 0;
 		const rawSavedTimeline = readTimelineEditorStateForRow(row);
-		const savedTimeline = rawSavedTimeline && (!regenAt || Number(rawSavedTimeline.updatedAt || 0) > regenAt)
-			? rawSavedTimeline
-			: null;
-		if (savedTimeline && Array.isArray(savedTimeline.tracks) && savedTimeline.tracks.length &&
-			Array.isArray(savedTimeline.scenes) && savedTimeline.scenes.length) {
-			const cloned = JSON.parse(JSON.stringify(savedTimeline));
-			cloned.videoStyle = videoStyle;
-			cloned.videoStyleEffects = styleEffects.slice();
-			cloned.scenes = cloned.scenes.map(function (scene) {
-				const isTplScene = Boolean(scene && (scene.isTemplateScene || scene.templateScene || String(scene.mediaSource || "") === "template composer"));
-				if (isTplScene) {
-					return Object.assign({}, scene, {
-						videoStyle: String(scene.videoStyle || videoStyle),
-						effects: Array.isArray(scene.effects) ? scene.effects.slice() : styleEffects.slice()
-					});
-				}
-				return Object.assign({}, scene, {
-					videoStyle: videoStyle,
-					effects: styleEffects.slice()
-				});
-			});
-			if ((!Array.isArray(cloned.subtitles) || !cloned.subtitles.length) && subtitles.length) {
-				cloned.subtitles = subtitles;
-			}
-			return cloned;
+		const savedTimeline = rawSavedTimeline;
+		if (savedTimeline && Array.isArray(savedTimeline.tracks)) {
+			/* Never recreate an existing project from a row cache or handoff. */
+			return JSON.parse(JSON.stringify(savedTimeline));
 		}
 
 		const requestedMinutes = Number(row && row.minutes) > 0 ? Number(row.minutes) : 1;
@@ -12260,8 +12278,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	 * Pixabay media into browser IndexedDB. It runs when a row finishes (so a
 	 * reload can put the bytes back) and when the row is opened in the timeline.
 	 */
-	function persistBatchRowMedia(row) {
-		const targetPageId = batchRowMediaPageId(row);
+	function persistBatchRowMedia(row, includeImages, preserveExisting) {
+		const targetPageId = batchTimelinePageIdForRow(row) || batchRowMediaPageId(row);
 		if (!row || !targetPageId) return null;
 		try {
 			/*
@@ -12273,8 +12291,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			const usedBackgroundKeys = new Set();
 			row._mediaPersistedAt = Date.now();
 			const assetTransfer = {
+				preserveExisting: Boolean(preserveExisting),
 				voiceover: row.mp3 || null,
-				assets: (Array.isArray(row.images) ? row.images : []).map(function (media) {
+				assets: (!includeImages && readTimelineEditorStateForRow(row) ? [] : (Array.isArray(row.images) ? row.images : [])).map(function (media) {
 					const explicitId = media && media.assetId ? String(media.assetId) : "";
 					let keyId = explicitId;
 					if (!keyId || keyId.indexOf("scene-") === 0) {
@@ -12305,18 +12324,75 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	}
 
 	function openBatchEditPage(row) {
-		if (!row || !batchRowHasScript(row)) {
-			if (row) try { purgeRowLocalAndCookieEntries(row); } catch (purgeError) { }
+		if (!row) return null;
+		const targetPageId = batchTimelinePageIdForRow(row) || batchRowMediaPageId(row);
+		const key = "edit-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
+		const sessionApi = window.__TIMELINE_EDITOR__;
+		/* Reserve every activation before project validation; this does not yet request takeover. */
+		const countPromise = (!sessionApi || typeof sessionApi.reserveEditSession !== "function")
+			? Promise.resolve({ error: new Error("The editor counter is unavailable") })
+			: sessionApi.reserveEditSession(targetPageId, key, false).then(function (count) { return { count: count }; }, function (error) { return { error: error }; });
+		function reportCounterFailure(result) {
+			if (result.error) showRequiredModal(["The Edit click could not be recorded: " + String(result.error && result.error.message || result.error)]);
+		}
+		if (row.running || row.retrying) { countPromise.then(reportCounterFailure); showRequiredModal(["Wait for Quick Batch media generation to finish before opening this editor."]); return null; }
+		if (!batchRowHasScript(row)) {
+			countPromise.then(reportCounterFailure);
+			try { purgeRowLocalAndCookieEntries(row); } catch (purgeError) { }
 			return null;
 		}
 		try { reconcileTimelineEdits(); } catch (reconcileErr) { }
-		const payload = batchProjectJson(row);
-		if (!payload) return null;
-		const key = "edit-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
-		/* Keep the timeline project id stable for this Quick Batch row so its local timing survives reopen/reload. */
-		const targetPageId = batchRowMediaPageId(row);
+		let payload;
+		try { payload = batchProjectJson(row); } catch (payloadError) { countPromise.then(reportCounterFailure); showRequiredModal(["The timeline project could not be prepared."]); return null; }
+		if (!payload) { countPromise.then(reportCounterFailure); return null; }
+		const mainKey = BATCH_TIMELINE_STATE_PREFIX + targetPageId;
+		let createdMain = false;
+		try {
+			const raw = window.localStorage.getItem(mainKey);
+			let existing = raw ? JSON.parse(raw) : null;
+			if (raw && (!existing || existing.projectId !== targetPageId || !Array.isArray(existing.tracks))) {
+				throw new Error("The saved timeline is invalid; it was not replaced.");
+			}
+			if (!existing) {
+				existing = readTimelineCookiesForPageId(targetPageId);
+				if (existing && !Array.isArray(existing.tracks)) throw new Error("The project cookie backup is invalid.");
+				const primarySafe = batchTimelineSafeId(targetPageId), legacySafe = batchTimelineLegacySafeId(targetPageId);
+				const legacyBackup = legacySafe !== primarySafe ? readTimelineCookiesForPageId(targetPageId, legacySafe, true) : null;
+				const safeIds = [primarySafe];
+				if (legacySafe !== primarySafe && (!legacyBackup || legacyBackup.projectId === targetPageId)) safeIds.push(legacySafe);
+				const cookiePrefixes = safeIds.map(function (id) { return BATCH_TIMELINE_COOKIE_PREFIX + id + "_"; });
+				const hasParts = String(window.document.cookie || "").split(";").some(function (entry) {
+					const name = entry.trim().split("=")[0];
+					return cookiePrefixes.some(function (prefix) { return name.indexOf(prefix) === 0 && /^[1-8]$/.test(name.slice(prefix.length)); });
+				});
+				if (!existing && hasParts) throw new Error("The project cookie backup is incomplete or damaged.");
+			}
+			if (!existing) {
+				existing = Object.assign({}, payload.timelineState, {
+					projectId: targetPageId, sourcePageId: pipelineManagementStore.pageId,
+					sourceRowId: String(row.id), sourceVid: String(row.vid || ""),
+					sourceScript: String(row.script || "").slice(0, 800), updatedAt: Date.now()
+				});
+				window.localStorage.setItem(mainKey, JSON.stringify(existing));
+				createdMain = true;
+			} else if (!raw) {
+				/* Recover an existing project from its per-project cookie mirror. */
+				window.localStorage.setItem(mainKey, JSON.stringify(existing));
+			}
+			row.timelineKey = mainKey;
+			payload.timelineState = existing;
+		} catch (storageError) {
+			countPromise.then(reportCounterFailure);
+			setBatchStage(row, row.stage, "The timeline project could not be saved or read. Your existing project was not replaced.");
+			showRequiredModal(["The timeline project could not be saved or read. Its existing data was not replaced. Check browser storage or restore a backup."]);
+			return null;
+		}
 		payload.sourcePageId = pipelineManagementStore.pageId;
 		payload.targetPageId = targetPageId;
+		payload.assetTransferPending = true;
+		if (!createdMain && payload.timelineState.cookieBackupReduced) {
+			showRequiredModal(["This project was recovered from a reduced cookie backup. Some timeline details may be missing; review it before editing."]);
+		}
 		payload.basicSettings.vid = row.vid || pipelineManagementStore.pageId + "-row-" + String(row.id);
 		/* The project detail carries the same identity, so the timeline can show it. */
 		if (payload.projectDetail) {
@@ -12326,9 +12402,12 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		}
 		/* Large media blobs travel browser-to-browser through IndexedDB, never through localStorage or a URL. */
 		/* Session 331 (regenerate fix): the transfer is the same one a finished row uses to keep its media. */
-		persistBatchRowMedia(row);
+		const mediaTransfer = persistBatchRowMedia(row, true, true);
 		try {
-			window.localStorage.setItem(MEDIA_TRANSITION_STORAGE_PREFIX + key, JSON.stringify(payload));
+			const handoff = Object.assign({}, payload);
+			/* The transition is only an identity/settings envelope, not another project. */
+			delete handoff.timelineState;
+			window.localStorage.setItem(MEDIA_TRANSITION_STORAGE_PREFIX + key, JSON.stringify(handoff));
 			window.document.cookie = "ytvs_transition_project_" + key.replace(/[^a-zA-Z0-9_-]/g, "_") +
 				"=" + encodeURIComponent(JSON.stringify({
 					v: 1, key: key, createdAt: payload.createdAt,
@@ -12360,10 +12439,53 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			href = window.location.pathname + "?layout=timeline&pipelinePage=" + encodeURIComponent(targetPageId) +
 				"&projectEdit=" + encodeURIComponent(key);
 		}
-		window.__BATCH_EDIT_URL__ = href;
-		try {
-			if (typeof window.open === "function") window.open(href, "_blank", "noopener");
-		} catch (openError) { }
+		/* Open synchronously under the click gesture; activate only after reservation. */
+		let editorWindow = null;
+		try { editorWindow = typeof window.open === "function" ? window.open("about:blank", "_blank") : null; } catch (openError) { }
+		if (!editorWindow) {
+			countPromise.then(reportCounterFailure);
+			showRequiredModal(["The timeline tab was blocked. Allow pop-ups and try Edit again; the current editor remains active."]);
+			return null;
+		}
+		if (!sessionApi || typeof sessionApi.reserveEditSession !== "function") {
+			try { editorWindow.close(); } catch (closeError) { }
+			showRequiredModal(["The timeline editor is not ready. Please try again."]);
+			return null;
+		}
+		Promise.all([countPromise, Promise.resolve(mediaTransfer)]).then(async function (results) {
+			const reservation = results[0];
+			if (reservation.error) throw reservation.error;
+			const count = reservation.count;
+			if (!await sessionApi.prepareEditSession(targetPageId, key, count)) throw new Error("This editor request was superseded or the project was deleted");
+			const destination = new URL(href, window.location.href);
+			destination.searchParams.set("editSession", key);
+			destination.searchParams.set("editCount", String(count));
+			const relative = destination.pathname + destination.search + destination.hash;
+			window.__BATCH_EDIT_URL__ = relative;
+			try {
+				editorWindow.opener = null;
+				editorWindow.location.replace(relative);
+				const started = Date.now();
+				(function monitorCandidate() {
+					let record;
+					try { record = JSON.parse(window.localStorage.getItem("ytvs.timeline-edit-session.v1." + targetPageId) || "null"); } catch (error) { return; }
+					if (!record || record.candidate !== key || record.candidateCount !== count) return;
+					if (editorWindow.closed === true || Date.now() - started > 60000) {
+						sessionApi.cancelEditCandidate(targetPageId, key, count).catch(function () { });
+						showRequiredModal(["The timeline tab did not become ready. The current editor remains active; click Edit to retry."]);
+						return;
+					}
+					window.setTimeout(monitorCandidate, 1000);
+				})();
+			} catch (navigationError) {
+				await sessionApi.cancelEditCandidate(targetPageId, key, count);
+				try { editorWindow.close(); } catch (closeError) { }
+				showRequiredModal(["The timeline tab could not be opened. Click Edit again to retry."]);
+			}
+		}).catch(function (error) {
+			try { editorWindow.close(); } catch (closeError) { }
+			showRequiredModal(["Could not safely open the timeline: " + String(error && error.message || error)]);
+		});
 		return payload;
 	}
 
@@ -14189,16 +14311,40 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	}
 
 	async function runBatchRow(row) {
+		const id = batchTimelinePageIdForRow(row) || batchRowMediaPageId(row);
+		const api = window.__TIMELINE_EDITOR__;
+		if (!api || typeof api.runWithTableMediaLock !== "function") {
+			setBatchStage(row, row.stage, "Cannot verify editor ownership. Close the editor before changing media.");
+			return false;
+		}
+		const result = await api.runWithTableMediaLock(id, function () { return runBatchRowWithMediaLock(row); });
+		if (result && result.ok === false) {
+			setBatchStage(row, row.stage, result.reason || "Close the timeline editor before changing media.");
+			showRequiredModal([result.reason || "Close the timeline editor before changing Quick Batch media."]);
+			return false;
+		}
+		return result;
+	}
+	async function runBatchRowWithMediaLock(row) {
 
-		/* A re-run starts from a clean row. */
+		const preserveTimeline = Boolean(row.timelineEdited && batchRowTimelinePendingRegen(row));
+		const previousVoice = preserveTimeline ? { mp3: row.mp3, mp3Url: row.mp3Url, audio: row.audio, subtitles: row.subtitles } : null;
 		row._runEpoch = (Number(row._runEpoch) || 0) + 1;
 		row._hydratingAssets = false;
 		row._hydratingPromise = null;
-		row._timelineAssetUrls = null;
-		row._timelineAssetBlobs = null;
-		row._timelineAudioUrls = null;
-		revokeBatchRow(row);
-
+		if (!preserveTimeline) {
+			row._timelineAssetUrls = null;
+			row._timelineAssetBlobs = null;
+			row._timelineAudioUrls = null;
+			revokeBatchRow(row);
+			row.prompts = [];
+			row.images = [];
+			row.mediaFilenames = [];
+			row._missingMediaScenes = [];
+			row.slides = [];
+			row.subtitles = [];
+			row.animated = false;
+		}
 		row.stopRequested = false;
 		cancelBatchPipelineRetryWait(row);
 		row._imagePipelineWarning = "";
@@ -14206,13 +14352,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		row.mp3 = null;
 		row.mp3Url = "";
 		row.audio = null;
-		row.prompts = [];
-		row.images = [];
-		row.mediaFilenames = [];
-		row._missingMediaScenes = [];
-		row.slides = [];
-		row.subtitles = [];
-		row.animated = false;
 		row.error = "";
 		row.startedAt = Date.now();
 
@@ -14413,10 +14552,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					row.images.length + " slides",
 					function () {
 
-						return buildBatchSlides(
-							row,
-							row.images
-						);
+						if (row.timelineEdited && batchRowTimelinePendingRegen(row)) return row.slides || [];
+						return buildBatchSlides(row, row.images);
 
 					}
 				);
@@ -14427,13 +14564,24 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			row.finishedAt =
 				Date.now();
 
-			row._timelineRegeneratedAt =
-				Math.max(batchRowTimelineUpdatedAt(row), row.finishedAt);
-
-			row.timeline = null;
-			row.timelineEdited = false;
-			row.timelineDurationSec = 0;
-			row.timelineSceneCount = 0;
+			const existingProject = readTimelineEditorStateForRow(row);
+			if (existingProject && Array.isArray(existingProject.tracks)) {
+				/* Generation refreshes voiceover, not the user's timeline composition. */
+				row._timelineRegeneratedAt = Math.max(Number(existingProject.updatedAt) || 0, row.finishedAt);
+				row.timeline = composeTimelineSummaryFromState(existingProject, row);
+				row.timelineEdited = true;
+				row.timelineUpdatedAt = Number(existingProject.updatedAt) || 0;
+				applyTimelineEditToBatchRow(row);
+			} else if (preserveTimeline) {
+				/* Legacy rows may only have a published summary, not a full project yet. */
+				row._timelineRegeneratedAt = Math.max(batchRowTimelineUpdatedAt(row), row.finishedAt);
+			} else {
+				row._timelineRegeneratedAt = Math.max(batchRowTimelineUpdatedAt(row), row.finishedAt);
+				row.timeline = null;
+				row.timelineEdited = false;
+				row.timelineDurationSec = 0;
+				row.timelineSceneCount = 0;
+			}
 			row._storedFinished = false;
 			row._storedImagesCount = 0;
 			row._storedSlidesCount = 0;
@@ -14450,7 +14598,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			/* Session 331: a successful render is archived for 24 h. */
 			try { recordCompletedBatchRow(row, "render"); } catch (archiveError) { }
 			/* Session 331 (regenerate fix): a finished row keeps its media so a reload can restore it. */
-			try { persistBatchRowMedia(row); } catch (persistError) { }
+			try { const mediaResult = await persistBatchRowMedia(row); if (mediaResult && mediaResult.ok === false) setBatchStage(row, row.stage, "Media could not be stored: " + String(mediaResult.reason || "unknown error")); } catch (persistError) { setBatchStage(row, row.stage, "Media could not be stored in this browser."); }
 
 			console.info("[batch-table] row " + row.id + " finished", {
 				ms: row.finishedAt - row.startedAt,
@@ -14471,7 +14619,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				console.warn("[batch-table] row " + row.id + " client ladder exhausted - no error is shown in the table", batchErrorBrief(rowError));
 				/* FINAL RULE: even an exhausted client ladder paints no failure. */
 				row.error = "";
-				setBatchStage(row, "ready", "");
+				if (previousVoice) {
+					row.mp3 = previousVoice.mp3; row.mp3Url = previousVoice.mp3Url;
+					row.audio = previousVoice.audio; row.subtitles = previousVoice.subtitles;
+				}
+				setBatchStage(row, previousVoice ? "done" : "ready", "");
 
 		}
 
@@ -14492,11 +14644,34 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	function batchRowWordCount(row) {
 		const text = String(row.script || "").trim();
 		if (!text) return 0;
-		return text.split(/\s+/).filter(Boolean).length;
+		return text.split(/\\s+/).filter(Boolean).length;
 	}
 
+	let batchOpenEditorLocks = new Set();
+	let batchOpenEditorCheck = false;
+	function refreshBatchOpenEditorLocks() {
+		if (batchOpenEditorCheck || !window.navigator.locks || typeof window.navigator.locks.query !== "function") return;
+		batchOpenEditorCheck = true;
+		window.navigator.locks.query().then(function (snapshot) {
+			const next = new Set((snapshot.held || []).concat(snapshot.pending || []).map(function (entry) { return String(entry && entry.name || ""); }).filter(function (name) { return name.indexOf("ytvs-edit-open:") === 0; }));
+			const changed = next.size !== batchOpenEditorLocks.size || Array.from(next).some(function (name) { return !batchOpenEditorLocks.has(name); });
+			batchOpenEditorLocks = next;
+			batchOpenEditorCheck = false;
+			if (changed) updateBatchToolbar();
+		}, function () { batchOpenEditorCheck = false; });
+	}
+	function batchRowMediaLocked(row) {
+		if (!row) return false;
+		try {
+			const id = batchTimelinePageIdForRow(row) || batchRowMediaPageId(row);
+			if (Array.from(batchOpenEditorLocks).some(function (name) { return name.indexOf("ytvs-edit-open:" + id + ":") === 0; })) return true;
+			const session = id && JSON.parse(window.localStorage.getItem("ytvs.timeline-edit-session.v1." + id) || "null");
+			return Boolean(session && (session.owner || (session.candidate && (!session.candidateAt || Date.now() - session.candidateAt <= 60000)) || session.requestActive));
+		} catch (error) { return true; }
+	}
 	function batchRowReadyForGeneration(row) {
 
+		if (batchRowMediaLocked(row)) return false;
 		if (
 			!row ||
 			!batchRowHasScript(row) ||
@@ -14723,6 +14898,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		if (!targets.length) {
 
+			if (insufficientWords.length) return;
+			const lockedRows = scripted.filter(batchRowMediaLocked);
+			if (lockedRows.length) { showRequiredModal(["Close the timeline editor before changing Quick Batch media for row(s): " + lockedRows.map(function (row) { return row.id; }).join(", ") + "."]); return; }
 			const unfinished =
 				scripted.filter(function (row) { return !batchRowFinished(row); });
 
@@ -15107,7 +15285,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		if (!row || !row.timelineEdited) return null;
 		const regenAt = Number(row._timelineRegeneratedAt) || 0;
 		const fullState = readTimelineEditorStateForRow(row);
-		if (fullState && (!regenAt || Number(fullState.updatedAt || 0) > regenAt) && Array.isArray(fullState.tracks)) {
+		if (fullState && Array.isArray(fullState.tracks)) {
 			const list = [];
 			fullState.tracks.forEach(function (track) {
 				if (!track || track.kind !== "audio" || !Array.isArray(track.items)) return;
@@ -15196,12 +15374,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			/* Requirement 1 (Session 331): Sync preview/export to timeline editor state */
 			if (row.timelineEdited) {
 				applyTimelineEditToBatchRow(row);
-				/* Ensure projectDetail and slideItems are fully reconciled from timeline */
-				if (row.timeline && Array.isArray(row.timeline.sceneItems)) {
-					row.projectDetail = row.projectDetail || {};
-					row.projectDetail.scenes = row.timeline.sceneItems;
-					row.slideItems = row.timeline.sceneItems;
-				}
 			} else if (!row.projectDetail) {
 				row.projectDetail = composeBatchProjectDetail(row);
 			}
@@ -15254,7 +15426,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					'<button type="button" class="upload-btn small" data-batch-preview="restart">\u21ba Restart</button>' +
 					'<span class="va-note" id="batch-preview-time">0:00</span>' +
 				"</div>" +
-				'<div class="va-note batch-preview-note">The narration and the burned-in subtitles of this row, exactly as the export will paint them. Nothing is uploaded - the MP4 is only built when you press Export.</div>' +
+				'<div class="va-note batch-preview-note">Preview of this row and its timeline edits. Nothing is uploaded - the MP4 is only built when you press Export.</div>' +
 				'<div class="seo-wt-actions">' +
 					'<button type="button" class="upload-btn small" onclick="exportBatchRow(' + row.id + ')">\u2b07 Export Video</button>' +
 					'<button type="button" class="upload-btn small" data-batch-preview="close">\u2715 Close</button>' +
@@ -15295,6 +15467,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		}
 
+		const storedTimeline = row.timelineEdited ? readTimelineEditorStateForRow(row) : null;
+		const previewTimeline = storedTimeline && Array.isArray(storedTimeline.tracks) ? storedTimeline : null;
 		const timelineAudios = resolveBatchRowTimelineAudios(row);
 		const voiceoverClip = timelineAudios
 			? timelineAudios.find(function (item) { return item && (item.a === "voiceover" || item.trId === "voiceover"); }) || null
@@ -15303,6 +15477,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		batchPreview = {
 			row: row,
+			timelineState: previewTimeline,
 			modal: modal,
 			canvas: canvas,
 			context: context,
@@ -15404,17 +15579,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			if (!batchPreview.playing) {
 				return batchPreview.manualMs;
 			}
-			const vo = batchPreview.voiceoverClip;
-			const useAudioClock = Boolean(
-				batchPreview.audio &&
-				!batchPreview.audio.paused &&
-				Number.isFinite(batchPreview.audio.currentTime) &&
-				batchPreview.audio.currentTime > 0 &&
-				(!batchPreview.timelineAudios || (vo && !Number(vo.m) && !(Number(vo.s) > 0)))
-			);
-			if (useAudioClock) {
-				return batchPreview.audio.currentTime * 1000;
-			}
 			if (batchPreview.manualMs > 0 && !(batchPreview.startedAt > 0)) {
 				return batchPreview.manualMs;
 			}
@@ -15455,7 +15619,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			if (!targetAudio) return;
 			targetAudio.volume = Number(clip.m) === 1 ? 0 : Math.max(0, Math.min(1, pipelineManagementNumber(clip.vol, 1)));
 			if (batchPreview.playing && inRange && Number(clip.m) !== 1) {
-				const offset = Math.max(0, localSeconds - startSec);
+				let offset = Math.max(0, localSeconds - startSec);
+				if (Number.isFinite(targetAudio.duration) && targetAudio.duration > 0) offset %= targetAudio.duration;
 				if (Math.abs(pipelineManagementNumber(targetAudio.currentTime, 0) - offset) > 0.35) {
 					try { targetAudio.currentTime = offset; } catch (seekErr) { }
 				}
@@ -15478,7 +15643,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const context =
 			batchPreview.context;
 
-		if (context && row && row.slides.length) {
+		if (context && row && Array.isArray(row.slides) && (row.slides.length || row.timelineEdited)) {
 
 			const width =
 				batchPreview.canvas.width || 1024;
@@ -15536,6 +15701,24 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				slideDur = durations[index] || 1;
 			}
 
+			const previewState = batchPreview.timelineState;
+			let timelineActive = null;
+			let timelineScene = null;
+			let timelineVisuals = null;
+			if (previewState) {
+				const mediaTrack = previewState.tracks.find(function (track) { return track && (track.id === "background-media" || track.kind === "media"); });
+				timelineActive = mediaTrack && Array.isArray(mediaTrack.items) ? mediaTrack.items.find(function (item) {
+					return item && localSeconds >= item.startSec && localSeconds < item.startSec + item.durationSec;
+				}) : null;
+				timelineScene = timelineActive && Array.isArray(previewState.scenes) ? previewState.scenes.find(function (scene) { return scene && String(scene.id) === String(timelineActive.sceneId); }) : null;
+				timelineVisuals = previewState.tracks.filter(function (track) { return track && track.kind === "visual"; }).reduce(function (items, track) { return items.concat(Array.isArray(track.items) ? track.items : []); }, []);
+				if (timelineActive) {
+					index = row.slides.findIndex(function (candidate) { return candidate && String(candidate.id) === String(timelineActive.id); });
+					slide = index >= 0 ? row.slides[index] : null;
+					sceneStart = Number(timelineActive.startSec) || 0;
+					slideDur = Number(timelineActive.durationSec) || 1;
+				} else { slide = null; index = -1; }
+			}
 			const phase = slide ? Math.max(0, Math.min(1, (localSeconds - sceneStart) / Math.max(0.001, slideDur))) : 0;
 			const slideVisible = Boolean(slide && slide.visible !== false);
 			if (slideVisible && slide.type === "mp4" && slide.videoEl && !slide.videoEl.seeking) {
@@ -15550,11 +15733,33 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				if (Math.abs(slide.videoEl.currentTime - targetTime) > 0.1) { try { slide.videoEl.currentTime = targetTime; } catch (_) {} }
 			}
 
+			if (row.timelineEdited) {
+				row.slides.forEach(function (candidate) {
+					if (!candidate || !candidate.videoEl) return;
+					if (candidate === slide && slideVisible && batchPreview.playing) {
+						if (candidate.videoEl.paused) batchPreviewPlay(candidate.videoEl);
+					} else {
+						try { candidate.videoEl.pause(); } catch (e) { }
+					}
+				});
+			}
+
 			const isTplSlide = Boolean(row.timelineEdited && slide && slide.isTemplateScene);
 			const fitMode = row.timelineEdited && slide && slide.fit === "contain" ? "contain" : "cover";
 			const zoom = (isTplSlide || fitMode === "contain") ? 1 : (1 + 0.08 * phase);
 			const activeStyle = String((row.timelineEdited && slide && slide.videoStyle) || row.style || "Cinematic Film");
 
+			const sharedPainter = row.timelineEdited && window.__TIMELINE_EDITOR__ && window.__TIMELINE_EDITOR__.paintFrame;
+			if (typeof sharedPainter === "function") {
+				const active = previewState ? timelineActive : slide;
+				const scene = previewState ? timelineScene : slide;
+				const media = slide && (slide.type === "mp4" ? { video: slide.videoEl } : { image: slide.img });
+				sharedPainter(context, width, height, localSeconds, {
+					state: previewState || { videoStyle: row.style, subtitles: row.subtitles },
+					active: active, scene: scene, asset: media,
+					visuals: timelineVisuals || resolveBatchRowTimelineElements(row)
+				});
+			} else {
 			context.fillStyle = row.timelineEdited ? "#08090c" : "#000000";
 
 			context.fillRect(
@@ -15651,6 +15856,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 			}
 
+			}
+
 			const timeEl =
 				document.getElementById(
 					"batch-preview-time"
@@ -15672,7 +15879,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		}
 
 		if (batchPreview) {
-
+			if (batchPreview.raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(batchPreview.raf);
 			batchPreview.raf =
 				typeof requestAnimationFrame === "function"
 					? requestAnimationFrame(batchPreviewTick)
@@ -15777,12 +15984,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		/* Requirement 1 (Session 331): Sync preview/export to timeline editor state */
 		if (row.timelineEdited) {
 			applyTimelineEditToBatchRow(row);
-			/* Ensure projectDetail and slideItems are fully reconciled from timeline */
-			if (row.timeline && Array.isArray(row.timeline.sceneItems)) {
-				row.projectDetail = row.projectDetail || {};
-				row.projectDetail.scenes = row.timeline.sceneItems;
-				row.slideItems = row.timeline.sceneItems;
-			}
 		} else if (!row.projectDetail) {
 			row.projectDetail = composeBatchProjectDetail(row);
 		}
@@ -16627,6 +16828,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	/* The toolbar mirrors the rows: how many can be generated, and busy? */
 	function updateBatchToolbar() {
+		refreshBatchOpenEditorLocks();
 
 		const scripted =
 			batchRows.filter(batchRowHasScript).length;
@@ -16641,7 +16843,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		 * here made the button appear dead for short scripts.
 		 */
 		const needsWordCountFeedback = batchRows.some(function (row) {
-			return batchRowHasScript(row) && !batchRowHasMinWords(row);
+			return batchRowHasScript(row) && !batchRowHasMinWords(row) && (!batchRowFinished(row) || batchRowTimelinePendingRegen(row));
 		});
 
 		const generate =
@@ -16679,7 +16881,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				scripted +
 				" with a script \u00b7 " +
 				runnable +
-				" ready";
+				" ready" + (batchRows.some(batchRowMediaLocked) ? " · Media locked while a timeline editor is open" : "");
 
 		}
 
@@ -27430,6 +27632,7 @@ async function retryImagePromptFlow(n) {
 		window.addEventListener("storage", function (event) {
 			if (!event) return;
 			const key = String(event.key || "");
+			if (key.indexOf("ytvs.timeline-edit-session.v1.") === 0) { try { updateBatchToolbar(); } catch (error) { } return; }
 			const isPipelineKey = key === pipelineManagementStore.localStorageKey;
 			const isTimelineProjectKey = key.indexOf(BATCH_TIMELINE_STATE_PREFIX) === 0;
 			if (key && !isPipelineKey && !isTimelineProjectKey) return;
@@ -27442,7 +27645,7 @@ async function retryImagePromptFlow(n) {
 		});
 		/* A tab that regains focus or visibility also checks, in case the storage event was missed. */
 		window.addEventListener("focus", function () {
-			try { reconcileTimelineEdits(); } catch (focusError) { }
+			try { reconcileTimelineEdits(); updateBatchToolbar(); } catch (focusError) { }
 		});
 		if (typeof document !== "undefined" && document.addEventListener) {
 			document.addEventListener("visibilitychange", function () {
@@ -27451,6 +27654,7 @@ async function retryImagePromptFlow(n) {
 				}
 			});
 		}
+		window.setInterval(function () { if (studioLayout === "table") refreshBatchOpenEditorLocks(); }, 2500);
 		window.addEventListener("beforeunload", function () { persistPipelineManagementState("beforeunload"); });
 	}
 

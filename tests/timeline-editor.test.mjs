@@ -105,7 +105,7 @@ function memoryIndexedDB() {
 	};
 }
 
-function openTimeline(savedTimeline = null) {
+async function openTimeline(savedTimeline = null) {
 	const key = "edit-timeline-test";
 	const payload = {
 		version: 1,
@@ -130,6 +130,7 @@ function openTimeline(savedTimeline = null) {
 	w.alert = () => {};
 	w.confirm = () => true;
 	w.scrollTo = () => {};
+	Object.defineProperty(w.navigator, "locks", { configurable: true, value: { query() { return Promise.resolve({held:[],pending:[]}); }, request(name, options, fn) { if (typeof options === "function") fn = options; return Promise.resolve().then(() => fn({ name })); } } });
 	w.localStorage.setItem("ytvs.transition-project.v1." + key, JSON.stringify(payload));
 	if (savedTimeline) w.localStorage.setItem("ytvs.timeline-editor.v1." + payload.targetPageId, JSON.stringify(savedTimeline));
 	w.document.cookie = "ytvs_transition_project_" + key + "=" + encodeURIComponent(JSON.stringify({
@@ -138,11 +139,12 @@ function openTimeline(savedTimeline = null) {
 	})) + "; Path=/; SameSite=Lax";
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
 	w.eval(TIMELINE_EDITOR_JS);
+	for (let i=0; i<100 && !w.__TIMELINE_EDITOR_STATE__; i++) await new Promise(r=>setTimeout(r,10));
 	return { dom, w, payload, previewContext };
 }
 
-test("Quick Batch timeline route is isolated, starts with one media lane and one shared text/graphics lane", (t) => {
-	const { dom, w, payload } = openTimeline();
+test("Quick Batch timeline route is isolated, starts with one media lane and one shared text/graphics lane", async (t) => {
+	const { dom, w, payload } = await openTimeline();
 	t.after(() => dom.window.close());
 	assert.equal(w.document.getElementById("landing-page").hidden, true);
 	assert.equal(w.document.getElementById("studio-app").hidden, false);
@@ -223,7 +225,7 @@ test("Quick Batch timeline route is isolated, starts with one media lane and one
 	assert.equal(state.soundExpanded, false);
 });
 
-test("legacy text and overlay tracks migrate into one shared visual lane without losing clips", (t) => {
+test("legacy text and overlay tracks migrate into one shared visual lane without losing clips", async (t) => {
 	const legacy = makeTimelineState();
 	legacy.projectId = "timeline-p_source_test-row-7";
 	legacy.version = 2;
@@ -241,7 +243,7 @@ test("legacy text and overlay tracks migrate into one shared visual lane without
 	]);
 	legacy.selectedTrackId = "text-2";
 	legacy.selectedItemId = "caption-2";
-	const { dom, w } = openTimeline(legacy);
+	const { dom, w } = await openTimeline(legacy);
 	t.after(() => dom.window.close());
 	const state = w.__TIMELINE_EDITOR_STATE__;
 	const visuals = state.tracks.filter((track) => track.kind === "visual");
@@ -255,8 +257,8 @@ test("legacy text and overlay tracks migrate into one shared visual lane without
 	assert.deepEqual(Array.from(w.document.querySelectorAll(".te-lane"), (lane) => lane.getAttribute("data-lane-track")), [visuals[0].id, "background-media"], "the shared text/graphics lane still sits above the background layer");
 });
 
-test("text and graphics continue rendering across background scene boundaries for their full seconds-based range", (t) => {
-	const { dom, w, previewContext } = openTimeline();
+test("text and graphics continue rendering across background scene boundaries for their full seconds-based range", async (t) => {
+	const { dom, w, previewContext } = await openTimeline();
 	t.after(() => dom.window.close());
 	const api = w.__TIMELINE_EDITOR__;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -280,6 +282,7 @@ test("Quick Batch media and voiceover Blobs transfer through IndexedDB, not loca
 	const dom = new JSDOM("", { url: "https://studio.test/free", runScripts: "outside-only" });
 	t.after(() => dom.window.close());
 	dom.window.indexedDB = memoryIndexedDB();
+	Object.defineProperty(dom.window.navigator, "locks", { configurable: true, value: { query() { return Promise.resolve({held:[],pending:[]}); }, request(name, options, fn) { if (typeof options === "function") fn = options; return Promise.resolve().then(() => fn({ name })); } } });
 	dom.window.eval(TIMELINE_EDITOR_JS);
 	const api = dom.window.__TIMELINE_EDITOR__;
 	const mediaBlob = new Blob(["pixabay-media"], { type: "image/jpeg" });
@@ -296,8 +299,8 @@ test("Quick Batch media and voiceover Blobs transfer through IndexedDB, not loca
 	assert.equal(dom.window.localStorage.length, 0, "binary media is not copied into localStorage");
 });
 
-test("scene and element timing changes persist; shared text/graphics lanes cap at four", (t) => {
-	const { dom, w, payload } = openTimeline();
+test("scene and element timing changes persist; shared text/graphics lanes cap at four", async (t) => {
+	const { dom, w, payload } = await openTimeline();
 	t.after(() => dom.window.close());
 	const api = w.__TIMELINE_EDITOR__;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -336,8 +339,8 @@ test("scene and element timing changes persist; shared text/graphics lanes cap a
 	assert.doesNotMatch(JSON.stringify(saved), /"blob"\s*:/, "Blob bytes are not placed in localStorage");
 });
 
-test("reopening the same Quick Batch row restores its saved scene and text timing", (t) => {
-	const first = openTimeline();
+test("reopening the same Quick Batch row restores its saved scene and text timing", async (t) => {
+	const first = await openTimeline();
 	const firstApi = first.w.__TIMELINE_EDITOR__;
 	firstApi.setItemTiming("media-1", 1.5, 8.5);
 	const caption = firstApi.addTextElement("Saved across reopen");
@@ -346,7 +349,7 @@ test("reopening the same Quick Batch row restores its saved scene and text timin
 	const saved = JSON.parse(first.w.localStorage.getItem("ytvs.timeline-editor.v1." + first.payload.targetPageId));
 	first.dom.window.close();
 
-	const reopened = openTimeline(saved);
+	const reopened = await openTimeline(saved);
 	t.after(() => reopened.dom.window.close());
 	const state = reopened.w.__TIMELINE_EDITOR_STATE__;
 	assert.equal(state.projectId, first.payload.targetPageId, "the stable row id selects the previous localStorage project");
@@ -390,8 +393,8 @@ test("timeline styling stacks the full-width sticky preview, the element panel, 
 	assert.match(TIMELINE_EDITOR_JS, /STATE_PREFIX = "ytvs\.timeline-editor\.v1\."/);
 });
 
-test("timelines without text or graphics open with one dummy text clip at 0:00 and no caption clips", (t) => {
-	const { dom, w, payload } = openTimeline();
+test("timelines without text or graphics open with one dummy text clip at 0:00 and no caption clips", async (t) => {
+	const { dom, w, payload } = await openTimeline();
 	t.after(() => dom.window.close());
 	const api = w.__TIMELINE_EDITOR__;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -403,17 +406,15 @@ test("timelines without text or graphics open with one dummy text clip at 0:00 a
 	assert.equal(dummy.text, "Your text here");
 	assert.equal(visual.items.some((item) => /-caption-\d+$/.test(item.id)), false, "caption clips never reach the timeline lane");
 
-	/* a project saved with an empty text lane gains the dummy on open */
+	/* a saved empty lane is intentional and stays empty on reopen */
 	const empty = makeTimelineState();
 	empty.projectId = "timeline-p_source_test-row-7";
 	empty.tracks = empty.tracks.map((track) => track.kind === "visual" ? { ...track, items: [] } : track);
 	empty.scenes = empty.scenes.map((scene) => ({ ...scene, elements: [] }));
-	const reopened = openTimeline(empty);
+	const reopened = await openTimeline(empty);
 	t.after(() => reopened.dom.window.close());
 	const reopenedVisual = reopened.w.__TIMELINE_EDITOR_STATE__.tracks.find((track) => track.kind === "visual");
-	assert.equal(reopenedVisual.items.length, 1, "an empty saved text lane is seeded with exactly one clip");
-	assert.equal(reopenedVisual.items[0].id, "dummy-text-1");
-	assert.equal(reopenedVisual.items[0].startSec, 0);
+	assert.equal(reopenedVisual.items.length, 0, "an empty saved text lane stays empty");
 
 	/* a project that already has a graphic never gets a second dummy */
 	const graphicProject = makeTimelineState();
@@ -421,7 +422,7 @@ test("timelines without text or graphics open with one dummy text clip at 0:00 a
 	graphicProject.tracks = graphicProject.tracks.map((track) => track.kind === "visual"
 		? { ...track, items: [{ id: "graphic-1", kind: "graphic", graphic: "star", label: "Star", sceneId: "scene-1", startSec: 2, durationSec: 3, x: 50, y: 50, size: 60, color: "#7aac2b", visible: true }] }
 		: track);
-	const withGraphic = openTimeline(graphicProject);
+	const withGraphic = await openTimeline(graphicProject);
 	t.after(() => withGraphic.dom.window.close());
 	const graphicItems = withGraphic.w.__TIMELINE_EDITOR_STATE__.tracks.find((track) => track.kind === "visual").items;
 	assert.equal(graphicItems.length, 1, "a project with its own graphic is left alone");
@@ -435,7 +436,7 @@ test("timelines without text or graphics open with one dummy text clip at 0:00 a
 	assert.equal(saved.tracks.find((track) => track.kind === "visual").items[0].startSec, 0.5);
 });
 
-test("Pixabay media is the one pinned background layer and every stray media lane is folded into it", (t) => {
+test("Pixabay media is the one pinned background layer and every stray media lane is folded into it", async (t) => {
 	const legacy = makeTimelineState();
 	legacy.projectId = "timeline-p_source_test-row-7";
 	legacy.tracks = legacy.tracks
@@ -444,7 +445,7 @@ test("Pixabay media is the one pinned background layer and every stray media lan
 			{ id: "background-media", kind: "media", label: "Background", expanded: true, items: legacy.tracks.find((track) => track.kind === "media").items.slice(0, 6) },
 			{ id: "overlay-media", kind: "media", label: "Overlay media", expanded: true, items: legacy.tracks.find((track) => track.kind === "media").items.slice(6) }
 		]);
-	const { dom, w } = openTimeline(legacy);
+	const { dom, w } = await openTimeline(legacy);
 	t.after(() => dom.window.close());
 	const state = w.__TIMELINE_EDITOR_STATE__;
 	const mediaTracks = state.tracks.filter((track) => track.kind === "media");
@@ -487,30 +488,24 @@ test("Pixabay media is the one pinned background layer and every stray media lan
 	assert.equal(w.document.querySelectorAll(".te-track-badge").length, 1, "the background lane carries a BG badge");
 });
 
-test("the preview canvas paints the background layer before text and graphics", (t) => {
-	/*
-	 * JSDOM never decodes a blob image, so the paint order is asserted against the
-	 * generated client source: inside drawPreview the background draw must come
-	 * before the visual-lane loop, and the visual loop must not draw media clips.
-	 */
-	const drawPreview = TIMELINE_EDITOR_JS.slice(TIMELINE_EDITOR_JS.indexOf("function drawPreview()"));
-	const body = drawPreview.slice(0, drawPreview.indexOf("function previewTick"));
-	const backgroundAt = body.indexOf("Layer 0");
-	const overlayAt = body.indexOf("Layers 1..4");
-	assert.ok(backgroundAt !== -1 && overlayAt !== -1, "the two paint layers are labelled in drawPreview");
-	assert.ok(backgroundAt < overlayAt, "the background layer is painted before the text/graphics layers");
-	assert.ok(body.indexOf("drawImageCover(") < overlayAt, "the Pixabay/upload frame is drawn first");
-	assert.ok(body.slice(overlayAt).includes("visualTracks().forEach("), "every visual lane is drawn afterwards");
+test("the preview canvas paints the background layer before text and graphics", async (t) => {
+	/* Both preview and export delegate to the shared painter, which paints
+	 * background media before the ordered visual items. */
+	const body = TIMELINE_EDITOR_JS.slice(TIMELINE_EDITOR_JS.indexOf("function paintSharedTimelineFrame("), TIMELINE_EDITOR_JS.indexOf("function paintTimelineFrameAt("));
+	assert.ok(body.indexOf("drawImageCover(") < body.indexOf("(frame.visuals || []).forEach("));
+	assert.ok(body.indexOf("drawStyleEffects(") < body.indexOf("(frame.visuals || []).forEach("));
+	assert.ok(body.indexOf("drawTimelineSubtitles(") > body.indexOf("(frame.visuals || []).forEach("));
+	assert.ok(TIMELINE_EDITOR_JS.slice(TIMELINE_EDITOR_JS.indexOf("function drawPreview()"), TIMELINE_EDITOR_JS.indexOf("function previewTick(")).includes("paintSharedTimelineFrame("));
 	assert.match(TIMELINE_EDITOR_JS, /MEDIA_TRACK_ID = "background-media"/);
 	assert.match(TIMELINE_EDITOR_JS, /function mediaTrack\(\) \{ return findTrack\(MEDIA_TRACK_ID\); \}/);
 });
 
-test("frame details, ruler seeking, gap preview and controls survive timeline edits", (t) => {
+test("frame details, ruler seeking, gap preview and controls survive timeline edits", async (t) => {
  const saved = makeTimelineState();
  saved.projectId = "timeline-p_source_test-row-7";
  saved.frame = { width: 1080, height: 1920, orientation: "portrait" };
  saved.videoStyle = "Neon Night";
- const { dom, w } = openTimeline(saved);
+ const { dom, w } = await openTimeline(saved);
  t.after(() => dom.window.close());
  const state = w.__TIMELINE_EDITOR_STATE__;
  const canvas = w.document.getElementById("timeline-preview-canvas");
@@ -539,7 +534,7 @@ test("frame details, ruler seeking, gap preview and controls survive timeline ed
  assert.equal(JSON.parse(w.localStorage.getItem('ytvs.timeline-editor.v1.' + state.projectId)).frame.orientation, 'portrait');
 });
 
-test("timeline seeker handle is a red inverted triangle pointing down that moves in sync during playback and scrubbing", (t) => {
+test("timeline seeker handle is a red inverted triangle pointing down that moves in sync during playback and scrubbing", async (t) => {
 	const handleMatch = APP_CSS.match(/\.te-playhead-handle\s*\{([^}]*)\}/);
 	assert.ok(handleMatch, ".te-playhead-handle CSS rule exists");
 	const handleCss = handleMatch[1];
@@ -557,7 +552,7 @@ test("timeline seeker handle is a red inverted triangle pointing down that moves
 	assert.match(rulerPlayheadMatch[1], /width:\s*2px/, "ruler stem matches the 2px red seeker line rather than a rectangular block");
 	assert.match(rulerPlayheadMatch[1], /background:\s*#ef4444/i);
 
-	const { dom, w } = openTimeline();
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const state = w.__TIMELINE_EDITOR_STATE__;
 
@@ -618,7 +613,7 @@ test("Export MP4 buttons appear in topbar, preview controls, and dock toolbar an
 	];
 	shortState.playheadSec = 0.4;
 
-	const { dom, w } = openTimeline(shortState);
+	const { dom, w } = await openTimeline(shortState);
 	t.after(() => dom.window.close());
 
 	const topbarBtn = w.document.querySelector('.te-topbar [data-timeline-action="export"]');
@@ -724,7 +719,7 @@ test("Export MP4 buttons appear in topbar, preview controls, and dock toolbar an
 });
 
 test("Export falls back cleanly to MediaRecorder when WebCodecs or Mp4Muxer is unavailable", async (t) => {
-	const { dom, w } = openTimeline();
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 
 	const canvas = w.document.getElementById("timeline-preview-canvas");
@@ -761,8 +756,8 @@ test("Export falls back cleanly to MediaRecorder when WebCodecs or Mp4Muxer is u
 	assert.equal(stoppedTracks, 1);
 });
 
-test("subtitle cues paint on the timeline preview while their tracks layer stays hidden and read-only", (t) => {
-	const { dom, w, previewContext } = openTimeline();
+test("subtitle cues paint on the timeline preview while their tracks layer stays hidden and read-only", async (t) => {
+	const { dom, w, previewContext } = await openTimeline();
 	t.after(() => dom.window.close());
 	const state = w.__TIMELINE_EDITOR_STATE__;
 	assert.deepEqual(Array.from(state.subtitles, (cue) => cue.text), ["A quiet morning", "Across scene two"], "the row's cue data survives normalizeState");
@@ -813,12 +808,12 @@ function duotoneGradients(context) {
 	return context.gradients.filter((gradient) => gradient.kind === "linear" && DUOTONE_STOPS.every((stop) => gradient.stops.some((entry) => entry[1] === stop)));
 }
 
-test("the timeline preview applies the passed row video style plus the template-modal neon and VHS effects", (t) => {
+test("the timeline preview applies the passed row video style plus the template-modal neon and VHS effects", async (t) => {
 	const saved = makeTimelineState();
 	saved.projectId = "timeline-p_source_test-row-7";
 	saved.videoStyle = "Retro Poster";
 	saved.subtitles = [];
-	const { dom, w, previewContext } = openTimeline(saved);
+	const { dom, w, previewContext } = await openTimeline(saved);
 	t.after(() => dom.window.close());
 	const state = w.__TIMELINE_EDITOR_STATE__;
 	assert.equal(state.videoStyle, "Retro Poster", "the Quick Batch row style arrives in the timeline details");
@@ -827,7 +822,6 @@ test("the timeline preview applies the passed row video style plus the template-
 	assert.deepEqual(Array.from(state.projectDetail.effects), ["vhs"], "Retro Poster resolves to the VHS treatment");
 
 	/* the shared Quick Batch CSS filter still paints the background layer */
-	assert.match(TIMELINE_EDITOR_JS, /window\.__videoStyleFilter && "filter" in context/, "the row style's canvas filter is applied on Layer 0");
 	assert.match(TIMELINE_EDITOR_JS, /window\.__videoStyleFilter && "filter" in targetCtx/, "the export painter applies it too");
 	/* and the effects copied from the editor layout's template modal run off the same style */
 	assert.ok(TIMELINE_EDITOR_JS.includes("function drawStyleEffects("), "the template-modal effect painter exists");
@@ -842,12 +836,12 @@ test("the timeline preview applies the passed row video style plus the template-
 	assert.ok(previewContext.rects.some((args) => args[2] >= 300 && args[3] <= 9), "the Retro Poster style draws rolling VHS scanline bands");
 });
 
-test("a Neon Night row applies the neon image effect together with the VHS effect on every scene", (t) => {
+test("a Neon Night row applies the neon image effect together with the VHS effect on every scene", async (t) => {
 	const saved = makeTimelineState();
 	saved.projectId = "timeline-p_source_test-row-7";
 	saved.videoStyle = "Neon Night";
 	saved.subtitles = [];
-	const { dom, w, previewContext } = openTimeline(saved);
+	const { dom, w, previewContext } = await openTimeline(saved);
 	t.after(() => dom.window.close());
 	const state = w.__TIMELINE_EDITOR_STATE__;
 	assert.equal(state.videoStyle, "Neon Night");
@@ -873,7 +867,7 @@ test("a Neon Night row applies the neon image effect together with the VHS effec
 	}
 });
 
-test("a Cinematic Film row paints the template-modal double gradient on every video and image scene", (t) => {
+test("a Cinematic Film row paints the template-modal double gradient on every video and image scene", async (t) => {
 	const saved = makeTimelineState();
 	saved.projectId = "timeline-p_source_test-row-7";
 	saved.videoStyle = "Cinematic Film";
@@ -882,7 +876,7 @@ test("a Cinematic Film row paints the template-modal double gradient on every vi
 	saved.scenes[1].mediaType = "video";
 	saved.scenes[1].mediaAssetId = "asset-scene-2";
 	saved.tracks.find((track) => track.kind === "media").items[1].mediaType = "video";
-	const { dom, w, previewContext } = openTimeline(saved);
+	const { dom, w, previewContext } = await openTimeline(saved);
 	t.after(() => dom.window.close());
 	const state = w.__TIMELINE_EDITOR_STATE__;
 	assert.equal(state.videoStyle, "Cinematic Film");
@@ -934,8 +928,8 @@ function frameCanvas(canvas, width, height) {
 	canvas.getBoundingClientRect = () => ({ left: 0, top: 0, right: width, bottom: height, width, height, x: 0, y: 0 });
 }
 
-test("the dock ends in an empty scroll layer that pans the tracks and reads as one more layer", (t) => {
-	const { dom, w } = openTimeline();
+test("the dock ends in an empty scroll layer that pans the tracks and reads as one more layer", async (t) => {
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const grid = doc.getElementById("timeline-track-grid");
@@ -979,8 +973,8 @@ test("the dock ends in an empty scroll layer that pans the tracks and reads as o
 	assert.equal(doc.querySelectorAll(".te-playhead").length >= 1, true);
 });
 
-test("each ＋ Text and ＋ Graphic click opens a new lane on top of the lanes already open", (t) => {
-	const { dom, w } = openTimeline();
+test("each ＋ Text and ＋ Graphic click opens a new lane on top of the lanes already open", async (t) => {
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -1040,8 +1034,8 @@ test("each ＋ Text and ＋ Graphic click opens a new lane on top of the lanes a
 	assert.equal(doc.querySelector('[data-scroll-layer="bottom"]').hasAttribute("data-lane-track"), false, "the scroll layer stays outside the lane count");
 });
 
-test("a selected text or graphic is dragged on the preview canvas and the drag writes the inspector x and y", (t) => {
-	const { dom, w, payload } = openTimeline();
+test("a selected text or graphic is dragged on the preview canvas and the drag writes the inspector x and y", async (t) => {
+	const { dom, w, payload } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -1114,8 +1108,8 @@ test("a selected text or graphic is dragged on the preview canvas and the drag w
 	assert.match(APP_CSS, /canvas#timeline-preview-canvas \{[^}]*touch-action:\s*none/, "the canvas opts out of native panning so the drag works on touch screens");
 });
 
-test("a duplicated background clip lands in the next time unit after the original and carries its own scene and children", (t) => {
-	const { dom, w, payload } = openTimeline();
+test("a duplicated background clip lands in the next time unit after the original and carries its own scene and children", async (t) => {
+	const { dom, w, payload } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -1175,8 +1169,8 @@ test("a duplicated background clip lands in the next time unit after the origina
 	assert.ok(saved.scenes.some((scene) => scene.id === copy.sceneId), "the duplicated scene is persisted");
 });
 
-test("a duplicated text, graphic or audio clip starts when the original timing ends", (t) => {
-	const { dom, w, payload } = openTimeline();
+test("a duplicated text, graphic or audio clip starts when the original timing ends", async (t) => {
+	const { dom, w, payload } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -1219,8 +1213,8 @@ test("a duplicated text, graphic or audio clip starts when the original timing e
 	assert.equal(savedCopies.find((item) => item.id === textCopy.id).startSec, 5);
 });
 
-test("a selected background clip shrinks the preview to 70 % and opens the 30 % child panel with child timing bound to the clip", (t) => {
-	const { dom, w } = openTimeline();
+test("a selected background clip shrinks the preview to 70 % and opens the 30 % child panel with child timing bound to the clip", async (t) => {
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -1302,13 +1296,13 @@ test("a selected background clip shrinks the preview to 70 % and opens the 30 % 
 	assert.match(APP_CSS, /\.te-child-panel\[hidden\]\s*\{[^}]*display:\s*none/, "the hidden panel takes no space");
 });
 
-test("timeline editor UI omits the three verbose hint paragraphs and vertically centers the preview video when width is 70%", (t) => {
+test("timeline editor UI omits the three verbose hint paragraphs and vertically centers the preview video when width is 70%", async (t) => {
 	const html = createHTML();
 	assert.doesNotMatch(html, /Select a clip in the timeline to edit its start and duration\./, "selected-element wall-of-text hint is removed from served HTML");
 	assert.doesNotMatch(html, /Child text and graphics are timed by this background clip only:/, "child-panel hint paragraph is removed from served HTML");
 	assert.doesNotMatch(html, /class="te-child-hint"/, "no .te-child-hint node in timeline markup");
 
-	const { dom, w } = openTimeline();
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const api = w.__TIMELINE_EDITOR__;
@@ -1439,7 +1433,7 @@ test("timeline editor hides bottom gallery cards, renames the selected heading a
 	assert.match(doc.getElementById("timeline-child-editor").textContent, /Graphic element/, "30% child panel still edits the selected child graphic");
 });
 
-test("timeline editor undo/redo steps through edits, the copy clean-up, sticky add buttons, 80 s timing sliders and 10 px child panel type", (t) => {
+test("timeline editor undo/redo steps through edits, the copy clean-up, sticky add buttons, 80 s timing sliders and 10 px child panel type", async (t) => {
 	const html = createHTML();
 	/* ---- removed copy ---- */
 	assert.doesNotMatch(html, /drag this text clip directly on the preview canvas/i, "the text drag tip is gone from the served markup");
@@ -1456,7 +1450,7 @@ test("timeline editor undo/redo steps through edits, the copy clean-up, sticky a
 	assert.ok(html.includes('data-timeline-action="undo"') && html.includes('data-timeline-action="redo"'));
 	assert.match(APP_CSS, /\.te-history\s*\{[^}]*padding:/, "the history pair is styled");
 
-	const { dom, w } = openTimeline();
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const api = w.__TIMELINE_EDITOR__;
@@ -1567,8 +1561,8 @@ test("timeline editor undo/redo steps through edits, the copy clean-up, sticky a
 	assert.match(childCatchAll[1], /font-size:\s*10px !important/);
 });
 
-test("the section above the tracks says Selected Scene only for a Scene Media box", (t) => {
-	const { dom, w } = openTimeline();
+test("the section above the tracks says Selected Scene only for a Scene Media box", async (t) => {
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const api = w.__TIMELINE_EDITOR__;
@@ -1601,7 +1595,7 @@ test("the section above the tracks says Selected Scene only for a Scene Media bo
 	assert.equal(doc.querySelector(".te-inspector-panel").getAttribute("aria-label"), "Selected scene controls", "the panel's label follows the heading");
 });
 
-test("the top scroll layer is white and borderless, and ＋ Add Clips opens the studio's own template modal", (t) => {
+test("the top scroll layer is white and borderless, and ＋ Add Clips opens the studio's own template modal", async (t) => {
 	const laneRule = APP_CSS.match(/\.te-scroll-lane\s*\{([^}]*)\}/);
 	assert.ok(laneRule, "the top scroll layer is styled");
 	assert.match(laneRule[1], /background:\s*#ffffff/, "the top scroll layer is white");
@@ -1624,8 +1618,8 @@ test("the top scroll layer is white and borderless, and ＋ Add Clips opens the 
 	assert.match(APP_JS, /window\.openTemplateModalForTimeline = openTemplateModalForTimeline/, "and APP_JS exposes that helper");
 });
 
-test("＋ Add Clips opens the Add video from template modal and its MP4 lands at the right-most end of Scene Media", (t) => {
-	const { dom, w } = openTimeline();
+test("＋ Add Clips opens the Add video from template modal and its MP4 lands at the right-most end of Scene Media", async (t) => {
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const doc = w.document;
 	const api = w.__TIMELINE_EDITOR__;
@@ -1680,8 +1674,8 @@ test("＋ Add Clips opens the Add video from template modal and its MP4 lands at
 	assert.match(helper, /window\.openTemplateModal\(n\);/, "and opens the very modal the editor layout's link opens");
 });
 
-test("a composed clip never steals a pending placeholder and the next one lands after it", (t) => {
-	const { dom, w } = openTimeline();
+test("a composed clip never steals a pending placeholder and the next one lands after it", async (t) => {
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const api = w.__TIMELINE_EDITOR__;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -1715,7 +1709,7 @@ test("a composed clip never steals a pending placeholder and the next one lands 
 });
 
 test("a composed clip is the last Scene Media scene and the timeline MP4 export renders it", async (t) => {
-	const { dom, w, previewContext } = openTimeline();
+	const { dom, w, previewContext } = await openTimeline();
 	t.after(() => dom.window.close());
 	const state = w.__TIMELINE_EDITOR_STATE__;
 	const track = state.tracks.find((candidate) => candidate.kind === "media");
@@ -1820,8 +1814,8 @@ test("a composed clip is the last Scene Media scene and the timeline MP4 export 
 	assert.equal(state.durationSec, 6);
 });
 
-test("overlapping boxes are moved clear, and every element or scene addition re-runs the pass", (t) => {
-	const { dom, w } = openTimeline();
+test("overlapping boxes are moved clear, and every element or scene addition re-runs the pass", async (t) => {
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const api = w.__TIMELINE_EDITOR__;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -1872,8 +1866,8 @@ test("overlapping boxes are moved clear, and every element or scene addition re-
 	assertNoOverlaps("after a duplicate");
 });
 
-test("the timeline length follows the last placed item, never the stretched ruler (Session 331)", (t) => {
-	const { dom, w } = openTimeline();
+test("the timeline length follows the last placed item, never the stretched ruler (Session 331)", async (t) => {
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const api = w.__TIMELINE_EDITOR__;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -1905,8 +1899,8 @@ test("the timeline length follows the last placed item, never the stretched rule
 	assert.equal(saved.durationSec, state.durationSec);
 });
 
-test("the Quick Batch hand-back stores the timeline edit in localStorage and the four cookies (Session 331 follow-up)", (t) => {
-	const { dom, w } = openTimeline();
+test("the Quick Batch hand-back stores the timeline edit in localStorage and the four cookies (Session 331 follow-up)", async (t) => {
+	const { dom, w } = await openTimeline();
 	t.after(() => dom.window.close());
 	const api = w.__TIMELINE_EDITOR__;
 	const state = w.__TIMELINE_EDITOR_STATE__;
@@ -1932,6 +1926,7 @@ test("the Quick Batch hand-back stores the timeline edit in localStorage and the
 	assert.ok(editedSceneSeconds > 0, "the scene was re-timed");
 
 	w.document.getElementById("timeline-back").click();
+	for (let i=0; i<100 && !w.__TIMELINE_EDIT_PUBLISH__; i++) await new Promise(r=>setTimeout(r,10));
 
 	const publish = w.__TIMELINE_EDIT_PUBLISH__;
 	assert.ok(publish, "the Back button published the edit");

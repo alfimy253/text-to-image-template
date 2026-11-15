@@ -858,6 +858,9 @@ export const PAGE_MARKUP = `
 				<button type="button" class="te-export te-primary" id="timeline-export-btn" data-timeline-action="export" title="Render and download this timeline as an MP4 video">\u2b07 Export MP4</button>
 			</div>
 
+			<div id="timeline-session-warning" class="te-session-warning" role="alert" hidden></div>
+			<button type="button" id="timeline-retry-media" class="te-history" hidden>Retry loading missing media</button>
+
 			<!-- 1/3 — the preview stage row: 100 % wide, or 70 % + 30 % child panel -->
 			<div class="te-stage-row" id="timeline-stage-row">
 				<section class="te-preview-panel" aria-label="Video preview">

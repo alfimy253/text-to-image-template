@@ -9378,6 +9378,15 @@ export const APP_CSS = `
 			color: var(--te-accent-ink);
 		}
 
+		.te-session-warning {
+			padding: 10px 14px;
+			border-bottom: 1px solid #d49a23;
+			background: #fff3d1;
+			color: #442b00;
+			font-weight: 600;
+		}
+		.te-session-warning[hidden] { display: none; }
+
 		.timeline-editor-shell button:hover:not(:disabled) {
 			filter: brightness(1.13);
 		}
