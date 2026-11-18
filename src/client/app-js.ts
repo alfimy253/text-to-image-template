@@ -12500,12 +12500,12 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	 * "Preview Here · Export Video" placeholder sentence is gone, which is
 	 * why .batch-pending no longer exists in APP_CSS either.
 	 *
-	 * batchRowFinished() stays the single flag behind all three, so they
-	 * still unlock together, at the same moment, exactly as before.
+	 * All three unlock together once the row has usable media and has
+	 * released its generation lock.
 	 */
 	function batchActionCell(row, kind) {
 		const id = escapeHTML(row.id);
-		const ready = batchRowFinished(row);
+		const ready = !row.running && batchRowFinished(row);
 		const locked = ready ? "" : ' disabled aria-disabled="true"';
 		const classes = "upload-btn small batch-action-btn" + (ready ? " batch-live" : "");
 		const suffix = " unlocks when this row is generated";
@@ -12592,9 +12592,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
-	function refreshBatchRowCells() {
+	function refreshBatchRowCells(onlyRow) {
 
-		for (const row of batchRows) {
+		for (const row of onlyRow ? [onlyRow] : batchRows) {
 
 			const tr =
 				document.querySelector('[data-batch-row="' + row.id + '"]');
@@ -12647,11 +12647,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 			if (actions) {
 
-				/*
-				 * All three icons are always in the cell; batchRowFinished()
-				 * is the one flag that decides whether they are enabled
-				 * (Session 332 — Edit is no longer "always live").
-				 */
 				actions.innerHTML =
 					batchActionsHTML(row);
 
@@ -13454,7 +13449,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		return true;
 	}
 
-	function alternateMediaPrompt(prompt, attempt, scene, owner) {
+	function alternateMediaPrompt(prompt, attempt, scene, owner, triedSelections) {
 		if (typeof prompt !== "string" || prompt.indexOf("pixabay:") !== 0) return prompt;
 		var token = null;
 		try { token = JSON.parse(prompt.slice(8)); } catch (error) { return prompt; }
@@ -13476,13 +13471,23 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		if (duplicates > 0) {
 			var startPage = Math.max(1, Math.floor(Number(token.page) || 1));
 			page = 1 + ((startPage - 1 + duplicates) % MEDIA_MAX_PIXABAY_PAGES);
-			/*
-			 * First hit of the moved page. A second duplicate walks the next
-			 * index instead of landing back on the page/asset that just failed,
-			 * so the pair (page, index) is never repeated.
-			 */
 			ordinal = Math.floor(duplicates / MEDIA_MAX_PIXABAY_PAGES) % limit;
 		}
+		/* An empty page or a transport failure does not increment duplicates.
+		 * If that leaves us on a tried result, check unused slots starting on
+		 * the original page instead of repeating the same selection. */
+		if (triedSelections && triedSelections.has(page + ":" + ordinal)) {
+			var startPageOffset = Math.floor(base / limit);
+			for (var slot = 0; slot < limit * MEDIA_MAX_PIXABAY_PAGES; slot++) {
+				var nextPage = 1 + ((startPageOffset + Math.floor(slot / limit)) % MEDIA_MAX_PIXABAY_PAGES);
+				var nextIndex = slot % limit;
+				if (triedSelections.has(nextPage + ":" + nextIndex)) continue;
+				page = nextPage;
+				ordinal = nextIndex;
+				break;
+			}
+		}
+		if (triedSelections) triedSelections.add(page + ":" + ordinal);
 		var next = Object.assign({}, token, {
 			type: type,
 			index: ordinal,
@@ -13542,7 +13547,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			? sceneIndexes.slice()
 			: prompts.map(function (_, index) { return index; });
 		var pending = prompts.map(function (prompt, index) {
-			return { prompt: prompt, scene: indexes[index], attempt: 0 };
+			return { prompt: prompt, scene: indexes[index], attempt: 0, triedSelections: new Set() };
 		});
 		var collected = [];
 		var exhausted = [];
@@ -13562,8 +13567,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			var pendingPrompts = [];
 			var pendingScenes = [];
 			for (var i = 0; i < pending.length; i++) {
-				pendingPrompts.push(alternateMediaPrompt(pending[i].prompt, pending[i].attempt, pending[i].scene, owner));
-				pendingScenes.push(pending[i].scene);
+				var target = pending[i];
+				pendingPrompts.push(alternateMediaPrompt(target.prompt, target.attempt, target.scene, owner, target.triedSelections));
+				pendingScenes.push(target.scene);
 			}
 			var result = null;
 			try {
@@ -13579,7 +13585,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				var item = pending[j];
 				if (!failedSet.has(item.scene)) continue;
 				if (item.attempt < policy.maxRetries) {
-					next.push({ prompt: item.prompt, scene: item.scene, attempt: item.attempt + 1 });
+					item.attempt += 1;
+					next.push(item);
 				}
 				else {
 					exhausted.push(item.scene);
@@ -14311,19 +14318,27 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	}
 
 	async function runBatchRow(row) {
+		if (row.running) return false;
 		const id = batchTimelinePageIdForRow(row) || batchRowMediaPageId(row);
 		const api = window.__TIMELINE_EDITOR__;
 		if (!api || typeof api.runWithTableMediaLock !== "function") {
 			setBatchStage(row, row.stage, "Cannot verify editor ownership. Close the editor before changing media.");
 			return false;
 		}
-		const result = await api.runWithTableMediaLock(id, function () { return runBatchRowWithMediaLock(row); });
-		if (result && result.ok === false) {
-			setBatchStage(row, row.stage, result.reason || "Close the timeline editor before changing media.");
-			showRequiredModal([result.reason || "Close the timeline editor before changing Quick Batch media."]);
-			return false;
+		row.running = true;
+		try {
+			refreshBatchRowCells(row);
+			const result = await api.runWithTableMediaLock(id, function () { return runBatchRowWithMediaLock(row); });
+			if (result && result.ok === false) {
+				setBatchStage(row, row.stage, result.reason || "Close the timeline editor before changing media.");
+				showRequiredModal([result.reason || "Close the timeline editor before changing Quick Batch media."]);
+				return false;
+			}
+			return result;
+		} finally {
+			row.running = false;
+			refreshBatchRowCells(row);
 		}
-		return result;
 	}
 	async function runBatchRowWithMediaLock(row) {
 
@@ -14340,6 +14355,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			row.prompts = [];
 			row.images = [];
 			row.mediaFilenames = [];
+			row._mediaDuplicatePages = null;
 			row._missingMediaScenes = [];
 			row.slides = [];
 			row.subtitles = [];
@@ -14558,9 +14574,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					}
 				);
 
-			row.animated =
-				true;
-
 			row.finishedAt =
 				Date.now();
 
@@ -14589,16 +14602,22 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			row._storedAnimated = false;
 			row.projectDetail = composeBatchProjectDetail(row);
 
-			setBatchStage(
-				row,
-				"done",
-				row.slides.length + " slides \u00b7 " + formatSeconds(spanMs / 1000)
-			);
+			/* A bounded, best-effort save lets reloads recover media. A storage
+			 * failure cannot invalidate the generated media already in this tab. */
+			let detail = row.slides.length + " slides \u00b7 " + formatSeconds(spanMs / 1000);
+			try {
+				const saved = await persistBatchRowMedia(row);
+				if (!saved || !saved.ok) {
+					detail += " \u00b7 Media could not be saved for reload" + (saved && saved.reason ? ": " + saved.reason : "");
+				}
+			} catch (persistError) {
+				detail += " \u00b7 Media could not be saved for reload";
+			}
+			row.animated = true;
+			setBatchStage(row, "done", detail);
 
 			/* Session 331: a successful render is archived for 24 h. */
 			try { recordCompletedBatchRow(row, "render"); } catch (archiveError) { }
-			/* Session 331 (regenerate fix): a finished row keeps its media so a reload can restore it. */
-			try { const mediaResult = await persistBatchRowMedia(row); if (mediaResult && mediaResult.ok === false) setBatchStage(row, row.stage, "Media could not be stored: " + String(mediaResult.reason || "unknown error")); } catch (persistError) { setBatchStage(row, row.stage, "Media could not be stored in this browser."); }
 
 			console.info("[batch-table] row " + row.id + " finished", {
 				ms: row.finishedAt - row.startedAt,
@@ -14626,8 +14645,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				setBatchStage(row, previousVoice ? "done" : "ready", "");
 
 		}
-
-		refreshBatchRowCells();
 
 		return batchRowFinished(row);
 
@@ -15079,9 +15096,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 			batchAttemptedRows.add(String(row.id));
 
-			row.running =
-				true;
-
 			const promise = (async function (targetRow) {
 
 				try {
@@ -15094,9 +15108,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 				}
 				finally {
-
-					targetRow.running =
-						false;
 
 					batchActivePromises.delete(promise);
 
