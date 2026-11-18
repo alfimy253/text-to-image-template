@@ -11,6 +11,7 @@ export const TIMELINE_EDITOR_JS = `
 		var DB_NAME = "ytvs-timeline-editor-assets-v1";
 		var DB_VERSION = 1;
 		var DB_STORE = "projects";
+		var TABLE_ASSET_SAVE_TIMEOUT_MS = 15000;
 		var STATE_PREFIX = "ytvs.timeline-editor.v1.";
 		var TIMELINE_COOKIE_PREFIX = "ytvs_timeline_editor_";
 		var TIMELINE_COOKIE_CHUNKS = 8;
@@ -150,18 +151,23 @@ export const TIMELINE_EDITOR_JS = `
 			}).catch(function () { return false; });
 		}
 
-		function storeProjectAssets(projectId, transfer) {
+		function storeProjectAssets(projectId, transfer, timeoutMs) {
 			var id = String(projectId || "");
 			if (!id) return Promise.resolve({ ok: false, reason: "missing timeline project id" });
 			var incoming = transfer || {};
+			var db = null, tx = null, expired = false, timer = null;
 			/* Read and merge within one readwrite transaction so concurrent tabs do not lose assets. */
-			return openAssetDb().then(function (db) {
+			var work = openAssetDb().then(function (openedDb) {
+				/* A late open must not start a transaction after the table releases its lock. */
+				if (expired) { openedDb.close(); return; }
+				db = openedDb;
 				return new Promise(function (resolve, reject) {
-					var tx = db.transaction(DB_STORE, "readwrite");
+					tx = db.transaction(DB_STORE, "readwrite");
 					var store = tx.objectStore(DB_STORE);
 					var request = store.get(id);
 					var record = null;
 					request.onsuccess = function () {
+						if (expired) return;
 						if (typeof incoming._canWrite === "function" && !incoming._canWrite()) { tx.abort(); return; }
 						var existing = request.result;
 						var assets = Object.assign({}, existing && existing.assets || {});
@@ -174,11 +180,29 @@ export const TIMELINE_EDITOR_JS = `
 						record = { id: id, assets: assets, voiceover: (incoming.preserveExisting && existing && existing.voiceover) || incoming.voiceover || (existing && existing.voiceover) || null, updatedAt: Date.now() };
 						store.put(record);
 					};
-					tx.oncomplete = function () { db.close(); resolve({ ok: true, id: id, assets: Object.keys(record.assets || {}).length, updatedAt: record.updatedAt }); };
-					tx.onerror = function () { db.close(); reject(tx.error || new Error("Could not save local media")); };
-					tx.onabort = function () { db.close(); reject(tx.error || new Error("Local media save was aborted")); };
+					tx.oncomplete = function () { resolve({ ok: true, id: id, assets: Object.keys(record.assets || {}).length, updatedAt: record.updatedAt }); };
+					tx.onerror = function () { reject(tx.error || new Error("Could not save local media")); };
+					tx.onabort = function () { reject(tx.error || new Error("Local media save was aborted")); };
 				});
-			}).catch(function (error) { return { ok: false, id: id, reason: String(error && error.message || error) }; });
+			});
+			if (timeoutMs > 0) {
+				var deadline = new Promise(function (_, reject) {
+					timer = window.setTimeout(function () {
+						expired = true;
+						incoming = null;
+						/* Stop an in-flight write before letting another tab take ownership. */
+						if (tx) { try { tx.abort(); } catch (error) { } }
+						reject(new Error("Saving local media timed out"));
+					}, timeoutMs);
+				});
+				work = Promise.race([work, deadline]);
+			}
+			return work.catch(function (error) {
+				return { ok: false, id: id, reason: String(error && error.message || error) };
+			}).finally(function () {
+				if (timer !== null) window.clearTimeout(timer);
+				if (db) db.close();
+			});
 		}
 
 		function storeOneAsset(projectId, assetId, blob, metadata) {
@@ -317,8 +341,8 @@ export const TIMELINE_EDITOR_JS = `
 				});
 			};
 			api.storeProjectAssets = function (id, transfer) {
-				if (tableMediaLocks.has(id)) return storeProjectAssets(id, transfer);
-				return api.runWithTableMediaLock(id, function () { return storeProjectAssets(id, transfer); });
+				var save = function () { return storeProjectAssets(id, transfer, TABLE_ASSET_SAVE_TIMEOUT_MS); };
+				return tableMediaLocks.has(id) ? save() : api.runWithTableMediaLock(id, save);
 			};
 			api.storeAsset = function (id, assetId, blob, metadata) {
 				if (!blob) return Promise.resolve({ ok: false, reason: "No media provided" });
