@@ -176,3 +176,441 @@ These rules describe the current code and supersede earlier session notes where 
 - Regression coverage: `tests/timeline-tab-recovery.test.mjs` — "Quick Batch cannot change project media while an editor owns it" and "Quick Batch media remains blocked while a stale editor tab is still open" both assert the per-project lock, that the locked row's `batchRowReadyForGeneration()` is false, and that writes succeed again once that project's owner lock and view locks are released.
 
 **Documentation change (this session):** rule 3 now states the row/project scope explicitly, that the toolbar note is only a hint, and that rows not open in a timeline editor keep their media buttons. Every clause in this file that meant the Quick Batch timeline editor now says **timeline editor** instead of "editor", and the terminology block at the top records that convention. No source code changed: the implementation already matched the clarified rule.
+
+---
+
+## Appendix — The whole system in plain English (beginner edition)
+
+> **Who this is for.** Someone who has never built a website. No prior knowledge of servers, HTTP,
+> cookies or JavaScript is assumed: every technical word is explained the first time it is used.
+> Everything below was checked against the current code (`src/`), not against older notes.
+> If you only read two sections, read **A** (what the app is) and **B** (the two halves).
+
+### A. What this app actually is
+
+**YouTube Vibe Studio** is a website that turns a **written script** into a **finished MP4 video**.
+
+It does not film anything. It does not paint pictures with AI. In practice it:
+
+1. lets the visitor type (or have AI write) a **narration script**;
+2. has an AI voice **read that script aloud** → an MP3;
+3. searches **Pixabay** (a free stock-photo/video site) for **12 matching pictures and clips**;
+4. paints those pictures into animated slides with the script as **subtitles**;
+5. **builds the MP4 video right inside the visitor's browser** and downloads it.
+
+**The cooking-show analogy.** The visitor's browser is the **kitchen**: chopping, cooking and plating
+(decoding images, drawing frames, encoding video) all happen there. The server is the **waiter**: it
+takes orders, fetches ingredients from shops (AI text, AI voice, Pixabay), keeps the bill, and hands
+things back. If the kitchen closes (tab closed), nothing that was only on the counter survives —
+which is exactly why this app stores so much *in the browser*.
+
+### B. The two halves: the page and the Worker
+
+A website normally has a **front end** (what you see) and a **back end** (what answers questions
+behind the scenes). Here they are:
+
+| Half | Where it lives | Plain-English job | Analogy |
+| --- | --- | --- | --- |
+| **The page** (front end) | `src/client/*` — one big HTML page with inline CSS + JavaScript | Buttons, tables, canvas preview, the timeline editor, **the video encoder** | the kitchen |
+| **The Worker** (back end) | `src/index.ts` + `src/modules/*` — one Cloudflare Worker | Decides what each URL returns; talks to AI, Pixabay, and the database | the waiter + the pantry |
+
+**"Cloudflare Worker"** = a small program that runs on Cloudflare's computers and answers web
+requests. It has no screen; it only returns text, HTML, JSON or image bytes. This project has
+exactly **one** Worker file that receives every request, and a long chain of `if` statements picks
+the right answer. There is no routing library, no framework, no bundler.
+
+**"API"** = a URL that a program (not a person) calls to get data. Example: `POST /api/voiceover`
+means "send a script, get audio back".
+
+**"HTTP request"** = one question asked of the server: a **method** (`GET` = "give me something",
+`POST` = "here is data, do something"), a **path** (`/api/script`), optional **headers**
+(small labels) and an optional **body** (the data).
+
+**Request → response in this app, in one diagram:**
+
+```text
+Visitor's browser                          Cloudflare Worker                    Outside world
+-------------------                        -----------------                    ------------
+click "Generate"  ──POST /api/script────▶  pick a model, ask for a script  ──▶  Workers AI / OpenRouter
+                  ◀──── plain text ──────  validate keywords + length
+                  ──POST /api/voiceover──▶  cut text into <=400-char chunks ─▶  MeloTTS (+fallback TTS)
+                  ◀──── audio bytes ─────
+                  ──POST /api/image-prompts▶ ask the text model for search words
+                  ◀──── 12 search terms ──
+                  ──GET /api/media/config──▶ here is the Pixabay key + limits
+                  ──(browser talks to pixabay.com / cdn.pixabay.com directly)──▶  Pixabay
+                  ──POST /api/media/claim─▶  reserve image credits
+decode + draw + encode (all local)  ──▶  an .mp4 file appears in Downloads
+```
+
+Two things surprise beginners, so they are stated plainly:
+
+- **The server never renders the video.** The browser has APIs called **WebCodecs** (encode video and
+  audio) and a small library called **mp4-muxer** (wrap those pieces into an `.mp4` file). No FFmpeg,
+  no render farm. If the browser is old, the export simply fails with a message.
+- **The heavy media bytes mostly bypass the server.** The page fetches photos/clips from Pixabay
+  itself; the Worker only hands out the configuration and keeps the credit count. This keeps the
+  server cheap and fast.
+
+### C. The words you will meet (mini-glossary)
+
+| Word | What it means here, in one line |
+| --- | --- |
+| **Worker** | The single back-end program (`src/index.ts`) that answers every URL. |
+| **Route** | One URL pattern the Worker recognises, e.g. `/api/script`. Unknown URLs get `404`. |
+| **KV** | Cloudflare's simple key→value database. Used for accounts, sessions, credits, settings, CMS, receipts. |
+| **Durable Object** | A tiny stateful helper. Here: one object that meters Pixabay calls so the app does not get rate-limited. |
+| **Cookie** | A small text note the site asks the browser to keep and send back on every request. Used for login, the guest flag, and backup copies of projects (they are size-limited: ~4 KB each). |
+| **localStorage** | A bigger per-website notebook inside the browser (megabytes). Survives reloads; lost if the visitor clears site data. |
+| **IndexedDB** | An actual database inside the browser. Used for **media blobs** (the MP3 and the photos/clips), because cookies/localStorage are far too small for megabytes of video. |
+| **Blob** | A chunk of binary data held in memory, e.g. one downloaded MP3. |
+| **Object URL** | A temporary `blob:` link that lets an `<img>`/`<video>` play a Blob. |
+| **JSON** | Text that represents structured data: `{"script":"...","minutes":2}`. |
+| **Web Lock** | A browser feature that lets tabs take turns. `navigator.locks.request("name", …)` means "only one tab at a time may hold `name`". Used to guarantee **one editor per video**. |
+| **Debounce / throttle** | "Wait a moment and only act once" / "act at most every N seconds". The timeline autosaves 180 ms after the last keystroke and publishes to the table at most once per 1.2 s. |
+| **NDJSON** | One JSON object per line, streamed as it is produced (used by the legacy batch image route). |
+| **HMAC ticket** | A signed, short-lived pass that proves a request really came from a trusted Worker (used by the API-rotation pool). |
+
+### D. Where everything lives (file map)
+
+```text
+src/index.ts .............. the Worker: every route + accounts + credits + settings (~6,700 lines)
+src/page.ts ............... glues the HTML shell together once and caches it
+src/prompts.ts ............ the two legacy demo prompts
+
+src/client/
+  markup.ts ............... the HTML skeleton (top bar, both views, timeline page, modals)
+  styles.ts ............... all CSS, including the seven themes
+  app-js.ts ............... THE main browser program (~29,800 lines): editor, Quick Batch table,
+                            renderer, GIF decoder, subtitle painter, browser storage
+  timeline-editor.ts ...... the separate timeline editor page (?layout=timeline) + locking + autosave
+  template-composer-js.ts . "Add video from template" gallery + 15 interactive scenes
+  template-scene-editor.ts  the scene/layer/text controls shared by composer and timeline
+  template-ring-carousel.ts the 5–7 image 3D ring template
+  template-shape-animations.ts 13 animated graphic objects
+  progressive-image-pipeline.ts  the browser loop that asks for scene keywords in batches
+  pixabay-direct.ts ....... browser-first Pixabay search + download + claim/settle
+  browser-offload.ts ...... capability negotiation + timeouts for AI routes
+  api-rotation.ts ......... asks the Worker which backup URL should run one AI call
+  config-page-js.ts ....... the 7-tab day-rotated settings page
+  script-notes-client.ts .. localStorage + cookie note memory (RULE 35)
+  pipeline-management-store.ts  per-page Quick Batch state (1 localStorage key + 4 cookies)
+  usage-ledger.ts ......... local-only "what I made today" counter (never authorizes anything)
+  payment-upload-js.ts .... receipt uploader on /upgrade
+  reel-scene-assets.ts .... bundled sample photos
+  aerial-background.ts .... Aerial theme backdrop
+
+src/modules/
+  script-seo.ts ........... SEO keyword planning + narration writer + validation
+  script-notes.ts ......... in-memory note store (0 KV writes) + stale-note detection
+  script-notes-api.ts ..... the legacy note routes + hang budgets
+  script-event-loop.ts .... small Node-style scheduler for the two-stage script work
+  image-prompts.ts ........ script → 12 Pixabay search terms (fixed scene plan)
+  pixabay.ts .............. search, cache, download, byte validation, rate limiting
+  image-batch.ts .......... credit reservation, per-scene work, retries, refunds, transport
+  image-load.ts ........... adaptive concurrency governor (starts at 3, grows to 6, halves on overload)
+  image-queue.ts .......... fair per-group task queue (so one row cannot starve the others)
+  voiceover.ts ............ MeloTTS + chunking + fallback TTS proxy
+  llm-openrouter.ts ....... instruct-model provider rotation (Cloudflare ⇄ OpenRouter)
+  api-relay.ts ............ backup-Worker pool, health, circuit breaker, signed tickets
+  cms.ts .................. up to 8 flat public pages, escaped rendering
+  payments.ts ............. receipt storage + admin approval → paid_user
+  user-pages.ts ........... the /account and /upgrade pages
+  theme-shell.ts .......... shared shell for standalone pages + CMS
+
+tests/ .................... 53 jsdom/node test files (~620 checks)   `npm test`
+bench/ .................... load/simulation scripts (not part of the app)
+e2e/ ...................... local fixtures for workerd integration tests
+render-app/ ............... a SEPARATE Node+Playwright script→MP3 helper (never called by the Worker)
+wrangler.json ............. bindings: AI, KV_BINDING, PIXABAY_RATE_LIMITER
+```
+
+### E. All the system rules, one line each
+
+The full rules live in `system-rules.md` (very long, very technical). This is the oversimplified
+translation. **The code is the source of truth**; if a rule here disagrees with the code, the code wins.
+
+| Rule | What it means if you have never seen this app |
+| --- | --- |
+| **Governing media rule** | Pictures and clips are **real Pixabay stock**, never AI-drawn. AI is only used for *words* (planning search terms, writing the script) and *speech*. |
+| **RULE 1** | One Worker answers everything. The browser does the heavy work (encoding, drawing). The HTML page is built once and reused. |
+| **RULE 2** | Accounts are rows in KV. No cap on how many accounts exist. Signup: username 3–20 letters/digits/underscore, password ≥ 6, valid email. Logging in lasts 30 days. |
+| **RULE 3** | The admin/settings page lives at `/{day-of-month}/config/uvxyz`, where the day is computed in **Asia/Taipei**. So on 18 Nov 2026 it is `/18/config/uvxyz`; yesterday's URL is a 404. It has its own password. |
+| **RULE 4–5** | An old "render on the server" queue still exists in code but no button uses it. Everything renders in the browser now. |
+| **RULE 6** | Pixabay replaces the old AI image generator. Photos must be JPEG/PNG/WebP ≤ 8 MB; clips MP4 ≤ 60 s and ≤ 16 MB; the file's first bytes are checked so an error page can never be saved as "an image". |
+| **RULE 7** | The AI script must contain **exactly 1 long-tail keyword said at least once** and **exactly 4 short keywords each said at least twice**. Extra mentions are always fine. One short keyword must appear in the title and one in a heading. |
+| **RULE 8** | The voice is MeloTTS. Text is cleaned, cut into ≤ 400-character pieces (≤ 8,000 characters total), retried, and falls back to another TTS service if needed. |
+| **RULE 9** | Per video: **25 images, 5 GIFs, 5 MP4s (≤ 60 s each)**. A still picture stays on screen **9 seconds**. **The MP3 decides the video length** — slides repeat until the audio is covered. |
+| **RULE 10** | Title and captions are painted per frame at fixed positions (title top-left, captions 4/7 up from the bottom). Up to **10 captions of 40 characters**; the last one stops showing after ~10 s. |
+| **RULE 11** | Output is always **30 fps H.264 video + AAC audio**. Only three quality presets: 480p/1.2 Mbps, 720p/2.5 Mbps, 720p/5 Mbps. No codec picker. |
+| **RULE 12** | GIFs are decoded one frame at a time with a memory cap (~120 MB of frames), so a giant GIF cannot freeze the tab. |
+| **RULE 13** | One template gallery (15 interactive scenes). The ring template needs **5–7 uploaded images** before it can export. Layers and rotation (0–360°) are shared controls. |
+| **RULE 14** | The Editor's bulk render runs **one video at a time** in the order shown, and cannot be started twice. |
+| **RULE 15** | Every KV record has a lifetime: credits expire in 2 days, render jobs in 1 h, blobs in 2 h; accounts/sessions/settings are permanent. Script notes are **never** in KV (see RULE 35). |
+| **RULE 16** | Build/deploy rules: `wrangler.json` names the entry, bindings and compatibility date; type-check + dry-run before deploy. |
+| **RULE 17** | A historical list of spots where old comments disagree with the code. Read it as "trust the code". |
+| **RULE 18** | Every tooltip, note, placeholder and alert **is a promise**: the constant behind each one must match (e.g. "25 images" must really be 25). |
+| **RULE 19** | Seven skins: default, Aerial (`strata`), Stellar, Night Lab, Warm Paper, Swiss, Neo Brutalist. **One choice for the whole site**, set in settings, applied by the server so nothing flashes. |
+| **RULE 20** | Each account gets **10,000 images per day**, unlimited videos/scripts/voiceovers. The counter resets at **midnight Asia/Taipei (UTC+8)**. A failed model call is refunded. |
+| **RULE 21** | Three studio addresses: `/free` (anyone, sets a 1-day guest cookie), `/studio` (signed-in), `/paid` (paid only). Guests get their own **10,000 image/day allowance keyed to their network address** (only a hash + masked IP are stored). No account → most data routes say `401`. |
+| **RULE 22** | One studio shell, **two views**: the Quick Batch **table** and the **Editor** accordions. Switching is memory-only (not saved). |
+| **RULE 23** | CMS, manual payments and the account dashboard reuse the shell but have their **own** password/session checks. Admin routes need the settings password. |
+| **RULE 24** | The "✨ Generate SEO Script" walkthrough: plan two keyword sets → pick one → pick a visual style → write the script → fetch the images. The modal can be closed while it works. |
+| **RULE 25** | The **Quick Batch table is a second editor, not a second engine**: it reuses the same renderer. Row states walk `empty → ready → voice → timing → prompts → images → animate → done` (or silently back to `ready`). |
+| **RULE 26** | `render-app/` is a **separate** local Node tool (script → MP3 via Playwright). The Worker never calls it and it is not needed to use the studio. |
+| **RULE 27** | UI decisions: no sticker button, Delete Video sits in each accordion, no "☁️ API" button, the planner retries instead of freezing. |
+| **RULE 28** | Prompts are capped at **1,800 characters**; image work is paced (~3 images per 3 s per row); queueing is non-blocking so the page stays responsive. |
+| **RULE 29–31** | The browser, not the server, drives the **progressive** image loop (ask for 3 keywords → render → ask for the next 3). Credits are reserved up front and refunded for anything not delivered. The server load-balances and answers `503 + Retry-After` instead of hard-failing. |
+| **RULE 32** | Retries happen **per scene**, never "restart the whole video", and a slow clip capture is bounded so a row cannot hang forever. |
+| **RULE 33** | Up to **5 backup Workers** can be registered. AI calls are spread **round-robin**, with health checks, a cooldown when one misbehaves, and only AI paths ever leave the primary. |
+| **RULE 34** | The text model itself rotates between **Cloudflare Workers AI** and **OpenRouter**; a broken key is benched for a while and the call falls through to the other provider. |
+| **RULE 35** | **Script details never touch the server's database.** The durable copy is the visitor's `localStorage` + a compact cookie, compared by digest/timestamp/length. The Worker keeps only a throwaway in-memory copy. |
+| **FINAL RULE (Quick Batch layout)** | Non-media stages fail → the browser retries **7 times, 40 s apart, silently**. Photos/clips fail → only the **individual failed item** is retried on the same ladder. Every video plans **12 scenes = 8 photos + 4 clips**, whatever the script length. The last table column is **Actions** (Preview ▶, Process export ⚙, Edit ✎). |
+
+### F. The user flows, step by step
+
+#### F1. First visit → account
+
+```text
+open "/"  ── landing page (sign up / log in links)
+   │
+   ├─ "Sign up" → GET /account?mode=signup → fill username/password/email → POST /api/signup
+   │                 → session cookie (30 days) → /studio
+   ├─ "Log in"  → GET /account            → POST /api/login
+   └─ "Try it"  → GET /free  → sets yvs_free=1 for 1 day → same studio, guest mode
+```
+
+- `/studio` without a session redirects to `/free`; `/paid` without a paid plan redirects to `/studio`.
+- These URLs decide **which studio mode** the page boots in (`window.__PLAN_MODE`). They are a
+  navigation boundary, not a security boundary — the real "do you have credits?" check happens on
+  every metered API call.
+- `/account` shows plan, today's usage, receipts; `/upgrade` explains manual payment, and the visitor
+  uploads a receipt screenshot (≤ 5 MiB). An admin later approves it with a transaction number, and
+  only then does the account become `paid_user`.
+
+#### F2. The Editor (the accordion view)
+
+1. **＋ Add Video** → a "Video N" card appears (max **10**). Each card holds its own files, MP3,
+   title, quality and script; deleting a card renumbers the rest.
+2. **✨ Generate SEO Script** opens the 4-step walkthrough (plan → choose keywords → choose style →
+   write & fetch). It can be closed while it works; the result lands in the card's Script box.
+3. **📁 Upload Image, GIF or MP4** adds up to 25 stills / 5 GIFs / 5 MP4s, or
+   **Add video from template** builds a 1–25 s clip from one of the 15 interactive scenes.
+4. **🎵 Upload MP3 Audio** (or the generated voiceover) sets the length of the video.
+5. **Title**, **Quality** (480p/720p/720p-high) — plain controls.
+6. **✦ Generate** (top bar) renders the cards **one after another** and downloads each MP4.
+
+#### F3. Quick Batch table (the fast lane)
+
+```text
+＋ Add Row  → paste a script (>= 10 words) → pick style / resolution / orientation
+   │
+   ✦ Generate
+   │   row1: voice ─▶ timing ─▶ prompts ─▶ images ─▶ animate ─▶ done ┐
+   │   row2: voice ─▶ timing ─▶ prompts ─▶ images ─▶ animate ─▶ done ├ 3 at a time,
+   │   row3: ...                                                      ┘ next starts early
+   ▼
+Actions column unlocks on the finished row:  ▶ Preview   ⚙ Process export   ✎ Edit
+```
+
+Rules a beginner will bump into immediately:
+
+- **Fewer than 10 words → nothing happens.** A dialog names the row(s) and the count.
+  (The constant is `WORD_COUNT_MIN = 10`.)
+- **An already-finished row is skipped**, because its MP3/images/animation are already in memory;
+  re-running it would only cost credits.
+- **Generate doubles as Stop** while rows are running.
+- **10 rows max**, **5 rows per page**, and finished rows are remembered for **24 hours**
+  (`ytvs.quick-batch-completed.v1`, at most 40 entries) purely so a refresh is not a total loss.
+- A row that fails a non-media stage retries **7 times × 40 s silently** — the row keeps its normal
+  "working" look and never paints an error.
+
+#### F4. Edit → the timeline editor (the part with real traffic rules)
+
+Pressing **✎ Edit** opens a **new tab** with `?layout=timeline`. Because a video must never be edited
+in two tabs at once, four mechanisms cooperate:
+
+1. **A click counter cookie** (`ytvs_timeline_edit_counter_<project>`) plus a small localStorage
+   ledger get a new increasing number — so the newest click can be identified even if a popup is
+   blocked.
+2. **A Web Lock** named `ytvs-edit-owner:<project>` — only one tab may hold it. The old tab finishes
+   its save, hands the project back, then releases; only then does the new tab continue.
+3. **A presence lock** `ytvs-edit-open:<project>:<tab>` — the Quick Batch table watches these to know
+   "this row's media is off-limits right now".
+4. **The saved project itself** lives in `localStorage["ytvs.timeline-editor.v1.<project>"]`, with an
+   **8-part cookie backup**. Media blobs live in the IndexedDB database
+   `ytvs-timeline-editor-assets-v1`, never in a cookie or URL.
+
+What the user sees:
+
+```text
+Quick Batch row  ──✎ Edit──▶  new tab: timeline editor
+                                scenes on a timeline, text/graphic layers,
+                                subtitles burned in, preview canvas, Export MP4
+                                     │  (every edit autosaves 180 ms later)
+                                     ▼
+                              "← Quick Batch"
+                                     │  save → publish a summary to the table → release the lock
+                                     ▼
+                          table row reopens with ▶ Preview / ⚙ Export using the edited project
+```
+
+- While that tab is open, **that row's** Generate/media buttons are locked. Other rows are fine.
+- A tab that has lost ownership becomes **read-only** and shows a warning; its saves are refused.
+- If the previous editor crashed, the next one asks before opening the last saved state — it cannot
+  bring back unsaved memory.
+
+#### F5. Export
+
+Both the table's ⚙ and the timeline's **⬇ Export MP4** end in the same browser encoder:
+paint frame → encode H.264 → encode AAC → mux → save. Chromium browsers stream straight to disk;
+other browsers build the file in memory and warn above ~250 MB. **Nothing is uploaded.**
+
+#### F6. Settings page (administrator)
+
+One page, password-protected, at today's day-stamped URL, with seven tabs:
+
+| Tab | What it controls |
+| --- | --- |
+| 1. General & Themes | the seven skins, backup-Worker URLs, background-worker mode |
+| 2. Guest Credits by IP | per-network guest usage, reset |
+| 3. Plans | plan descriptions |
+| 4. Accounts Credits | set `free` / `paid_user`, reset today's counters |
+| 5. Local Payment Gateway | the bank/wallet text shown on `/upgrade` |
+| 6. Payment Transactions | paginated receipts, approve with a unique transaction number |
+| 7. CMS Pages | create/edit/delete up to 8 flat public pages |
+
+#### F7. Public pages and CMS
+
+`/` landing · `/account` · `/upgrade` · `/free` `/studio` `/paid` · `/{day}/config/uvxyz` ·
+`/<slug>` for a published CMS page (flat slugs only, reserved words blocked, text HTML-escaped so a
+"page" can never inject code).
+
+### G. What the browser remembers (and what the server does)
+
+| Store | Key | Holds | Size limit / lifetime |
+| --- | --- | --- | --- |
+| Cookie | `yvs_session` | login token | 30 days |
+| Cookie | `yvs_free` | "this visitor came through /free" | 1 day |
+| Cookie | `ytvs_note` | compact copy of the newest script note | ≤ 3.4 KB |
+| Cookie | `ytvs_timeline_editor_<id>_1…_8` | backup of one timeline project | 8 × ~3.8 KB |
+| Cookie | `ytvs_pipeline_management_<page>_1…_4` | backup of the Quick Batch page | 4 × ~3.8 KB |
+| Cookie | `ytvs_timeline_edit_counter_<id>` | "who clicked Edit last" | session |
+| Cookie | `ytvs_transition_project_<key>` | tiny "which row am I opening" note | short-lived |
+| localStorage | `ytvs.timeline-editor.v1.<id>` | **the real saved timeline project** | megabytes-ish |
+| localStorage | `ytvs.pipeline-management.v1.<page>` | **the real Quick Batch rows** | ≤ 8 rows, 8,000 chars/script |
+| localStorage | `ytvs.script-notes.v1` | script notes | 24 entries / 7 days |
+| localStorage | `ytvs.quick-batch-completed.v1` | finished-row archive | 40 entries / 24 h |
+| IndexedDB | `ytvs-timeline-editor-assets-v1` | **MP3 + photos + clips (the bytes)** | browser quota |
+| KV (server) | `user:`, `email:`, `credits:`, `ipcredits:`, `config:*`, `payment:*` | accounts, counters, settings, receipts | see RULE 15 |
+
+**Plain rule of thumb:** the server knows *who you are and how much you may spend*. Your browser
+knows *what you made*. Clearing site data deletes your projects; deleting your account does not.
+
+### H. The "only one editor" rule, explained with a library book
+
+The timeline project is a **library book**. `localStorage` is the shelf, the cookies are a photocopy
+in case the shelf is empty, and IndexedDB is the box of photographs tucked inside the book.
+
+- **Borrowing** = holding `ytvs-edit-owner:<project>`. Only one borrower at a time.
+- **The waiting list** = the counter cookie. The newest number gets the book next.
+- **The sticky note on the desk** = `ytvs-edit-open:...`, telling the Quick Batch table
+  "this book is on loan — don't reshuffle its pictures".
+- **Photocopying on the way out** = save + publish, so the table sees the edit.
+- **A book returned without a checkout slip** = a crash. The next borrower is asked
+  "the previous one didn't say it finished — open the last saved version?"; unsaved scribbles are gone.
+
+This machinery is **per project**, not per table: only the row whose video is open loses its buttons.
+
+### I. What happens when things go wrong (the failure menu)
+
+| Situation | What the code does | What the visitor sees |
+| --- | --- | --- |
+| Script-writing model fails | Browser retries **7×**, 40 s apart, one inference per try | a normal spinner; no error text in Quick Batch |
+| A pipeline stage fails (voice/plan/animate) | Only that stage is retried on the same ladder; earlier work kept | the row keeps its working label |
+| One photo/clip fails | Only that **item** is retried; successful files and filenames are kept | the rest of the gallery stays |
+| Everything still fails | the row returns quietly to `ready` | buttons stay locked; press Generate again |
+| Pixabay is rate-limiting (`429`) | the server's `Retry-After` hint is honoured; no tight loop | progress pauses, then continues |
+| Image fleet overloaded | server answers `503 + Retry-After`, load governor halves concurrency | the browser waits instead of piling on |
+| Allowance spent | request refused with the counters | "daily allowance exhausted" + reset time |
+| Popup blocked on Edit | the click is still counted; the current editor keeps control | a dialog asking to allow pop-ups |
+| Two tabs edit the same video | newest request wins; loser becomes read-only | top-of-page warning in the old tab |
+| Storage full / blocked | save fails **closed**: nothing is silently overwritten | a red storage banner with a "Reset" button |
+| Browser has no WebCodecs | export refuses up front | "use modern Chrome, Edge or Safari" |
+| Video would be huge in memory | asks for confirmation first | "this may crash the tab — continue?" |
+| Tab closed mid-edit | `pagehide` flushes one last save | whatever was not saved is gone (and it says so) |
+
+### J. Limits cheat sheet (memorise these and you know the app)
+
+| Thing | Limit |
+| --- | --- |
+| Videos in the Editor · rows in Quick Batch | 10 · 10 (5 per page) |
+| Minimum script for a Quick Batch row | **10 words** |
+| Scenes per automatic video | **12 = 8 photos + 4 clips** (clips at slots 2, 5, 8, 11) |
+| Uploads per video | 25 images · 5 GIFs · 5 MP4s (60 s each) |
+| Still-picture duration | 9 s (list repeats until the MP3 ends) |
+| Captions | 10 rows · 40 characters · last one hidden after ~10 s |
+| Voiceover | ≤ 8,000 characters, chunks ≤ 400, 8 languages (`en` default) |
+| Images per day | **10,000** per account **and** per guest network; reset 00:00 Asia/Taipei |
+| Image pacing | ~3 images / 3 s per row; 12 max per legacy batch request |
+| Video output | 30 fps, H.264 + AAC, presets 854×480 · 1280×720 · 1280×720-high |
+| Timeline editor | ≤ 60 min project, ≤ 80 s per item slider, min clip 0.25 s, ≤ 4 visual tracks, ≤ 100 media files |
+| Backup Workers | 5 |
+| Settings page | `/{day}/config/uvxyz`, password-gated, Asia/Taipei day |
+| CMS | 8 pages · 100 blocks · flat slug ≤ 64 chars |
+| Payment receipt | 5 MiB, PNG/JPEG/WebP/GIF only |
+
+### K. How to run and check it yourself
+
+```bash
+npm install
+npx wrangler kv namespace create KV_BINDING   # paste the id into wrangler.json
+npx wrangler dev                              # local server with bindings
+npx wrangler deploy                           # publish
+npm test                                      # 53 files / ~620 checks (jsdom + node)
+npx tsc --noEmit                              # type-check (some pre-existing errors in src/index.ts)
+```
+
+- `PIXABAY_ALLOW_UNMETERED=true` lets local runs import stock media without KV (dev only).
+- `RELAY_SECRET` must be identical on every Worker in a rotation pool.
+- `render-app/` is optional and independent: `cd render-app && npm install && npm start`.
+
+**Verification of this appendix (2026-11-18):** documentation-only change; no source code was
+modified. `tests/session-331-fixes.test.mjs` and `tests/timeline-preview-parity.test.mjs` pass;
+`tests/final-media-cap-actions.test.mjs` reports 10/14 with four failures (`Edit opens a new page…`,
+`…one dummy text at 0:00…`, `…live video style…`, `Generate refuses unprepared staged rows…`) and
+`tests/deep-debug-regressions.test.mjs` has one frame-size assertion failure — all five are
+**pre-existing on this branch as received** and unrelated to this document.
+
+### L. The whole thing in ten sentences
+
+1. One small program on Cloudflare answers every URL; one big page in the browser does all the work.
+2. Signup/login lives in Cloudflare KV; a cookie remembers you for 30 days.
+3. An AI plans keywords and writes a plain narration script (1 long-tail ≥ 1×, 4 short ≥ 2× each).
+4. A second AI speaks it; the MP3 is cut into small chunks and stitched back together.
+5. A text model turns the script into 12 short Pixabay search phrases.
+6. Your browser itself downloads 8 photos and 4 clips and checks they are really images/video.
+7. Every video buys its scenes from a 10,000-per-day allowance that resets at Taipei midnight.
+8. A canvas paints the slides, subtitles and titles; WebCodecs encodes them at 30 fps.
+9. The Quick Batch table runs three rows at a time; the timeline editor edits one video at a time
+   under a browser lock, saving into localStorage with cookie backups.
+10. Everything is stored in **your** browser, so a reload can keep your work — and clearing site data
+    can destroy it.
+
+**One-line summary:** *write a script → an AI plans stock searches and speaks it → your browser
+downloads the pictures, paints the slides, and encodes the MP4 locally.*
+
+### M. Documentation drift found while writing this appendix (code wins)
+
+Three old numbers in the prose documents no longer match the code. They are listed here instead of
+being silently repeated, because a beginner reading the wrong number would design the wrong thing:
+
+| Where the old number lives | Old claim | What the code actually does |
+| --- | --- | --- |
+| `README.md` "Limits worth knowing" → Voiceover | "chunked at 500" | `VOICEOVER_MAX_CHUNK = 400` in `src/modules/voiceover.ts`; `/api/voiceover` rejects a chunk over 400 characters |
+| `README.md` "Limits worth knowing" → Captions, and the quoted on-screen hint in `system-rules.md` RULE 18 | "last caption capped at 12 s" | `CAPTION_MAX_VISIBLE_MS = 10 000` (10 s) in `src/client/app-js.ts` — the *hint text* still says 12 s, so the copy and the constant disagree |
+| `system-rules.md` RULE 33, opening line | "up to four backup Worker URLs" | `MAX_RELAY_WORKERS = 5` (`src/modules/api-relay.ts`) and the `config/workers` validator slices to 5 (`src/index.ts`); the settings page accepts five |
+
+None of these is a new bug — they are documentation lag. The quickest fix is to correct the prose
+(500 → 400, 12 s → 10 s, four → five) or, for the caption hint, to decide which number is intended and
+change the constant or the copy so they match. This appendix uses the **code** values throughout.
