@@ -10,7 +10,7 @@ export const CONFIG_PAYMENT_GATEWAY_KEY = "config:payment_gateway";
 export const PAYMENT_META_PREFIX = "payment:";
 export const PAYMENT_IMAGE_PREFIX = "payment_img:";
 export const PAYMENT_TXN_PREFIX = "payment_txn:";
-export const MAX_PAYMENT_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MiB
+export const MAX_PAYMENT_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MiB
 
 export interface PaymentGatewayConfig {
 	gatewayName: string;
@@ -217,11 +217,18 @@ async function parseUploadedScreenshotRequest(request: Request): Promise<
 			return {
 				ok: false,
 				status: 413,
-				error: "Screenshot image is too large (maximum 5 MB)."
+				error: "Screenshot image is too large (maximum 4 MB)."
 			};
 		}
 
 		const bytes = new Uint8Array(await file.arrayBuffer());
+		if (bytes.length > MAX_PAYMENT_IMAGE_BYTES) {
+			return {
+				ok: false,
+				status: 413,
+				error: "Screenshot image is too large (maximum 4 MB)."
+			};
+		}
 		const userNote = String(form.get("userNote") ?? form.get("note") ?? "")
 			.trim()
 			.slice(0, 300);
@@ -266,7 +273,7 @@ async function parseUploadedScreenshotRequest(request: Request): Promise<
 		return {
 			ok: false,
 			status: 413,
-			error: "Screenshot image is too large (maximum 5 MB)."
+			error: "Screenshot image is too large (maximum 4 MB)."
 		};
 	}
 
@@ -284,7 +291,7 @@ async function parseUploadedScreenshotRequest(request: Request): Promise<
 		return {
 			ok: false,
 			status: 413,
-			error: "Screenshot image is too large (maximum 5 MB)."
+			error: "Screenshot image is too large (maximum 4 MB)."
 		};
 	}
 

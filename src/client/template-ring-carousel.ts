@@ -52,6 +52,15 @@ export const TEMPLATE_RING_CAROUSEL_JS = `
 				ringRenderUploadAccordion(state);
 				return;
 			}
+			if (files.some(function (file) {
+				const mime = String(file && file.type || "").toLowerCase();
+				const name = String(file && file.name || "");
+				return (mime === "image/gif" || /\\.gif$/i.test(name)) && Number(file.size) > 30 * 1024 * 1024;
+			})) {
+				state.ringMessage = "GIF files must be 30 MB or smaller. Your current images were kept.";
+				ringRenderUploadAccordion(state);
+				return;
+			}
 			const version = ++ringUploadVersion;
 			const staged = [];
 			state.ringUploading = true;

@@ -177,6 +177,39 @@ These rules describe the current code and supersede earlier session notes where 
 
 **Documentation change (this session):** rule 3 now states the row/project scope explicitly, that the toolbar note is only a hint, and that rows not open in a timeline editor keep their media buttons. Every clause in this file that meant the Quick Batch timeline editor now says **timeline editor** instead of "editor", and the terminology block at the top records that convention. No source code changed: the implementation already matched the clarified rule.
 
+
+## Auth caps, 30-day session TTL, 4 MB payment screenshot cap, and 30 MB GIF caps (2026-11-18)
+
+**Changes implemented:**
+
+1. **Payment / phone screenshot upload capped at 4 MiB (4 MB) only** (`src/modules/payments.ts`, `src/client/payment-upload-js.ts`):
+   - Lowered `MAX_PAYMENT_IMAGE_BYTES` (Worker) and `MAX_BYTES` (`/upgrade` client uploader) from `5 * 1024 * 1024` to `4 * 1024 * 1024` (4 MiB).
+   - Enforced across multipart `POST /api/payments/upload` (both `file.size` and decoded byte length), JSON/data-URL base64 uploads (both pre-decode character guard and decoded byte length), client file selection/drag-drop, and submit click handler; updated all dropzone and `413` error messages to `4 MB`.
+   - Regular still-image uploads (PNG/JPEG/WebP/etc.) in the Editor, timeline editor, and template composer intentionally have **no** 4 MB file-size cap.
+
+2. **Signup username & email capped at 40 characters; total account count remains uncapped** (`src/index.ts`, `src/client/app-js.ts`, `src/modules/user-pages.ts`):
+   - Added `AUTH_USERNAME_MAX_CHARS = 40` and `AUTH_EMAIL_MAX_CHARS = 40`.
+   - `POST /api/signup` validates usernames with `/^[a-zA-Z0-9_]{3,40}$/` (3–40 letters, numbers, or `_`) and rejects trimmed/lowercased emails over 40 characters (`400`) before checking email syntax (`/^[^\s@]+@[^\s@]+\.[^\s@]+$/`), bounding KV `email:<address>` keys well inside Cloudflare KV's 512-byte key limit. Total signup account count stays uncapped.
+   - Updated `#auth-username` and `#auth-email` in the studio auth modal and `#ia-username` and `#ia-email` on `/account` & `/upgrade` to `maxlength="40"` with matching client-side validation and error messages.
+
+3. **30-day KV TTL on login & signup sessions** (`src/index.ts`):
+   - Added `AUTH_SESSION_TTL_SECONDS = 30 * 24 * 3600` (`2,592,000` seconds = 30 days) and passed `{ expirationTtl: AUTH_SESSION_TTL_SECONDS }` on `KV_BINDING.put("session:" + token, ...)` in both `POST /api/signup` and `POST /api/login`, matching `yvs_session` cookie `Max-Age=2592000`.
+   - Added `authSessionExpired()` on `authSessionFromRequest()` and `GET /api/session` so pre-existing legacy sessions without a KV TTL whose `createdAt` is older than 30 days are rejected (`401`) and deleted from KV on access.
+
+4. **30 MiB GIF file-size cap and 30 MiB decoded GIF frame memory cap** (`src/client/app-js.ts`, `src/client/timeline-editor.ts`, `src/client/markup.ts`, `src/client/template-composer-js.ts`, `src/client/template-ring-carousel.ts`):
+   - **GIF file size (`MAX_GIF_FILE_BYTES = 30 * 1024 * 1024`):** Enforced in Editor accordion uploads (`#va-file-N`), legacy `#file-upload`, `prepareVideo()`, `parseGifBytes()`, `decodeGifFrames()`, timeline editor `addMediaFiles()`, `storeOneAsset()`, `storeProjectAssets()`, and template composer / 3D ring uploads. Files exceeding 30 MiB with a non-GIF extension/MIME have their first 6 bytes checked for `GIF87a`/`GIF89a` so renamed GIFs cannot bypass the 30 MiB limit while regular photos of any size remain completely uncapped and valid sibling uploads in the same batch still load.
+   - **Timeline GIF metadata & Quick Batch hydration fix:** `addMediaFiles()` now persists normalized `type: "image/gif"` to IndexedDB even when a `.gif` file reports an empty browser `file.type`, and `src/client/app-js.ts` defines `decodeGifFrames(blob)` (enforcing both 30 MiB caps) so timeline GIFs hydrated into Quick Batch decode properly.
+   - **Decoded GIF frame budget (`GIF_FRAME_BUDGET_BYTES = 30 * 1024 * 1024`):** Lowered `buildGifSlideFrames()` budget from 120 MiB to 30 MiB using floor downscaling, per-frame indexed pixel release (`frame.pixels = null`), full delta/disposal composition, and duration-preserving even frame subsampling whenever extreme frame counts would exceed 30 MiB at the spatial readability floor — keeping total retained RGBA frame bytes strictly `<= 30 MiB` while preserving exact `loopMs`. Added per-frame (`64M` px) and cumulative (`256M` px) indexed-pixel guards in `parseGifBytes()` against malformed LZW decompression bombs.
+   - Updated on-screen upload notes in the Editor, `#file-upload`, and timeline editor inspector (RULE 18).
+
+5. **Intentionally kept unchanged:** `/api/config/workers`, `/api/render*`, `/api/worker/*`, `putBlobStore`/`getBlobStore`, `workerRunJob`, `apiRenderVideo`, the admin Background Worker Mode card, archived `src/index.ts.original`, and standalone `render-app/`.
+
+6. **Verified accompanying rules (code-checked):**
+   - **RULE 8 (MeloTTS voiceover):** Server (`src/modules/voiceover.ts`) owns all text cleaning (`sanitizeVoiceoverText`), 8,000-char slicing (`VOICEOVER_MAX_CHARS`), `<= 400`-char chunking (`splitVoiceoverChunks`), 3-lane synthesis within a 90 s budget, per-chunk 3× `@cf/myshell-ai/melotts` retries, English Deepgram fallbacks (`@cf/deepgram/aura-2-en`, `@cf/deepgram/aura-1`), external fallback (`https://tts-api.netlify.app`), and WAV/MP3 joining. Browser (`src/client/app-js.ts`, `src/client/browser-offload.ts`) sends one full-text `POST /api/voiceover` (165 s timeout); Quick Batch retries a failed voice stage up to 7× at 40 s intervals while the Editor runs a single request per click.
+   - **RULE 11 (Video output & presets):** No codec picker anywhere. Editor accordions encode 30 fps H.264 (`avc1.4d002a`) + AAC (`mp4a.40.2`, 128/160/192 kbps; silent when no audio) at the exact three presets (`854×480` @ 1.2 Mbps, `1280×720` @ 2.5 Mbps, `1280×720` @ 5 Mbps). Quick Batch reuses `generateMP4()` at 30 fps across `[480, 540, 720, 1024] × [1:1, 16:9, 9:16]` frame sizes; timeline editor exports `state.frame` at 30 fps H.264 + 160 kbps AAC (2.5/5 Mbps auto, with a `MediaRecorder` fallback when WebCodecs/`Mp4Muxer` is unavailable); template composer exports silent 30 fps 1080p H.264 @ 6 Mbps.
+
+**Verification:** `tests/session-331-caps-and-ttl.test.mjs` passed 7/7; existing suites `account-rows` (6/6), `public-entry-points` (9/9), `browser-local-render` (3/3), `session-264-editor-render` (10/10), `session-331-fixes` (11/11), `timeline-preview-parity` (2/2), `timeline-quick-batch-sync` (11/11), `timeline-tab-recovery` (6/6), targeted `timeline-editor` upload/export/media checks (6/6), `template-composer` (22/22), `retry-offload-worker` (9/9), and `api-relay` (40/40) all passed (142/142 total). All inline client bundles parsed cleanly, `npx wrangler deploy --dry-run` succeeded, `git diff --check` passed, and `tsc --noEmit` added zero new errors.
+
 ---
 
 ## Appendix — The whole system in plain English (beginner edition)
@@ -334,19 +367,19 @@ translation. **The code is the source of truth**; if a rule here disagrees with 
 | --- | --- |
 | **Governing media rule** | Pictures and clips are **real Pixabay stock**, never AI-drawn. AI is only used for *words* (planning search terms, writing the script) and *speech*. |
 | **RULE 1** | One Worker answers everything. The browser does the heavy work (encoding, drawing). The HTML page is built once and reused. |
-| **RULE 2** | Accounts are rows in KV. No cap on how many accounts exist. Signup: username 3–20 letters/digits/underscore, password ≥ 6, valid email. Logging in lasts 30 days. |
+| **RULE 2** | Accounts are rows in KV. No cap on how many accounts exist. Signup: username 3–40 letters/digits/underscore, password ≥ 6, valid email ≤ 40 characters. Logging in lasts 30 days (both the cookie and the KV session record expire after 30 days). |
 | **RULE 3** | The admin/settings page lives at `/{day-of-month}/config/uvxyz`, where the day is computed in **Asia/Taipei**. So on 18 Nov 2026 it is `/18/config/uvxyz`; yesterday's URL is a 404. It has its own password. |
 | **RULE 4–5** | An old "render on the server" queue still exists in code but no button uses it. Everything renders in the browser now. |
 | **RULE 6** | Pixabay replaces the old AI image generator. Photos must be JPEG/PNG/WebP ≤ 8 MB; clips MP4 ≤ 60 s and ≤ 16 MB; the file's first bytes are checked so an error page can never be saved as "an image". |
 | **RULE 7** | The AI script must contain **exactly 1 long-tail keyword said at least once** and **exactly 4 short keywords each said at least twice**. Extra mentions are always fine. One short keyword must appear in the title and one in a heading. |
-| **RULE 8** | The voice is MeloTTS. Text is cleaned, cut into ≤ 400-character pieces (≤ 8,000 characters total), retried, and falls back to another TTS service if needed. |
+| **RULE 8** | The voice is MeloTTS. The browser sends the full script in one request (Quick Batch retries a failed stage up to 7× at 40 s intervals); the Worker cleans the text, cuts it into ≤ 400-character pieces (≤ 8,000 characters total), retries up to 3× per chunk, falls back to Deepgram Aura (English) and an external TTS service if needed, and stitches the audio back together. |
 | **RULE 9** | Per video: **25 images, 5 GIFs, 5 MP4s (≤ 60 s each)**. A still picture stays on screen **9 seconds**. **The MP3 decides the video length** — slides repeat until the audio is covered. |
 | **RULE 10** | Title and captions are painted per frame at fixed positions (title top-left, captions 4/7 up from the bottom). Up to **10 captions of 40 characters**; the last one stops showing after ~10 s. |
 | **RULE 11** | Output is always **30 fps H.264 video + AAC audio**. Only three quality presets: 480p/1.2 Mbps, 720p/2.5 Mbps, 720p/5 Mbps. No codec picker. |
-| **RULE 12** | GIFs are decoded one frame at a time with a memory cap (~120 MB of frames), so a giant GIF cannot freeze the tab. |
+| **RULE 12** | Each GIF upload is capped at **30 MiB** (Editor, timeline editor, and templates; regular photos have no file-size cap) and decoded frame memory is strictly capped at **30 MiB**, so a giant GIF cannot freeze or crash the tab. |
 | **RULE 13** | One template gallery (15 interactive scenes). The ring template needs **5–7 uploaded images** before it can export. Layers and rotation (0–360°) are shared controls. |
 | **RULE 14** | The Editor's bulk render runs **one video at a time** in the order shown, and cannot be started twice. |
-| **RULE 15** | Every KV record has a lifetime: credits expire in 2 days, render jobs in 1 h, blobs in 2 h; accounts/sessions/settings are permanent. Script notes are **never** in KV (see RULE 35). |
+| **RULE 15** | Every KV record has a lifetime: sessions expire in 30 days, credits in 2 days, render jobs in 1 h, blobs in 2 h; accounts/settings are permanent. Script notes are **never** in KV (see RULE 35). |
 | **RULE 16** | Build/deploy rules: `wrangler.json` names the entry, bindings and compatibility date; type-check + dry-run before deploy. |
 | **RULE 17** | A historical list of spots where old comments disagree with the code. Read it as "trust the code". |
 | **RULE 18** | Every tooltip, note, placeholder and alert **is a promise**: the constant behind each one must match (e.g. "25 images" must really be 25). |
@@ -385,7 +418,7 @@ open "/"  ── landing page (sign up / log in links)
   navigation boundary, not a security boundary — the real "do you have credits?" check happens on
   every metered API call.
 - `/account` shows plan, today's usage, receipts; `/upgrade` explains manual payment, and the visitor
-  uploads a receipt screenshot (≤ 5 MiB). An admin later approves it with a transaction number, and
+  uploads a receipt screenshot (≤ 4 MiB). An admin later approves it with a transaction number, and
   only then does the account become `paid_user`.
 
 #### F2. The Editor (the accordion view)
@@ -394,7 +427,7 @@ open "/"  ── landing page (sign up / log in links)
    title, quality and script; deleting a card renumbers the rest.
 2. **✨ Generate SEO Script** opens the 4-step walkthrough (plan → choose keywords → choose style →
    write & fetch). It can be closed while it works; the result lands in the card's Script box.
-3. **📁 Upload Image, GIF or MP4** adds up to 25 stills / 5 GIFs / 5 MP4s, or
+3. **📁 Upload Image, GIF or MP4** adds up to 25 stills / 5 GIFs (≤ 30 MiB each) / 5 MP4s, or
    **Add video from template** builds a 1–25 s clip from one of the 15 interactive scenes.
 4. **🎵 Upload MP3 Audio** (or the generated voiceover) sets the length of the video.
 5. **Title**, **Quality** (480p/720p/720p-high) — plain controls.
@@ -502,7 +535,7 @@ One page, password-protected, at today's day-stamped URL, with seven tabs:
 | localStorage | `ytvs.script-notes.v1` | script notes | 24 entries / 7 days |
 | localStorage | `ytvs.quick-batch-completed.v1` | finished-row archive | 40 entries / 24 h |
 | IndexedDB | `ytvs-timeline-editor-assets-v1` | **MP3 + photos + clips (the bytes)** | browser quota |
-| KV (server) | `user:`, `email:`, `credits:`, `ipcredits:`, `config:*`, `payment:*` | accounts, counters, settings, receipts | see RULE 15 |
+| KV (server) | `user:`, `email:`, `session:`, `credits:`, `ipcredits:`, `config:*`, `payment:*` | accounts, 30-day sessions, counters, settings, receipts | see RULE 15 |
 
 **Plain rule of thumb:** the server knows *who you are and how much you may spend*. Your browser
 knows *what you made*. Clearing site data deletes your projects; deleting your account does not.
@@ -544,21 +577,22 @@ This machinery is **per project**, not per table: only the row whose video is op
 
 | Thing | Limit |
 | --- | --- |
+| Account signup & login | username 3–40 chars (`[a-zA-Z0-9_]`) · email ≤ 40 chars · password ≥ 6 · session TTL 30 days (no account count cap) |
 | Videos in the Editor · rows in Quick Batch | 10 · 10 (5 per page) |
 | Minimum script for a Quick Batch row | **10 words** |
 | Scenes per automatic video | **12 = 8 photos + 4 clips** (clips at slots 2, 5, 8, 11) |
-| Uploads per video | 25 images · 5 GIFs · 5 MP4s (60 s each) |
+| Uploads per video | 25 images (no file-size cap) · 5 GIFs (≤ 30 MiB file, ≤ 30 MiB decoded frames) · 5 MP4s (60 s each) |
 | Still-picture duration | 9 s (list repeats until the MP3 ends) |
 | Captions | 10 rows · 40 characters · last one hidden after ~10 s |
 | Voiceover | ≤ 8,000 characters, chunks ≤ 400, 8 languages (`en` default) |
 | Images per day | **10,000** per account **and** per guest network; reset 00:00 Asia/Taipei |
 | Image pacing | ~3 images / 3 s per row; 12 max per legacy batch request |
 | Video output | 30 fps, H.264 + AAC, presets 854×480 · 1280×720 · 1280×720-high |
-| Timeline editor | ≤ 60 min project, ≤ 80 s per item slider, min clip 0.25 s, ≤ 4 visual tracks, ≤ 100 media files |
+| Timeline editor | ≤ 60 min project, ≤ 80 s per item slider, min clip 0.25 s, ≤ 4 visual tracks, ≤ 100 media files (GIFs ≤ 30 MiB; regular images uncapped) |
 | Backup Workers | 5 |
 | Settings page | `/{day}/config/uvxyz`, password-gated, Asia/Taipei day |
 | CMS | 8 pages · 100 blocks · flat slug ≤ 64 chars |
-| Payment receipt | 5 MiB, PNG/JPEG/WebP/GIF only |
+| Payment receipt | 4 MiB, PNG/JPEG/WebP/GIF only |
 
 ### K. How to run and check it yourself
 
