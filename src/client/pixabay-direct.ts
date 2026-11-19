@@ -17,9 +17,9 @@
  * request budget. The fetch now starts in the page.
  *
  * Safety rules kept from `src/modules/pixabay.ts` (code is the source of truth):
- *   - upstream `per_page=12`, pages 1-2, `safesearch=true`, photos are
+ *   - upstream `per_page=14`, pages 1-2, `safesearch=true`, photos are
  *     `image_type=photo` + orientation, videos send no orientation;
- *   - eight photo results and four video results are exposed per search;
+ *   - eight photo results and six video results are exposed per search;
  *   - media URLs must be HTTPS on `pixabay.com` or `cdn.pixabay.com`, with no
  *     credentials, port or `key` parameter;
  *   - JPEG/PNG/WebP photos (8 MiB) and MP4 clips <= 60 s (16 MiB) only, with
@@ -38,7 +38,7 @@ function createPixabayDirectRuntime(win) {
 	var CONFIG_PATH = "/api/media/config";
 	var DEFAULT_CLAIM_PATH = "/api/media/claim";
 	var DEFAULT_SETTLE_PATH = "/api/media/settle";
-	var PER_PAGE = 12, IMAGE_RESULTS = 8, VIDEO_RESULTS = 4, MAX_PAGES = 2;
+	var PER_PAGE = 14, IMAGE_RESULTS = 8, VIDEO_RESULTS = 6, MAX_PAGES = 2;
 	var MAX_IMAGE_BYTES = 8 * 1024 * 1024, MAX_VIDEO_BYTES = 16 * 1024 * 1024;
 	var CONFIG_TTL = 10 * 60 * 1000, CONFIG_DISABLED_TTL = 60 * 1000;
 	var ASSET_CORS_HOLD_MS = 5 * 60 * 1000;

@@ -123,11 +123,11 @@ test("script generation rejects an invalid selected keyword set before calling A
 });
 
 test("image prompt counts, fixed style catalog, and compact general-idea instructions are consistent", () => {
-	assert.equal(imagePromptCountForMinutes(1), 12);
-	assert.equal(imagePromptCountForMinutes(2), 12);
-	assert.equal(imagePromptCountForMinutes(3), 12);
-	assert.equal(imagePromptCountForMinutes(4), 12);
-	assert.equal(imagePromptCountForMinutes(5), 12);
+	assert.equal(imagePromptCountForMinutes(1), 14);
+	assert.equal(imagePromptCountForMinutes(2), 14);
+	assert.equal(imagePromptCountForMinutes(3), 14);
+	assert.equal(imagePromptCountForMinutes(4), 14);
+	assert.equal(imagePromptCountForMinutes(5), 14);
 	assert.deepEqual(IMAGE_STYLES, [
 		"Cinematic Film", "Editorial Magazine", "Kinetic Typography", "Neon Night", "Minimalist",
 		"Retro Poster", "Documentary", "Split Composition", "Dream Glow", "Pop Comic"
@@ -136,8 +136,8 @@ test("image prompt counts, fixed style catalog, and compact general-idea instruc
 	const script = "The first sentence introduces a home garden. The middle sentence contains implementation detail that is not needed by the image model. The final sentence shows the garden feeding a healthier neighborhood.";
 	const idea = summarizeScriptIdea(script, "Home gardening");
 	const instruction = buildImagePromptInstruction({ topic: "Home gardening", minutes: 3, style: "Kinetic Typography", script });
-	assert.match(instruction, /exactly 12 image prompts/);
-	assert.match(instruction, /exactly 12 image prompts[^.]*four video scenes and eight photo scenes/);
+	assert.match(instruction, /exactly 14 image prompts/);
+	assert.match(instruction, /exactly 14 image prompts[^.]*six video scenes and eight photo scenes/);
 	assert.match(instruction, /video image style: Kinetic Typography/);
 	assert.match(instruction, /motion-design-inspired composition/);
 	assert.match(instruction, /general meaning of the whole video/);

@@ -227,7 +227,7 @@ It does not film anything. It does not paint pictures with AI. In practice it:
 
 1. lets the visitor type (or have AI write) a **narration script**;
 2. has an AI voice **read that script aloud** → an MP3;
-3. searches **Pixabay** (a free stock-photo/video site) for **12 matching pictures and clips**;
+3. searches **Pixabay** (a free stock-photo/video site) for **14 matching pictures and clips**;
 4. paints those pictures into animated slides with the script as **subtitles**;
 5. **builds the MP4 video right inside the visitor's browser** and downloads it.
 
@@ -269,7 +269,7 @@ click "Generate"  ──POST /api/script────▶  pick a model, ask for a
                   ──POST /api/voiceover──▶  cut text into <=400-char chunks ─▶  MeloTTS (+fallback TTS)
                   ◀──── audio bytes ─────
                   ──POST /api/image-prompts▶ ask the text model for search words
-                  ◀──── 12 search terms ──
+                  ◀──── 14 search terms ──
                   ──GET /api/media/config──▶ here is the Pixabay key + limits
                   ──(browser talks to pixabay.com / cdn.pixabay.com directly)──▶  Pixabay
                   ──POST /api/media/claim─▶  reserve image credits
@@ -338,7 +338,7 @@ src/modules/
   script-notes.ts ......... in-memory note store (0 KV writes) + stale-note detection
   script-notes-api.ts ..... the legacy note routes + hang budgets
   script-event-loop.ts .... small Node-style scheduler for the two-stage script work
-  image-prompts.ts ........ script → 12 Pixabay search terms (fixed scene plan)
+  image-prompts.ts ........ legacy server-side planner (browser now plans 14 Pixabay search terms from the script)
   pixabay.ts .............. search, cache, download, byte validation, rate limiting
   image-batch.ts .......... credit reservation, per-scene work, retries, refunds, transport
   image-load.ts ........... adaptive concurrency governor (starts at 3, grows to 6, halves on overload)
@@ -398,7 +398,7 @@ translation. **The code is the source of truth**; if a rule here disagrees with 
 | **RULE 33** | Up to **5 backup Workers** can be registered. AI calls are spread **round-robin**, with health checks, a cooldown when one misbehaves, and only AI paths ever leave the primary. |
 | **RULE 34** | The text model itself rotates between **Cloudflare Workers AI** and **OpenRouter**; a broken key is benched for a while and the call falls through to the other provider. |
 | **RULE 35** | **Script details never touch the server's database.** The durable copy is the visitor's `localStorage` + a compact cookie, compared by digest/timestamp/length. The Worker keeps only a throwaway in-memory copy. |
-| **FINAL RULE (Quick Batch layout)** | Non-media stages fail → the browser retries **7 times, 40 s apart, silently**. Photos/clips fail → only the **individual failed item** is retried on the same ladder. Every video plans **12 scenes = 8 photos + 4 clips**, whatever the script length. The last table column is **Actions** (Preview ▶, Process export ⚙, Edit ✎). |
+| **FINAL RULE (Quick Batch layout)** | Non-media stages fail → the browser retries **7 times, 40 s apart, silently**. Photos/clips fail → only the **individual failed item** is retried on the same ladder. Every video plans **14 scenes = 8 photos + 6 clips**, whatever the script length. The last table column is **Actions** (Preview ▶, Process export ⚙, Edit ✎). |
 
 ### F. The user flows, step by step
 
@@ -580,13 +580,13 @@ This machinery is **per project**, not per table: only the row whose video is op
 | Account signup & login | username 3–40 chars (`[a-zA-Z0-9_]`) · email ≤ 40 chars · password ≥ 6 · session TTL 30 days (no account count cap) |
 | Videos in the Editor · rows in Quick Batch | 10 · 10 (5 per page) |
 | Minimum script for a Quick Batch row | **10 words** |
-| Scenes per automatic video | **12 = 8 photos + 4 clips** (clips at slots 2, 5, 8, 11) |
+| Scenes per automatic video | **14 = 8 photos + 6 clips** (clips at slots 2, 4, 6, 9, 11, 14) |
 | Uploads per video | 25 images (no file-size cap) · 5 GIFs (≤ 30 MiB file, ≤ 30 MiB decoded frames) · 5 MP4s (60 s each) |
 | Still-picture duration | 9 s (list repeats until the MP3 ends) |
 | Captions | 10 rows · 40 characters · last one hidden after ~10 s |
 | Voiceover | ≤ 8,000 characters, chunks ≤ 400, 8 languages (`en` default) |
 | Images per day | **10,000** per account **and** per guest network; reset 00:00 Asia/Taipei |
-| Image pacing | ~3 images / 3 s per row; 12 max per legacy batch request |
+| Image pacing | ~3 images / 3 s per row; 14 max per legacy batch request |
 | Video output | 30 fps, H.264 + AAC, presets 854×480 · 1280×720 · 1280×720-high |
 | Timeline editor | ≤ 60 min project, ≤ 80 s per item slider, min clip 0.25 s, ≤ 4 visual tracks, ≤ 100 media files (GIFs ≤ 30 MiB; regular images uncapped) |
 | Backup Workers | 5 |
@@ -622,8 +622,8 @@ modified. `tests/session-331-fixes.test.mjs` and `tests/timeline-preview-parity.
 2. Signup/login lives in Cloudflare KV; a cookie remembers you for 30 days.
 3. An AI plans keywords and writes a plain narration script (1 long-tail ≥ 1×, 4 short ≥ 2× each).
 4. A second AI speaks it; the MP3 is cut into small chunks and stitched back together.
-5. A text model turns the script into 12 short Pixabay search phrases.
-6. Your browser itself downloads 8 photos and 4 clips and checks they are really images/video.
+5. The browser turns the script into 14 short Pixabay search phrases (three content words at every 12th–15th word, articles removed).
+6. Your browser itself downloads 8 photos and 6 clips and checks they are really images/video.
 7. Every video buys its scenes from a 10,000-per-day allowance that resets at Taipei midnight.
 8. A canvas paints the slides, subtitles and titles; WebCodecs encodes them at 30 fps.
 9. The Quick Batch table runs three rows at a time; the timeline editor edits one video at a time
@@ -631,8 +631,23 @@ modified. `tests/session-331-fixes.test.mjs` and `tests/timeline-preview-parity.
 10. Everything is stored in **your** browser, so a reload can keep your work — and clearing site data
     can destroy it.
 
-**One-line summary:** *write a script → an AI plans stock searches and speaks it → your browser
+**One-line summary:** *write a script → the browser plans stock searches from the script and speaks it → your browser
 downloads the pictures, paints the slides, and encodes the MP4 locally.*
+
+### N. Browser scene-keyword planning (2026-11-19)
+
+**What changed:** The studio no longer POSTs the narration script to `/api/image-prompts` for a text model to plan Pixabay search keywords. Scene keywords are now planned entirely in the browser from the row's script.
+
+**How it works** (`src/client/app-js.ts`, `planBrowserSceneKeywords(script, totalScenes)`):
+
+1. **Three words at every x-th word.** The planner walks the script's content words and takes three at every x-th position, where x is drawn once from the arithmetic sequence `[12, 13, 14, 15]`. If the script runs out before all scenes are filled, positions wrap around to the start.
+2. **Articles removed.** Selected words are filtered through the stopword list (`SCRIPT_KEYWORD_STOPWORDS`, `SCRIPT_KEYWORD_WEAK_WORDS`) so articles (`a`, `an`, `the`) and other short function words never reach Pixabay.
+3. **Scene types fixed.** Six scenes are video and eight are photos, at positions `[1, 3, 5, 8, 10, 13]` (zero-based), matching `BROWSER_VIDEO_POSITIONS`.
+4. **Browser-side only.** `requestBatchPrompts` (Quick Batch) and the Editor's prompt request both call `planBrowserSceneKeywords` from `row.script` / `project.script`, slice by batch offset/count, and return `pixabay:JSON` tokens. No text model is consulted and `/api/image-prompts` is not called for these flows.
+
+**Scene counts:** All constants moved from 12 to 14 — `AUTO_MEDIA_TOTAL=14`, `AUTO_VIDEO_SCENES=6`, `AUTO_IMAGE_SCENES=8`, plus matching constants in `src/modules/image-prompts.ts`, `src/modules/pixabay.ts`, `src/modules/image-batch.ts`, `src/client/progressive-image-pipeline.ts`, `src/client/pixabay-direct.ts`, and `src/index.ts` (worker capabilities `mediaSceneCap: 14`, `mediaVideoScenes: 6`, `mediaImageScenes: 8`).
+
+**Tests:** `session-331-fixes.test.mjs` (11/11), `final-media-cap-actions.test.mjs` (14/14), `quick-batch-table.test.mjs` (8 pass / 7 pre-existing failures, unchanged from baseline).
 
 ### M. Documentation drift found while writing this appendix (code wins)
 

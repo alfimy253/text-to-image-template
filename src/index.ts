@@ -344,9 +344,9 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				batchPipelineRetries: 7,
 				quickBatchPipelineRetryBackoffMs: 40000,
 				batchPipelineRetryBackoffMs: 40000,
-				/* Fixed 12-scene media cap, per-item media retries and unique filenames. */
-				mediaSceneCap: 12,
-				mediaVideoScenes: 4,
+		/* Fixed 14-scene media cap (six clips + eight photos), per-item media retries and unique filenames. */
+		mediaSceneCap: 14,
+				mediaVideoScenes: 6,
 				mediaImageScenes: 8,
 				mediaItemRetryOwner: "browser",
 				mediaItemRetries: 7,
@@ -379,7 +379,7 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				imageRetryOwner: "worker",
 				workerImageAttempts: IMAGE_OVERLOAD_ATTEMPTS,
 				imageRetryBudgetMs: IMAGE_RETRY_BUDGET_MS,
-				mediaProvider: "pixabay", per_page: 12, image_per_page: 8, video_per_page: 4 }), {
+				mediaProvider: "pixabay", per_page: 14, image_per_page: 8, video_per_page: 6 }), {
 				headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
 			});
 		}
@@ -1350,16 +1350,18 @@ async function handleRequest(request: any, env: any, ctx: any) {
 		}
 
 		/*
-		 * TEXT-LLM STOCK KEYWORDS + PIXABAY PHOTO/VIDEO DELIVERY (no polling):
+		 * PIXABAY PHOTO/VIDEO DELIVERY (no polling):
 		 *   POST /api/image-prompts  -> {prompts: [...]} in the body
 		 *   POST /api/image-batch    -> application/x-ndjson stream of
 		 *                               {type:"image"} events, one per
 		 *                               rendered scene (see
 		 *                               src/modules/image-batch.ts)
-		 * The prompt count follows the script length (1 min -> 10,
-		 * 2-3 min -> 14, 4-6 min -> 20), including exactly two video slots.
-		 * The text model plans short stock-search keywords from the whole script inside
-		 * the POST, so the browser never polls a background job; the old
+		 * Studio scenes are keyworded in the browser from the narration
+		 * script (three content words at every x-th word, x drawn from
+		 * 12-15, articles removed), so the studio no longer POSTs the
+		 * script to /api/image-prompts; the route stays live for legacy
+		 * and external callers, still on the fixed 14-scene plan
+		 * (six clips + eight photos). The old
 		 * /api/image-prompts/<id> job URL now answers 410 Gone.
 		 */
 		if (
@@ -5406,9 +5408,9 @@ function mediaBrowserConfigResponse(
 		assetHosts: ["cdn.pixabay.com"],
 		/* Browser Pixabay access necessarily uses the public provider key. */
 		key: enabled ? String(env.PIXABAY_API_KEY).trim() : "",
-		perPage: 12,
+		perPage: 14,
 		imageResults: 8,
-		videoResults: 4,
+		videoResults: 6,
 		maxImageBytes: 8 * 1024 * 1024,
 		maxVideoBytes: 16 * 1024 * 1024,
 		claimPath: "/api/media/claim",

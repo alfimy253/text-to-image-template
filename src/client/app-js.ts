@@ -2316,7 +2316,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				if (Number(edit.projectDetail.audioCount) > 0 || (Array.isArray(edit.audios) && edit.audios.length > 0)) {
 					row.mp3 = true;
 				}
-				if (row.mp3 && (Number(row.images) >= 12 || Boolean(row.finished))) {
+				if (row.mp3 && (Number(row.images) >= AUTO_MEDIA_TOTAL || Boolean(row.finished))) {
 					row.stage = "done";
 					row.animated = true;
 					row.finished = true;
@@ -2644,9 +2644,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	const MAX_MP4_UPLOADS =
 		5;
 
-	/* FINAL MEDIA CAP: both layouts plan the same 12 automatic scenes. */
-	const AUTO_MEDIA_TOTAL = 12;
-	const AUTO_VIDEO_SCENES = 4;
+	/* FINAL MEDIA CAP: both layouts plan the same 14 automatic scenes. */
+	const AUTO_MEDIA_TOTAL = 14;
+	const AUTO_VIDEO_SCENES = 6;
 	const AUTO_IMAGE_SCENES = 8;
 	const MEDIA_ITEM_MAX_RETRIES = 7;
 	const MEDIA_ITEM_TOTAL_ATTEMPTS = MEDIA_ITEM_MAX_RETRIES + 1;
@@ -2654,6 +2654,88 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	const MEDIA_ITEM_UI_CHECK_MS = 250;
 	const MEDIA_MAX_PIXABAY_PAGES = 2;
 	const MEDIA_TRANSITION_STORAGE_PREFIX = "ytvs.transition-project.v1.";
+
+
+	/* ----------------------------------------------------------------
+	 * Browser-side script keyword planning (no server, no text model).
+	 *
+	 * The narration is split into words, articles (a, an, the) are
+	 * removed, and three words are taken at every x-th word. x is drawn
+	 * once from 12, 13, 14 or 15, so the pick positions form the
+	 * arithmetic sequence 0, x, 2x, 3x ... — one three-word Pixabay
+	 * search term per scene, every word actually spoken in the script.
+	 * If the script runs out of words the sequence wraps around, so
+	 * every scene still gets a search term.
+	 * ---------------------------------------------------------------- */
+	const BROWSER_KEYWORD_STEPS = [12, 13, 14, 15];
+	const BROWSER_KEYWORD_WORDS_PER_SCENE = 3;
+	const BROWSER_KEYWORD_ARTICLES = new Set(["a", "an", "the"]);
+
+	function browserContentWords(script) {
+		const words = [];
+		const token = String(script || "").match(/[A-Za-z0-9]+/g) || [];
+		for (var i = 0; i < token.length; i++) {
+			const lower = String(token[i]).toLowerCase();
+			if (BROWSER_KEYWORD_ARTICLES.has(lower)) continue;
+			words.push(lower);
+		}
+		return words;
+	}
+
+	/* One three-word search term per scene, taken from the script itself. */
+	function planBrowserSceneKeywords(script, totalScenes) {
+		const words = browserContentWords(script);
+		const total = Math.max(1, Math.floor(Number(totalScenes) || AUTO_MEDIA_TOTAL));
+		if (!words.length) {
+			return Array.from({ length: total }, function () { return "video"; });
+		}
+		const step = BROWSER_KEYWORD_STEPS[Math.floor(Math.random() * BROWSER_KEYWORD_STEPS.length)];
+		const keywords = [];
+		for (var scene = 0; scene < total; scene++) {
+			const start = (scene * step) % words.length;
+			const picked = [];
+			for (var offset = 0; offset < BROWSER_KEYWORD_WORDS_PER_SCENE; offset++) {
+				picked.push(words[(start + offset) % words.length]);
+			}
+			keywords.push(picked.join(" "));
+		}
+		return keywords;
+	}
+
+	/* Browser-side mirror of the fixed Pixabay plan in src/modules/pixabay.ts:
+	 * six zero-based video slots in the 14-scene plan; every other slot is a photo.
+	 * Kept in sync with PIXABAY_VIDEO_POSITIONS there. */
+	const BROWSER_VIDEO_POSITIONS = [1, 3, 5, 8, 10, 13];
+
+	function browserImageScenePositions(total) {
+		var positions = [];
+		for (var scene = 0; scene < total; scene++) {
+			if (BROWSER_VIDEO_POSITIONS.indexOf(scene) === -1) positions.push(scene);
+		}
+		return positions;
+	}
+
+	/* Turns planned keywords into the structured Pixabay search tokens the
+	 * media import understands: one token per scene, with the scene's type
+	 * (video slots come from the fixed plan) and the result index to read. */
+	function buildPixabaySceneTokens(keywords, startScene) {
+		var videoPositions = BROWSER_VIDEO_POSITIONS;
+		var imagePositions = browserImageScenePositions(AUTO_MEDIA_TOTAL);
+		var tokens = [];
+		for (var relative = 0; relative < keywords.length; relative++) {
+			var scene = Math.floor(Number(startScene)) + relative;
+			var isVideo = videoPositions.indexOf(scene) !== -1;
+			var positions = isVideo ? videoPositions : imagePositions;
+			tokens.push("pixabay:" + JSON.stringify({
+				q: String(keywords[relative] || ""),
+				type: isVideo ? "video" : "image",
+				page: 1,
+				index: Math.max(0, positions.indexOf(scene)),
+				scene: scene
+			}));
+		}
+		return tokens;
+	}
 
 
 	const MP4_MAX_DURATION_S =
@@ -11293,9 +11375,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	 * the frame orientation. The resolution is the LONG edge in pixels; the
 	 * short edge follows the orientation (16:9 for landscape / portrait,
 	 * 1:1 for square) so 480 / 540 / 720 stay honest names.
-	 * The values are sent to BOTH /api/image-prompts (so every scene prompt
-	 * is written for that frame) and /api/image-batch (so SDXL really draws
-	 * at that size).
+	 * The frame travels with every Pixabay scene token so each search is
+	 * composed for that shape and size.
 	 */
 	const BATCH_RESOLUTIONS = [480, 540, 720, 1024];
 
@@ -13483,136 +13564,36 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
-	/*
-	 * Session 331: the length the scene windows are cut from. The verified
-	 * voiceover wins, then the worker's measured script span, then the minutes
-	 * the project was created with.
-	 */
-	function editorScenePlanDuration(project) {
-		const audio = Number(project && project.audio && project.audio.duration);
-		if (Number.isFinite(audio) && audio > 0) return audio;
-		const voice = Number(project && project._voiceoverDurationMs);
-		if (Number.isFinite(voice) && voice > 0) return voice / 1000;
-		const measured = Number(project && project.scriptDurationMs);
-		if (Number.isFinite(measured) && measured > 0) return measured / 1000;
-		return Math.max(1, Number(project && project._seoMinutes) || 1) * 60;
-	}
-
-	/* Step 2: the script + the row's style become the scene prompts. */
+	/* Step 2: the scene keywords come from the row's own script, planned
+	 * in the browser. Three content words at every x-th word (x drawn once
+	 * from 12, 13, 14 or 15; articles removed) make one Pixabay search
+	 * term per scene. No text model is consulted and /api/image-prompts
+	 * is never called for this row. */
 	async function requestBatchPrompts(row, batch) {
-
-		const caps = await studioOffload.capabilities();
-		const compact = null;
-		if (caps.compactPrompts) {
-			const owner = { controller: null }; row._promptOwner = owner;
-			const response = await studioOffload.jsonRequest("/api/image-prompts", {
-				method: "POST", headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ topic: batchRowTopic(row), minutes: row.minutes, style: row.style, batch: batch,
-					sceneTotal: AUTO_MEDIA_TOTAL, resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value, script: String(row.script || ""),
-					keywordSource: "script", durationSec: batchScenePlanDuration(row) })
-			}, 60000, {
-				isCancelled: function () { return Boolean(row.stopRequested); },
-				setController: function (controller) { owner.controller = controller; },
-				clearController: function (controller) { if (owner.controller === controller) owner.controller = null; }
-			});
-			const data = await response.json().catch(function () { return null; });
-			if (!response.ok || !data || !data.success || !Array.isArray(data.prompts)) {
-				const error = new Error((data && data.error) || ("Scene prompt request failed (HTTP " + response.status + ")"));
-				error.retryable = response.status === 408 || response.status >= 500 || response.status === 429 || response.ok;
-				/* #263: keep the server's load answer so the retry can wait it out. */
-				error.status = response.status;
-				error.kind = (data && data.kind) || "";
-				error.retryAfterMs = data && Number(data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
-				/* Session 279: the worker ran the ladder; this is what it spent. */
-				error.attempts = Number(data && data.attempts) || 0;
-				error.retryOwner = (data && data.retryOwner) || "";
-				throw error;
-			}
-			return data.prompts;
+		const script = String(row.script || "").trim();
+		if (!script) {
+			const error = new Error("The row needs a script before its scenes can be planned.");
+			error.retryable = false;
+			throw error;
 		}
-		// Separate ownership: prompt lookahead must not overwrite the image stream's Stop handle.
-		const owner = Object.create(row);
-		row._promptOwner = owner;
-		return await batchFetch(
-			owner,
-			"/api/image-prompts",
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json"
-				},
-				body:
-					JSON.stringify({
-						batch: batch,
-						sceneTotal: AUTO_MEDIA_TOTAL,
-						topic:
-							batchRowTopic(row),
-						minutes:
-							row.minutes,
-						style:
-							row.style,
-							/*
-							 * Session #211: the frame the row asked for is
-							 * written into the prompts themselves, so every
-							 * scene is composed for that shape and size.
-							 */
-							resolution:
-								batchResolution(row.resolution),
-							orientation:
-								batchOrientation(row.orientation).value,
-						scriptIdea: compact || undefined,
-						script: compact ? undefined : String(row.script || "").trim(),
-						/* Session 331: script-anchored scene keywords (no model). */
-						keywordSource: "script",
-						durationSec: batchScenePlanDuration(row)
-					})
-			},
-			60000,
-			async function (response) {
-
-				const data =
-					await response
-						.json()
-						.catch(function () { return {}; });
-
-				if (!response.ok || !data.success) {
-
-					const error = new Error((data && data.error) || ("Stock search terms failed (HTTP " + response.status + ")"));
-					error.retryable = response.status === 408 || response.status >= 500 || response.status === 429 || response.ok;
-					throw error;
-
-				}
-
-				const prompts =
-					Array.isArray(data.prompts)
-						? data.prompts.filter(function (prompt) {
-							return typeof prompt === "string" && prompt.trim().length > 0;
-						})
-						: [];
-
-				if (!prompts.length) {
-
-					throw new Error(
-						"No Pixabay scene selections were prepared"
-					);
-
-				}
-
-				return prompts;
-
-			}
-		);
-
-	}
-
-	/*
-	 * Session 331: a quick-batch row's verified voiceover length, else the
-	 * minutes it was planned for. The scene windows follow this.
-	 */
-	function batchScenePlanDuration(row) {
-		const audio = Number(row && row.audio && row.audio.duration);
-		if (Number.isFinite(audio) && audio > 0) return audio;
-		return Math.max(1, Number(row && row.minutes) || 1) * 60;
+		/* Plan the whole scene keyword list once per row; the
+		 * progressive pipeline hands it out one chunk at a time, so the
+		 * row never re-plans mid-run and a stage retry reuses the same
+		 * terms instead of asking a model again. */
+		let planned = row._browserSceneKeywords;
+		if (!planned) {
+			planned = planBrowserSceneKeywords(script, AUTO_MEDIA_TOTAL);
+			row._browserSceneKeywords = planned;
+		}
+		const batchOffset = Math.max(0, Math.floor(Number(batch && batch.offset) || 0));
+		const batchCount = Math.max(1, Math.floor(Number(batch && batch.count) || planned.length));
+		const slice = planned.slice(batchOffset, batchOffset + batchCount);
+		if (!slice.length) {
+			const error = new Error("The scene plan is incomplete; retrying the plan.");
+			error.retryable = false;
+			throw error;
+		}
+		return buildPixabaySceneTokens(slice, batchOffset);
 	}
 
 	function batchRowTopic(row) {
@@ -13691,9 +13672,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	 */
 	/*
 	 * FINAL MEDIA RULE — individual retries, unique filenames and a fixed
-	 * 12-scene plan. These helpers are shared by the Quick Batch table and the
-	 * Editor. A failed image or video is requested again by client JS; a
-	 * successful asset is never reset, revoked or re-requested.
+	 * 14-scene plan (six clips + eight photos). These helpers are shared by
+	 * the Quick Batch table and the Editor. A failed image or video is
+	 * requested again by client JS; a successful asset is never reset,
+	 * revoked or re-requested.
 	 */
 	function mediaItemRetryPolicy() {
 		var policy = {
@@ -13817,7 +13799,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		 * Session 331: a rejected duplicate filename is answered by moving the
 		 * Pixabay result page forward one page per duplicate and taking the
 		 * first hit of that page. Before this, the page only changed after a
-		 * full limit (8 images / 4 videos) index rotation, so a duplicate at
+		 * full limit (8 images / 6 videos) index rotation, so a duplicate at
 		 * index 0 re-read the very page that had just refused the asset.
 		 */
 		var duplicates = mediaDuplicatePages(owner, scene);
@@ -14807,7 +14789,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	await batchRunPipelineStage(
 		row,
 		"prompts",
-		"Planning and selecting 12 distinct Pixabay scenes for every script length",
+		"Planning and selecting 14 distinct Pixabay scenes for every script length",
 		async function (retry) {
 			/*
 			 * Requirement 3 (Session 331): Preserve timeline edits.
@@ -14865,7 +14847,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 						row._promptOwner = null;
 					}
 					if (!Array.isArray(row.prompts) || row.prompts.length !== expectedImageCount) {
-						throw new Error("The fixed 12-scene plan is incomplete; client JS will retry the scene plan.");
+						throw new Error("The fixed 14-scene plan is incomplete; client JS will retry the scene plan.");
 					}
 					const deliveredSceneIndexes = new Set(row.images.map(function (image) { return Number(image.index); })
 						.filter(function (index) { return Number.isInteger(index) && index >= 0 && index < AUTO_MEDIA_TOTAL; }));
@@ -14875,14 +14857,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 						return error;
 					};
 					if (deliveredSceneIndexes.size !== expectedImageCount) {
-						throw mediaError("The fixed 12-scene plan did not receive every distinct Pixabay scene after individual retries.");
+						throw mediaError("The fixed 14-scene plan did not receive every distinct Pixabay scene after individual retries.");
 					}
 					const clips = row.images.filter(function (media) { return media.blob && media.blob.type === "video/mp4"; });
 					const uniqueFilenames = new Set(row.images.map(function (media) {
 						return media.stockFilename || (media.blob && media.blob.stockFilename);
 					}));
 					if (clips.length !== AUTO_VIDEO_SCENES || uniqueFilenames.size !== AUTO_MEDIA_TOTAL) {
-						throw mediaError("The fixed plan requires four clips and eight photos, each with a unique filename.");
+						throw mediaError("The fixed plan requires six clips and eight photos, each with a unique filename.");
 					}
 					return row.prompts;
 				},
@@ -23440,7 +23422,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'<div id="seo-wt-selected-' + n + '"></div>' +
 			'<label class="seo-wt-style-label" for="seo-wt-style-select-' + n + '">Video treatment (Pixabay stock appearance varies)</label>' +
 			'<select id="seo-wt-style-select-' + n + '" aria-describedby="seo-wt-style-note-' + n + '">' + seoImageStyleOptionsHTML(selectedStyle) + '</select>' +
-			'<span class="va-note" id="seo-wt-style-note-' + n + '">Choose one visual style. Every scene search is read from your script inside that scene\u2019s own time window, and words from the selected SEO keyword set win over the rest; articles, adjectives and other short words are skipped. Every video plans 12 scenes: 4 silent Pixabay clips and 8 stock photos.</span>' +
+			'<span class="va-note" id="seo-wt-style-note-' + n + '">Choose one visual style. Every scene search is read from your script inside that scene\u2019s own time window, and words from the selected SEO keyword set win over the rest; articles, adjectives and other short words are skipped. Every video plans 14 scenes: 6 silent Pixabay clips and 8 stock photos.</span>' +
 			'<span class="va-note">Nothing is lost if you close this window after pressing Generate: the script and its images keep running in the background for Video ' + n + '.</span>' +
 			'<div class="seo-wt-actions">' +
 			'<button type="button" class="upload-btn" onclick="confirmSeoStyleAndGenerate(' + n + ')">\\u2728 Generate Script &amp; Images</button>' +
@@ -24573,7 +24555,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	/*
 	 * Step 3 + 4 of the walkthrough.
 	 *
-	 * The text LLM plans stock keywords; delivery routes import photos and two MP4 clips.
+	 * Scene keywords are planned in the browser from the script; delivery
+	 * routes import photos and clips. No text model is asked for keywords.
 	 * No interval timers, no gallery watcher, no job URL to create or
 	 * destroy: the batch stream is both the progress and the completion
 	 * signal, so there is nothing to clean up afterwards.
@@ -24620,7 +24603,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			return { images: [], failed: failed };
 		}, "editor-media");
 		project._imageFlowStopReason = result.failed.length
-			? (lastMediaFailure || "The fixed 12-scene plan needs four distinct Pixabay clips and eight distinct photos.")
+			? (lastMediaFailure || "The fixed 14-scene plan needs six distinct Pixabay clips and eight distinct photos.")
 			: "";
 		project._missingMediaScenes = result.failed.slice();
 		mediaItemRetryLog({
@@ -24705,20 +24688,20 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		project._imageAutoRetries = 0;
 		project._imageFlowRetry = null;
 
-		if (availableImages < AUTO_IMAGE_SCENES || videoCounts(project).clips > MAX_MP4_UPLOADS - AUTO_VIDEO_SCENES) {
-			await finalizeImagePromptFlow(
-				n,
-				"Make room for eight distinct Pixabay photos and four Pixabay video clips in this gallery."
-			);
-			return;
-		}
+	if (availableImages < AUTO_IMAGE_SCENES || videoCounts(project).clips > Math.max(0, MAX_MP4_UPLOADS - AUTO_VIDEO_SCENES)) {
+		await finalizeImagePromptFlow(
+			n,
+			"Make room for eight distinct Pixabay photos and six Pixabay video clips in this gallery."
+		);
+		return;
+	}
 
 		if (statusEl) {
 			statusEl.textContent =
 				"Planning Pixabay scene keywords from the full script…";
 		}
 
-		/* Fixed for every script length: 4 Pixabay clips + 8 distinct photos. */
+		/* Fixed for every script length: 6 Pixabay clips + 8 distinct photos. */
 		const target = AUTO_MEDIA_TOTAL;
 \t\tproject.imagePrompts = [];
 \t\tproject.imagePromptTarget = target;
@@ -24744,46 +24727,36 @@ if (flowRetry) flowRetry.style.display = "none";
 					});
 					renderImageKeywords(n);
 				},
-				cancelPrompts: function () {
-					if (project._imagePromptCreateController) project._imagePromptCreateController.abort();
-				},
-				request: async function (batch) {
-					const caps = await studioOffload.capabilities();
-					const compact = null;
-					const sendPrompt = caps.compactPrompts ? async function (url, init, timeout, owner, key, consume) {
-						const response = await studioOffload.jsonRequest(url, init, timeout, {
-							isCancelled: isCancelled,
-							setController: function (controller) { owner[key] = controller; },
-							clearController: function (controller) { if (owner[key] === controller) owner[key] = null; }
-						});
-						return consume(response);
-					} : seoFetchWithTimeout;
-					return sendPrompt("/api/image-prompts", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							topic: project._seoTopic || "my video", minutes: project._seoMinutes || 1,
-							style: style, script: project.script || "", sceneTotal: target, keywordSet: project.selectedSeoSet || null,
-							/* Session 331: no model plans the searches; the script and
-							 * the SEO set are read inside each scene's time window. */
-							keywordSource: "script",
-							durationSec: editorScenePlanDuration(project),
-							batch: batch
-						})
-					}, IMAGE_PROMPT_REQUEST_TIMEOUT_MS, project, "_imagePromptCreateController", async function (response) {
-						const data = await seoResponseJson(response);
-						if (!response.ok || !data.success) {
-							const error = new Error((data && data.error) || ("Scene prompt request failed (HTTP " + response.status + ")"));
-							error.retryable = response.status === 408 || response.status >= 500 || response.status === 429 || response.ok;
-							error.status = response.status;
-							/* #263: a load answer carries the wait the server wants. */
-							error.kind = (data && data.kind) || "";
-							error.retryAfterMs = Number(data && data.retryAfterMs) > 0 ? Number(data.retryAfterMs) : 0;
-							throw error;
-						}
-						return data.prompts;
-					});
-				},
+		cancelPrompts: function () {
+			/* The plan is computed in the browser: nothing in flight to abort. */
+		},
+		request: async function (batch) {
+			/* Scene keywords are planned in the browser from this video's
+			 * own script: three content words at every x-th word (x drawn
+			 * once from 12, 13, 14 or 15, articles removed), one Pixabay
+			 * search term per scene. No text model is asked and
+			 * /api/image-prompts is not called for this flow. */
+			const script = String(project.script || "").trim();
+			if (!script) {
+				const error = new Error("The video needs a script before its scenes can be planned.");
+				error.retryable = false;
+				throw error;
+			}
+			let planned = project._browserSceneKeywords;
+			if (!planned) {
+				planned = planBrowserSceneKeywords(script, target);
+				project._browserSceneKeywords = planned;
+			}
+			const batchOffset = Math.max(0, Math.floor(Number(batch && batch.offset) || 0));
+			const batchCount = Math.max(1, Math.floor(Number(batch && batch.count) || planned.length));
+			const slice = planned.slice(batchOffset, batchOffset + batchCount);
+			if (!slice.length) {
+				const error = new Error("The scene plan is incomplete; retrying the plan.");
+				error.retryable = false;
+				throw error;
+			}
+			return buildPixabaySceneTokens(slice, batchOffset);
+		},
 				render: async function (prompts, offset) {
 					const liveN = videoProjects.indexOf(project) + 1;
 					if (liveN <= 0 || isCancelled()) return;
@@ -25246,7 +25219,7 @@ if (flowRetry) flowRetry.style.display = "none";
 		project.assets = project.assets.map(function (a) { return a.imagePromptFlowId === flowId ? plannedAssets[orderedIndex++] : a; });
 		if (gallery) project.assets.forEach(function (a) { if (a.card) gallery.appendChild(a.card); });
 		/* A strict fixed-plan summary must never hide a concrete provider error. */
-		if (finalReason && /fixed 12-scene plan/.test(finalReason) && project._lastMediaError) {
+		if (finalReason && /fixed 14-scene plan/.test(finalReason) && project._lastMediaError) {
 			finalReason = project._lastMediaError;
 		}
 		const requiredClips = plannedAssets.filter(function (a) { return a.kind === "mp4"; });
@@ -25254,7 +25227,7 @@ if (flowRetry) flowRetry.style.display = "none";
 		const uniqueClipIds = new Set(requiredClips.map(function (a) { return a.stockSource && a.stockSource.id; }));
 		if (!finalReason && (requiredClips.length !== AUTO_VIDEO_SCENES || uniqueClipIds.size !== AUTO_VIDEO_SCENES || requiredPhotoCount !== AUTO_IMAGE_SCENES)) {
 			finalReason = project._lastMediaError ||
-				"The fixed 12-scene plan needs four distinct Pixabay clips and eight distinct photos. Delivered media was kept.";
+				"The fixed 14-scene plan needs six distinct Pixabay clips and eight distinct photos. Delivered media was kept.";
 		}
 		const actualCount =
 			project.assets.filter(function (asset) {
