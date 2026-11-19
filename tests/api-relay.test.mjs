@@ -1665,7 +1665,7 @@ test("the UI Worker's share shrinks as backups are added: 1 slot in (1 + 3 x bac
 });
 
 test("TEMP_LAYOUT_TRACE pins both task owners and never fails over a traced response", async () => {
- for (const [layout, host] of [["editor", "worker-one-api"], ["table", "worker-api-two"]]) {
+ for (const [layout, host] of [["editor", "worker-api-two"], ["table", "worker-api-two"]]) {
   const path = "/api/script";
   const query = RELAY_ENDPOINT_PATH + "?path=" + path + "&traceLayout=" + layout;
   const reply = await handleRelayRoutes(requestFor(query), new URL(query, SELF), { RELAY_SECRET: "test-secret" }, {

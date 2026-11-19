@@ -1794,7 +1794,7 @@ export async function handleRelayRoutes(
 
 		// TEMP_LAYOUT_TRACE: fixed, server-owned destinations; never accept a URL from the caller.
 		if (pinned) {
-			const origin = layout === "editor" ? "https://worker-one-api.missiona-carla.workers.dev" : "https://worker-api-two.missiona-carla.workers.dev";
+			const origin = layout === "editor" ? "https://worker-api-two.missiona-carla.workers.dev" : "https://worker-api-two.missiona-carla.workers.dev";
 			const local = origin === url.origin;
 			const auth = local ? { ticket: null, expiresAt: 0 } : await mintRelayClientTicket(env, options, [pipelinePath]);
 			if (!local && !auth.ticket) return jsonResponse({ success: false, error: "Pipeline ticket unavailable" }, 403);
