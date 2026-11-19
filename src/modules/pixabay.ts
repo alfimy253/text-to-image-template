@@ -3,13 +3,14 @@ export interface PixabayEnv {
 	PIXABAY_API_KEY?: string;
 	PIXABAY_RATE_LIMITER?: DurableObjectNamespace;
 }
-/* Fixed 12-scene plan: every automatic video searches the same 12 Pixabay results. */
-export const PIXABAY_PER_PAGE = 12; // Upstream results requested; Pixabay minimum is 3.
+/* Fixed 14-scene plan: every automatic video searches the same 14 Pixabay results
+ * (8 photos + 6 videos), whatever the script length. */
+export const PIXABAY_PER_PAGE = 14; // Upstream results requested; Pixabay minimum is 3.
 export const PIXABAY_IMAGE_RESULTS = 8; // Eight distinct photo scenes.
-export const PIXABAY_VIDEO_RESULTS = 4; // Four distinct video scenes.
+export const PIXABAY_VIDEO_RESULTS = 6; // Six distinct video scenes.
 export const PIXABAY_MAX_PAGES = 2; // Second page supplies further unique filenames on retries.
-/** The four fixed, evenly spaced zero-based video slots in the 12-scene plan. */
-export const PIXABAY_VIDEO_POSITIONS: readonly number[] = [1, 4, 7, 10];
+/** The six fixed, evenly spaced zero-based video slots in the 14-scene plan. */
+export const PIXABAY_VIDEO_POSITIONS: readonly number[] = [1, 3, 5, 8, 10, 13];
 export const PIXABAY_CACHE_SECONDS = 86400;
 export const PIXABAY_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const PIXABAY_MAX_VIDEO_BYTES = 16 * 1024 * 1024;
@@ -139,7 +140,7 @@ const budgets = new Map<string, { start: number; calls: number; until: number }>
 export interface SearchResult { provider: "pixabay"; per_page: number; page: number; totalHits: number; hits: StockHit[] }
 export interface SearchInput { q?: string; type?: MediaType; page?: number; per_page?: number; orientation?: string; id?: number }
 
-/** The fixed plan exposes eight photos or four clips from twelve upstream results. */
+/** The fixed plan exposes eight photos or six clips from fourteen upstream results. */
 export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?: AbortSignal, trace?: PixabayTrace): Promise<SearchResult> {
 	if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
 	const key = keyFor(env);
@@ -149,7 +150,7 @@ export async function searchPixabay(env: PixabayEnv, input: SearchInput, signal?
 	const type = input.type || "image";
 	if (type !== "image" && type !== "video") throw new PixabayError("type must be image or video", 400);
 	const resultLimit = type === "image" ? PIXABAY_IMAGE_RESULTS : PIXABAY_VIDEO_RESULTS;
-	// Legacy clients may still ask for 3; the fixed plan uses 12 upstream results and returns 8/4 scenes.
+	// Legacy clients may still ask for 3; the fixed plan uses 14 upstream results and returns 8/6 scenes.
 	const allowedPerPage = [3, PIXABAY_PER_PAGE, resultLimit];
 	if (input.per_page !== undefined && allowedPerPage.indexOf(Number(input.per_page)) === -1) throw new PixabayError("Invalid per_page for media type", 400);
 	const page = input.page ?? 1;

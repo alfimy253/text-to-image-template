@@ -67,15 +67,15 @@ function words(query) {
 
 test("scene keywords are read from the script inside each scene's own window", () => {
 	const plans = planScriptSceneKeywords(
-		{ topic: "solar power", minutes: 1, style: "Documentary", script: SOLAR_SCRIPT, durationSec: 12 },
-		12,
+		{ topic: "solar power", minutes: 1, style: "Documentary", script: SOLAR_SCRIPT, durationSec: 14 },
+		14,
 		0,
-		12
+		14
 	);
-	assert.equal(plans.length, 12, "one plan per scene");
-	assert.deepEqual(plans.map((plan) => plan.scene), Array.from({ length: 12 }, (_, i) => i), "scenes in order");
+	assert.equal(plans.length, 14, "one plan per scene");
+	assert.deepEqual(plans.map((plan) => plan.scene), Array.from({ length: 14 }, (_, i) => i), "scenes in order");
 	plans.forEach((plan, index) => {
-		assert.equal(plan.startSec, index, "each scene owns a 1-second window of the 12-second video");
+		assert.equal(plan.startSec, index, "each scene owns a 1-second window of the 14-second video");
 		assert.equal(plan.endSec, index + 1);
 		assert.ok(plan.query.length > 0, "every scene has a search");
 		words(plan.query).forEach((word) => {
@@ -85,12 +85,12 @@ test("scene keywords are read from the script inside each scene's own window", (
 	});
 	/* The three sentences fall on their own scenes: the window decides the words. */
 	const firstSentence = ["solar", "panels", "harvest", "sunlight"];
-	plans.slice(0, 3).forEach((plan) => {
-		words(plan.query).forEach((word) => assert.ok(firstSentence.includes(word), "scene 0-2 only search the first sentence"));
+	plans.slice(0, 4).forEach((plan) => {
+		words(plan.query).forEach((word) => assert.ok(firstSentence.includes(word), "scene 0-3 only search the first sentence"));
 	});
 	const lastSentence = ["inverters", "convert", "direct", "current"];
-	plans.slice(8).forEach((plan) => {
-		words(plan.query).forEach((word) => assert.ok(lastSentence.includes(word), "scenes 8-11 only search the last sentence"));
+	plans.slice(10).forEach((plan) => {
+		words(plan.query).forEach((word) => assert.ok(lastSentence.includes(word), "scenes 10-13 only search the last sentence"));
 	});
 });
 
@@ -107,8 +107,8 @@ test("articles, adjectives and short words never become search terms", () => {
 	const plans = planScriptSceneKeywords({
 		topic: "solar power", minutes: 1, style: "Documentary",
 		script: "The very important solar panels are a great thing. It is the best and most useful of them.",
-		durationSec: 12
-	}, 12, 0, 12);
+		durationSec: 14
+	}, 14, 0, 14);
 	plans.forEach((plan) => {
 		words(plan.query).forEach((word) => {
 			assert.equal(isSceneKeywordWord(word), true, "only content words reach Pixabay: " + plan.query);
@@ -133,39 +133,39 @@ test("words from the selected SEO keyword set outrank the rest of the script", (
 	assert.ok(!plan.words.includes("echo"), "a lower-ranked word is dropped first");
 });
 
-test("the same keyword may serve two scenes - the token index keeps the results apart", async () => {
-	const input = {
-		topic: "solar", minutes: 1, style: "Documentary", script: SOLAR_SCRIPT,
-		durationSec: 12, keywordSource: "script"
-	};
+	test("the same keyword may serve two scenes - the token index keeps the results apart", async () => {
+		const input = {
+			topic: "solar", minutes: 1, style: "Documentary", script: SOLAR_SCRIPT,
+			durationSec: 14, keywordSource: "script"
+		};
 	const prompts = await generateImagePrompts({}, "unused-model", input);
-	assert.equal(prompts.length, 12, "the whole plan is planned without an AI binding");
+	assert.equal(prompts.length, 14, "the whole plan is planned without an AI binding");
 	const parsed = prompts.map((prompt) => {
 		assert.match(prompt, /^pixabay:/, "a structured browser search token");
 		return JSON.parse(prompt.slice(8));
 	});
-	assert.deepEqual(parsed.map((token) => token.scene), Array.from({ length: 12 }, (_, i) => i));
+	assert.deepEqual(parsed.map((token) => token.scene), Array.from({ length: 14 }, (_, i) => i));
 	parsed.forEach((token) => {
 		assert.equal(token.page, 1, "the first search of a scene starts on page 1");
 		assert.ok(token.index >= 0 && token.index < 8, "a valid result index");
-		assert.equal(token.type, [1, 4, 7, 10].includes(token.scene) ? "video" : "image", "the fixed 4 clips / 8 photos plan");
+		assert.equal(token.type, [1, 3, 5, 8, 10, 13].includes(token.scene) ? "video" : "image", "the fixed 6 clips / 8 photos plan");
 	});
 	const imageIndexes = parsed.filter((token) => token.type === "image").map((token) => token.index);
 	const videoIndexes = parsed.filter((token) => token.type === "video").map((token) => token.index);
 	assert.deepEqual(imageIndexes.slice().sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7], "the 8 photos read 8 distinct results");
-	assert.deepEqual(videoIndexes.slice().sort((a, b) => a - b), [0, 1, 2, 3], "the 4 clips read 4 distinct results");
+	assert.deepEqual(videoIndexes.slice().sort((a, b) => a - b), [0, 1, 2, 3, 4, 5], "the 6 clips read 6 distinct results");
 });
 
 test("a batch asks only for its own scenes and keeps their windows", async () => {
 	const prompts = await generateImagePrompts({}, "unused-model", {
 		topic: "solar", minutes: 1, style: "Documentary", script: SOLAR_SCRIPT,
-		durationSec: 12, keywordSource: "script",
-		batch: { offset: 3, count: 3, total: 12, attempt: 0, previous: [] }
+		durationSec: 14, keywordSource: "script",
+		batch: { offset: 3, count: 3, total: 14, attempt: 0, previous: [] }
 	});
 	assert.equal(prompts.length, 3);
 	const scenes = prompts.map((prompt) => JSON.parse(prompt.slice(8)).scene);
 	assert.deepEqual(scenes, [3, 4, 5], "the chunk keeps the absolute scene numbers");
-	assert.equal(JSON.parse(prompts[1].slice(8)).type, "video", "scene 4 is one of the four clip slots");
+	assert.equal(JSON.parse(prompts[2].slice(8)).type, "video", "scene 5 is one of the six clip slots");
 });
 
 test("the image-prompts route plans from the script without asking a model", async () => {
@@ -173,8 +173,8 @@ test("the image-prompts route plans from the script without asking a model", asy
 		new Request("https://studio.test/api/image-prompts", {
 			method: "POST",
 			body: JSON.stringify({
-				topic: "solar power", minutes: 1, style: "Documentary", script: SOLAR_SCRIPT,
-				sceneTotal: 12, keywordSource: "script", durationSec: 12
+		topic: "solar power", minutes: 1, style: "Documentary", script: SOLAR_SCRIPT,
+		sceneTotal: 14, keywordSource: "script", durationSec: 14
 			})
 		}),
 		{},
@@ -183,8 +183,8 @@ test("the image-prompts route plans from the script without asking a model", asy
 	assert.equal(response.status, 200, "no AI binding is required for the script plan");
 	const data = await response.json();
 	assert.equal(data.success, true);
-	assert.equal(data.prompts.length, 12);
-	assert.equal(data.expectedCount, 12);
+	assert.equal(data.prompts.length, 14);
+	assert.equal(data.expectedCount, 14);
 	data.prompts.forEach((prompt) => {
 		const token = JSON.parse(prompt.slice(8));
 		words(token.q).forEach((word) => {
@@ -200,23 +200,21 @@ test("the scene windows follow the measured voiceover, not the minute count", ()
 		2,
 		"a word count without audio reads at 2.5 words a second"
 	);
-	const words = timedScriptWords(SOLAR_SCRIPT, 12);
+	const words = timedScriptWords(SOLAR_SCRIPT, 14);
 	assert.equal(words[0].startSec, 0, "the first word starts the video");
-	assert.ok(words[words.length - 1].endSec <= 12.001, "the last word ends inside the video");
+	assert.ok(words[words.length - 1].endSec <= 14.001, "the last word ends inside the video");
 	for (let index = 1; index < words.length; index++) {
 		assert.ok(words[index].startSec >= words[index - 1].startSec, "word spans are monotonic");
 	}
 	const plans = planScriptSceneKeywords({
 		topic: "solar", minutes: 1, style: "Documentary", script: SOLAR_SCRIPT, durationSec: 30
-	}, 12, 0, 12);
-	assert.equal(plans[11].endSec, 30, "a longer voiceover stretches the same 12 windows");
+	}, 14, 0, 14);
+	assert.equal(plans[13].endSec, 30, "a longer voiceover stretches the same 14 windows");
 });
 
-test("both layouts ask the worker for the script plan, with their measured length", () => {
-	const calls = APP_JS.match(/keywordSource: "script"/g) || [];
-	assert.ok(calls.length >= 3, "the editor flow and both quick-batch request paths ask for it: " + calls.length);
-	assert.match(APP_JS, /durationSec: editorScenePlanDuration\(project\)/, "the editor sends its verified voiceover length");
-	assert.match(APP_JS, /durationSec: batchScenePlanDuration\(row\)/, "a quick-batch row sends its own length");
-	assert.match(APP_JS, /function editorScenePlanDuration\(project\) \{[\s\S]{0,400}?_voiceoverDurationMs/, "the editor prefers the measured voiceover");
-	assert.match(APP_JS, /function batchScenePlanDuration\(row\) \{[\s\S]{0,200}?row\.audio/, "the row prefers its decoded audio");
+test("both layouts plan scene keywords in the browser from the script", () => {
+	assert.match(APP_JS, /function planBrowserSceneKeywords\(script, totalScenes\)/, "the browser planner is defined in app-js");
+	assert.match(APP_JS, /planBrowserSceneKeywords\(script, AUTO_MEDIA_TOTAL\)/, "the quick batch plans from its row script");
+	assert.match(APP_JS, /planBrowserSceneKeywords\(script, target\)/, "the editor plans from its project script");
+	assert.match(APP_JS, /BROWSER_VIDEO_POSITIONS = \[1, 3, 5, 8, 10, 13\]/, "six video positions for the 14-scene plan");
 });

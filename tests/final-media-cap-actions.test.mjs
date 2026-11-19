@@ -1,5 +1,5 @@
 /*
- * FINAL RULE — fixed 12-scene media cap, individual media retries, unique
+ * FINAL RULE — fixed 14-scene media cap, individual media retries, unique
  * filenames, one Actions column and transition-only Edit JSON. These tests
  * guard the live source contracts rather than a rendered screenshot.
  */
@@ -45,6 +45,11 @@ function makeApp(url = "https://studio.test/free", prepare) {
 	w.URL.createObjectURL = () => "blob:final-media-" + (++objectUrlId);
 	w.URL.revokeObjectURL = () => { };
 	w.__PLAN_MODE = "freemium";
+	w.__TIMELINE_EDITOR__ = {
+		reserveEditSession: async () => 1,
+		prepareEditSession: async () => true,
+		storeProjectAssets: async () => ({ ok: true })
+	};
 	if (prepare) prepare(w);
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
 	(() => {
@@ -70,8 +75,8 @@ function makeApp(url = "https://studio.test/free", prepare) {
  * filenames, and 12 slides.
  */
 function finishRow(w, row) {
-	const videoIndexes = [0, 3, 6, 9];
-	row.images = Array.from({ length: 12 }, (_, index) => ({
+	const videoIndexes = [1, 3, 5, 8, 10, 13];
+	row.images = Array.from({ length: 14 }, (_, index) => ({
 		index,
 		blob: { type: videoIndexes.includes(index) ? "video/mp4" : "image/jpeg", stockFilename: "scene-" + (index + 1) },
 		stockFilename: "scene-" + (index + 1)
@@ -80,9 +85,9 @@ function finishRow(w, row) {
 	 * slideDurationSec() times a scene from its slide, and a slide without a
 	 * slice falls back to SLIDE_SECONDS_MIN. The animator hands each slide its
 	 * share of the voiceover as _partialSec, so the fixture does the same: a
-	 * three-minute row is twelve 15-second scenes.
+	 * three-minute row is fourteen scenes.
 	 */
-	const sceneSpan = ((Number(row.minutes) > 0 ? Number(row.minutes) : 1) * 60) / 12;
+	const sceneSpan = ((Number(row.minutes) > 0 ? Number(row.minutes) : 1) * 60) / 14;
 	row.slides = row.images.map((image) => ({
 		img: { naturalWidth: 1280, naturalHeight: 720 },
 		type: image.blob.type === "video/mp4" ? "mp4" : "image",
@@ -102,33 +107,33 @@ function finishRow(w, row) {
 	return row;
 }
 
-test("the planner and Pixabay search always use 12 scenes: 4 videos + 8 photos", () => {
-	assert.equal(SCENE_MEDIA_TOTAL, 12);
-	assert.equal(SCENE_VIDEO_COUNT, 4);
+test("the planner and Pixabay search always use 14 scenes: 6 videos + 8 photos", () => {
+	assert.equal(SCENE_MEDIA_TOTAL, 14);
+	assert.equal(SCENE_VIDEO_COUNT, 6);
 	assert.equal(SCENE_IMAGE_COUNT, 8);
-	assert.equal(SCENE_COUNT_MIN, 12);
-	assert.equal(SCENE_COUNT_MAX, 12);
-	assert.equal(IMAGE_BATCH_MAX_PROMPTS, 12);
+	assert.equal(SCENE_COUNT_MIN, 14);
+	assert.equal(SCENE_COUNT_MAX, 14);
+	assert.equal(IMAGE_BATCH_MAX_PROMPTS, 14);
 	for (const text of ["one", "a ".repeat(129), "a ".repeat(400), "a ".repeat(900)]) {
-		assert.equal(sceneCountForScript(text), 12, "fixed total for every script length");
-		assert.equal(sceneCountCeiling(text, 1), 12, "short duration keeps the fixed total");
-		assert.equal(sceneCountCeiling(text, 6), 12, "long duration keeps the fixed total");
-		assert.equal(resolveSceneTotal({ script: text, minutes: 3 }), 12);
+		assert.equal(sceneCountForScript(text), 14, "fixed total for every script length");
+		assert.equal(sceneCountCeiling(text, 1), 14, "short duration keeps the fixed total");
+		assert.equal(sceneCountCeiling(text, 6), 14, "long duration keeps the fixed total");
+		assert.equal(resolveSceneTotal({ script: text, minutes: 3 }), 14);
 	}
-	const positions = videoScenePositions(12);
-	assert.equal(positions.length, 4);
-	assert.equal(new Set(positions).size, 4);
-	assert.ok(positions.every((position) => Number.isInteger(position) && position >= 0 && position < 12));
-	assert.equal(PIXABAY_PER_PAGE, 12);
+	const positions = videoScenePositions(14);
+	assert.equal(positions.length, 6);
+	assert.equal(new Set(positions).size, 6);
+	assert.ok(positions.every((position) => Number.isInteger(position) && position >= 0 && position < 14));
+	assert.equal(PIXABAY_PER_PAGE, 14);
 	assert.equal(PIXABAY_IMAGE_RESULTS, 8);
-	assert.equal(PIXABAY_VIDEO_RESULTS, 4);
+	assert.equal(PIXABAY_VIDEO_RESULTS, 6);
 	assert.equal(PIXABAY_MAX_PAGES, 2);
 	const token = JSON.parse(sceneSearchToken("calm yoga", 11).slice(8));
 	assert.equal(token.type, "image");
-	assert.equal(token.index, 7);
+	assert.equal(token.index, 6);
 	assert.equal(token.scene, 11);
-	assert.match(PROGRESSIVE_IMAGE_PIPELINE_JS, /IMAGE_SCENE_MEDIA_TOTAL = 12/);
-	assert.match(PROGRESSIVE_IMAGE_PIPELINE_JS, /IMAGE_SCENE_VIDEO_COUNT = 4/);
+	assert.match(PROGRESSIVE_IMAGE_PIPELINE_JS, /IMAGE_SCENE_MEDIA_TOTAL = 14/);
+	assert.match(PROGRESSIVE_IMAGE_PIPELINE_JS, /IMAGE_SCENE_VIDEO_COUNT = 6/);
 	assert.match(PROGRESSIVE_IMAGE_PIPELINE_JS, /IMAGE_SCENE_IMAGE_COUNT = 8/);
 	assert.doesNotMatch(PROGRESSIVE_IMAGE_PIPELINE_JS, /\[\[130, 6\], \[240, 8\], \[500, 10\]\]/);
 });
@@ -156,15 +161,16 @@ test("the last table column is Actions with Preview, Process Export and Edit ico
 	assert.match(APP_CSS, /\.batch-action-btn:disabled\s*\{[^}]*cursor:\s*not-allowed/, "a locked icon still reads as locked");
 	assert.doesNotMatch(APP_JS, /data-batch-generate|batch-row-ai/);
 	assert.doesNotMatch(APP_CSS, /batch-row-ai/);
-	assert.match(APP_JS, /AUTO_MEDIA_TOTAL = 12/);
-	assert.match(APP_JS, /AUTO_VIDEO_SCENES = 4/);
+	assert.match(APP_JS, /AUTO_MEDIA_TOTAL = 14/);
+	assert.match(APP_JS, /AUTO_VIDEO_SCENES = 6/);
 	assert.match(APP_JS, /AUTO_IMAGE_SCENES = 8/);
 });
 
 test("Edit opens a new page with transition-only basic settings and no AI enhancer row button", async () => {
 	let opened = "";
 	const { dom, w } = makeApp("https://studio.test/free", (win) => {
-		win.open = (href) => { opened = String(href); return null; };
+		const editorWin = { location: { replace: (href) => { opened = String(href); } }, closed: false, opener: null };
+		win.open = () => editorWin;
 	});
 	test.after(() => dom.window.close());
 	const row = w.addBatchRow({
@@ -197,6 +203,7 @@ test("Edit opens a new page with transition-only basic settings and no AI enhanc
 	assert.ok(Array.from(readyActions.querySelectorAll("[data-batch-action]")).every((button) => !button.disabled), "a finished row's icons are clickable");
 	assert.equal(/[A-Za-z]{2,}/.test(readyActions.textContent), false, "and no words once it is ready either");
 	readyActions.querySelector('[data-batch-action="edit"]').click();
+	await new Promise((resolve) => setTimeout(resolve, 0));
 	assert.match(opened, /layout=timeline/);
 	assert.match(opened, /pipelinePage=/);
 	assert.match(opened, /projectEdit=/);
@@ -207,14 +214,14 @@ test("Edit opens a new page with transition-only basic settings and no AI enhanc
 	assert.ok(w.__BATCH_EDIT_PROJECT__.sourcePageId, "the source page id is recorded");
 	assert.equal(w.__BATCH_EDIT_PROJECT__.targetPageId, "timeline-" + w.__PIPELINE_MANAGEMENT_STORE__.pageId + "-row-" + String(row.id), "the timing project id is stable per Quick Batch row");
 	assert.ok(w.__BATCH_EDIT_PROJECT__.basicSettings.vid, "the drafted row has a page-scoped vid");
-	assert.equal(w.__BATCH_EDIT_PROJECT__.timelineState.scenes.length, 12, "handoff includes one timing record per scene");
+	assert.equal(w.__BATCH_EDIT_PROJECT__.timelineState.scenes.length, 14, "handoff includes one timing record per scene");
 	assert.deepEqual(Array.from(w.__BATCH_EDIT_PROJECT__.timelineState.tracks, (track) => track.kind), ["audio", "audio", "audio", "media", "visual"]);
 	assert.equal(w.__BATCH_EDIT_PROJECT__.timelineState.soundExpanded, false, "Soundtrack starts collapsed");
 	const mediaTrack = w.__BATCH_EDIT_PROJECT__.timelineState.tracks.find((track) => track.kind === "media");
-	assert.equal(mediaTrack.items.length, 12, "the 12 Quick Batch media slots are retained in the timeline");
-	assert.deepEqual(Array.from(mediaTrack.items, (item) => item.assetId), Array.from({ length: 12 }, (_, index) => "scene-" + (index + 1)));
+	assert.equal(mediaTrack.items.length, 14, "the 14 Quick Batch media slots are retained in the timeline");
+	assert.deepEqual(Array.from(mediaTrack.items, (item) => item.assetId), Array.from({ length: 14 }, (_, index) => "scene-" + (index + 1)));
 	assert.equal(mediaTrack.items[3].mediaType, "video", "MP4 scene metadata survives the handoff");
-	assert.equal(w.__BATCH_EDIT_PROJECT__.timelineState.scenes[0].durationSec, 15, "scene durations follow the requested three-minute draft");
+	assert.equal(w.__BATCH_EDIT_PROJECT__.timelineState.scenes[0].durationSec, 180 / 14, "scene durations follow the requested three-minute draft");
 	assert.equal(w.__BATCH_EDIT_PROJECT__.basicSettings.script, row.script);
 	assert.equal(w.__BATCH_EDIT_PROJECT__.basicSettings.style, "Neon Night");
 	assert.equal(w.__BATCH_EDIT_PROJECT__.basicSettings.minutes, 3);
@@ -227,10 +234,11 @@ test("Edit opens a new page with transition-only basic settings and no AI enhanc
 	assert.match(w.document.cookie, /ytvs_transition_project_/, "the short cookie mirror is present");
 });
 
-test("a Quick Batch row hands off one dummy text at 0:00 instead of caption clips", () => {
+test("a Quick Batch row hands off one dummy text at 0:00 instead of caption clips", async () => {
 	let opened = "";
 	const { dom, w } = makeApp("https://studio.test/free", (win) => {
-		win.open = (href) => { opened = String(href); return null; };
+		const editorWin = { location: { replace: (href) => { opened = String(href); } }, closed: false, opener: null };
+		win.open = () => editorWin;
 	});
 	test.after(() => dom.window.close());
 	const row = w.addBatchRow({ script: "Quiet rooftop gardens in the morning.", style: "Neon Night", minutes: 1 });
@@ -242,6 +250,7 @@ test("a Quick Batch row hands off one dummy text at 0:00 instead of caption clip
 	/* Session 332: Edit unlocks with the row, so the handoff test finishes it first. */
 	finishRow(w, row);
 	w.document.querySelector('[data-batch-row="' + row.id + '"] [data-batch-action="edit"]').click();
+	await new Promise((resolve) => setTimeout(resolve, 0));
 	assert.match(opened, /layout=timeline/);
 	const state = w.__BATCH_EDIT_PROJECT__.timelineState;
 	const visual = state.tracks.find((track) => track.kind === "visual");
@@ -269,10 +278,11 @@ test("a Quick Batch row hands off one dummy text at 0:00 instead of caption clip
 	);
 });
 
-test("the edit icon passes the row's live video style into the project detail and the timeline handoff", () => {
+test("the edit icon passes the row's live video style into the project detail and the timeline handoff", async () => {
 	let opened = "";
 	const { dom, w } = makeApp("https://studio.test/free", (win) => {
-		win.open = (href) => { opened = String(href); return null; };
+		const editorWin = { location: { replace: (href) => { opened = String(href); } }, closed: false, opener: null };
+		win.open = () => editorWin;
 	});
 	test.after(() => dom.window.close());
 	const row = w.addBatchRow({ script: "Quiet rooftop gardens in the morning.", style: "Neon Night", minutes: 1 });
@@ -283,6 +293,7 @@ test("the edit icon passes the row's live video style into the project detail an
 	const styleSelect = tr.querySelector('[data-batch-field="style"]');
 	styleSelect.value = "Cinematic Film";
 	tr.querySelector('[data-batch-action="edit"]').click();
+	await new Promise((resolve) => setTimeout(resolve, 0));
 
 	const payload = w.__BATCH_EDIT_PROJECT__;
 	assert.equal(row.style, "Cinematic Film", "the row model follows the control the user picked");
@@ -291,18 +302,18 @@ test("the edit icon passes the row's live video style into the project detail an
 	assert.equal(payload.projectDetail.style, "Cinematic Film", "the project detail carries the video style");
 	assert.deepEqual(Array.from(payload.projectDetail.effects), ["duotone"], "Cinematic Film resolves to the double gradient");
 	assert.equal(payload.projectDetail.effectLabel, "double gradient");
-	assert.equal(payload.projectDetail.sceneCount, 12);
-	assert.equal(payload.projectDetail.scenes.length, 12);
+	assert.equal(payload.projectDetail.sceneCount, 14);
+	assert.equal(payload.projectDetail.scenes.length, 14);
 	assert.ok(
 		payload.projectDetail.scenes.every((scene) => Array.from(scene.effects).join(",") === "duotone"),
 		"every scene in the project detail carries the double gradient"
 	);
 	assert.equal(payload.timelineState.videoStyle, "Cinematic Film", "the timeline state carries the same style");
 	assert.deepEqual(Array.from(payload.timelineState.videoStyleEffects), ["duotone"]);
-	assert.equal(payload.timelineState.scenes.length, 12);
+	assert.equal(payload.timelineState.scenes.length, 14);
 	assert.ok(
 		payload.timelineState.scenes.every((scene) => Array.from(scene.effects).join(",") === "duotone" && scene.videoStyle === "Cinematic Film"),
-		"all 12 timeline scenes are stamped with the style and its effects"
+		"all 14 timeline scenes are stamped with the style and its effects"
 	);
 	const key = new URL(opened, "https://studio.test").searchParams.get("projectEdit");
 	const stored = JSON.parse(w.localStorage.getItem("ytvs.transition-project.v1." + key));
@@ -310,9 +321,12 @@ test("the edit icon passes the row's live video style into the project detail an
 	assert.match(decodeURIComponent(w.document.cookie), /Cinematic Film/, "the short cookie mirror names the style");
 
 	/* a neon row asked for the neon image effect together with the VHS effect */
+	/* clear the timeline saved by the first click so row.style wins */
+	w.localStorage.clear();
 	styleSelect.value = "Neon Night";
 	styleSelect.dispatchEvent(new w.Event("change", { bubbles: true }));
 	tr.querySelector('[data-batch-action="edit"]').click();
+	await new Promise((resolve) => setTimeout(resolve, 50));
 	assert.deepEqual(Array.from(w.__BATCH_EDIT_PROJECT__.projectDetail.effects), ["neon", "vhs"]);
 	assert.deepEqual(Array.from(w.__BATCH_EDIT_PROJECT__.timelineState.videoStyleEffects), ["neon", "vhs"]);
 	assert.ok(
@@ -469,7 +483,7 @@ test("Generate refuses unprepared staged rows and starts only ready rows", async
 	const { dom, w } = makeApp();
 	test.after(() => dom.window.close());
 	while (w.__BATCH_ROWS.length) w.removeBatchRow(w.__BATCH_ROWS[0].id);
-	const staged = w.addBatchRow({ script: "A staged row with a script." });
+	const staged = w.addBatchRow({ script: "A staged row with a proper script that has enough words." });
 	staged.stage = "voice";
 	staged.running = true;
 	staged.retrying = false;

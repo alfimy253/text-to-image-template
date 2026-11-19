@@ -397,7 +397,7 @@ export const PAGE_MARKUP = `
 				title attributes, which is where the same facts now live.
 			-->
 
-			<p class="va-note">Stock photos and clips from Pixabay · 12 results per search: 8 distinct photos and 4 clips for every script. Source dimensions vary; resolution controls the output frame.</p>
+			<p class="va-note">Stock photos and clips from Pixabay · 14 results per search: 8 distinct photos and 6 clips for every script. Source dimensions vary; resolution controls the output frame.</p>
 			<div class="table-scroll">
 
 				<table class="batch-table batch-table-edit">

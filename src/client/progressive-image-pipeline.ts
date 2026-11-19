@@ -2,15 +2,15 @@
 export const PROGRESSIVE_IMAGE_PIPELINE_JS = `
 /*
  * FINAL MEDIA CAP — every automatic video in either layout has exactly
- * 12 Pixabay scenes: FOUR video clips and EIGHT distinct photo images.
+ * 14 Pixabay scenes: SIX video clips and EIGHT distinct photo images.
  * Script word count and duration never change this total. The browser-side
  * target matches sceneCountForScript() in src/modules/image-prompts.ts.
  */
-var IMAGE_SCENE_MEDIA_TOTAL = 12;
-var IMAGE_SCENE_VIDEO_COUNT = 4;
+var IMAGE_SCENE_MEDIA_TOTAL = 14;
+var IMAGE_SCENE_VIDEO_COUNT = 6;
 var IMAGE_SCENE_IMAGE_COUNT = 8;
-var IMAGE_SCENE_COUNT_MIN = 12;
-var IMAGE_SCENE_COUNT_MAX = 12;
+var IMAGE_SCENE_COUNT_MIN = 14;
+var IMAGE_SCENE_COUNT_MAX = 14;
 /* Match the Worker's Unicode letter/number tokenization exactly, including
  * punctuation-separated words and ignoring emoji. Escapes survive the template. */
 var IMAGE_WORD_PATTERN = /[\\p{L}\\p{N}][\\p{L}\\p{N}'’_-]*/gu;
@@ -27,7 +27,7 @@ function imageScriptWordCount(script) {
 	return words ? words.length : 0;
 }
 function imageSceneTarget(script, minutes) {
-	/* Fixed for every script length and every duration: 4 videos + 8 images. */
+	/* Fixed for every script length and every duration: 6 videos + 8 images. */
 	return IMAGE_SCENE_MEDIA_TOTAL;
 }
 async function runProgressiveImagePipeline(options) {

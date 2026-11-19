@@ -305,7 +305,7 @@ test("the table is an editable quick-batch grid with a Generate at its top right
 	/* Preview / Export come from ONE renderer and ONE flag: together, or not at all */
 	const actionCells = APP_JS.match(/batchActionCell\(row, "(preview|export|edit)"\)/g) || [];
 	assert.ok(actionCells.length >= 3, "Preview, Process Export and Edit share one renderer");
-	assert.match(APP_JS, /AUTO_MEDIA_TOTAL = 12/);
+	assert.match(APP_JS, /AUTO_MEDIA_TOTAL = 14/);
 
 	/* the style column reuses the script modal's fixed list of ten styles */
 	assert.ok(APP_JS.includes("batchStyleOptionsHTML"));
@@ -335,9 +335,9 @@ test("one Generate runs every row that has a script and unlocks both cells toget
 	w.document.getElementById("batch-generate").click();
 	await waitFor(w, () => w.batchRowFinished(w.getBatchRow(filled.id)));
 
-	/* Only the filled row ran: one voiceover and four progressive batches for 12 scenes. */
+	/* Only the filled row ran: one voiceover and four progressive batches for 14 scenes. */
 	assert.equal(calls.filter((call) => call.path === "/api/voiceover").length, 1);
-	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 4);
+	assert.equal(calls.filter((call) => call.path === "/api/image-prompts").length, 0, "scene keywords are planned in the browser, not via /api/image-prompts");
 	assert.equal(calls.filter((call) => call.path === "/api/image-batch").length, 4);
 
 	const voice = JSON.parse(calls.find((call) => call.path === "/api/voiceover").body);
@@ -718,8 +718,8 @@ test("Quick Batch renders its first chunk before the next prompt batch finishes"
 	assert.equal(w.batchRowFinished(row), false);
 	release();
 	await run;
-	assert.equal(row.images.length, 12);
-	assert.deepEqual(Array.from(row.images, (image) => image.index), Array.from({ length: 12 }, (_, i) => i));
+	assert.equal(row.images.length, 14);
+	assert.deepEqual(Array.from(row.images, (image) => image.index), Array.from({ length: 14 }, (_, i) => i));
 	assert.equal(w.batchRowFinished(row), true);
 });
 
