@@ -34,6 +34,7 @@ export const API_ROTATION_JS = String.raw`
 	if (typeof window.fetch !== "function") return;
 	window.__yvsApiRotationInstalled = true;
 
+	var traceSequence = 0;
 	var ENDPOINT_PATH = "/api/relay/endpoint";
 	var TICKET_HEADER = "x-yvs-relay-ticket";
 	var ASK_TIMEOUT_MS = 8000;
@@ -68,7 +69,7 @@ export const API_ROTATION_JS = String.raw`
 		lastError: ""
 	};
 
-	function pathOf(input) {
+	function pathOf(input, layout) {
 		var raw = typeof input === "string" ? input : (input && input.url) || "";
 		if (!raw) return "";
 		var path = raw;
@@ -78,6 +79,7 @@ export const API_ROTATION_JS = String.raw`
 			if (parsed.origin !== window.location.origin) return "";
 			path = parsed.pathname;
 		} catch (_) { return ""; }
+		if ((layout === "editor" || layout === "table") && (path === "/api/media/search" || path === "/api/media/asset")) return path;
 		for (var i = 0; i < AI_PATHS.length; i++) {
 			if (path === AI_PATHS[i]) return path;
 		}
@@ -150,8 +152,9 @@ export const API_ROTATION_JS = String.raw`
 	 * Ask the UI Worker which URL runs this pipeline call. The answer is the
 	 * rotation: this function never chooses anything, it only waits.
 	 */
-	function askForUrl(path, failedId) {
+	function askForUrl(path, failedId, layout) {
 		var query = ENDPOINT_PATH + "?path=" + encodeURIComponent(path);
+		if (layout) query += "&traceLayout=" + encodeURIComponent(layout);
 		if (failedId) query += "&failed=" + encodeURIComponent(failedId);
 		var controller = typeof AbortController === "function" ? new AbortController() : null;
 		var timer = setTimeout(function () { if (controller) controller.abort(); }, ASK_TIMEOUT_MS);
@@ -175,7 +178,7 @@ export const API_ROTATION_JS = String.raw`
 			return response.json();
 		}).then(function (data) {
 			if (!data || data.success === false || !data.url) return null;
-			if (typeof data.ticket === "string" && data.ticket) {
+			if (!layout && typeof data.ticket === "string" && data.ticket) {
 				state.ticket = data.ticket;
 				state.ticketExp = Number(data.expiresAt) || 0;
 			}
@@ -213,8 +216,34 @@ export const API_ROTATION_JS = String.raw`
 	}
 
 	window.fetch = function (input, init) {
-		var path = pathOf(input);
+		var path = pathOf(input, init && init.traceLayout);
 		if (!path || isRelayPath(path)) return nativeFetch(input, init);
+		// TEMP_LAYOUT_TRACE: capture task ownership at creation, not the currently visible tab.
+		var layout = init && init.traceLayout;
+		if (layout === "editor" || layout === "table") {
+			var id = ++traceSequence;
+			var notify = function (message) {
+				var line = "[Pipeline trace #" + id + " | " + layout + "] " + message;
+				console.log(line);
+				window.alert(line);
+			};
+			return askForUrl(path, null, layout).then(async function (given) {
+				if (!given || given.traceLayout !== layout) {
+					notify("Not sent: worker lookup failed for " + path);
+					throw new Error("Pinned worker unavailable");
+				}
+				var endpoint = new URL(given.url).origin + path;
+				notify("Requested: " + endpoint);
+				try {
+					var response = await callGiven(given, input, Object.assign({}, init, { redirect: "error" }), new URL(targetOf(input), window.location.href).search);
+					notify((response.ok ? "Finished" : "Failed") + " (HTTP " + response.status + "): " + endpoint);
+					return response;
+				} catch (error) {
+					notify("Failed (no HTTP response): " + endpoint);
+					throw error;
+				}
+			});
+		}
 		if (window.navigator && window.navigator.onLine === false) return nativeFetch(input, init);
 
 		var search = "";

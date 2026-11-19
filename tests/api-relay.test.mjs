@@ -1638,3 +1638,29 @@ test("the UI Worker's share shrinks as backups are added: 1 slot in (1 + 3 x bac
 	const fallback = pickRelayEndpoint(pool, config({ localWeight: 0 }), Date.now());
 	assert.equal(fallback.id, "local", "a fully cooled pool still answers, on the UI Worker");
 });
+
+test("TEMP_LAYOUT_TRACE pins both task owners and never fails over a traced response", async () => {
+ for (const [layout, host] of [["editor", "worker-one-api"], ["table", "worker-api-two"]]) {
+  const path = "/api/script";
+  const query = RELAY_ENDPOINT_PATH + "?path=" + path + "&traceLayout=" + layout;
+  const reply = await handleRelayRoutes(requestFor(query), new URL(query, SELF), { RELAY_SECRET: "test-secret" }, {
+   identity: async () => ({ username: "bob" })
+  });
+  const given = await reply.json();
+  const endpoint = "https://" + host + ".missiona-carla.workers.dev" + path;
+  assert.equal(given.url, endpoint);
+  assert.ok(given.ticket);
+  const {win, calls, asks} = browserRuntime(() => new Response(null, {status:503}), given);
+  const messages = [];
+  win.alert = message => messages.push(message);
+  const result = await win.fetch(path + "?async=1", {method:"POST", traceLayout:layout, body:"{}"});
+  assert.equal(result.status, 503);
+  assert.equal(asks.length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, endpoint + "?async=1");
+  assert.equal(calls[0].init.credentials, "omit");
+  assert.match(messages[0], /Requested:/);
+  assert.match(messages[1], /Failed \(HTTP 503\)/);
+  assert.ok(messages.every(m => m.includes(endpoint) && !m.includes(given.ticket)));
+ }
+});
