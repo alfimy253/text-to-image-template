@@ -31,9 +31,11 @@
 			]
 		}
 	],
-	// ...
+	
   "vars": {
-    "PIXABAY_API_KEY": "25595393-2c55c5e0a915e1939f01b6faf"
+    "PIXABAY_API_KEY": "25595393-2c55c5e0a915e1939f01b6faf",
+    "RELAY_SECRET": "relaysecret123adminrelaysecret123admin"
+
   },
-  // ...
+  
 }
