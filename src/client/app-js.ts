@@ -2500,6 +2500,143 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		5;
 
 
+	const MAX_GIF_FILE_BYTES =
+		30 * 1024 * 1024;
+
+
+	const GIF_FRAME_BUDGET_BYTES =
+		30 * 1024 * 1024;
+
+
+	const GIF_MAX_SINGLE_FRAME_PIXELS =
+		64 * 1024 * 1024;
+
+
+	const GIF_MAX_INDEXED_PIXELS =
+		256 * 1024 * 1024;
+
+
+	window.__MAX_GIF_FILE_BYTES =
+		MAX_GIF_FILE_BYTES;
+
+
+	window.__GIF_FRAME_BUDGET_BYTES =
+		GIF_FRAME_BUDGET_BYTES;
+
+
+	function isGifFileSync(
+		file
+	) {
+
+		if (!file) {
+			return false;
+		}
+
+		const mime =
+			String(
+				file.type || ""
+			).toLowerCase();
+
+		const name =
+			String(
+				file.name || ""
+			);
+
+		return (
+			mime === "image/gif" ||
+			/\\.gif$/i.test(name)
+		);
+
+	}
+
+
+	async function hasGifMagicHeader(
+		blob
+	) {
+
+		if (
+			!blob ||
+			typeof blob.slice !== "function"
+		) {
+			return false;
+		}
+
+		try {
+
+			const slice =
+				blob.slice(0, 6);
+
+			if (
+				!slice ||
+				typeof slice.arrayBuffer !== "function"
+			) {
+				return false;
+			}
+
+			const head =
+				new Uint8Array(
+					await slice.arrayBuffer()
+				);
+
+			return (
+				head.length === 6 &&
+				head[0] === 0x47 &&
+				head[1] === 0x49 &&
+				head[2] === 0x46 &&
+				head[3] === 0x38 &&
+				(head[4] === 0x37 || head[4] === 0x39) &&
+				head[5] === 0x61
+			);
+
+		}
+		catch (headerErr) {
+
+			return false;
+
+		}
+
+	}
+
+
+	async function isGifUploadFile(
+		file,
+		fileIsMp4
+	) {
+
+		if (isGifFileSync(file)) {
+			return true;
+		}
+
+		if (
+			fileIsMp4 ||
+			!file ||
+			Number(file.size) <= MAX_GIF_FILE_BYTES
+		) {
+			return false;
+		}
+
+		/*
+		 * Only sniff the 6-byte GIF signature on oversized files so a GIF
+		 * renamed to .png/.jpg cannot bypass the 30 MB GIF cap, while regular
+		 * photos (PNG/JPEG/WebP/etc.) remain completely uncapped in size.
+		 */
+		return hasGifMagicHeader(file);
+
+	}
+
+
+	function formatGifSizeMb(
+		bytes
+	) {
+
+		return (
+			(Number(bytes || 0) / (1024 * 1024)).toFixed(1) +
+			" MB"
+		);
+
+	}
+
+
 	const MAX_IMAGE_UPLOADS =
 		25;
 
@@ -5592,12 +5729,19 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					 */
 
 
-					const fileIsGif =
+					const fileIsMp4 =
 						file.type ===
-							"image/gif" ||
-							/\.gif$/i.test(
+							"video/mp4" ||
+							/\\.(mp4|m4v)$/i.test(
 								file.name
 							);
+
+
+					const fileIsGif =
+						await isGifUploadFile(
+							file,
+							fileIsMp4
+						);
 
 
 					const uploadedGifs =
@@ -5621,6 +5765,28 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 					if (
 						fileIsGif &&
+						Number(file.size) >
+							MAX_GIF_FILE_BYTES
+					) {
+
+
+						alert(
+							'GIF "' +
+								(file.name || "file") +
+								'" (' +
+								formatGifSizeMb(file.size) +
+								") exceeds the 30 MB maximum."
+						);
+
+
+						continue;
+
+
+					}
+
+
+					if (
+						fileIsGif &&
 						uploadedGifs >=
 							MAX_GIF_UPLOADS
 					) {
@@ -5637,14 +5803,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 
 					}
-
-
-					const fileIsMp4 =
-						file.type ===
-							"video/mp4" ||
-							/\\.(mp4|m4v)$/i.test(
-								file.name
-							);
 
 					if (
 						!fileIsGif &&
@@ -6013,31 +6171,18 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 						}
 
 						if (
-							file.type ===
-								"image/gif" ||
-							/\.gif$/i.test(
-								file.name
-							)
+							fileIsGif
 						) {
 
 							try {
 
-								const buffer =
-									await file.arrayBuffer();
-
+								slideEntry.gif =
+									await decodeGifFrames(
+										file
+									);
 
 								slideEntry.type =
 									"gif";
-
-
-								slideEntry.gif =
-									buildGifSlideFrames(
-										parseGifBytes(
-											new Uint8Array(
-												buffer
-											)
-										)
-									);
 
 
 								const badgeEl =
@@ -7467,6 +7612,18 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 
 		if (
+			bytes.length >
+				MAX_GIF_FILE_BYTES
+		) {
+
+			throw new Error(
+				"GIF exceeds the 30 MB file size limit"
+			);
+
+		}
+
+
+		if (
 			bytes[0] !== 0x47 ||
 			bytes[1] !== 0x49 ||
 			bytes[2] !== 0x46
@@ -7487,6 +7644,18 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const height =
 			bytes[8] |
 			(bytes[9] << 8);
+
+
+		if (
+			width <= 0 ||
+			height <= 0
+		) {
+
+			throw new Error(
+				"Invalid GIF dimensions"
+			);
+
+		}
 
 
 		const screenPacked =
@@ -7536,6 +7705,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		const frames =
 			[];
+
+
+		let totalIndexedPixels =
+			0;
 
 
 		let pending =
@@ -7690,6 +7863,39 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				const frameHeight =
 					bytes[offset + 6] |
 					(bytes[offset + 7] << 8);
+
+
+				const framePixels =
+					frameWidth * frameHeight;
+
+
+				if (
+					frameWidth <= 0 ||
+					frameHeight <= 0 ||
+					framePixels > GIF_MAX_SINGLE_FRAME_PIXELS
+				) {
+
+					throw new Error(
+						"GIF frame dimensions exceed the memory limit"
+					);
+
+				}
+
+
+				totalIndexedPixels +=
+					framePixels;
+
+
+				if (
+					totalIndexedPixels >
+						GIF_MAX_INDEXED_PIXELS
+				) {
+
+					throw new Error(
+						"GIF decoded frames exceed the memory limit"
+					);
+
+				}
 
 
 				const imagePacked =
@@ -7970,26 +8176,51 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		/*
 		 * Memory guard: every stored frame costs
-		 * width*height*4 bytes. Very large GIFs are
-		 * downscaled to stay under the budget.
+		 * outWidth*outHeight*4 bytes. Decoded GIF frame
+		 * memory is strictly capped at 30 MiB
+		 * (GIF_FRAME_BUDGET_BYTES): dimensions downscale
+		 * first, and if extreme frame count would still
+		 * exceed 30 MiB at the readability floor, evenly
+		 * spaced composited frames are kept while folding
+		 * intermediate frame delays so loop timing stays exact.
 		 */
 
 		const BUDGET_BYTES =
-			120 * 1024 * 1024;
+			GIF_FRAME_BUDGET_BYTES;
 
 
 		let scale =
 			1;
 
 
-		const rawBytes =
-			frames.length *
+		const singleFrameRawBytes =
 			width *
 			height *
 			4;
 
 
+		const rawBytes =
+			frames.length *
+			singleFrameRawBytes;
+
+
 		if (rawBytes > BUDGET_BYTES) {
+
+			const maxSingleScale =
+				singleFrameRawBytes > BUDGET_BYTES
+					? Math.sqrt(
+							BUDGET_BYTES /
+								singleFrameRawBytes
+					  )
+					: 1;
+
+
+			const minReadableScale =
+				Math.min(
+					0.15,
+					maxSingleScale
+				);
+
 
 			scale =
 				Math.sqrt(
@@ -8000,10 +8231,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 			scale =
 				Math.max(
-					0.15,
+					minReadableScale,
 					Math.min(
-						1,
-						scale
+						maxSingleScale,
+						Math.min(
+							1,
+							scale
+						)
 					)
 				);
 
@@ -8012,18 +8246,38 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		const outWidth =
 			Math.max(
-				2,
-				Math.round(
-					width * scale
-				)
+				width < 2 ? 1 : 2,
+				scale < 1
+					? Math.floor(
+							width * scale
+					  )
+					: width
 			);
 
 
 		const outHeight =
 			Math.max(
-				2,
-				Math.round(
-					height * scale
+				height < 2 ? 1 : 2,
+				scale < 1
+					? Math.floor(
+							height * scale
+					  )
+					: height
+			);
+
+
+		const outFrameBytes =
+			outWidth *
+			outHeight *
+			4;
+
+
+		const maxStoredFrames =
+			Math.max(
+				1,
+				Math.floor(
+					BUDGET_BYTES /
+						outFrameBytes
 				)
 			);
 
@@ -8080,9 +8334,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 
 		for (
-			const frame of
-				frames
+			let frameIndex = 0;
+			frameIndex < frames.length;
+			frameIndex++
 		) {
+
+			const frame =
+				frames[frameIndex];
 
 			/*
 			 * Disposal 3 on the previous frame means
@@ -8203,6 +8461,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			);
 
 
+			/*
+			 * Release indexed pixel buffer once painted so
+			 * peak decode memory drops as each frame completes.
+			 */
+			frame.pixels =
+				null;
+
+
 			const dx =
 				Math.round(
 					frame.left * scale
@@ -8216,14 +8482,20 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 
 			const dw =
-				Math.round(
-					frame.width * scale
+				Math.max(
+					1,
+					Math.round(
+						frame.width * scale
+					)
 				);
 
 
 			const dh =
-				Math.round(
-					frame.height * scale
+				Math.max(
+					1,
+					Math.round(
+						frame.height * scale
+					)
 				);
 
 
@@ -8241,29 +8513,52 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 
 			/*
-			 * Capture the canvas exactly as the
-			 * frame is displayed.
+			 * Capture the canvas as displayed, enforcing
+			 * total retained RGBA memory <= GIF_FRAME_BUDGET_BYTES.
 			 */
 
-			outFrames.push(
-				{
-					data:
-						compositeCtx.getImageData(
-							0,
-							0,
-							outWidth,
-							outHeight
-						),
-
-					durationMs:
-						frame.delayMs
-				}
-			);
+			const keepFrame =
+				frames.length <= maxStoredFrames ||
+				frameIndex === 0 ||
+				Math.floor(
+					(frameIndex * maxStoredFrames) /
+						frames.length
+				) >
+					Math.floor(
+						((frameIndex - 1) * maxStoredFrames) /
+							frames.length
+					);
 
 
-			startMs.push(
-				loopMs
-			);
+			if (keepFrame) {
+
+				outFrames.push(
+					{
+						data:
+							compositeCtx.getImageData(
+								0,
+								0,
+								outWidth,
+								outHeight
+							),
+
+						durationMs:
+							frame.delayMs
+					}
+				);
+
+
+				startMs.push(
+					loopMs
+				);
+
+			}
+			else {
+
+				outFrames[outFrames.length - 1].durationMs +=
+					frame.delayMs;
+
+			}
 
 
 			loopMs +=
@@ -8348,6 +8643,64 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		};
 
 	}
+
+
+	async function decodeGifFrames(
+		blob
+	) {
+
+		if (!blob) {
+			throw new Error(
+				"Missing GIF file"
+			);
+		}
+
+		if (
+			Number(blob.size) >
+				MAX_GIF_FILE_BYTES
+		) {
+			throw new Error(
+				"GIF exceeds the 30 MB file size limit"
+			);
+		}
+
+		const buffer =
+			await mediaDeadline(
+				blob.arrayBuffer(),
+				30000,
+				"Reading the GIF file timed out; retry this video."
+			);
+
+		if (
+			buffer.byteLength >
+				MAX_GIF_FILE_BYTES
+		) {
+			throw new Error(
+				"GIF exceeds the 30 MB file size limit"
+			);
+		}
+
+		return buildGifSlideFrames(
+			parseGifBytes(
+				new Uint8Array(
+					buffer
+				)
+			)
+		);
+
+	}
+
+
+	window.__parseGifBytes =
+		parseGifBytes;
+
+
+	window.__buildGifSlideFrames =
+		buildGifSlideFrames;
+
+
+	window.__decodeGifFrames =
+		decodeGifFrames;
 
 
 	/*
@@ -9399,7 +9752,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				'<div class="va-section">' +
 				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
 				'<button type="button" class="upload-btn" id="va-upload-btn-' + n + '" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
-				'<span class="va-note">Max 5 GIF \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
+				'<span class="va-note">Max 5 GIF (30 MB max) \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
 				'<a href="#" class="va-template-link" id="va-template-link-' + n + '" data-video-index="' + n + '" onclick="if (!event.defaultPrevented && window.openTemplateModal) window.openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
 				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include 4 stock video clips and 8 distinct photos.</span>' +
@@ -17158,19 +17511,37 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			const file of files
 		) {
 
-			const fileIsGif =
-				file.type ===
-					"image/gif" ||
-				/\\.gif$/i.test(
-					file.name
-				);
-
 			const fileIsMp4 =
 				file.type ===
 					"video/mp4" ||
 				/\\.(mp4|m4v)$/i.test(
 					file.name
 				);
+
+			const fileIsGif =
+				await isGifUploadFile(
+					file,
+					fileIsMp4
+				);
+
+			if (
+				fileIsGif &&
+				Number(file.size) >
+					MAX_GIF_FILE_BYTES
+			) {
+
+				alert(
+					"Video " + n +
+						': GIF "' +
+						(file.name || "file") +
+						'" (' +
+						formatGifSizeMb(file.size) +
+						") exceeds the 30 MB maximum."
+				);
+
+				continue;
+
+			}
 
 			const counts =
 				videoCounts(
@@ -18260,17 +18631,24 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					"gif"
 			) {
 
-				const buffer =
-					await mediaDeadline(asset.file.arrayBuffer(), 30000,
-						"Reading the GIF file timed out; retry this video.");
+				if (
+					asset.file &&
+					Number(asset.file.size) >
+						MAX_GIF_FILE_BYTES
+				) {
+
+					throw new Error(
+						"Video " + n +
+							': GIF "' +
+							(asset.file.name || "file") +
+							'" exceeds the 30 MB maximum.'
+					);
+
+				}
 
 				const gif =
-					buildGifSlideFrames(
-						parseGifBytes(
-							new Uint8Array(
-								buffer
-							)
-						)
+					await decodeGifFrames(
+						asset.file
 					);
 
 				slides.push(
@@ -18960,11 +19338,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'<div class="auth-error" id="auth-error" role="alert"></div>' +
 			'<div class="auth-field" id="auth-email-wrap" style="display:none">' +
 			'<label for="auth-email">Email</label>' +
-			'<input type="email" id="auth-email" maxlength="64" autocomplete="email">' +
+			'<input type="email" id="auth-email" maxlength="40" autocomplete="email">' +
 			'</div>' +
 			'<div class="auth-field">' +
 			'<label for="auth-username">Username</label>' +
-			'<input type="text" id="auth-username" maxlength="20" autocomplete="username">' +
+			'<input type="text" id="auth-username" maxlength="40" autocomplete="username">' +
 			'</div>' +
 			'<div class="auth-field">' +
 			'<label for="auth-password">Password</label>' +
@@ -19693,13 +20071,26 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		);
 
 		if (
-			!/^[a-zA-Z0-9_]{3,20}$/.test(
+			!/^[a-zA-Z0-9_]{3,40}$/.test(
 				username
 			)
 		) {
 
 			setAuthError(
-				"Username: 3-20 letters, numbers or _ ."
+				"Username: 3-40 letters, numbers or _ ."
+			);
+
+			return;
+
+		}
+
+		if (
+			authIsSignup &&
+			email.length > 40
+		) {
+
+			setAuthError(
+				"Email must be 40 characters or fewer."
 			);
 
 			return;

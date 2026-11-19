@@ -177,7 +177,7 @@ export const PAYMENT_UPLOAD_JS = `
 (function() {
 	"use strict";
 
-	var MAX_BYTES = 5 * 1024 * 1024;
+	var MAX_BYTES = 4 * 1024 * 1024;
 
 	function esc(s) {
 		return String(s == null ? "" : s)
@@ -205,7 +205,7 @@ export const PAYMENT_UPLOAD_JS = `
 				'<label class="pay-dropzone" id="pay-dropzone" for="payment-screenshot-file">' +
 					'<input type="file" id="payment-screenshot-file" name="screenshot" accept="image/png,image/jpeg,image/webp,image/gif" />' +
 					'<div class="pay-dropzone-title">\\ud83d\\udcf8 Click or Drop Payment Transaction Screenshot</div>' +
-					'<div class="pay-dropzone-sub">PNG, JPG, WEBP or GIF \\u00b7 Max 5 MB \\u00b7 Make sure the transaction number is readable</div>' +
+					'<div class="pay-dropzone-sub">PNG, JPG, WEBP or GIF \\u00b7 Max 4 MB \\u00b7 Make sure the transaction number is readable</div>' +
 				'</label>' +
 				'<div class="pay-preview-wrap" id="pay-preview-wrap">' +
 					'<img class="pay-preview-thumb" id="pay-preview-thumb" alt="Selected payment screenshot preview" title="Click to view fullscreen" />' +
@@ -275,7 +275,7 @@ export const PAYMENT_UPLOAD_JS = `
 		function applyFile(file) {
 			if (!file) return;
 			if (file.size > MAX_BYTES) {
-				setStatus("err", "That image is larger than 5 MB. Please choose a smaller screenshot.");
+				setStatus("err", "That image is larger than 4 MB. Please choose a smaller screenshot.");
 				return;
 			}
 			if (file.type && !/^image\\/(png|jpe?g|webp|gif)$/i.test(file.type)) {
@@ -378,6 +378,10 @@ export const PAYMENT_UPLOAD_JS = `
 				if (uploading) return;
 				if (!selectedFile) {
 					setStatus("err", "Please select a payment transaction screenshot image first.");
+					return;
+				}
+				if (selectedFile.size > MAX_BYTES) {
+					setStatus("err", "That image is larger than 4 MB. Please choose a smaller screenshot.");
 					return;
 				}
 				uploading = true;

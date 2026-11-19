@@ -1722,10 +1722,34 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 			renderPhotoThumbs();
 		}
 
+		const TEMPLATE_MAX_GIF_BYTES = 30 * 1024 * 1024;
+
+		function isTemplateGifFile(f) {
+			if (!f) return false;
+			const mime = String(f.type || "").toLowerCase();
+			const name = String(f.name || "");
+			return mime === "image/gif" || /\\.gif$/i.test(name);
+		}
+
 		async function onPhotoFiles(event) {
-			const files = Array.from(event.target.files || []).slice(0, 2);
+			const rawFiles = Array.from(event.target.files || []).slice(0, 2);
 			event.target.value = "";
+			if (!rawFiles.length) {
+				return;
+			}
+			const skippedGifs = [];
+			const files = [];
+			for (const f of rawFiles) {
+				if (isTemplateGifFile(f) && Number(f.size) > TEMPLATE_MAX_GIF_BYTES) {
+					skippedGifs.push(f.name || "GIF");
+					continue;
+				}
+				files.push(f);
+			}
 			if (!files.length) {
+				if (statusEl) {
+					statusEl.textContent = "GIF files must be 30 MB or smaller.";
+				}
 				return;
 			}
 			for (const u of photoUrls) {
@@ -1752,7 +1776,8 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 				statusEl.textContent =
 					photos.length + " photo" +
 					(photos.length === 1 ? "" : "s") +
-					" loaded \\u00b7 " + currentVarDef().name;
+					" loaded \\u00b7 " + currentVarDef().name +
+					(skippedGifs.length ? " (skipped GIF over 30 MB)" : "");
 			}
 		}
 

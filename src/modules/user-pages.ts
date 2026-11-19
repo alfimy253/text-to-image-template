@@ -196,6 +196,29 @@ const INLINE_AUTH_WIDGET_JS = `
 			var username = (document.getElementById("ia-username").value || "").trim();
 			var email = (document.getElementById("ia-email").value || "").trim();
 			var password = document.getElementById("ia-password").value || "";
+			if (mode === "signup") {
+				if (!/^[a-zA-Z0-9_]{3,40}$/.test(username)) {
+					if (msg) {
+						msg.className = "inline-auth-msg visible err";
+						msg.textContent = "Username: 3-40 letters, numbers or _";
+					}
+					return;
+				}
+				if (email.length > 40) {
+					if (msg) {
+						msg.className = "inline-auth-msg visible err";
+						msg.textContent = "Email must be 40 characters or fewer";
+					}
+					return;
+				}
+				if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+					if (msg) {
+						msg.className = "inline-auth-msg visible err";
+						msg.textContent = "Enter a valid email address";
+					}
+					return;
+				}
+			}
 			var endpoint = mode === "signup" ? "/api/signup" : "/api/login";
 			var payload = mode === "signup"
 				? { username: username, email: email, password: password }
@@ -248,12 +271,12 @@ function renderInlineAuthCard(heading: string, subheading: string): string {
 			</div>
 			<form class="inline-auth-form" id="ia-form">
 				<div>
-					<label class="site-muted" for="ia-username" style="display:block;font-size:0.84rem;margin-bottom:4px;">Username</label>
-					<input class="site-input" type="text" id="ia-username" required autocomplete="username" />
+					<label class="site-muted" for="ia-username" style="display:block;font-size:0.84rem;margin-bottom:4px;">Username (3–40 characters)</label>
+					<input class="site-input" type="text" id="ia-username" maxlength="40" required autocomplete="username" />
 				</div>
 				<div id="ia-email-wrap" style="display:none;">
-					<label class="site-muted" for="ia-email" style="display:block;font-size:0.84rem;margin-bottom:4px;">Email</label>
-					<input class="site-input" type="email" id="ia-email" autocomplete="email" />
+					<label class="site-muted" for="ia-email" style="display:block;font-size:0.84rem;margin-bottom:4px;">Email (max 40 characters)</label>
+					<input class="site-input" type="email" id="ia-email" maxlength="40" autocomplete="email" />
 				</div>
 				<div>
 					<label class="site-muted" for="ia-password" style="display:block;font-size:0.84rem;margin-bottom:4px;">Password</label>

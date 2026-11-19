@@ -26,6 +26,28 @@ export const TIMELINE_EDITOR_JS = `
 		var MIN_CLIP_SEC = 0.25;
 		var MAX_VISUAL_TRACKS = 4;
 		var MAX_MEDIA_FILES = 100;
+		var MAX_GIF_FILE_BYTES = 30 * 1024 * 1024;
+
+		function isGifAssetMeta(blob, meta) {
+			var type = String((meta && meta.type) || (blob && blob.type) || "").toLowerCase();
+			var name = String((meta && meta.name) || (blob && blob.name) || "").toLowerCase();
+			return type === "image/gif" || name.slice(-4) === ".gif";
+		}
+
+		function hasGifMagicBytes(blob) {
+			if (!blob || typeof blob.slice !== "function") return Promise.resolve(false);
+			try {
+				var slice = blob.slice(0, 6);
+				if (!slice || typeof slice.arrayBuffer !== "function") return Promise.resolve(false);
+				return slice.arrayBuffer().then(function (buf) {
+					var head = new Uint8Array(buf);
+					return head.length === 6 && head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 &&
+						head[3] === 0x38 && (head[4] === 0x37 || head[4] === 0x39) && head[5] === 0x61;
+				}).catch(function () { return false; });
+			} catch (error) {
+				return Promise.resolve(false);
+			}
+		}
 		/*
 		 * The Pixabay stocks (and any local upload) always live in ONE track. That
 		 * track IS the background layer of the composition: the canvas paints it
@@ -173,6 +195,7 @@ export const TIMELINE_EDITOR_JS = `
 						var assets = Object.assign({}, existing && existing.assets || {});
 						(Array.isArray(incoming.assets) ? incoming.assets : []).forEach(function (asset) {
 							if (!asset || !asset.blob || !asset.id) return;
+							if (isGifAssetMeta(asset.blob, asset) && Number(asset.blob.size) > MAX_GIF_FILE_BYTES) return;
 							if (incoming.preserveExisting && assets[String(asset.id)]) return;
 							assets[String(asset.id)] = { id: String(asset.id), blob: asset.blob,
 								name: String(asset.name || asset.blob.name || ""), type: String(asset.type || asset.blob.type || ""), source: asset.source || null };
@@ -208,6 +231,9 @@ export const TIMELINE_EDITOR_JS = `
 		function storeOneAsset(projectId, assetId, blob, metadata) {
 			if (!blob) return Promise.resolve({ ok: false, reason: "no browser file was supplied" });
 			var info = metadata || {};
+			if (isGifAssetMeta(blob, info) && Number(blob.size) > MAX_GIF_FILE_BYTES) {
+				return Promise.resolve({ ok: false, reason: "GIF exceeds the 30 MB limit" });
+			}
 			var key = String(assetId || "asset-" + Date.now().toString(36));
 			return storeProjectAssets(projectId, {
 				assets: [{ id: key, blob: blob, name: info.name || blob.name || "", type: info.type || blob.type || "", source: info.source || null }]
@@ -448,9 +474,13 @@ export const TIMELINE_EDITOR_JS = `
 			if (!sessionMayWrite()) return Promise.resolve({ ok: false, reason: "This editor is no longer active" });
 			if (!blob) return Promise.resolve({ ok: false, reason: "no browser file was supplied" });
 			var info = metadata || {};
+			if (isGifAssetMeta(blob, info) && Number(blob.size) > MAX_GIF_FILE_BYTES) {
+				return Promise.resolve({ ok: false, reason: "GIF exceeds the 30 MB limit" });
+			}
 			var key = String(assetId || "asset-" + Date.now().toString(36));
 			return api.storeProjectAssets(id, { assets: [{ id: key, blob: blob, name: info.name || blob.name || "", type: info.type || blob.type || "", source: info.source || null }] });
 		};
+		api.maxGifBytes = MAX_GIF_FILE_BYTES;
 
 		/* Session 331 follow-up: the edit hand-back to the Quick Batch table. */
 		var publishReady = false;
@@ -2627,7 +2657,7 @@ export const TIMELINE_EDITOR_JS = `
 				inspector.appendChild(mediaActions);
 				var note = document.createElement("div");
 				note.className = "te-inspector-note";
-				note.textContent = "Pixabay scenes and your uploads share the one background layer. It is pinned below every text and graphic clip.";
+				note.textContent = "Pixabay scenes and your uploads share the one background layer (GIFs up to 30 MB). It is pinned below every text and graphic clip.";
 				inspector.appendChild(note);
 				return;
 			}
@@ -3322,9 +3352,23 @@ export const TIMELINE_EDITOR_JS = `
 			if (!track) return;
 			if (!valid.length) { setStatus("Choose an image, GIF or MP4 file.", true); return; }
 			var nextStart = track.items.reduce(function (end, item) { return Math.max(end, item.startSec + item.durationSec); }, 0);
+			var addedCount = 0;
+			var skippedGifs = [];
 			for (var i = 0; i < valid.length; i++) {
 				var file = valid[i];
 				var kind = fileType(file);
+				/*
+				 * Enforce 30 MiB maximum on GIF files only; regular still images
+				 * have no file-size cap. Only sniff 6-byte magic header when an
+				 * image file exceeds 30 MiB so normal uploads remain synchronous.
+				 */
+				if (kind === "image" && Number(file.size) > MAX_GIF_FILE_BYTES) {
+					if (await hasGifMagicBytes(file)) kind = "gif";
+				}
+				if (kind === "gif" && Number(file.size) > MAX_GIF_FILE_BYTES) {
+					skippedGifs.push(String(file.name || "GIF") + " (" + (Number(file.size) / (1024 * 1024)).toFixed(1) + " MB)");
+					continue;
+				}
 				var placeholder = track.items.find(function (item) { return !item.assetId; }) || null;
 				var duration = kind === "video" ? await probeDuration(file, "video") : placeholder ? placeholder.durationSec : 5;
 				var assetId = makeId("upload");
@@ -3357,15 +3401,25 @@ export const TIMELINE_EDITOR_JS = `
 					state.scenes.push(scene); track.items.push(item);
 					nextStart += duration;
 				}
-				registerAsset(assetId, file, { name: file.name, type: file.type || (kind === "video" ? "video/mp4" : kind === "gif" ? "image/gif" : "image/jpeg"), source: "user upload" });
-				api.storeAsset(pageId, assetId, file, { name: file.name, type: file.type, source: "user upload" }).then(function (result) { if (!result || !result.ok) setStatus("Media is usable now but could not be kept for reloads in this browser.", true); });
+				var normalizedType = kind === "gif" ? "image/gif" : (file.type || (kind === "video" ? "video/mp4" : "image/jpeg"));
+				registerAsset(assetId, file, { name: file.name, type: normalizedType, source: "user upload" });
+				api.storeAsset(pageId, assetId, file, { name: file.name, type: normalizedType, source: "user upload" }).then(function (result) { if (!result || !result.ok) setStatus("Media is usable now but could not be kept for reloads in this browser.", true); });
 				state.selectedTrackId = track.id; state.selectedItemId = item.id; selectedSceneId = sceneId;
+				addedCount++;
+			}
+			if (!addedCount && skippedGifs.length) {
+				setStatus("GIF files must be 30 MB or smaller. Skipped: " + skippedGifs.join(", ") + ".", true);
+				return;
 			}
 			/* Overlap rule: an added media file can never sit on top of another. */
 			resolveTimelineOverlaps();
 			ensureTimelineEnd(nextStart);
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
-			setStatus(valid.length + (valid.length === 1 ? " media file added" : " media files added") + " to the background layer.", false);
+			if (skippedGifs.length) {
+				setStatus(addedCount + (addedCount === 1 ? " media file added" : " media files added") + "; skipped GIF(s) over 30 MB: " + skippedGifs.join(", ") + ".", true);
+			} else {
+				setStatus(addedCount + (addedCount === 1 ? " media file added" : " media files added") + " to the background layer.", false);
+			}
 		}
 		/*
 		 * ＋ Add Clips — the studio's "Add video from template" composer

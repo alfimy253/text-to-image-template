@@ -3688,6 +3688,44 @@ const AUTH_USER_PREFIX =
 const AUTH_LEGACY_SCAN_MAX =
 	200;
 
+export const AUTH_USERNAME_MAX_CHARS =
+	40;
+
+export const AUTH_EMAIL_MAX_CHARS =
+	40;
+
+export const AUTH_SESSION_TTL_SECONDS =
+	30 * 24 * 3600;
+
+
+function authSessionExpired(
+	session: any
+): boolean {
+
+	if (
+		!session ||
+		typeof session !== "object" ||
+		!session.createdAt
+	) {
+		return false;
+	}
+
+	const createdMs =
+		Date.parse(
+			String(session.createdAt)
+		);
+
+	if (!Number.isFinite(createdMs)) {
+		return false;
+	}
+
+	return (
+		Date.now() - createdMs >
+		AUTH_SESSION_TTL_SECONDS * 1000
+	);
+
+}
+
 
 /*
  * ---- The user row is the single source of truth ----------------
@@ -4830,7 +4868,23 @@ async function authSessionFromRequest(
 
 	try {
 
-		return JSON.parse(raw);
+		const parsed =
+			JSON.parse(raw);
+
+		if (
+			authSessionExpired(parsed)
+		) {
+			try {
+				await env.KV_BINDING.delete(
+					"session:" + match[1]
+				);
+			}
+			catch (deleteError) {
+			}
+			return null;
+		}
+
+		return parsed;
 
 	}
 	catch (parseError) {
@@ -5979,10 +6033,40 @@ async function handleAuthApi(
 				);
 			}
 
-			const session =
-				JSON.parse(
-					raw
+			let session: any;
+
+			try {
+				session =
+					JSON.parse(
+						raw
+					);
+			}
+			catch (sessionParseError) {
+				return json(
+					{ authenticated: false },
+					401
 				);
+			}
+
+			if (
+				authSessionExpired(session)
+			) {
+				try {
+					await env.KV_BINDING.delete(
+						"session:" + match[1]
+					);
+				}
+				catch (deleteError) {
+				}
+				return json(
+					{ authenticated: false },
+					401,
+					authSessionCookie(
+						"",
+						0
+					)
+				);
+			}
 
 			/*
 			 * Plan and today's credit counters ride along with
@@ -6207,7 +6291,7 @@ async function handleAuthApi(
 				).trim().toLowerCase();
 
 			if (
-				!/^[a-zA-Z0-9_]{3,20}$/.test(
+				!/^[a-zA-Z0-9_]{3,40}$/.test(
 					username
 				)
 			) {
@@ -6215,7 +6299,7 @@ async function handleAuthApi(
 					{
 						success: false,
 						error:
-							"Username: 3-20 letters, numbers or _"
+							"Username: 3-40 letters, numbers or _"
 					},
 					400
 				);
@@ -6230,6 +6314,20 @@ async function handleAuthApi(
 						success: false,
 						error:
 							"Password must be at least 6 characters"
+					},
+					400
+				);
+			}
+
+			if (
+				email.length >
+					AUTH_EMAIL_MAX_CHARS
+			) {
+				return json(
+					{
+						success: false,
+						error:
+							"Email must be 40 characters or fewer"
 					},
 					400
 				);
@@ -6423,7 +6521,11 @@ async function handleAuthApi(
 						createdAt:
 							new Date().toISOString()
 					}
-				)
+				),
+				{
+					expirationTtl:
+						AUTH_SESSION_TTL_SECONDS
+				}
 			);
 
 			const signupCredits =
@@ -6453,7 +6555,7 @@ async function handleAuthApi(
 				200,
 				authSessionCookie(
 					token,
-					30 * 24 * 3600
+					AUTH_SESSION_TTL_SECONDS
 				)
 			);
 
@@ -6542,7 +6644,11 @@ async function handleAuthApi(
 						createdAt:
 							new Date().toISOString()
 					}
-				)
+				),
+				{
+					expirationTtl:
+						AUTH_SESSION_TTL_SECONDS
+				}
 			);
 
 			const loginUsertype =
@@ -6595,7 +6701,7 @@ async function handleAuthApi(
 				200,
 				authSessionCookie(
 					token,
-					30 * 24 * 3600
+					AUTH_SESSION_TTL_SECONDS
 				)
 			);
 
