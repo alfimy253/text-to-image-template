@@ -374,7 +374,7 @@ function createStudioOffloadRuntime(win) {
 					}
 					if (!blob) {
 						try {
-							blob = await timedFetch("/api/image", { traceLayout: options && options.traceLayout, method: "POST", headers: { "Content-Type": "application/json" },
+							blob = await timedFetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" },
 								body: JSON.stringify(Object.assign({ prompt: prompt }, frame)) }, 165000, g.options, async function (response) {
 									if (!response.ok) return responseError(response);
 									var contentType = response.headers.get("Content-Type") || "";

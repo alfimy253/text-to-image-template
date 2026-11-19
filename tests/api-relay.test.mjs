@@ -999,31 +999,6 @@ function browserRuntime(handler, answer) {
 	return { win, calls, asks };
 }
 
-/*
- * Same runtime as browserRuntime(), but with a real DOM attached and the
- * native dialog suppressed - exactly the situation the bug reported: an
- * embedded/sandboxed studio where window.alert() never shows a box. The
- * trace therefore has to surface through the on-page panel, which these
- * helpers read back. A passing suite here proves a user SEES the events,
- * not merely that the code called a function named alert.
- */
-function browserRuntimeWithDom(handler, answer) {
-	const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>", { url: SELF + "/studio" });
-	const rt = browserRuntime(handler, answer);
-	rt.win.document = dom.window.document;
-	/* Native dialogs off, like a sandboxed preview frame. If tracing still
-	 * relied on alert(), nothing below would ever be recorded. */
-	rt.win.alert = () => {};
-	const doc = dom.window.document;
-	rt.panel = () => doc.getElementById("yvs-pipeline-trace");
-	rt.panelLines = () => {
-		const panel = doc.getElementById("yvs-pipeline-trace");
-		if (!panel) return [];
-		return Array.from(panel.querySelectorAll(".yvs-trace-line")).map((el) => el.textContent);
-	};
-	return rt;
-}
-
 test("the browser asks the Worker for the URL of an AI path and calls exactly that URL", async () => {
 	const ticket = "ticket-value";
 	const { win, calls, asks } = browserRuntime(
@@ -1662,83 +1637,4 @@ test("the UI Worker's share shrinks as backups are added: 1 slot in (1 + 3 x bac
 	for (const entry of pool.slice(1)) noteRelayFailure(entry.id, new Error("503"), 30_000);
 	const fallback = pickRelayEndpoint(pool, config({ localWeight: 0 }), Date.now());
 	assert.equal(fallback.id, "local", "a fully cooled pool still answers, on the UI Worker");
-});
-
-test("TEMP_LAYOUT_TRACE pins both task owners and never fails over a traced response", async () => {
- for (const [layout, host] of [["editor", "worker-api-two"], ["table", "worker-api-two"]]) {
-  const path = "/api/script";
-  const query = RELAY_ENDPOINT_PATH + "?path=" + path + "&traceLayout=" + layout;
-  const reply = await handleRelayRoutes(requestFor(query), new URL(query, SELF), { RELAY_SECRET: "test-secret" }, {
-   identity: async () => ({ username: "bob" })
-  });
-  const given = await reply.json();
-  const endpoint = "https://" + host + ".missiona-carla.workers.dev" + path;
-  assert.equal(given.url, endpoint);
-  assert.ok(given.ticket);
-  /* Native dialog suppressed; the visible on-page panel must carry every
-   * event instead. This is what proves a user actually SEES the trace. */
-  const rt = browserRuntimeWithDom(() => new Response(null, {status:503}), given);
-  const {win, calls, asks} = rt;
-  let nativeAlerts = 0;
-  win.alert = () => { nativeAlerts++; };
-  const result = await win.fetch(path + "?async=1", {method:"POST", traceLayout:layout, body:"{}"});
-  assert.equal(result.status, 503, "a traced response is returned as-is and never failed over");
-  assert.equal(asks.length, 1);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, endpoint + "?async=1");
-  assert.equal(calls[0].init.credentials, "omit");
-  assert.equal(nativeAlerts, 0, "the trace never leans on a blocking native dialog");
-  const lines = rt.panelLines();
-  const ownerLabel = layout === "table" ? "Quick Batch" : "Editor";
-  assert.ok(lines.some(l => l.includes(ownerLabel + " \u2014 looking up Worker for " + path)), "the lookup is surfaced as its own event");
-  const selectedIdx = lines.findIndex(l => l.includes("Selected Worker: " + endpoint));
-  const httpIdx = lines.findIndex(l => l.includes("HTTP 503 received"));
-  assert.ok(selectedIdx >= 0, host + "'s URL is displayed in the panel");
-  assert.ok(httpIdx > selectedIdx, "the HTTP status is shown AFTER the selected Worker URL");
-  assert.ok(!lines.some(l => l.includes("Finished")), "headers alone are not reported as a finished video");
-  assert.ok(lines.every(l => !l.includes(given.ticket)), "the signed ticket is never displayed");
-  const panel = rt.panel();
-  assert.equal(panel.getAttribute("role"), "log", "the panel is an ARIA live log region");
-  assert.ok(panel.querySelector("[data-trace-close]"), "the panel exposes a close button");
- }
-});
-
-test("the trace panel renders the whole voice hand-out and a failed lookup while alert stays silent", async () => {
-	const path = "/api/voiceover";
-	const query = RELAY_ENDPOINT_PATH + "?path=" + encodeURIComponent(path) + "&traceLayout=table";
-	const reply = await handleRelayRoutes(requestFor(query), new URL(query, SELF), { RELAY_SECRET: "test-secret" }, {
-		identity: async () => ({ username: "bob" })
-	});
-	const given = await reply.json();
-	const endpoint = "https://worker-api-two.missiona-carla.workers.dev" + path;
-	assert.equal(given.url, endpoint);
-
-	/* Successful hand-out: lookup -> Worker Two selected -> HTTP 200 received. */
-	const ok = browserRuntimeWithDom(() => new Response("audio-bytes", { status: 200 }), given);
-	const okResult = await ok.win.fetch(path, { method: "POST", traceLayout: "table", body: "{}" });
-	assert.equal(okResult.status, 200);
-	const okLines = ok.panelLines();
-	assert.ok(okLines.some(l => l.includes("Quick Batch") && l.includes("looking up Worker for " + path)), "the Quick Batch lookup is announced");
-	const sel = okLines.findIndex(l => l.includes("Selected Worker: " + endpoint));
-	const http = okLines.findIndex(l => l.includes("HTTP 200 received"));
-	assert.ok(sel >= 0, "Worker Two's URL is displayed");
-	assert.ok(http > sel, "its HTTP status follows the selected URL");
-
-	/* Lookup refused by the server: nothing is sent and no HTTP outcome is invented. */
-	const refused = browserRuntimeWithDom(() => new Response(null, { status: 500 }), { success: false });
-	await assert.rejects(refused.win.fetch(path, { method: "POST", traceLayout: "table", body: "{}" }), /Pinned worker unavailable/);
-	assert.equal(refused.calls.length, 0, "a failed lookup sends nothing downstream");
-	const refusedLines = refused.panelLines();
-	assert.ok(refusedLines.some(l => l.includes("looking up Worker for " + path)), "the lookup attempt is still shown");
-	assert.ok(refusedLines.some(l => l.includes("Not sent: worker lookup failed for " + path)));
-	assert.ok(!refusedLines.some(l => l.includes("HTTP ")), "no HTTP status is claimed when nothing was sent");
-
-	/* Lookup answered but WITHOUT the table pin: rejected client-side the same way. */
-	const unpinned = browserRuntimeWithDom(() => new Response("x", { status: 200 }), {
-		success: true, url: "https://unpinned.test" + path, local: false,
-		endpointId: "worker:https://unpinned.test", ticket: "t", expiresAt: Date.now() + 60_000
-	});
-	await assert.rejects(unpinned.win.fetch(path, { method: "POST", traceLayout: "table", body: "{}" }), /Pinned worker unavailable/);
-	assert.equal(unpinned.calls.length, 0, "an answer missing the table tag is rejected before any call");
-	assert.ok(unpinned.panelLines().some(l => l.includes("Not sent: worker lookup failed for " + path)));
 });

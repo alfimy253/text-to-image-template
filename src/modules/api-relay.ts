@@ -120,8 +120,6 @@ function permitsNonVisualModel(model: string): boolean {
 		(isInstructModel(model) || /melotts|aura|whisper|tts/i.test(model));
 }
 
-const TRACE_STOCK_PATHS = ["/api/media/search", "/api/media/asset"];
-
 export const RELAY_AI_PATHS = [
 	"/api/script",
 	"/api/seo-plan",
@@ -798,7 +796,7 @@ export async function verifyRelayToken(
 export function relayTicketAllowsPath(ticket: RelayTokenPayload | null, pathname: string): boolean {
 	if (!ticket || ticket.k !== "client") return false;
 	const allowed = Array.isArray(ticket.paths) ? ticket.paths : [];
-	return allowed.indexOf(pathname) !== -1 && (RELAY_AI_PATHS.includes(pathname) || TRACE_STOCK_PATHS.includes(pathname));
+	return allowed.indexOf(pathname) !== -1 && RELAY_AI_PATHS.indexOf(pathname) !== -1;
 }
 
 /**
@@ -1783,22 +1781,11 @@ export async function handleRelayRoutes(
 		const rawPath = String(url.searchParams.get("path") || "").trim();
 		const cleanPath = rawPath.split("?")[0].split("#")[0];
 		const pipelinePath = cleanPath.charAt(0) === "/" ? cleanPath : "/" + cleanPath;
-		const layout = url.searchParams.get("traceLayout");
-		const pinned = layout === "editor" || layout === "table";
-		if (!RELAY_AI_PATHS.includes(pipelinePath) && !(pinned && TRACE_STOCK_PATHS.includes(pipelinePath))) {
+		if (RELAY_AI_PATHS.indexOf(pipelinePath) === -1) {
 			return jsonResponse(
 				{ success: false, error: "Unsupported pipeline path", paths: RELAY_AI_PATHS.slice() },
 				400
 			);
-		}
-
-		// TEMP_LAYOUT_TRACE: fixed, server-owned destinations; never accept a URL from the caller.
-		if (pinned) {
-			const origin = layout === "editor" ? "https://worker-api-two.missiona-carla.workers.dev" : "https://worker-api-two.missiona-carla.workers.dev";
-			const local = origin === url.origin;
-			const auth = local ? { ticket: null, expiresAt: 0 } : await mintRelayClientTicket(env, options, [pipelinePath]);
-			if (!local && !auth.ticket) return jsonResponse({ success: false, error: "Pipeline ticket unavailable" }, 403);
-			return jsonResponse({ success: true, traceLayout: layout, url: origin + pipelinePath, endpointId: origin, local, ...auth }, 200, { "Cache-Control": "no-store" });
 		}
 
 		const config = await readRelayConfig(env, options);
@@ -2032,7 +2019,7 @@ export async function handleRelayRoutes(
  * ============================================================= */
 
 function isCorsPath(pathname: string): boolean {
-	return TRACE_STOCK_PATHS.includes(pathname) || RELAY_AI_PATHS.indexOf(pathname) !== -1 || isRelayPath(pathname);
+	return RELAY_AI_PATHS.indexOf(pathname) !== -1 || isRelayPath(pathname);
 }
 
 const PREFLIGHT_HEADERS = {

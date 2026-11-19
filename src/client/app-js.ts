@@ -13454,7 +13454,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		const response = await studioOffload.mediaResponse(
 			"/api/voiceover",
 			{
-				traceLayout: "table", method: "POST",
+				method: "POST",
 				headers: {
 					"Content-Type": "application/json"
 				},
@@ -13960,7 +13960,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		if (owner.isCancelled && owner.isCancelled()) return cancelledResults(prompts, results);
 
 		const perAttempt = {
-			traceLayout: owner.traceLayout,
 			slots: imageSlots || undefined,
 			isCancelled: owner.isCancelled,
 			priority: owner.priority,
@@ -14048,7 +14047,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			const results = await requestImageChunk(prompts, {
 				resolution: batchResolution(row.resolution), orientation: batchOrientation(row.orientation).value
 			}, {
-				traceLayout: "table",
 				isCancelled: function () { return Boolean(row.stopRequested); },
 				priority: function () {
 					const tr = document.querySelector('[data-batch-row="' + row.id + '"]');
@@ -14091,7 +14089,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 						row,
 						"/api/image-batch",
 						{
-							traceLayout: "table", method: "POST",
+							method: "POST",
 							headers: {
 								"Content-Type": "application/json",
 								"Accept": "application/x-ndjson"
@@ -23880,7 +23878,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				await fetch(
 					"/api/seo-plan",
 					{
-						traceLayout: "editor", method: "POST",
+						method: "POST",
 						headers: {
 							"Content-Type":
 								"application/json"
@@ -24824,7 +24822,6 @@ if (flowRetry) flowRetry.style.display = "none";
 		const stale = function () { return Boolean(project._deleted || !project._imageFlowActive || project._imageFlowSeq !== seq); };
 		try {
 			const results = await requestImageChunk(prompts, {}, {
-				traceLayout: "editor",
 				isCancelled: stale,
 				priority: function () { return project.el && project.el.contains(document.activeElement) ? 2 : 0; },
 				setController: function (controller) { if (!stale()) project._imageBatchController = controller; else controller.abort(); },
@@ -25084,7 +25081,7 @@ if (flowRetry) flowRetry.style.display = "none";
 						"/api/image-batch",
 						Object.assign(
 							{
-								traceLayout: "editor", method: "POST",
+								method: "POST",
 								headers: {
 									"Content-Type": "application/json",
 									"Accept": "application/x-ndjson"
@@ -25527,7 +25524,7 @@ async function retryImagePromptFlow(n) {
 					searchUrl.searchParams.set("page", "1");
 					searchUrl.searchParams.set("per_page", String(AUTO_MEDIA_TOTAL));
 					searchUrl.searchParams.set("orientation", "landscape");
-					const searchResponse = await fetch(searchUrl.pathname + searchUrl.search, { traceLayout: "editor", signal: controller ? controller.signal : undefined });
+					const searchResponse = await fetch(searchUrl.pathname + searchUrl.search, controller ? { signal: controller.signal } : undefined);
 					const searchData = await searchResponse.json().catch(function () { return null; });
 					if (!searchResponse.ok || !searchData || !Array.isArray(searchData.hits)) {
 						/*
@@ -25554,7 +25551,7 @@ async function retryImagePromptFlow(n) {
 					assetUrl.searchParams.set("page", "1");
 					assetUrl.searchParams.set("per_page", String(AUTO_MEDIA_TOTAL));
 					assetUrl.searchParams.set("orientation", "landscape");
-					const assetResponse = await fetch(assetUrl.pathname + assetUrl.search, { traceLayout: "editor", signal: controller ? controller.signal : undefined });
+					const assetResponse = await fetch(assetUrl.pathname + assetUrl.search, controller ? { signal: controller.signal } : undefined);
 					if (!assetResponse.ok) {
 						const errorData = await assetResponse.json().catch(function () { return null; });
 						const assetError = new Error((errorData && errorData.error) || ("Pixabay asset download failed (HTTP " + assetResponse.status + ")"));
@@ -26583,7 +26580,7 @@ async function retryImagePromptFlow(n) {
 			await send(
 				scriptPath,
 				{
-					traceLayout: context && context.layout === "row" ? "table" : "editor", method: "POST",
+					method: "POST",
 					headers: {
 						"Content-Type":
 							"application/json"
@@ -27547,7 +27544,7 @@ async function retryImagePromptFlow(n) {
 	async function requestEditorVoiceover(project, text, lang) {
 		return studioOffload.mediaResponse(
 			"/api/voiceover",
-			{ traceLayout: "editor", method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text, lang: lang }) },
+			{ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text, lang: lang }) },
 			{
 				isCancelled: function () { return Boolean(project._deleted); },
 				setController: function (controller) { project._voiceoverController = controller; },
