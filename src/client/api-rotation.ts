@@ -215,6 +215,77 @@ export const API_ROTATION_JS = String.raw`
 		return nativeFetch(target, options);
 	}
 
+	var tracePanelRoot = null;
+
+	/*
+	 * Build the on-page trace panel once. It lives INSIDE the studio page as a
+	 * live region (role="log") with its own close button, so a pipeline event
+	 * becomes something a person SEES rather than a native window.alert() that
+	 * a browser, an embedded preview, or a sandboxed frame can suppress
+	 * WITHOUT throwing. Lines are written with textContent only - never
+	 * innerHTML - so a traced URL can never inject markup.
+	 */
+	function buildTracePanel(doc) {
+		var root = doc.createElement("section");
+		root.id = "yvs-pipeline-trace";
+		root.setAttribute("role", "log");
+		root.setAttribute("aria-live", "polite");
+		root.setAttribute("aria-label", "Pipeline trace");
+		root.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:2147483000;width:min(420px,calc(100vw - 24px));" +
+			"max-height:40vh;display:flex;flex-direction:column;background:#0f172a;color:#e2e8f0;" +
+			"border:1px solid #334155;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.4);" +
+			"font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden;";
+
+		var head = doc.createElement("header");
+		head.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#1e293b;";
+		var title = doc.createElement("strong");
+		title.textContent = "Pipeline trace";
+		var closeBtn = doc.createElement("button");
+		closeBtn.type = "button";
+		closeBtn.setAttribute("data-trace-close", "");
+		closeBtn.setAttribute("aria-label", "Close pipeline trace");
+		closeBtn.textContent = "Close";
+		closeBtn.style.cssText = "background:#334155;color:#e2e8f0;border:0;border-radius:6px;padding:2px 8px;cursor:pointer;font:inherit;";
+		closeBtn.addEventListener("click", function () { root.hidden = true; });
+		head.appendChild(title);
+		head.appendChild(closeBtn);
+
+		var lines = doc.createElement("div");
+		lines.setAttribute("data-trace-lines", "");
+		lines.style.cssText = "padding:8px 10px;overflow:auto;white-space:pre-wrap;word-break:break-word;";
+
+		root.appendChild(head);
+		root.appendChild(lines);
+		doc.body.appendChild(root);
+		return root;
+	}
+
+	/*
+	 * Show one trace line. The console copy always fires first; the very same
+	 * message is then appended to the panel. Every DOM step is guarded so a
+	 * broken display can never stop callGiven() from running, nor turn a
+	 * successful response into a retry: tracing OBSERVES the pipeline, it does
+	 * not drive it. (Do NOT merely wrap window.alert() in try/catch - a browser
+	 * ignores a dialog WITHOUT throwing, which is exactly the failure mode this
+	 * panel replaces.)
+	 */
+	function showTraceLine(line) {
+		console.log(line);
+		try {
+			var doc = window.document;
+			if (!doc || !doc.body || typeof doc.createElement !== "function") return;
+			if (!tracePanelRoot || !doc.body.contains(tracePanelRoot)) tracePanelRoot = buildTracePanel(doc);
+			var list = tracePanelRoot.querySelector("[data-trace-lines]");
+			if (!list) return;
+			var row = doc.createElement("div");
+			row.className = "yvs-trace-line";
+			row.textContent = line;
+			list.appendChild(row);
+			tracePanelRoot.hidden = false;
+			list.scrollTop = list.scrollHeight;
+		} catch (_) { /* a rendering glitch must never break the request */ }
+	}
+
 	window.fetch = function (input, init) {
 		var path = pathOf(input, init && init.traceLayout);
 		if (!path || isRelayPath(path)) return nativeFetch(input, init);
@@ -222,24 +293,31 @@ export const API_ROTATION_JS = String.raw`
 		var layout = init && init.traceLayout;
 		if (layout === "editor" || layout === "table") {
 			var id = ++traceSequence;
-			var notify = function (message) {
-				var line = "[Pipeline trace #" + id + " | " + layout + "] " + message;
-				console.log(line);
-				window.alert(line);
+			var ownerLabel = layout === "table" ? "Quick Batch" : "Editor";
+			var trace = function (message) {
+				showTraceLine("[Pipeline trace #" + id + " | " + layout + "] " + message);
 			};
+			/* Surface the lookup as its OWN event, before we wait on it, so
+			 * "waiting for a Worker" can never be mistaken for "no tracing
+			 * code ran". */
+			trace(ownerLabel + " \u2014 looking up Worker for " + path);
 			return askForUrl(path, null, layout).then(async function (given) {
 				if (!given || given.traceLayout !== layout) {
-					notify("Not sent: worker lookup failed for " + path);
+					trace("Not sent: worker lookup failed for " + path);
 					throw new Error("Pinned worker unavailable");
 				}
 				var endpoint = new URL(given.url).origin + path;
-				notify("Requested: " + endpoint);
+				/* Show which Worker was chosen, then that the request left. */
+				trace("Selected Worker: " + endpoint);
+				trace("Requested: " + endpoint);
 				try {
 					var response = await callGiven(given, input, Object.assign({}, init, { redirect: "error" }), new URL(targetOf(input), window.location.href).search);
-					notify((response.ok ? "Finished" : "Failed") + " (HTTP " + response.status + "): " + endpoint);
+					/* Only headers have arrived at this point: report the real
+					 * status instead of calling the whole video finished. */
+					trace("HTTP " + response.status + " received" + (response.ok ? "" : " \u2014 request failed"));
 					return response;
 				} catch (error) {
-					notify("Failed (no HTTP response): " + endpoint);
+					trace("Failed (no HTTP response): " + endpoint);
 					throw error;
 				}
 			});
