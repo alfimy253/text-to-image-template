@@ -366,6 +366,70 @@ function timingSafeEqualHex(a: string, b: string): boolean {
 }
 
 /* =============================================================
+ * DIAGNOSTICS (2026-11-20)
+ *
+ * WHY THIS EXISTS
+ * A production event answered `POST /api/seo-plan` with 500 while the only
+ * clue in the log was:
+ *
+ *     [seo-plan] model call failed { model: "@cf/meta/llama-3.3-70b...",
+ *                                     attempt: 2, error: "Relay endpoint
+ *                                     answered 404" }
+ *
+ * Nothing in this file logged WHICH pool member answered 404, WHICH URL was
+ * called, what the body said, or why the remaining members (including the
+ * local backstop) were not tried. The relay layer was silent, so the only
+ * visible error was the last one - and it was the pool's error, not the
+ * model's, which makes the log actively misleading.
+ *
+ * Every log below is written BEFORE the line it describes, so the sequence in
+ * `wrangler tail` reads as a trace:
+ *
+ *   [relay] model call        <- what is about to be attempted, on which pool
+ *   [relay] attempt           <- before each member is contacted
+ *   [relay] http request      <- immediately before the fetch()
+ *   [relay] http answer       <- the status/headers that came back
+ *   [relay] endpoint refused  <- status + body preview when it was not ok
+ *   [relay] attempt failed    <- name/message + transient? + what happens next
+ *   [relay] call failed       <- the error that leaves the relay layer
+ *
+ * Logging can never break a call: every write is wrapped.
+ * ============================================================= */
+
+export type RelayLogLevel = "log" | "warn" | "error";
+
+function relayLog(level: RelayLogLevel, message: string, data: Record<string, unknown> = {}): void {
+	try {
+		console[level]("[relay] " + message, data);
+	} catch {
+		/* a broken console must never fail a model call */
+	}
+}
+
+/** Everything worth knowing about a thrown relay error, for one log object. */
+export function relayErrorDetail(error: unknown): Record<string, unknown> {
+	const record = error as Record<string, unknown> | null;
+	const read = (key: string): unknown => (record && key in record ? record[key] : undefined);
+	return {
+		name: error instanceof Error ? error.name : typeof error,
+		message: error instanceof Error ? error.message : String(error),
+		status: read("relayStatus"),
+		endpoint: read("relayEndpoint"),
+		url: read("relayUrl"),
+		errorKind: read("relayErrorKind")
+	};
+}
+
+/** Short, single-line, safe-for-logs preview of a response body. */
+function bodyPreview(text: string, max = 300): string {
+	return String(text || "")
+		.replace(/[\u0000-\u001F\u007F]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, max);
+}
+
+/* =============================================================
  * CONFIG
  * ============================================================= */
 
@@ -598,6 +662,20 @@ function isTransientRelayFailure(error: unknown): boolean {
 	/* A backup that answered "this model call is invalid" is authoritative:
 	 * another member would spend the same paid call on the same answer. */
 	if (name === "ModelError") return false;
+	/*
+	 * A member that cannot serve `POST /api/relay/ai` at all - an older
+	 * deployment, a typo'd Worker URL, a paused Worker, a route behind a
+	 * different path prefix (the 404 that produced the seo-plan 500) - has
+	 * not judged the model. It is a POOL problem: cool that member and let
+	 * the chain fall through to the next one and finally to local, exactly
+	 * as the module invariant promises.
+	 *
+	 * The generic classifier below cannot decide this: FATAL_PATTERNS in
+	 * image-load.ts matches the bare "404" in "Relay endpoint answered 404",
+	 * so without this line a single unreachable backup aborted the whole
+	 * call and surfaced as a model failure to the browser.
+	 */
+	if (name === "RelayUnavailableError") return true;
 	const message = error instanceof Error ? error.message : String(error);
 	/* A member with no AI binding is a pool problem, not a model problem. */
 	if (/binding not configured/i.test(message)) return true;
@@ -990,10 +1068,21 @@ async function runLocalModel(
 ): Promise<unknown> {
 	const ai = env && env.AI;
 	if (!ai || typeof ai.run !== "function") {
+		/* Logged before the throw: this is the "missing AI binding" the
+		 * settings page has to show, not a silent 500. */
+		relayLog("warn", "local call refused: no AI binding", { model, timeoutMs });
 		throw new Error("AI binding not configured");
 	}
 	const startedAt = Date.now();
 	healthFor("local").inFlight += 1;
+	/* Written BEFORE `ai.run()` so a hung binding still leaves a trace. */
+	relayLog("log", "local call start", {
+		model,
+		timeoutMs,
+		inputKeys: Object.keys(input || {}),
+		promptChars: typeof (input as any)?.prompt === "string" ? String((input as any).prompt).length : undefined,
+		inFlight: healthFor("local").inFlight
+	});
 	try {
 		const { signal, cleanup } = abortSignalFor(request, timeoutMs);
 		let timer: any = null;
@@ -1002,6 +1091,7 @@ async function runLocalModel(
 			if (!signal) {
 				const value = await call;
 				noteRelaySuccess("local", Date.now() - startedAt);
+				relayLog("log", "local call ok", { model, ms: Date.now() - startedAt });
 				return value;
 			}
 			const timeout = new Promise((_, reject) => {
@@ -1013,13 +1103,26 @@ async function runLocalModel(
 			});
 			const value = await Promise.race([call, timeout]);
 			noteRelaySuccess("local", Date.now() - startedAt);
+			relayLog("log", "local call ok", { model, ms: Date.now() - startedAt });
 			return value;
 		} finally {
 			if (timer) clearTimeout(timer);
 			cleanup();
 		}
 	} catch (error) {
-		if (isTransientRelayFailure(error)) noteRelayFailure("local", error, cooldownMs);
+		const transient = isTransientRelayFailure(error);
+		/* THE REAL MODEL ERROR. Before this line existed, a local failure was
+		 * invisible whenever a backup later failed too: the pool error was the
+		 * only thing that reached the logs. */
+		relayLog("warn", "local call failed", Object.assign(relayErrorDetail(error), {
+			model,
+			ms: Date.now() - startedAt,
+			timeoutMs,
+			transient,
+			action: transient ? "fail over to the pool" : "final - no failover",
+			cooldownMs: transient ? cooldownMs : 0
+		}));
+		if (transient) noteRelayFailure("local", error, cooldownMs);
 		throw error;
 	} finally {
 		healthFor("local").inFlight = Math.max(0, healthFor("local").inFlight - 1);
@@ -1056,8 +1159,20 @@ async function runRemoteModel(
 	const startedAt = Date.now();
 	const { signal, timedOut, cleanup } = abortSignalFor(request, timeoutMs);
 	healthFor(entry.id).inFlight += 1;
+	const target = entry.url + RELAY_AI_PATH;
+	/* Written BEFORE the fetch: the URL, the model and the body size are the
+	 * three facts a 404 cannot tell us afterwards. */
+	relayLog("log", "http request", {
+		endpoint: entry.id,
+		url: target,
+		model,
+		bodyBytes: body.length,
+		timeoutMs,
+		inFlight: healthFor(entry.id).inFlight,
+		tokenTtlMs: RELAY_TOKEN_TTL_MS
+	});
 	try {
-		const response = await fetchImpl(entry.url + RELAY_AI_PATH, {
+		const response = await fetchImpl(target, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -1070,19 +1185,77 @@ async function runRemoteModel(
 		});
 
 		const kind = response.headers.get(RELAY_RESULT_HEADER) || "";
+		/* Written BEFORE the ok/!ok branch, so EVERY answer is recorded -
+		 * including the 404 that used to be reported with no endpoint name. */
+		relayLog("log", "http answer", {
+			endpoint: entry.id,
+			url: target,
+			model,
+			status: response.status,
+			ok: response.ok,
+			resultKind: kind || null,
+			errorKind: response.headers.get(RELAY_ERROR_KIND_HEADER) || null,
+			servedBy: response.headers.get("X-YVS-Relay-Served-By") || null,
+			contentType: response.headers.get("content-type") || null,
+			cfRay: response.headers.get("cf-ray") || null,
+			ms: Date.now() - startedAt
+		});
 		if (!response.ok) {
+			/*
+			 * ONE read of the body, as text.
+			 *
+			 * The old code called `response.json()`; a member that answers
+			 * "Not Found" (an older deployment's router, a Worker that does
+			 * not serve /api/relay/ai at all) threw inside that parse and the
+			 * body was lost, so the log only ever said "answered 404".
+			 */
+			const raw = await response.text().catch(() => "");
 			let message = "Relay endpoint answered " + response.status;
 			let errorKind = response.headers.get(RELAY_ERROR_KIND_HEADER) || "";
+			let parsed: any = null;
 			try {
-				const parsed: any = await response.json();
+				parsed = raw ? JSON.parse(raw) : null;
 				if (parsed && parsed.error) message = String(parsed.error);
 				if (parsed && parsed.kind) errorKind = String(parsed.kind);
 			} catch {
 				/* keep the status message */
 			}
+			/*
+			 * A relay HTTP failure is a MEMBER failure, not a model verdict,
+			 * with one exception: the compute endpoint's own "the model said
+			 * no" answer (`kind: "model"` or a 400). Everything else - 401
+			 * (secret mismatch), 403, 404/405/410 (route missing or wrong
+			 * path), 413, 429, 5xx - means "this member cannot serve this
+			 * call right now", so the chain cools it and moves on to the next
+			 * member and finally to local.
+			 */
+			const modelVerdict = errorKind === "model" || response.status === 400;
+			relayLog("warn", "endpoint refused the call", {
+				endpoint: entry.id,
+				url: target,
+				model,
+				status: response.status,
+				errorKind: errorKind || null,
+				modelVerdict,
+				bodyChars: raw.length,
+				bodyLooksLikeJson: !!parsed,
+				bodyPreview: bodyPreview(raw, 300),
+				hint:
+					response.status === 404 || response.status === 405
+						? "this URL does not serve " + RELAY_AI_PATH +
+							" - an older/other deployment, a typo'd Worker URL, or a path prefix"
+						: undefined,
+				ms: Date.now() - startedAt
+			});
 			const error = new Error(message);
-			if (errorKind === "model" || response.status === 400) error.name = "ModelError";
-			else error.name = "RelayError";
+			error.name = modelVerdict ? "ModelError" : "RelayUnavailableError";
+			/* Carried on the error so the caller's log names the culprit. */
+			Object.assign(error, {
+				relayEndpoint: entry.id,
+				relayUrl: target,
+				relayStatus: response.status,
+				relayErrorKind: errorKind || null
+			});
 			throw error;
 		}
 
@@ -1090,20 +1263,54 @@ async function runRemoteModel(
 			const bytes = new Uint8Array(await response.arrayBuffer());
 			if (bytes.byteLength > RELAY_MAX_RESULT_BYTES) throw new Error("Relayed result too large");
 			noteRelaySuccess(entry.id, Date.now() - startedAt);
+			relayLog("log", "relayed result ok", {
+				endpoint: entry.id,
+				model,
+				result: "binary",
+				bytes: bytes.byteLength,
+				ms: Date.now() - startedAt
+			});
 			return bytes;
 		}
 
 		const data: any = await response.json();
 		if (!data || data.ok !== true) {
+			/*
+			 * A 200 with no usable envelope (an older deployment answering
+			 * HTML/plain text, a proxy injecting a page) is the same class of
+			 * member problem as a 404: log it, cool it, fail over.
+			 */
+			relayLog("warn", "relayed result envelope missing", {
+				endpoint: entry.id,
+				url: target,
+				model,
+				status: response.status,
+				keys: data && typeof data === "object" ? Object.keys(data).slice(0, 10) : null,
+				bodyPreview: bodyPreview(JSON.stringify(data || null)),
+				ms: Date.now() - startedAt
+			});
 			throw new Error((data && data.error) || "Relay endpoint returned no result");
 		}
 		if (data.resultBinary) {
 			const bytes = fromHex(String(data.resultBinary));
 			if (!bytes) throw new Error("Relay endpoint returned malformed bytes");
 			noteRelaySuccess(entry.id, Date.now() - startedAt);
+			relayLog("log", "relayed result ok", {
+				endpoint: entry.id,
+				model,
+				result: "hex-binary",
+				bytes: bytes.byteLength,
+				ms: Date.now() - startedAt
+			});
 			return bytes;
 		}
 		noteRelaySuccess(entry.id, Date.now() - startedAt);
+		relayLog("log", "relayed result ok", {
+			endpoint: entry.id,
+			model,
+			result: "json",
+			ms: Date.now() - startedAt
+		});
 		return data.result;
 	} catch (error) {
 		/*
@@ -1114,7 +1321,20 @@ async function runRemoteModel(
 		 * failing the whole request on a hanging backup.
 		 */
 		const failure = timedOut() ? relayTimeoutError(timeoutMs) : error;
-		if (isTransientRelayFailure(failure)) noteRelayFailure(entry.id, failure, cooldownMs);
+		const transient = isTransientRelayFailure(failure);
+		/* Written BEFORE the throw: name, message, target and the decision. */
+		relayLog(transient ? "warn" : "error", "remote call failed", Object.assign(relayErrorDetail(failure), {
+			endpoint: entry.id,
+			url: target,
+			model,
+			ms: Date.now() - startedAt,
+			timeoutMs,
+			timedOut: timedOut(),
+			transient,
+			action: transient ? "cool this member and fail over" : "final - no failover",
+			cooldownMs: transient ? cooldownMs : 0
+		}));
+		if (transient) noteRelayFailure(entry.id, failure, cooldownMs);
 		throw failure;
 	} finally {
 		cleanup();
@@ -1204,13 +1424,58 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 		 * turn one call into `attempts x timeoutMs` of waiting. */
 		const chainStartedAt = Date.now();
 		const chainBudget = Math.min(RELAY_CHAIN_MAX_MS, Math.max(1, settings.timeoutMs) * attempts.length);
+		/*
+		 * Written BEFORE the first member is contacted: which pool was
+		 * resolved, in which order, how many members will be tried, whether
+		 * this request was itself rotated here (preferLocal), and how long the
+		 * whole chain may last. A 404-only log could never be traced back to a
+		 * pool without this.
+		 */
+		relayLog("log", "model call", {
+			model,
+			enabled: settings.enabled,
+			preferLocal: !!options.preferLocal,
+			pool: members.map((entry) => ({
+				id: entry.id,
+				local: entry.local,
+				cooling: healthFor(entry.id).openedUntil > Date.now(),
+				failures: healthFor(entry.id).failures
+			})),
+			order: ordered.map((entry) => (entry.local ? "local" : entry.label)),
+			attempts: attempts.map((entry) => (entry.local ? "local" : entry.url)),
+			maxAttempts: settings.maxAttempts,
+			timeoutMs: settings.timeoutMs,
+			chainBudgetMs: chainBudget,
+			requestUrl: request ? request.url : undefined
+		});
 		for (const entry of attempts) {
 			const remaining = chainBudget - (Date.now() - chainStartedAt);
 			/* The first member always runs; later ones need a usable slice. */
-			if (attemptIndex > 0 && remaining < 250) break;
+			if (attemptIndex > 0 && remaining < 250) {
+				relayLog("warn", "chain budget exhausted", {
+					model,
+					tried: attemptIndex,
+					planned: attempts.length,
+					chainBudgetMs: chainBudget,
+					elapsedMs: Date.now() - chainStartedAt,
+					next: entry.local ? "local" : entry.url,
+					lastError: lastError ? relayErrorDetail(lastError) : null
+				});
+				break;
+			}
 			const attemptMs = Math.max(1_000, Math.min(settings.timeoutMs, remaining));
 			attemptIndex += 1;
 			stats.endpoints.push(entry.local ? "local" : entry.label);
+			/* BEFORE the member is contacted. */
+			relayLog("log", "attempt", {
+				model,
+				attempt: attemptIndex,
+				of: attempts.length,
+				endpoint: entry.local ? "local" : entry.id,
+				url: entry.local ? "local" : entry.url + RELAY_AI_PATH,
+				timeoutMs: attemptMs,
+				chainRemainingMs: remaining
+			});
 			try {
 				if (entry.local) {
 					const value = await runLocalModel(
@@ -1248,14 +1513,35 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 				 * A definitive answer (cancelled request, rejected prompt,
 				 * retired model slug) is final. Anything else - a timeout,
 				 * an overload signal, a dropped connection, a member with no
-				 * AI binding - moves on to the next pool member.
+				 * AI binding, a member that does not serve /api/relay/ai -
+				 * moves on to the next pool member and finally to local.
 				 */
-				if (!isTransientRelayFailure(error)) throw error;
+				const transient = isTransientRelayFailure(error);
+				/* Written BEFORE the decision is applied. */
+				relayLog(transient ? "warn" : "error", "attempt failed", Object.assign(relayErrorDetail(error), {
+					model,
+					attempt: attemptIndex,
+					of: attempts.length,
+					endpoint: entry.local ? "local" : entry.id,
+					transient,
+					remainingAttempts: attempts.length - attemptIndex,
+					action: transient ? "try the next pool member" : "final - the whole call fails here"
+				}));
+				if (!transient) throw error;
 				continue;
 			}
 		}
 
-		throw lastError instanceof Error ? lastError : new Error("All API relay endpoints failed");
+		const finalError = lastError instanceof Error ? lastError : new Error("All API relay endpoints failed");
+		/* Written BEFORE the throw that leaves this layer. */
+		relayLog("error", "call failed: every pool member was tried", Object.assign(relayErrorDetail(finalError), {
+			model,
+			tried: stats.endpoints.slice(),
+			pool: members.length,
+			chainBudgetMs: chainBudget,
+			elapsedMs: Date.now() - chainStartedAt
+		}));
+		throw finalError;
 	}
 
 	/*
@@ -1284,12 +1570,25 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 
 		if (!llm || !llm.enabled || llm.provider === "cloudflare") {
 			stats.cloudflare += 1;
+			/* BEFORE the Workers AI pool is entered. */
+			relayLog("log", "provider", {
+				model,
+				provider: "cloudflare-workers-ai",
+				reason: !llm ? "no llm policy" : !llm.enabled ? "provider rotation disabled" : "policy=cloudflare"
+			});
 			return runViaWorkersAi(model, input);
 		}
 
 		/* Without a key the OpenRouter half is skipped, not attempted. */
 		const keyInfo = await resolveOpenRouterKey(env, llm).catch(() => null);
 		const providers = orderLlmProviders(llm, Date.now(), Math.random, !!keyInfo && keyInfo.configured);
+		/* BEFORE the first provider is tried. */
+		relayLog("log", "provider", {
+			model,
+			providers,
+			keyConfigured: !!keyInfo && !!keyInfo.configured,
+			source: keyInfo ? keyInfo.source : null
+		});
 		let lastError: unknown = null;
 		for (let index = 0; index < providers.length; index++) {
 			const provider = providers[index];
@@ -1324,13 +1623,27 @@ export function createRelayRuntime(env: any, request?: Request, options: RelayRu
 				return value;
 			} catch (error) {
 				lastError = error;
+				const transient = isTransientRelayFailure(error);
+				relayLog(transient ? "warn" : "error", "provider failed", Object.assign(relayErrorDetail(error), {
+					model,
+					provider,
+					index,
+					of: providers.length,
+					transient,
+					action: transient ? "try the next provider" : "final - no failover"
+				}));
 				if (error instanceof Error && error.name === "AbortError") throw error;
-				if (!isTransientRelayFailure(error)) throw error;
+				if (!transient) throw error;
 				continue;
 			}
 		}
 
-		throw lastError instanceof Error ? lastError : new Error("All LLM providers failed");
+		const providerError = lastError instanceof Error ? lastError : new Error("All LLM providers failed");
+		relayLog("error", "call failed: every provider was tried", Object.assign(relayErrorDetail(providerError), {
+			model,
+			providers
+		}));
+		throw providerError;
 	}
 
 	return {
@@ -1430,22 +1743,49 @@ export async function handleRelayAiCall(
 	env: any,
 	options: RelayRuntimeOptions = {}
 ): Promise<Response> {
+	/* This Worker is the RECEIVING side. Every rejection is logged here with a
+	 * stable reason code, because the caller only ever sees the status: a 404
+	 * can never come from this handler, so seeing these lines (or not seeing
+	 * them) separates "a member refused the call" from "the URL is not this
+	 * deployment at all". */
+	const inboundStartedAt = Date.now();
 	if (request.method !== "POST") {
+		relayLog("warn", "inbound refused", { reason: "method", method: request.method });
 		return jsonResponse({ success: false, error: "POST only" }, 405, { Allow: "POST" });
 	}
 
 	const token = request.headers.get(RELAY_TOKEN_HEADER);
 	const payload = await verifyRelayToken(env, token, "ai", (options.now || Date.now)());
 	if (!payload) {
+		relayLog("warn", "inbound refused", {
+			reason: "token",
+			detail: token ? "signature invalid, expired or wrong kind" : "no token header",
+			tokenPresent: !!token,
+			tokenChars: token ? token.length : 0,
+			hint: "RELAY_SECRET must be identical on every Worker in the pool",
+			cfRay: request.headers.get("cf-ray") || null
+		});
 		return jsonResponse({ success: false, error: "Invalid or expired relay token" }, 401);
 	}
 
 	const body = await readBodyText(request, RELAY_MAX_BODY_BYTES);
 	if (body == null) {
+		relayLog("warn", "inbound refused", {
+			reason: "body-too-large",
+			maxBytes: RELAY_MAX_BODY_BYTES,
+			declaredBytes: request.headers.get("content-length") || null,
+			model: payload.m || null
+		});
 		return jsonResponse({ success: false, error: "Relay payload too large" }, 413);
 	}
 
 	if (payload.d && payload.d !== (await sha256Hex(body))) {
+		relayLog("warn", "inbound refused", {
+			reason: "digest",
+			detail: "the body this Worker received is not the body the caller signed",
+			bodyChars: body.length,
+			model: payload.m || null
+		});
 		return jsonResponse({ success: false, error: "Relay payload digest mismatch" }, 401);
 	}
 
@@ -1453,27 +1793,48 @@ export async function handleRelayAiCall(
 	try {
 		parsed = JSON.parse(body);
 	} catch {
+		relayLog("warn", "inbound refused", {
+			reason: "not-json",
+			bodyPreview: bodyPreview(body),
+			model: payload.m || null
+		});
 		return jsonResponse({ success: false, error: "Relay payload must be JSON" }, 400);
 	}
 	const model = String(parsed?.model || "");
 	const input = parsed && typeof parsed.input === "object" && parsed.input !== null ? parsed.input : {};
 	if (!RELAY_MODEL_PATTERN.test(model) || (payload.m && payload.m !== model)) {
+		relayLog("warn", "inbound refused", {
+			reason: "model-slug",
+			model,
+			tokenModel: payload.m || null,
+			patternOk: RELAY_MODEL_PATTERN.test(model),
+			matchesToken: !payload.m || payload.m === model
+		});
 		return jsonResponse({ success: false, error: "Invalid model slug" }, 400);
 	}
 
 	if (!permitsNonVisualModel(model)) {
+		relayLog("warn", "inbound refused", { reason: "not-a-text-or-voice-model", model });
 		return jsonResponse({ success: false, error: "AI image generation is disabled; use Pixabay" }, 410);
 	}
 
 	const ai = env && env.AI;
 	if (!ai || typeof ai.run !== "function") {
 		/* 503 (not 500) so the caller fails over instead of surfacing a hard error. */
+		relayLog("warn", "inbound has no AI binding", { reason: "no-binding", model });
 		return jsonResponse({ success: false, error: "AI binding not configured", kind: "transient" }, 503, {
 			[RELAY_ERROR_KIND_HEADER]: "transient"
 		});
 	}
+	/* Accepted: logged BEFORE `ai.run()`, so a hung call is still traceable. */
+	relayLog("log", "inbound accepted", {
+		model,
+		inputKeys: Object.keys(input || {}),
+		promptChars: typeof input?.prompt === "string" ? input.prompt.length : undefined,
+		caller: request.headers.get("x-yvs-relay-hop") ? "worker" : "unknown",
+		cfRay: request.headers.get("cf-ray") || null
+	});
 
-	const startedAt = Date.now();
 	try {
 		/*
 		 * Never relay again from here: this call always executes locally, and it
@@ -1488,17 +1849,39 @@ export async function handleRelayAiCall(
 			"Cache-Control": "no-store",
 			[RELAY_RESULT_HEADER]: encoded.kind,
 			"X-YVS-Relay-Served-By": "relay",
-			"X-YVS-Relay-Ms": String(Date.now() - startedAt)
+			"X-YVS-Relay-Ms": String(Date.now() - inboundStartedAt)
 		};
 		if (encoded.kind === "binary") {
 			headers["Content-Type"] = encoded.mime || "application/octet-stream";
+			relayLog("log", "inbound ok", {
+				model,
+				result: "binary",
+				bytes: encoded.bytes.byteLength,
+				ms: Date.now() - inboundStartedAt
+			});
 			return new Response(encoded.bytes as unknown as BodyInit, { status: 200, headers });
 		}
 		headers["Content-Type"] = "application/json";
+		relayLog("log", "inbound ok", {
+			model,
+			result: "json",
+			resultKeys:
+				encoded.value && typeof encoded.value === "object"
+					? Object.keys(encoded.value as Record<string, unknown>).slice(0, 10)
+					: null,
+			ms: Date.now() - inboundStartedAt
+		});
 		return new Response(JSON.stringify({ ok: true, result: encoded.value }), { status: 200, headers });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (error instanceof Error && error.name === "TimeoutError") {
+			/* The binding hung: 504-transient makes the caller fail over. */
+			relayLog("error", "inbound timed out", Object.assign(relayErrorDetail(error), {
+				model,
+				maxMs: RELAY_ENDPOINT_MAX_MS,
+				ms: Date.now() - inboundStartedAt,
+				answer: "504 transient"
+			}));
 			return jsonResponse(
 				{ success: false, ok: false, error: message, kind: "transient" },
 				504,
@@ -1507,6 +1890,17 @@ export async function handleRelayAiCall(
 		}
 		const classification = classifyImageFailure(error);
 		const kind = classification.kind === "fatal" ? "model" : "transient";
+		/* THE MODEL's own answer, logged on the Worker that ran it. This is the
+		 * line that tells a pool failure apart from a model failure. */
+		relayLog("warn", "inbound model failure", Object.assign(relayErrorDetail(error), {
+			model,
+			classification: classification.kind,
+			retryAfterMs: classification.retryAfterMs,
+			reason: classification.reason,
+			kind,
+			answer: "502 " + kind,
+			ms: Date.now() - inboundStartedAt
+		}));
 		return jsonResponse(
 			{ success: false, ok: false, error: message, kind },
 			502,
@@ -1750,7 +2144,25 @@ export async function handleRelayRoutes(
 	options: RelayRouteOptions = {}
 ): Promise<Response | null> {
 	const pathname = url.pathname;
-	if (!isRelayPath(pathname)) return null;
+	if (!isRelayPath(pathname)) {
+		/*
+		 * A `/api/relay/...` URL that is not exactly one of the routes below
+		 * (a trailing slash, a doubled segment, a prefixed mount) falls through
+		 * to the main router, which answers 404 "Not Found". A caller then
+		 * reports "Relay endpoint answered 404" and cannot tell WHY, so the
+		 * near-miss is logged here, before the router 404s it.
+		 */
+		if (/^\/api\/relay(\/|$)/i.test(pathname)) {
+			relayLog("warn", "relay route not recognised", {
+				reason: "path-mismatch",
+				pathname,
+				method: request.method,
+				known: RELAY_AI_PATHS.concat([RELAY_AI_PATH, RELAY_PING_PATH, RELAY_POOL_PATH, RELAY_ENDPOINT_PATH, RELAY_STATUS_PATH, RELAY_CONFIG_PATH, RELAY_TEST_PATH]),
+				answer: "404 from the main router"
+			});
+		}
+		return null;
+	}
 
 	/* Inbound compute endpoint: worker -> worker. */
 	if (pathname === RELAY_AI_PATH) {
@@ -1837,6 +2249,21 @@ export async function handleRelayRoutes(
 				});
 			}
 		}
+
+		/* Written BEFORE the answer leaves: this is the line that explains why
+		 * a later `[seo-plan]` request arrived on another Worker at all. */
+		relayLog("log", "endpoint pick", {
+			path: pipelinePath,
+			handedOut: backup ? backup.url + pipelinePath : pipelinePath,
+			endpoint: backup ? backup.id : "local",
+			hasTicket: !!ticket,
+			pool: pool.map((entry) => ({
+				id: entry.id,
+				local: entry.local,
+				cooling: healthFor(entry.id).openedUntil > Date.now(),
+				failures: healthFor(entry.id).failures
+			}))
+		});
 
 		return jsonResponse({
 			success: true,

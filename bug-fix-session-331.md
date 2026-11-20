@@ -786,3 +786,83 @@ None of these is a new bug — they are documentation lag. The quickest fix is t
 (500 → 400, 12 s → 10 s, four → five, 7 / 40 s → 30 / 20 s) or, for the caption hint, to decide which
 number is intended and change the constant or the copy so they match. This appendix uses the **code**
 values throughout.
+
+### O. Relay 404 diagnosis and relay/seo-plan observability (2026-11-20)
+
+**The two production events.** A browser on the studio sent `POST /api/seo-plan` to
+`worker-api-two` (the request carried `x-yvs-relay-ticket`, so `/api/relay/endpoint` had rotated it
+there). The Worker answered **500**, and the only handler line in the log was:
+
+```
+[seo-plan] model call failed { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+                               attempt: 2, error: "Relay endpoint answered 404" }
+```
+
+**What that message actually means.** `env.AI` is the rotation proxy built by `withRelayedAi()`
+(`src/modules/api-relay.ts`), so the planner's `env.AI.run()` is a *pool* call, not a model call.
+"Relay endpoint answered 404" is produced by `runRemoteModel()` when some pool member answered a
+non-2xx to `POST <member>/api/relay/ai`. It is never produced by the compute endpoint itself
+(`handleRelayAiCall()` answers only 400/401/405/410/413/502/503/504), so a **404 means the URL did
+not reach a relay-capable deployment at all** — an older deployment of this source, a typo'd Worker
+URL in `config:workers`, a paused Worker, or a path prefix. `/api/relay/ai` is a route of this
+codebase; a worker that predates it, or no worker at all, answers the main router's plain
+`Not Found` 404 (or the edge's own 404 for a name that does not exist).
+
+**Why one bad member returned a 500 instead of failing over.** `isTransientRelayFailure()` used
+`classifyImageFailure()`, whose `FATAL_PATTERNS` in `src/modules/image-load.ts` contains `/\b404\b/`.
+The bare status inside the message therefore matched "fatal" and the chain re-threw on the first
+member that 404'd, skipping the remaining members **and the local backstop** — contradicting this
+module's own invariant ("a failing backup is circuit-broken … and never blocks the request: the call
+falls through to the next member and finally to local"). The browser saw the pool's error as if it
+were the model's verdict, retried 30 x 20 s, and never learned the real cause.
+
+**The fix (behaviour).** `runRemoteModel()` now names a non-2xx relay answer explicitly:
+
+| Relay answer | Name | Treated as | Why |
+| --- | --- | --- | --- |
+| `kind: "model"` in the body, or a `400` | `ModelError` | final, no failover | the compute endpoint judged *the request*; another member would repeat the same paid call |
+| anything else (401/403/404/405/410/413/429/5xx) | `RelayUnavailableError` | transient: cool that member, fail over | the member could not serve the call; this says nothing about the model |
+
+`isTransientRelayFailure()` returns `true` for `RelayUnavailableError` before the generic
+classifier runs, so the 404 path is a pool failure again. The error also carries `relayEndpoint`,
+`relayUrl`, `relayStatus` and `relayErrorKind`, so the caller's log names the culprit.
+
+**The fix (observability).** Every log is written *before* the line it describes, so `wrangler tail`
+reads as a trace:
+
+| Line | Written before | Key fields |
+| --- | --- | --- |
+| `[seo-plan] route` / `[seo-plan] route answer` (`src/index.ts`) | the handler runs / the response returns | `origin`, `referer`, `rotated`, `cfRay`, `country`, `status`, `ms` |
+| `[seo-plan] request` | the body is parsed | `topic`, `scriptModel`, `fallbacks`, `budgetMs`, `rotated`, `hasAiBinding` |
+| `[seo-plan] plan start` / `[seo-plan] model` | the model list is walked | primary + fallbacks, deadline left |
+| `[seo-plan] model call` | `env.AI.run()` | `attempt`, `promptChars`, `attemptTimeoutMs`, `deadlineInMs`, `relay` stats |
+| `[seo-plan] model call failed` | the retry/`break` | `name`, `message`, `status`, `endpoint`, `url`, `errorKind`, `poolError`, `relay` stats |
+| `[seo-plan] failed` | the 500 is returned | the same relay fields plus `httpStatus: 500` |
+| `[relay] provider` | a provider is chosen | `cloudflare-workers-ai` / `openrouter`, key source |
+| `[relay] model call` | the first member is contacted | `pool`, `order`, `attempts`, `preferLocal`, `chainBudgetMs` |
+| `[relay] attempt` | each member is contacted | `attempt n/of`, `endpoint`, `url`, `timeoutMs` |
+| `[relay] http request` / `[relay] http answer` | the `fetch()` / the ok branch | `url`, `model`, `bodyBytes`, `status`, `resultKind`, `errorKind`, `servedBy`, `cfRay`, `ms` |
+| `[relay] endpoint refused the call` | the error is built | `status`, `errorKind`, `modelVerdict`, `bodyChars`, `bodyPreview`, `hint` |
+| `[relay] attempt failed` / `[relay] remote call failed` | the throw | `name`, `message`, `transient`, `action`, `remainingAttempts` |
+| `[relay] call failed` | the error leaves the relay layer | `tried`, `pool`, `chainBudgetMs`, `elapsedMs` |
+| `[relay] inbound refused` / `inbound ok` / `inbound model failure` | the receiving side answers | reason code (`token`, `digest`, `model-slug`, `not-a-text-or-voice-model`, `no-binding`), `model`, `ms` |
+| `[relay] relay route not recognised` | the main router 404s a near-miss | `pathname`, `known` |
+
+Reading the incident with these lines: `[relay] http answer { status: 404 }` + `[relay] endpoint
+refused the call { endpoint: "worker:<url>", url: "<url>/api/relay/ai", hint: "this URL does not
+serve /api/relay/ai …" }` identifies the offending member; `[relay] local call failed` shows the
+real local model error; `[relay] attempt` / `[relay] attempt failed` show the order and the decision.
+
+**Verification.** `tests/api-relay.test.mjs` gained two cases — a 404 member is cooled and the call
+lands on local, and a fully-404 pool keeps `relayStatus`/`relayUrl` on the error — and the suite
+passes 43/43. `seo-plan-resilience`, `seo-plan-client-retries`, `script-seo`,
+`pipeline-retry-policy`, `session-331-fixes`, `retry-offload-worker`, `script-retry-owner`,
+`public-entry-points` and `script-writing-client-retries` pass unchanged. `npx wrangler deploy
+--dry-run` succeeds; `tsc --noEmit` reports only the pre-existing `src/index.ts` errors. The
+`deep-debug-regressions` / `final-media-cap-actions` failures reproduce identically on the
+unmodified baseline.
+
+**Still unknown (needs one production tail, not a guess):** *which* URL is registered as a backup on
+`worker-api-two`, and whether that deployment predates `/api/relay/ai`. The pool is read from
+`config:workers` (KV) plus `RELAY_WORKERS`; the new `[relay] model call` line prints it, and a stale
+member is now cooled after its first 404 instead of failing the plan.

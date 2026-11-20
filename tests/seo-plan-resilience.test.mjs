@@ -23,6 +23,12 @@ import {
 	parseKeywordSet,
 	planOneSeoKeywordSet
 } from "../src/modules/script-seo.ts";
+import {
+	invalidateRelayCache,
+	noteRelayFailure,
+	resetRelayHealth,
+	withRelayedAi
+} from "../src/modules/api-relay.ts";
 
 const setA = {
 	title: "Yoga for a Calmer Morning",
@@ -252,4 +258,70 @@ test("a hanging planner cannot outlast the Worker request budget", async (t) => 
 	assert.equal(data.success, false);
 	assert.match(data.error, /timed out/);
 	assert.deepEqual(models, ["mock-instruct", "mock-instruct", SEO_PLAN_FALLBACK_MODELS[0]]);
+});
+
+/*
+ * PRODUCTION REGRESSION (2026-11-20, worker-api-two):
+ *
+ *   POST /api/seo-plan -> 500
+ *   [seo-plan] model call failed { attempt: 2, error: "Relay endpoint answered 404" }
+ *
+ * `env.AI` is the rotation proxy, so that message came from the POOL: a
+ * registered backup did not serve `/api/relay/ai` (older deployment / typo /
+ * path prefix). "404" matched FATAL_PATTERNS in image-load.ts, the chain
+ * re-threw, and the browser got a 500 for a plan the local Worker could have
+ * produced. This test runs the WHOLE route through a relayed env with one
+ * stale backup: it must end at the local Worker with one validated set.
+ */
+test("a stale backup that 404s /api/relay/ai does not fail the plan: local answers", async () => {
+	invalidateRelayCache();
+	resetRelayHealth();
+	const store = new Map([
+		["config:workers", JSON.stringify(["https://stale.test"])],
+		["config:llm", JSON.stringify({ provider: "cloudflare" })]
+	]);
+	const env = {
+		AI: { run: async () => ({ response: JSON.stringify(setA) }) },
+		KV_BINDING: {
+			async get(key) {
+				return store.has(key) ? store.get(key) : null;
+			},
+			async put(key, value) {
+				store.set(key, String(value));
+			},
+			async delete(key) {
+				store.delete(key);
+			},
+			async list() {
+				return { keys: [], list_complete: true };
+			}
+		},
+		RELAY_SECRET: "seo-plan-stale-backup"
+	};
+	/* Local is cooling, so the stale backup is the first candidate - exactly
+	 * the order that produced the 404 in production. */
+	noteRelayFailure("local", new Error("429 Too Many Requests"), 30_000);
+	const requested = [];
+	const relayed = withRelayedAi(env, jsonRequest("https://primary.test/api/seo-plan", { topic: "Morning yoga" }), {
+		selfOrigin: "https://primary.test",
+		fetchImpl: async (url) => {
+			requested.push(String(url));
+			/* An older deployment: the main router's plain 404. */
+			return new Response("Not Found", { status: 404 });
+		}
+	});
+
+	const response = await handleSeoPlanGeneration(
+		jsonRequest("https://primary.test/api/seo-plan", { topic: "Morning yoga" }),
+		relayed,
+		"@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+	);
+	assert.equal(response.status, 200, "the plan is served by the local Worker");
+	const payload = await response.json();
+	assert.equal(payload.success, true);
+	assert.equal(payload.sets.length, 1);
+	assert.equal(payload.sets[0].longTail, setA.longTail);
+	assert.deepEqual(requested, ["https://stale.test/api/relay/ai"]);
+	invalidateRelayCache();
+	resetRelayHealth();
 });
