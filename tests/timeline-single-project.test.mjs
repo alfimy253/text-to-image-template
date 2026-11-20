@@ -123,6 +123,7 @@ function bootWindow({ url, localStorage, sessionStorage, cookieJar, indexedDB, l
 	if (indexedDB) Object.defineProperty(w, "indexedDB", { configurable: true, value: indexedDB });
 	if (prepare) prepare(w);
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	if (loadTimeline) {
 		w.eval(TIMELINE_EDITOR_JS);
 	}

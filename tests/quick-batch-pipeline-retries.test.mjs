@@ -80,13 +80,13 @@ test("the final Quick Batch rule advertises browser-owned 7-retry / 40 s stage l
 	)).json();
 	assert.equal(caps.quickBatchPipelineRetryOwner, "browser");
 	assert.equal(caps.batchPipelineRetryOwner, "browser");
-	assert.equal(caps.quickBatchPipelineRetries, 7);
-	assert.equal(caps.batchPipelineRetries, 7);
-	assert.equal(caps.quickBatchPipelineRetryBackoffMs, 40000);
-	assert.equal(caps.batchPipelineRetryBackoffMs, 40000);
+	assert.equal(caps.quickBatchPipelineRetries, 30);
+	assert.equal(caps.batchPipelineRetries, 30);
+	assert.equal(caps.quickBatchPipelineRetryBackoffMs, 20000);
+	assert.equal(caps.batchPipelineRetryBackoffMs, 20000);
 	assert.equal(caps.scriptRetryOwner, "browser");
-	assert.equal(caps.browserScriptRetries, 7);
-	assert.equal(caps.scriptRetryBackoffMs, 40000);
+	assert.equal(caps.browserScriptRetries, 30);
+	assert.equal(caps.scriptRetryBackoffMs, 20000);
 });
 
 test("the editor script textbox stays visible across delayed state paints and renumbering", async (t) => {

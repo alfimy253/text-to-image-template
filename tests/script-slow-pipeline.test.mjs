@@ -498,7 +498,10 @@ function makeApp() {
 	w.URL.revokeObjectURL = () => {};
 	w.__PLAN_MODE = "freemium";
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	/* This guard measures one note request, not the browser retry ladder. */
 	w.__SCRIPT_RETRY_TIMING.maxRetries = 0;
 	w.__SCRIPT_RETRY_TIMING.backoffMs = 0;

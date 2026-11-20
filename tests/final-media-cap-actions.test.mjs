@@ -52,6 +52,7 @@ function makeApp(url = "https://studio.test/free", prepare) {
 	};
 	if (prepare) prepare(w);
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => {
 		const raw = w.setTimeout.bind(w);
 		w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a);
@@ -426,11 +427,11 @@ test("client JS records unique filenames and retries only failed media items", a
 	assert.equal(result.attempts, 2);
 });
 
-test("a persistent failed image gets seven 40-second-style backoffs and eight total attempts", async () => {
+test("a persistent failed image gets thirty 20-second-style backoffs and 31 total attempts", async () => {
 	const { dom, w } = makeApp();
 	test.after(() => dom.window.close());
 	w.__MEDIA_ITEM_RETRY_LOG = [];
-	w.__MEDIA_ITEM_RETRY_TIMING = { maxRetries: 7, backoffMs: 0, uiCheckMs: 0 };
+	w.__MEDIA_ITEM_RETRY_TIMING = { maxRetries: 30, backoffMs: 0, uiCheckMs: 0 };
 	let calls = 0;
 	const result = await w.retryFailedMediaOnly(
 		{ mediaFilenames: [] },
@@ -439,12 +440,12 @@ test("a persistent failed image gets seven 40-second-style backoffs and eight to
 		async () => { calls += 1; return { images: [], failed: [0] }; },
 		"test-media"
 	);
-	assert.equal(calls, 8, "one initial attempt plus seven retries");
-	assert.equal(result.attempts, 8);
+	assert.equal(calls, 31, "one initial attempt plus thirty retries");
+	assert.equal(result.attempts, 31);
 	assert.equal(JSON.stringify(result.failed), "[0]");
-	assert.equal(w.__MEDIA_ITEM_RETRY_LOG.filter((entry) => entry.event === "backoff").length, 7);
-	assert.match(APP_JS, /MEDIA_ITEM_MAX_RETRIES = 7/);
-	assert.match(APP_JS, /MEDIA_ITEM_RETRY_BACKOFF_MS = 40000/);
+	assert.equal(w.__MEDIA_ITEM_RETRY_LOG.filter((entry) => entry.event === "backoff").length, 30);
+	assert.match(APP_JS, /MEDIA_ITEM_MAX_RETRIES = PIPELINE_RETRY.stages.media.maxRetries/);
+	assert.match(APP_JS, /MEDIA_ITEM_RETRY_BACKOFF_MS = PIPELINE_RETRY.stages.media.backoffMs/);
 	assert.match(APP_JS, /requestBatchImagesWithIndividualRetries/);
 	assert.match(APP_JS, /runEditorMediaWithIndividualRetries/);
 });

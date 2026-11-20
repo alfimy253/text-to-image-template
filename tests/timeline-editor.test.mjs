@@ -138,6 +138,7 @@ async function openTimeline(savedTimeline = null) {
 		targetPageId: payload.targetPageId, vid: "p_source_test-row-7"
 	})) + "; Path=/; SameSite=Lax";
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	w.eval(TIMELINE_EDITOR_JS);
 	for (let i=0; i<100 && !w.__TIMELINE_EDITOR_STATE__; i++) await new Promise(r=>setTimeout(r,10));
 	return { dom, w, payload, previewContext };

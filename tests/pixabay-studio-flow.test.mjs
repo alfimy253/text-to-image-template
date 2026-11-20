@@ -182,7 +182,7 @@ test('Quick Batch keeps delivered media and does not mark a partial 12-scene pla
 	await deadline(w.runBatchRow(row), 30000);
 	/* FINAL RULE: only the individually failed scene is retried seven times.
 	 * The other eleven successful imports, object URLs and filenames stay put. */
-	assert.equal(simulatedFailures, 8, 'one initial item pass plus seven individual retries');
+	assert.equal(simulatedFailures, 31, 'one initial item pass plus thirty individual retries');
 	assert.equal(row.images.length, 11, 'successful media is never reset by a failed item retry');
 	assert.equal(w.batchRowFinished(row), false, 'one missing scene cannot enable the Actions buttons');
 	assert.equal(row.stage, 'ready');

@@ -46,7 +46,10 @@ function makeApp() {
 	Object.defineProperty(w.navigator, "hardwareConcurrency", { configurable: true, get: () => 8 });
 	Object.defineProperty(w.navigator, "deviceMemory", { configurable: true, get: () => 8 });
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	/* The fixed plan includes four mock MP4s; make their metadata probe succeed. */
 	w.__CLIP_PROBE_TIMING = { timeoutMs: 1 };
 	Object.defineProperty(w.HTMLMediaElement.prototype, "src", {

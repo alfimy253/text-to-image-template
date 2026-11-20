@@ -557,7 +557,10 @@ function bootRealWorkerStudio(env, customAudioDecode) {
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	return { dom, w };
 }
 
@@ -801,7 +804,10 @@ test("Stage 3 client: stopBatchRows() cancels an in-flight NDJSON /api/image-bat
 		};
 	};
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	test.after(() => dom.window.close());
 
 	const row = w.__BATCH_ROWS[0];
@@ -960,6 +966,7 @@ test("Client __IMAGE_TASK_RUNTIME: offloads large base64 decodes to Web Worker t
 		}
 	};
 	w1.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w1.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w1.setTimeout.bind(w1); w1.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	test.after(() => domWithWorker.window.close());
 
@@ -985,6 +992,7 @@ test("Client __IMAGE_TASK_RUNTIME: offloads large base64 decodes to Web Worker t
 	w2.URL.createObjectURL = () => "blob:no-worker";
 	w2.URL.revokeObjectURL = () => {};
 	w2.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w2.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w2.setTimeout.bind(w2); w2.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
 	test.after(() => domNoWorker.window.close());
 
