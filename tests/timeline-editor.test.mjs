@@ -1664,7 +1664,9 @@ test("＋ Add Clips opens the Add video from template modal and its MP4 lands at
 	assert.match(TEMPLATE_COMPOSER_JS, /window\.__TIMELINE_TEMPLATE_CLIP__/, "the composer looks for the timeline sink");
 	const addFn = TEMPLATE_COMPOSER_JS.slice(TEMPLATE_COMPOSER_JS.indexOf("async function addTemplateToVideo()"));
 	assert.ok(addFn.indexOf("timelineClipSink()") < addFn.indexOf("project.assets.push(asset)"), "the sink is checked before the gallery push");
-	assert.match(addFn, /if \(!sink\) \{[\s\S]{0,200}?MAX_MP4_UPLOADS/, "the 5-clip gallery cap only guards the gallery path");
+	assert.match(addFn, /if \(!sink\) \{[\s\S]{0,200}?MAX_MP4_UPLOADS/, "the 40-clip gallery cap only guards the gallery path");
+	assert.match(APP_JS, /const MAX_MP4_UPLOADS =\s*40/, "the editor layout allows up to 40 MP4 clips per video");
+	assert.match(TIMELINE_EDITOR_JS, /var MAX_VIDEO_CLIPS = 40/, "the table timeline also caps MP4 clips at 40");
 	assert.match(addFn, /handClipToTimeline\(renderedVideo, clipDuration\)/, "the probed length travels with the clip, so the timeline never re-probes it");
 	const handOff = TEMPLATE_COMPOSER_JS.slice(TEMPLATE_COMPOSER_JS.indexOf("function handClipToTimeline("));
 	assert.match(handOff.slice(0, 700), /durationSec: seconds/, "the single hand-off helper sends the length");
@@ -1673,6 +1675,34 @@ test("＋ Add Clips opens the Add video from template modal and its MP4 lands at
 	const helper = APP_JS.slice(APP_JS.indexOf("function openTemplateModalForTimeline()"));
 	assert.match(helper, /if \(!videoProjects\.length\) \{\s*addVideoAccordion\(\);/, "the helper creates the Video N the composer needs");
 	assert.match(helper, /window\.openTemplateModal\(n\);/, "and opens the very modal the editor layout's link opens");
+});
+
+test("the table timeline rejects a 41st video clip", async (t) => {
+	const { dom, w } = await openTimeline();
+	t.after(() => dom.window.close());
+	const state = w.__TIMELINE_EDITOR_STATE__;
+	const track = state.tracks.find((candidate) => candidate.kind === "media");
+	for (let index = 0; index < 40; index++) {
+		track.items.push({
+			id: "video-limit-" + index,
+			kind: "media",
+			mediaType: "video",
+			assetId: "video-asset-" + index,
+			startSec: 60 + index * 5,
+			durationSec: 5
+		});
+	}
+	assert.equal(w.__TIMELINE_TEMPLATE_CLIP__({
+		blob: new w.Blob(["over-limit"], { type: "video/mp4" }),
+		name: "41st clip.mp4",
+		durationSec: 5
+	}), 0, "the table timeline refuses clips beyond its 40-MP4 cap");
+	assert.match(w.document.getElementById("timeline-status").textContent, /at most 40 video clips/);
+	await w.__TIMELINE_EDITOR__.addMediaFiles([
+		new w.File(["over-limit-upload"], "41st-upload.mp4", { type: "video/mp4" })
+	]);
+	assert.equal(track.items.length, 52, "the upload path also refuses the extra MP4");
+	assert.match(w.document.getElementById("timeline-status").textContent, /at most 40 video clips/);
 });
 
 test("a composed clip never steals a pending placeholder and the next one lands after it", async (t) => {

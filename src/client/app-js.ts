@@ -2676,7 +2676,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 
 	const MAX_MP4_UPLOADS =
-		5;
+		40;
 
 	/* FINAL MEDIA CAP: both layouts plan the same 14 automatic scenes. */
 	const AUTO_MEDIA_TOTAL = 14;
@@ -9874,10 +9874,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				'<div class="va-section">' +
 				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
 				'<button type="button" class="upload-btn" id="va-upload-btn-' + n + '" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
-				'<span class="va-note">Max 5 GIF (30 MB max) \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
+				'<span class="va-note">Max 5 GIF (30 MB max) \u00b7 25 images \u00b7 40 MP4 (1:00 each, silent)</span>' +
 				'<a href="#" class="va-template-link" id="va-template-link-' + n + '" data-video-index="' + n + '" onclick="if (!event.defaultPrevented && window.openTemplateModal) window.openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
-				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include 4 stock video clips and 8 distinct photos.</span>' +
+				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include 6 stock video clips and 8 distinct photos.</span>' +
 				'<div class="va-seo-keywords" id="va-image-keywords-' + n + '" style="display:none"></div>' +
 				'<button type="button" class="upload-btn small" id="va-image-retry-' + n + '" onclick="retryImagePromptFlow(' + n + ')" style="display:none" title="Search Pixabay again using the keywords shown below and add the matching photos and clips to this gallery">Retry Pixabay search</button>' +
 				'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
@@ -18555,7 +18555,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		if (project._requiresStockClips) {
 			const clips = project.assets.filter(function (a) { return a.imagePromptFlowId && a.kind === "mp4"; });
 			if (clips.length !== AUTO_VIDEO_SCENES || new Set(clips.map(function (a) { return a.stockSource && a.stockSource.id; })).size !== AUTO_VIDEO_SCENES) {
-				throw new Error("This planned video requires four distinct Pixabay clips. Retry only the missing scenes before export.");
+				throw new Error("This planned video requires six distinct Pixabay clips. Retry only the missing scenes before export.");
 			}
 		}
 

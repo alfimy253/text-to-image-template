@@ -372,6 +372,17 @@ test("on the timeline page Download MP4 also appends the clip to the end of Scen
 	assert.equal(h.window.videoProjects[0].assets.length, 1, "and its gallery path still fills the accordion");
 });
 
+test("the editor gallery refuses a 41st composed MP4", async (t) => {
+	const h = harness(t, null);
+	const project = h.window.videoProjects[0];
+	project.assets = Array.from({ length: 40 }, (_, index) => ({ kind: "mp4", file: { name: "clip-" + index + ".mp4" } }));
+	h.window.openTemplateModal(1);
+	await h.api.addToVideo();
+	assert.equal(project.assets.length, 40, "the gallery remains at its 40-clip cap");
+	assert.match(h.alerts.join(" "), /at most 40 MP4 clips/);
+	assert.equal(h.frames.length, 0, "the composer is stopped before doing another render");
+});
+
 test("render-first MP4 muxes finite microsecond durations (mp4-muxer@5.1.3), falls back to Level 4.2 in portrait, and never emits NaN on NaN/Infinity probes", async (t) => {
 	const h = harness(t, null);
 	h.api.openScene(h.api.scenes.findIndex((s) => s.name === "Shape Study"));

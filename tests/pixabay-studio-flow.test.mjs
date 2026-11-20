@@ -362,19 +362,19 @@ test('editor Retry Pixabay search reuses visible terms and adds a missing stock 
 	project._seoTopic = 'garden flowers'; project._seoMinutes = 1; project._imageFlowActive = true;
 	project.selectedSeoSet = { longTail: 'garden flowers', short: ['garden', 'flowers', 'neighbors', 'spring'] };
 	await deadline(w.startImagePromptFlow(1));
-	assert.equal(project.assets.filter(asset => asset.kind === 'mp4').length, 4);
+	assert.equal(project.assets.filter(asset => asset.kind === 'mp4').length, 6, "all six planned clips fit under the editor's 40-clip cap");
 	const missingClip = project.assets.find(asset => asset.kind === 'mp4');
 	const missingScene = missingClip.sceneIndex;
 	if (missingClip.card?.parentNode) missingClip.card.parentNode.removeChild(missingClip.card);
 	project.assets = project.assets.filter(asset => asset !== missingClip);
 	if (missingClip.url) w.URL.revokeObjectURL(missingClip.url);
-	assert.equal(project.assets.filter(asset => asset.kind === 'mp4').length, 3);
+	assert.equal(project.assets.filter(asset => asset.kind === 'mp4').length, 5);
 
 	await deadline(w.retryImagePromptFlow(1));
 	const clips = project.assets.filter(asset => asset.kind === 'mp4');
-	assert.equal(clips.length, 4, 'the missing clip is searched and restored to the gallery');
+	assert.equal(clips.length, 6, 'the missing clip is searched and restored to the gallery');
 	assert.ok(clips.some(asset => asset.sceneIndex === missingScene), 'restored clip keeps its planned scene index');
-	assert.equal(project.assets.filter(asset => asset.imagePromptFlowId === project.imagePromptFlowId).length, 12,
+	assert.equal(project.assets.filter(asset => asset.imagePromptFlowId === project.imagePromptFlowId).length, 14,
 		'successful photos/clips remain and are not imported a second time');
 	assert.equal(project.imagePromptStates[String(missingScene)].state, 'imported');
 });

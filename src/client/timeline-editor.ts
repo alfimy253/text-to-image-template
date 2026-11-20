@@ -26,6 +26,7 @@ export const TIMELINE_EDITOR_JS = `
 		var MIN_CLIP_SEC = 0.25;
 		var MAX_VISUAL_TRACKS = 4;
 		var MAX_MEDIA_FILES = 100;
+		var MAX_VIDEO_CLIPS = 40;
 		var MAX_GIF_FILE_BYTES = 30 * 1024 * 1024;
 
 		function isGifAssetMeta(blob, meta) {
@@ -1555,6 +1556,16 @@ export const TIMELINE_EDITOR_JS = `
 		 * "which lane are the Pixabay images in?" has exactly one answer.
 		 */
 		function mediaTrack() { return findTrack(MEDIA_TRACK_ID); }
+		function timelineVideoClipCount(track) {
+			var lane = track || mediaTrack();
+			if (!lane || !Array.isArray(lane.items)) return 0;
+			return lane.items.filter(function (item) {
+				if (!item) return false;
+				if (item.mediaType === "video" || item.type === "mp4" || item.kind === "mp4") return true;
+				var scene = sceneById(item.sceneId);
+				return Boolean(scene && scene.mediaType === "video");
+			}).length;
+		}
 		function visualTracks() { return state.tracks.filter(function (track) { return track.kind === "visual"; }); }
 		/*
 		 * Child text/graphics
@@ -2445,7 +2456,7 @@ export const TIMELINE_EDITOR_JS = `
 			 * studio's "Add video from template" composer modal.
 			 */
 			html += '<div class="te-group-title te-group-background"><span class="te-group-label">' + esc(MEDIA_TRACK_NAME) + ' LAYER</span></div>';
-			html += '<div class="te-group-fill te-group-fill-background te-background-actions"><span class="te-background-actions-sticky"><button type="button" class="te-add-inline" data-timeline-action="add-media">＋ Add media</button><button type="button" class="te-add-inline" data-timeline-action="add-clips">＋ Add Clips</button></span>' + playheadHtml(playheadLeft, false) + '</div>';
+			html += '<div class="te-group-fill te-group-fill-background te-background-actions"><span class="te-background-actions-sticky"><button type="button" class="te-add-inline" data-timeline-action="add-media" title="Upload media; up to ' + MAX_VIDEO_CLIPS + ' MP4 clips per timeline">＋ Add media</button><button type="button" class="te-add-inline" data-timeline-action="add-clips" title="Compose an MP4; up to ' + MAX_VIDEO_CLIPS + ' video clips per timeline">＋ Add Clips</button></span>' + playheadHtml(playheadLeft, false) + '</div>';
 			var backgroundTrack = mediaTrack();
 			html += '<div class="te-track-label te-track-background' + (String(state.selectedTrackId) === MEDIA_TRACK_ID ? ' selected' : '') + '"><button type="button" class="te-track-select" data-track-select="' + esc(MEDIA_TRACK_ID) + '">' + esc(backgroundTrack && backgroundTrack.label || MEDIA_TRACK_LABEL) + '<small><span class="te-track-badge">BG</span> ' + (backgroundTrack ? backgroundTrack.items.length + " scenes" : "empty") + '</small></button></div>';
 			html += '<div class="te-lane te-media-lane te-background-lane" data-lane-track="' + esc(MEDIA_TRACK_ID) + '" style="width:' + width + 'px">';
@@ -3354,9 +3365,14 @@ export const TIMELINE_EDITOR_JS = `
 			var nextStart = track.items.reduce(function (end, item) { return Math.max(end, item.startSec + item.durationSec); }, 0);
 			var addedCount = 0;
 			var skippedGifs = [];
+			var skippedVideos = [];
 			for (var i = 0; i < valid.length; i++) {
 				var file = valid[i];
 				var kind = fileType(file);
+				if (kind === "video" && timelineVideoClipCount(track) >= MAX_VIDEO_CLIPS) {
+					skippedVideos.push(String(file.name || "MP4"));
+					continue;
+				}
 				/*
 				 * Enforce 30 MiB maximum on GIF files only; regular still images
 				 * have no file-size cap. Only sniff 6-byte magic header when an
@@ -3407,15 +3423,27 @@ export const TIMELINE_EDITOR_JS = `
 				state.selectedTrackId = track.id; state.selectedItemId = item.id; selectedSceneId = sceneId;
 				addedCount++;
 			}
-			if (!addedCount && skippedGifs.length) {
+			if (!addedCount && skippedGifs.length && !skippedVideos.length) {
 				setStatus("GIF files must be 30 MB or smaller. Skipped: " + skippedGifs.join(", ") + ".", true);
+				return;
+			}
+			if (!addedCount && skippedVideos.length && !skippedGifs.length) {
+				setStatus("A single timeline holds at most " + MAX_VIDEO_CLIPS + " video clips. Skipped: " + skippedVideos.join(", ") + ".", true);
+				return;
+			}
+			if (!addedCount && skippedVideos.length && skippedGifs.length) {
+				setStatus("No media was added: skipped videos at the " + MAX_VIDEO_CLIPS + "-clip limit and GIFs over 30 MB.", true);
 				return;
 			}
 			/* Overlap rule: an added media file can never sit on top of another. */
 			resolveTimelineOverlaps();
 			ensureTimelineEnd(nextStart);
 			renderTimeline(); renderInspector(); drawPreview(); scheduleSave();
-			if (skippedGifs.length) {
+			if (skippedVideos.length && skippedGifs.length) {
+				setStatus(addedCount + (addedCount === 1 ? " media file added" : " media files added") + "; skipped videos at the " + MAX_VIDEO_CLIPS + "-clip limit and GIFs over 30 MB.", true);
+			} else if (skippedVideos.length) {
+				setStatus(addedCount + (addedCount === 1 ? " media file added" : " media files added") + "; skipped videos at the " + MAX_VIDEO_CLIPS + "-clip limit: " + skippedVideos.join(", ") + ".", true);
+			} else if (skippedGifs.length) {
 				setStatus(addedCount + (addedCount === 1 ? " media file added" : " media files added") + "; skipped GIF(s) over 30 MB: " + skippedGifs.join(", ") + ".", true);
 			} else {
 				setStatus(addedCount + (addedCount === 1 ? " media file added" : " media files added") + " to the background layer.", false);
@@ -3479,7 +3507,7 @@ export const TIMELINE_EDITOR_JS = `
 			if (!blob) { setStatus("The composed clip arrived without any media bytes.", true); return 0; }
 			if (isExporting || recorder) { setStatus("Wait for the export to finish before adding a clip.", true); return 0; }
 			if (!mediaTrack()) { setStatus("The Scene Media layer is missing from this project.", true); return 0; }
-			if (clipsQueue.length >= MAX_MEDIA_FILES) { setStatus("A single timeline holds at most " + MAX_MEDIA_FILES + " clips.", true); return 0; }
+			if (timelineVideoClipCount(mediaTrack()) >= MAX_VIDEO_CLIPS) { setStatus("A single timeline holds at most " + MAX_VIDEO_CLIPS + " video clips.", true); return 0; }
 			var name = String(clip.name || "Template clip").slice(0, 80);
 			var file = clip.file && typeof clip.file === "object" && clip.file.name ? clip.file : new File([blob], name, { type: "video/mp4" });
 			var duration = clamp(number(clip.durationSec, 0) || 5, MIN_CLIP_SEC, MAX_DURATION_SEC);
