@@ -50,10 +50,10 @@ test('parallel rendering drains already-started media before a render failure su
  second.resolve(); await rejection;
 });
 
-test('reopening an editor walkthrough retains a single partial SEO plan instead of replanning', async t => {
+test('reopening an editor walkthrough retains a single SEO plan instead of replanning', async t => {
  const {w} = harness(); t.after(() => w.close()); let calls=0;
  const original=w.fetch; w.fetch = async (input, init) => {
-  if (String(input) === '/api/seo-plan') {calls++; return json({success:true,partial:true,sets:[setA],warning:'Only one set'});}
+  if (String(input) === '/api/seo-plan') {calls++; return json({success:true,sets:[setA]});}
   return original(input,init);
  };
  w.addVideoAccordion(); await w.generateScript(1);
@@ -117,12 +117,11 @@ test('editor passes a validated SEO writer result and selected vocabulary into t
  const {handleSeoPlanGeneration,handleSeoScriptGeneration} = await import('../src/modules/script-seo.ts');
  const {handleGenerateImagePrompts} = await import('../src/modules/image-prompts.ts');
  const {w} = harness(); t.after(() => w.close()); const planning=deferred(); const prompts=[];
- const setB={title:'Planting Herbs',headings:['Planting herbs'],longTail:'herbs for home',short:['herbs','home','planting','pots']};
  const lines=['Garden flowers help the garden.','Flowers grow in the soil.','Plants love healthy soil.','Plants thrive here.'];
  const srt=lines.map((line,i)=>`${i+1}\n00:00:${String(i*4).padStart(2,'0')},000 --> 00:00:${String((i+1)*4).padStart(2,'0')},000\n${line}`).join('\n\n');
  const env={AI:{run:async (_model,input)=>{
   prompts.push(input.prompt);
-  if (input.prompt.includes('SEO strategist')) return {response:JSON.stringify(input.prompt.includes('DIFFERENT')?setB:setA)};
+  if (input.prompt.includes('SEO strategist')) return {response:JSON.stringify(setA)};
   if (input.prompt.includes('professional video script writer')) return {response:srt};
   if (input.prompt.includes('You plan Pixabay stock searches')) {
    const slots=JSON.parse(input.prompt.match(/Requested slots of \d+ total: ([^\n]+)/)[1]);
@@ -140,7 +139,7 @@ test('editor passes a validated SEO writer result and selected vocabulary into t
   return original(input,init);
  };
  w.addVideoAccordion(); w.document.getElementById('va-script-topic-1').value='garden';
- await w.generateScript(1); assert.equal(w.__VIDEO_PROJECTS[0].seoSets.length,2);
+ await w.generateScript(1); assert.equal(w.__VIDEO_PROJECTS[0].seoSets.length,1);
  w.selectSeoKeywordSet(1,0); await w.confirmSeoStyleAndGenerate(1);
  const body=await Promise.race([planning.promise,new Promise((_,reject)=>setTimeout(()=>reject(Error('planner did not run')),2000))]);
  assert.match(body.script,/Garden flowers help the garden/);

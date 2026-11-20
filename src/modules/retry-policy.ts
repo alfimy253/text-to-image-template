@@ -26,7 +26,7 @@
  *
  *   - SEO plan          `script-seo.ts`   SEO_PLAN_TRANSPORT_ATTEMPTS = 2 per
  *                      model, 400 ms x attempt; 3 validation attempts per
- *                      model; one fallback model (worst case 12 model calls).
+ *                      model; one fallback model, all within one request budget.
  *   - Script writing    `script-seo.ts`   one inference per request in the
  *                      browser-owned path (planner/writer limits = 1); the
  *                      legacy path keeps 3 planner + 3 writer attempts.
@@ -49,6 +49,11 @@ export const PIPELINE_RETRY_BACKOFF_MS = 20_000;
 
 /** Attempts in total: the first try plus every retry. */
 export const PIPELINE_RETRY_TOTAL_ATTEMPTS = PIPELINE_RETRY_MAX + 1;
+
+/** Whole Worker request, including transport retries and model fallback. */
+export const SEO_PLAN_REQUEST_BUDGET_MS = 120_000;
+/** Includes relay lookup and reading the JSON body, with room for network overhead. */
+export const SEO_PLAN_CLIENT_TIMEOUT_MS = SEO_PLAN_REQUEST_BUDGET_MS + 30_000;
 
 export type PipelineRetryOwner = "browser" | "worker";
 

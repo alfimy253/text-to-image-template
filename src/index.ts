@@ -1349,12 +1349,12 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			*     file.
 		*/
 		/*
-		 * SEO PLAN (two selectable keyword sets) for the accordion
-		 * walkthrough: POST /api/seo-plan {topic} plans TWO different
-		 * validated sets (1 long-tail + exactly 4 shorts, title and
-		 * headings each); the client shows both, the user selects one,
-		 * and that set is then sent back as `keywordSet` to
-		 * POST /api/script, which skips its own planner.
+		 * SEO PLAN for the accordion walkthrough: POST /api/seo-plan
+		 * {topic} plans one validated set (1 long-tail + exactly 4 shorts,
+		 * title and headings). Once accepted it is sent as `keywordSet`
+		 * to POST /api/script, which skips its own planner.
+		 * The response keeps the existing sets array with one entry.
+		 * Validation and retries still run when the model reply is invalid.
 		 */
 		if (
 			request.method === "POST" &&
