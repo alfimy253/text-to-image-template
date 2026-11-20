@@ -167,7 +167,10 @@ test("#279 a failed scene is one verdict that keeps its original index", async (
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	await tick();
 
 	const prompts = ["Scene 0", "Scene 1", "Scene 2", "Scene 3", "Scene 4", "Scene 5"];
@@ -208,7 +211,10 @@ test("#279 a chunk reports load and rejection verdicts without a second pass", a
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	await tick();
 
 	const delivered = [];
@@ -245,7 +251,10 @@ test("#279 a load verdict comes back at once: no browser-side ladder to cut shor
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	await tick();
 
 	/*
@@ -328,7 +337,10 @@ test("#279 a transient provider failure inside the second chunk no longer ends t
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	await tick();
 
 	/* FINAL MEDIA CAP: every script plans twelve scenes, i.e. four prompt chunks. */
@@ -435,7 +447,10 @@ test("#263 a prompt-chunk overload no longer stops the video mid-way", async (t)
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
+	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 	await tick();
 
 	/* FINAL MEDIA CAP: every script plans twelve scenes, i.e. four prompt chunks. */

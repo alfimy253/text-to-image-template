@@ -251,8 +251,8 @@ test("capabilities advertise the browser as the script retry owner", async () =>
 	assert.equal(caps.retryOwner, "worker", "all other stages stay worker-owned");
 	assert.equal(caps.scriptRetryOwner, "browser");
 	assert.equal(caps.workerScriptRetries, 3);
-	assert.equal(caps.browserScriptRetries, 7);
-	assert.equal(caps.scriptRetryBackoffMs, 40000);
+	assert.equal(caps.browserScriptRetries, 30);
+	assert.equal(caps.scriptRetryBackoffMs, 20000);
 });
 
 /* ------------------------------------------------------------------------- */

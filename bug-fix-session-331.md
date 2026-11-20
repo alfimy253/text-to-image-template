@@ -205,7 +205,7 @@ These rules describe the current code and supersede earlier session notes where 
 5. **Intentionally kept unchanged:** `/api/config/workers`, `/api/render*`, `/api/worker/*`, `putBlobStore`/`getBlobStore`, `workerRunJob`, `apiRenderVideo`, the admin Background Worker Mode card, archived `src/index.ts.original`, and standalone `render-app/`.
 
 6. **Verified accompanying rules (code-checked):**
-   - **RULE 8 (MeloTTS voiceover):** Server (`src/modules/voiceover.ts`) owns all text cleaning (`sanitizeVoiceoverText`), 8,000-char slicing (`VOICEOVER_MAX_CHARS`), `<= 400`-char chunking (`splitVoiceoverChunks`), 3-lane synthesis within a 90 s budget, per-chunk 3× `@cf/myshell-ai/melotts` retries, English Deepgram fallbacks (`@cf/deepgram/aura-2-en`, `@cf/deepgram/aura-1`), external fallback (`https://tts-api.netlify.app`), and WAV/MP3 joining. Browser (`src/client/app-js.ts`, `src/client/browser-offload.ts`) sends one full-text `POST /api/voiceover` (165 s timeout); Quick Batch retries a failed voice stage up to 7× at 40 s intervals while the Editor runs a single request per click.
+   - **RULE 8 (MeloTTS voiceover):** Server (`src/modules/voiceover.ts`) owns all text cleaning (`sanitizeVoiceoverText`), 8,000-char slicing (`VOICEOVER_MAX_CHARS`), `<= 400`-char chunking (`splitVoiceoverChunks`), 3-lane synthesis within a 90 s budget, per-chunk 3× `@cf/myshell-ai/melotts` retries, English Deepgram fallbacks (`@cf/deepgram/aura-2-en`, `@cf/deepgram/aura-1`), external fallback (`https://tts-api.netlify.app`), and WAV/MP3 joining. Browser (`src/client/app-js.ts`, `src/client/browser-offload.ts`) sends one full-text `POST /api/voiceover` (165 s timeout); Quick Batch retries a failed voice stage up to 30× at 20 s intervals, and the Editor owns the same 30 x 20 s ladder for its own voice step (`requestEditorVoiceoverWithClientRetries`). Both read `src/modules/retry-policy.ts` (stage `voiceover`).
    - **RULE 11 (Video output & presets):** No codec picker anywhere. Editor accordions encode 30 fps H.264 (`avc1.4d002a`) + AAC (`mp4a.40.2`, 128/160/192 kbps; silent when no audio) at the exact three presets (`854×480` @ 1.2 Mbps, `1280×720` @ 2.5 Mbps, `1280×720` @ 5 Mbps). Quick Batch reuses `generateMP4()` at 30 fps across `[480, 540, 720, 1024] × [1:1, 16:9, 9:16]` frame sizes; timeline editor exports `state.frame` at 30 fps H.264 + 160 kbps AAC (2.5/5 Mbps auto, with a `MediaRecorder` fallback when WebCodecs/`Mp4Muxer` is unavailable); template composer exports silent 30 fps 1080p H.264 @ 6 Mbps.
 
 **Verification:** `tests/session-331-caps-and-ttl.test.mjs` passed 7/7; existing suites `account-rows` (6/6), `public-entry-points` (9/9), `browser-local-render` (3/3), `session-264-editor-render` (10/10), `session-331-fixes` (11/11), `timeline-preview-parity` (2/2), `timeline-quick-batch-sync` (11/11), `timeline-tab-recovery` (6/6), targeted `timeline-editor` upload/export/media checks (6/6), `template-composer` (22/22), `retry-offload-worker` (9/9), and `api-relay` (40/40) all passed (142/142 total). All inline client bundles parsed cleanly, `npx wrangler deploy --dry-run` succeeded, `git diff --check` passed, and `tsc --noEmit` added zero new errors.
@@ -358,6 +358,123 @@ render-app/ ............... a SEPARATE Node+Playwright script→MP3 helper (neve
 wrangler.json ............. bindings: AI, KV_BINDING, PIXABAY_RATE_LIMITER
 ```
 
+### D-2. Retry mechanics — 30 retries per pipeline step, 20 s apart (2026-11-20)
+
+**Why this section exists.** Every retry number used to be typed into prose (README, session notes,
+comments, `/api/capabilities`) and into three different places in the page script. They disagreed.
+Since 2026-11-20 there is exactly **one** place a retry limit or backoff is written down:
+[`src/modules/retry-policy.ts`](src/modules/retry-policy.ts). Everything else reads it.
+
+> **Code wins.** If any sentence below ever disagrees with `src/modules/retry-policy.ts`, the file
+> is right and the sentence is a bug in this document.
+
+#### The rule in one line
+
+**Every pipeline step retries up to 30 times (31 attempts in total), waits 20 seconds before each
+retry, and the browser owns the ladder.**
+
+```
+attempt 1 ──fail──► wait 20 s ──► attempt 2 ──fail──► wait 20 s ──► … ──► attempt 31 ──fail──► verdict
+```
+
+30 retries x 20 s = **600 s (10 minutes) of patience per step**, on top of the time each attempt
+itself takes. That is deliberate: the studio would rather wait out a busy fleet than hand the user a
+failure they cannot act on.
+
+#### The table (the live numbers)
+
+| Pipeline step | Ladder owner | Retries after the first attempt | Wait before each retry | Stage key in `retry-policy.ts` |
+| --- | --- | --- | --- | --- |
+| SEO planning — `POST /api/seo-plan`, editor walkthrough | browser | **30** | **20 s** | `seoPlan` |
+| Script writing — `POST /api/script`, Editor and Quick Batch | browser | **30** | **20 s** | `scriptWrite` |
+| Photos and clips — Pixabay import, **per failed item** | browser | **30** | **20 s** | `media` |
+| Voiceover — `POST /api/voiceover`, editor | browser | **30** | **20 s** | `voiceover` |
+| Quick Batch — any failed non-media stage (prompts, voice, animate) | browser | **30** | **20 s** | `batchPipeline` |
+| Editor image flow — scene plan + missing scenes after a retryable stop | browser | **30** | **20 s** (a server `Retry-After` hint wins, clamped 2 s–120 s) | `imageFlow` |
+| Render / export (canvas + WebCodecs) | — | **none** | — | — |
+
+`maxAttempts` is always `maxRetries + 1` (31). The object is injected into the page script
+(`APP_JS` embeds `PIPELINE_RETRY_POLICY`) and advertised by `/api/pipeline-capabilities`, so the page,
+the API and this document can no longer drift.
+
+#### What the browser exposes (reading the live policy)
+
+Nobody has to guess a number; these are live in devtools:
+
+| Global | Meaning |
+| --- | --- |
+| `window.PIPELINE_RETRY` (inside the page) | the whole table — `stages.<step>.maxRetries / maxAttempts / backoffMs / owner` |
+| `window.__SCRIPT_RETRY_TIMING` | script-writing ladder (`maxRetries: 30`, `backoffMs: 20000`, `owner: "browser"`) |
+| `window.__SEO_PLAN_RETRY_TIMING` + `__SEO_PLAN_RETRY_LOG` | SEO planning ladder and its per-attempt log |
+| `window.__BATCH_PIPELINE_RETRY_TIMING` + `__BATCH_PIPELINE_RETRY_LOG` | Quick Batch stage ladder |
+| `window.__MEDIA_ITEM_RETRY_TIMING` + `__MEDIA_ITEM_RETRY_LOG` | per-item photo/clip ladder |
+| `window.__VOICE_RETRY_TIMING` + `__VOICE_RETRY_LOG` | editor voiceover ladder |
+| `window.__IMAGE_AUTO_RETRY_TIMING` + `__IMAGE_AUTO_RETRY_LOG` | editor image-flow auto-retry |
+| `GET /api/pipeline-capabilities` | `browserScriptRetries`, `seoPlanRetries`, `batchPipelineRetries`, `mediaItemRetries`, `editorVoiceRetries`, `pipelineRetryPolicy` — all from the same file |
+
+The `*_LOG` arrays record every `attempt`, `attempt-failed`, `backoff`, `success`, `verdict` and
+`budget-exhausted` event, which is how a support session answers "did it really try thirty times?".
+
+#### The Worker's own (much smaller) ladders — unchanged, and why
+
+A single HTTP request cannot survive 600 s of sleeping, so the big ladder lives in the browser and
+the Worker keeps a **fast inner ladder inside one attempt**. These are not a second pipeline ladder
+and they are not the numbers above:
+
+| Inside one request | File | Attempts | Wait |
+| --- | --- | --- | --- |
+| SEO planner transport | `script-seo.ts` | `SEO_PLAN_TRANSPORT_ATTEMPTS = 2` per model, ×3 validation attempts per model, 1 fallback model (≤12 model calls) | 400 ms, 800 ms (transport only) |
+| Script writing | `script-seo.ts` | 1 inference per request when the browser owns the ladder; legacy path 3 planner + 3 writer | none |
+| Scene prompts | `image-prompts.ts` | `IMAGE_PROMPT_ATTEMPTS = 3` | exponential 400 ms, inside a total budget |
+| Image generation | `image-batch.ts` | `IMAGE_OVERLOAD_ATTEMPTS = 4` on load-shedding, 2 otherwise | exponential 800 ms → 20 s, inside a 45 s budget |
+| Voiceover | `voiceover.ts` | `VOICEOVER_CHUNK_ATTEMPTS = 3` per chunk, then fallback models | 400 ms x attempt |
+| Relay failover | `api-relay.ts` | `maxAttempts = 3` endpoints | none, 180 s chain budget |
+
+#### What is deliberately NOT retried
+
+* **A verdict.** A 4xx that cannot change (bad topic, missing AI binding, rejected credential, a
+  refused script) stops the ladder immediately — 30 retries of a request that is wrong by
+  construction would only waste ten minutes. 408, 409, 425, 429 and 5xx are retried.
+* **A cancellation.** Deleting the video, Stop, or closing the flow cancels the pending 20 s wait
+  and the in-flight request. Nothing is painted as a failure afterwards.
+* **A stop with a spent budget.** When the 31st attempt fails, the ladder reports one quiet verdict
+  (`budget-exhausted`) instead of a silently spinning UI.
+
+#### What each retry keeps
+
+* **Quick Batch:** only the failed *stage* is reset. Successful earlier stages, delivered media,
+  object URLs and recorded filenames stay. No row restart, no duplicate paid batch.
+* **Editor media:** only the individual failed photo/clip is requested again; a delivered asset is
+  never re-requested or revoked.
+* **SEO planning:** each attempt is a fresh plan request — the worker performs one planner run per
+  request, so a retry is a real new plan, not a nested ladder.
+
+#### Where to change it
+
+One file, two constants:
+
+```ts
+export const PIPELINE_RETRY_MAX = 30;          // retries after the first attempt
+export const PIPELINE_RETRY_BACKOFF_MS = 20_000; // wait before each retry
+```
+
+Change them and the editor, the Quick Batch table, the page globals and `/api/capabilities` all move
+together. `.md` files that still quote the old **7 retries / 40 s** rule are historical session
+notes, not instructions.
+
+#### Verification
+
+* `tests/pipeline-retry-policy.test.mjs` — asserts the code table is 30 / 20 000, that `APP_JS` is
+  built from it, that no step ladder falls back to a hand-written number, and that
+  `/api/pipeline-capabilities` agrees.
+* `tests/seo-plan-client-retries.test.mjs` — 4 attempts when the plan recovers on the fourth,
+  exactly **31** when it never does, a 4xx verdict not retried, a 429 retried.
+* `tests/script-writing-client-retries.test.mjs`, `tests/script-retry-owner.test.mjs`,
+  `tests/retry-offload-worker.test.mjs`, `tests/final-media-cap-actions.test.mjs`,
+  `tests/pixabay-auto-retry.test.mjs` — the same numbers through the UI.
+* jsdom suites compress the **wait only** via `window.__PIPELINE_RETRY_SPEED`; the advertised
+  `backoffMs` is still 20 000, and a real 20 s request timeout is never shortened.
+
 ### E. All the system rules, one line each
 
 The full rules live in `system-rules.md` (very long, very technical). This is the oversimplified
@@ -372,7 +489,7 @@ translation. **The code is the source of truth**; if a rule here disagrees with 
 | **RULE 4–5** | An old "render on the server" queue still exists in code but no button uses it. Everything renders in the browser now. |
 | **RULE 6** | Pixabay replaces the old AI image generator. Photos must be JPEG/PNG/WebP ≤ 8 MB; clips MP4 ≤ 60 s and ≤ 16 MB; the file's first bytes are checked so an error page can never be saved as "an image". |
 | **RULE 7** | The AI script must contain **exactly 1 long-tail keyword said at least once** and **exactly 4 short keywords each said at least twice**. Extra mentions are always fine. One short keyword must appear in the title and one in a heading. |
-| **RULE 8** | The voice is MeloTTS. The browser sends the full script in one request (Quick Batch retries a failed stage up to 7× at 40 s intervals); the Worker cleans the text, cuts it into ≤ 400-character pieces (≤ 8,000 characters total), retries up to 3× per chunk, falls back to Deepgram Aura (English) and an external TTS service if needed, and stitches the audio back together. |
+| **RULE 8** | The voice is MeloTTS. The browser sends the full script in one request (Quick Batch retries a failed stage **30× at 20 s intervals**, and the editor retries its own voice step 30× at 20 s intervals); the Worker cleans the text, cuts it into ≤ 400-character pieces (≤ 8,000 characters total), retries up to 3× per chunk, falls back to Deepgram Aura (English) and an external TTS service if needed, and stitches the audio back together. |
 | **RULE 9** | Per video: **25 images, 5 GIFs, 5 MP4s (≤ 60 s each)**. A still picture stays on screen **9 seconds**. **The MP3 decides the video length** — slides repeat until the audio is covered. |
 | **RULE 10** | Title and captions are painted per frame at fixed positions (title top-left, captions 4/7 up from the bottom). Up to **10 captions of 40 characters**; the last one stops showing after ~10 s. |
 | **RULE 11** | Output is always **30 fps H.264 video + AAC audio**. Only three quality presets: 480p/1.2 Mbps, 720p/2.5 Mbps, 720p/5 Mbps. No codec picker. |
@@ -398,7 +515,7 @@ translation. **The code is the source of truth**; if a rule here disagrees with 
 | **RULE 33** | Up to **5 backup Workers** can be registered. AI calls are spread **round-robin**, with health checks, a cooldown when one misbehaves, and only AI paths ever leave the primary. |
 | **RULE 34** | The text model itself rotates between **Cloudflare Workers AI** and **OpenRouter**; a broken key is benched for a while and the call falls through to the other provider. |
 | **RULE 35** | **Script details never touch the server's database.** The durable copy is the visitor's `localStorage` + a compact cookie, compared by digest/timestamp/length. The Worker keeps only a throwaway in-memory copy. |
-| **FINAL RULE (Quick Batch layout)** | Non-media stages fail → the browser retries **7 times, 40 s apart, silently**. Photos/clips fail → only the **individual failed item** is retried on the same ladder. Every video plans **14 scenes = 8 photos + 6 clips**, whatever the script length. The last table column is **Actions** (Preview ▶, Process export ⚙, Edit ✎). |
+| **FINAL RULE (Quick Batch layout)** | Non-media stages fail → the browser retries **30 times, 20 s apart, silently**. Photos/clips fail → only the **individual failed item** is retried on the same ladder. Every video plans **14 scenes = 8 photos + 6 clips**, whatever the script length. The last table column is **Actions** (Preview ▶, Process export ⚙, Edit ✎). |
 
 ### F. The user flows, step by step
 
@@ -651,7 +768,7 @@ downloads the pictures, paints the slides, and encodes the MP4 locally.*
 
 ### M. Documentation drift found while writing this appendix (code wins)
 
-Three old numbers in the prose documents no longer match the code. They are listed here instead of
+Old numbers in the prose documents no longer match the code. They are listed here instead of
 being silently repeated, because a beginner reading the wrong number would design the wrong thing:
 
 | Where the old number lives | Old claim | What the code actually does |
@@ -659,7 +776,9 @@ being silently repeated, because a beginner reading the wrong number would desig
 | `README.md` "Limits worth knowing" → Voiceover | "chunked at 500" | `VOICEOVER_MAX_CHUNK = 400` in `src/modules/voiceover.ts`; `/api/voiceover` rejects a chunk over 400 characters |
 | `README.md` "Limits worth knowing" → Captions, and the quoted on-screen hint in `system-rules.md` RULE 18 | "last caption capped at 12 s" | `CAPTION_MAX_VISIBLE_MS = 10 000` (10 s) in `src/client/app-js.ts` — the *hint text* still says 12 s, so the copy and the constant disagree |
 | `system-rules.md` RULE 33, opening line | "up to four backup Worker URLs" | `MAX_RELAY_WORKERS = 5` (`src/modules/api-relay.ts`) and the `config/workers` validator slices to 5 (`src/index.ts`); the settings page accepts five |
+| Retry prose in `THIRD_PARTY_NOTICES.md`, `api-relay-rotation.md`, `bug-audit.md`, `bug-fix-session-*.md`, `IMAGE_FETCH_BROWSER_MIGRATION.md`, `PIXABAY_IMAGE_PIPELINE_REQUIREMENTS.md`, `RULE-35-client-side-script-notes.md` | "7 retries, 40 s apart" | `PIPELINE_RETRY_MAX = 30` and `PIPELINE_RETRY_BACKOFF_MS = 20 000` in `src/modules/retry-policy.ts` (see §D-2). Those files are dated session records; the code and §D-2 win. |
 
 None of these is a new bug — they are documentation lag. The quickest fix is to correct the prose
-(500 → 400, 12 s → 10 s, four → five) or, for the caption hint, to decide which number is intended and
-change the constant or the copy so they match. This appendix uses the **code** values throughout.
+(500 → 400, 12 s → 10 s, four → five, 7 / 40 s → 30 / 20 s) or, for the caption hint, to decide which
+number is intended and change the constant or the copy so they match. This appendix uses the **code**
+values throughout.

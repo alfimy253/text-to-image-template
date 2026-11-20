@@ -38,13 +38,13 @@ function fastRetries(w) {
 	w.__SCRIPT_RETRY_TIMING.uiCheckMs = 1;
 }
 
-test("the browser advertises seven retries, eight writes and a 40-second backoff", (t) => {
+test("the browser advertises 30 retries, 31 writes and a 20-second backoff", (t) => {
 	const { w } = harness();
 	t.after(() => w.close());
-	assert.equal(w.__SCRIPT_RETRY_TIMING.maxRetries, 7);
-	assert.equal(w.__SCRIPT_RETRY_TIMING.maxAttempts, 8);
-	assert.equal(w.__SCRIPT_RETRY_TIMING.backoffMs, 40000);
-	assert.equal(w.__SCRIPT_RETRY_TIMING.retryBackoffMs, 40000);
+	assert.equal(w.__SCRIPT_RETRY_TIMING.maxRetries, 30);
+	assert.equal(w.__SCRIPT_RETRY_TIMING.maxAttempts, 31);
+	assert.equal(w.__SCRIPT_RETRY_TIMING.backoffMs, 20000);
+	assert.equal(w.__SCRIPT_RETRY_TIMING.retryBackoffMs, 20000);
 	assert.equal(w.__SCRIPT_RETRY_TIMING.owner, "browser");
 });
 
@@ -170,11 +170,11 @@ test("the Worker advertises the browser script ladder and accepts attempt seven"
 		new Request("https://studio.test/api/pipeline-capabilities"), {}, {}
 	)).json();
 	assert.equal(caps.scriptRetryOwner, "browser");
-	assert.equal(caps.browserScriptRetries, 7);
-	assert.equal(caps.scriptRetryBackoffMs, 40000);
+	assert.equal(caps.browserScriptRetries, 30);
+	assert.equal(caps.scriptRetryBackoffMs, 20000);
 
 	const { SCRIPT_BROWSER_RETRY_LIMIT, handleSeoScriptGeneration } = await import("../src/modules/script-seo.ts");
-	assert.equal(SCRIPT_BROWSER_RETRY_LIMIT, 7);
+	assert.equal(SCRIPT_BROWSER_RETRY_LIMIT, 30);
 	const keywordSet = {
 		title: "Yoga Morning Balance",
 		headings: ["Yoga for Calm", "Morning Stretch"],

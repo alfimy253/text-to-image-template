@@ -35,6 +35,17 @@ import {
 	SCRIPT_BROWSER_RETRY_BACKOFF_MS,
 	SCRIPT_BROWSER_RETRY_LIMIT
 } from "./modules/script-seo";
+/*
+ * The ONE retry table. Every retry number advertised below comes from
+ * src/modules/retry-policy.ts — the same object the page script is built
+ * with — so code is the only source of truth and the page, the API and the
+ * docs cannot drift.
+ */
+import {
+	PIPELINE_RETRY_MAX,
+	PIPELINE_RETRY_BACKOFF_MS,
+	PIPELINE_RETRY_STAGES
+} from "./modules/retry-policy";
 import { scriptEventLoop } from "./modules/script-event-loop";
 import {
 	handleScriptNoteWrite,
@@ -338,19 +349,24 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				workerScriptRetries: 3,
 				browserScriptRetries: SCRIPT_BROWSER_RETRY_LIMIT,
 				scriptRetryBackoffMs: SCRIPT_BROWSER_RETRY_BACKOFF_MS,
+				seoPlanRetryOwner: PIPELINE_RETRY_STAGES.seoPlan.owner,
+				seoPlanRetries: PIPELINE_RETRY_STAGES.seoPlan.maxRetries,
+				seoPlanRetryBackoffMs: PIPELINE_RETRY_STAGES.seoPlan.backoffMs,
 				quickBatchPipelineRetryOwner: "browser",
 				batchPipelineRetryOwner: "browser",
-				quickBatchPipelineRetries: 7,
-				batchPipelineRetries: 7,
-				quickBatchPipelineRetryBackoffMs: 40000,
-				batchPipelineRetryBackoffMs: 40000,
+				quickBatchPipelineRetries: PIPELINE_RETRY_STAGES.batchPipeline.maxRetries,
+				batchPipelineRetries: PIPELINE_RETRY_STAGES.batchPipeline.maxRetries,
+				quickBatchPipelineRetryBackoffMs: PIPELINE_RETRY_STAGES.batchPipeline.backoffMs,
+				batchPipelineRetryBackoffMs: PIPELINE_RETRY_STAGES.batchPipeline.backoffMs,
+				/* The whole retry table, so a client can read it in one object. */
+				pipelineRetryPolicy: { maxRetries: PIPELINE_RETRY_MAX, backoffMs: PIPELINE_RETRY_BACKOFF_MS, stages: PIPELINE_RETRY_STAGES },
 		/* Fixed 14-scene media cap (six clips + eight photos), per-item media retries and unique filenames. */
 		mediaSceneCap: 14,
 				mediaVideoScenes: 6,
 				mediaImageScenes: 8,
 				mediaItemRetryOwner: "browser",
-				mediaItemRetries: 7,
-				mediaItemRetryBackoffMs: 40000,
+				mediaItemRetries: PIPELINE_RETRY_STAGES.media.maxRetries,
+				mediaItemRetryBackoffMs: PIPELINE_RETRY_STAGES.media.backoffMs,
 				mediaFilenameDedupe: "per-video",
 				quickBatchActionsColumn: "preview-process-export-edit",
 				/* Session 331: per-tab pages, four cookie chunks, no TTL. */
@@ -373,6 +389,10 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				serverVoiceChunks: VOICEOVER_SERVER_CHUNKS,
 				workerVoiceAttempts: VOICEOVER_CHUNK_ATTEMPTS,
 				voiceBudgetMs: VOICEOVER_TOTAL_BUDGET_MS,
+				/* The editor's own voice step ladder (browser-owned). */
+				editorVoiceRetryOwner: PIPELINE_RETRY_STAGES.voiceover.owner,
+				editorVoiceRetries: PIPELINE_RETRY_STAGES.voiceover.maxRetries,
+				editorVoiceRetryBackoffMs: PIPELINE_RETRY_STAGES.voiceover.backoffMs,
 				promptRetryOwner: "worker",
 				workerPromptAttempts: IMAGE_PROMPT_ATTEMPTS,
 				promptBudgetMs: IMAGE_PROMPT_TOTAL_BUDGET_MS,

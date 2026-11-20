@@ -52,6 +52,7 @@ import {
 	type ScriptNoteState
 } from "./script-notes";
 import { scriptEventLoop, type ScriptEventLoop } from "./script-event-loop";
+import { PIPELINE_RETRY_STAGES } from "./retry-policy";
 
 export const SEO_LONG_TAIL = 1;
 export const SEO_SHORT_TOTAL = 4;
@@ -1207,11 +1208,15 @@ export const SEO_PLAN_TRANSPORT_ATTEMPTS = 2;
 
 /*
  * The browser owns the script-writing retry ladder: one initial write plus
- * seven 40-second-spaced retries. A singleAttempt request may therefore carry
- * any attempt number in that range; the Worker performs one inference for it.
+ * PIPELINE_RETRY_MAX (30) retries, PIPELINE_RETRY_BACKOFF_MS (20 s) apart.
+ * A singleAttempt request may therefore carry any attempt number in that
+ * range; the Worker performs one inference for it.
+ *
+ * The numbers are NOT written here: src/modules/retry-policy.ts is the only
+ * source of truth, and the page script is built from the same object.
  */
-export const SCRIPT_BROWSER_RETRY_LIMIT = 7;
-export const SCRIPT_BROWSER_RETRY_BACKOFF_MS = 40000;
+export const SCRIPT_BROWSER_RETRY_LIMIT = PIPELINE_RETRY_STAGES.scriptWrite.maxRetries;
+export const SCRIPT_BROWSER_RETRY_BACKOFF_MS = PIPELINE_RETRY_STAGES.scriptWrite.backoffMs;
 
 function plannerSleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1832,7 +1837,7 @@ export async function handleSeoScriptGeneration(
 	 * WHO OWNS THE RETRIES? THE BROWSER, FOR SCRIPT WRITING.
 	 *
 	 * The shipped page sends `browserRetries: true` and owns one initial
-	 * write plus seven 40-second-spaced retries in
+	 * write plus thirty 20-second-spaced retries in
 	 * requestScriptWritingWithClientRetries(). This route therefore makes
 	 * exactly one planner and one writer inference for that request, rotates
 	 * its model using the browser's `attempt`, and returns a verdict for
@@ -1872,7 +1877,7 @@ export async function handleSeoScriptGeneration(
 		? alternateModel : scriptModel;
 	/*
 	 * A retry on the same slug with the same prompt is a replay. The shipped
-	 * page sends `attempt` for its seven browser-owned retries and rotates the
+	 * page sends `attempt` for its thirty browser-owned retries and rotates the
 	 * slug before calling this route through `browserAttempt`; `modelForAttempt`
 	 * preserves the legacy worker-owned ladder's own rotation for callers that
 	 * do not send `browserRetries`.

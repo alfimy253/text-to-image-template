@@ -120,10 +120,11 @@ export function harness({ presentFrames = true, blockPlay = false, clipDuration 
 	w.console.warn = function (...args) { warnings.push(args.map(String).join(" ")); return warn.apply(w.console, args); };
 
 	/*
-	 * The production browser waits 40 seconds before each script-write retry and
-	 * before each Quick Batch table pipeline-stage retry. jsdom tests exercise
-	 * those ladders many times, so compress exactly that production delay here;
-	 * the policies still advertise 40000 ms and the dedicated retry tests assert it.
+	 * The production browser waits 20 seconds before each pipeline-step retry
+	 * (src/modules/retry-policy.ts). jsdom tests exercise those ladders many
+	 * times, so compress exactly that production delay here; the policies still
+	 * advertise 20000 ms and the dedicated retry tests assert it. 40000 is kept
+	 * for a cached pre-2026-11-20 page that still uses the old backoff.
 	 */
 	const rawSetTimeout = w.setTimeout.bind(w);
 	w.setTimeout = function (callback, delay, ...args) {
@@ -131,6 +132,14 @@ export function harness({ presentFrames = true, blockPlay = false, clipDuration 
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
+	w.__PIPELINE_RETRY_SPEED = 20000;
+
+	/*
+	 * Retry waits only: the policy still advertises 20 000 ms, but the app
+	 * divides the WAIT by this multiplier, so a 31-attempt ladder finishes in
+	 * milliseconds. Request timeouts (which are also 20 s) are untouched.
+	 */
+	w.__PIPELINE_RETRY_SPEED = 20000;
 
 	return { w, warnings, stats: () => ({ encoded, drawCalls: drawCalls.count, frameDurations }) };
 }
