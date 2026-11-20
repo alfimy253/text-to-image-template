@@ -1361,11 +1361,54 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			url.pathname === "/api/seo-plan"
 		) {
 
-			return handleSeoPlanGeneration(
-				request,
-				env,
-				SCRIPT_MODEL
+			/*
+			 * SEO-PLAN DIAGNOSTICS (2026-11-20).
+			 *
+			 * A production `POST /api/seo-plan` answered 500 while the only
+			 * log line was `[seo-plan] model call failed ... "Relay endpoint
+			 * answered 404"`. These two lines bracket the handler so the
+			 * Cloudflare event for the request can be matched to the handler
+			 * log: who called (rotation ticket / origin / colo), that the
+			 * route was reached at all, and what status it finally returned.
+			 * They are written BEFORE and AFTER the handler runs - never
+			 * instead of it.
+			 */
+			const seoPlanStartedAt =
+				Date.now();
+
+			console.log(
+				"[seo-plan] route",
+				{
+					route: "/api/seo-plan",
+					method: request.method,
+					origin: request.headers.get("origin") || null,
+					referer: request.headers.get("referer") || null,
+					rotated: !!request.headers.get("x-yvs-relay-ticket"),
+					cfRay: request.headers.get("cf-ray") || null,
+					country: request.headers.get("cf-ipcountry") || null,
+					contentLength: request.headers.get("content-length") || null,
+					scriptModel: SCRIPT_MODEL
+				}
 			);
+
+			const seoPlanResponse =
+				await handleSeoPlanGeneration(
+					request,
+					env,
+					SCRIPT_MODEL
+				);
+
+			console.log(
+				"[seo-plan] route answer",
+				{
+					route: "/api/seo-plan",
+					status: seoPlanResponse.status,
+					ok: seoPlanResponse.ok,
+					ms: Date.now() - seoPlanStartedAt
+				}
+			);
+
+			return seoPlanResponse;
 
 		}
 
