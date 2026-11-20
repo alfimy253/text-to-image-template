@@ -37,7 +37,7 @@ function capturePlan(w, reply) {
 		const path = new URL(String(input), "https://studio.test").pathname;
 		if (path === "/api/seo-plan") {
 			calls.push(init && init.body ? JSON.parse(init.body) : null);
-			return reply(calls.length);
+			return reply(calls.length, init);
 		}
 		return original(input, init);
 	};
@@ -51,7 +51,7 @@ test("a failed SEO plan is retried silently until it succeeds", async (t) => {
 	const calls = capturePlan(w, (attempt) =>
 		attempt < 4
 			? json({ success: false, error: "SEO planner model failed - try again" }, 500)
-			: json({ success: true, sets: [plan, { ...plan, longTail: "gentle morning yoga routine at home", short: ["morning yoga", "gentle stretch", "home practice", "yoga routine"] }] })
+			: json({ success: true, sets: [plan] })
 	);
 
 	await w.generateScript(1);
@@ -66,7 +66,7 @@ test("a failed SEO plan is retried silently until it succeeds", async (t) => {
 		log.filter((entry) => entry.event === "backoff").every((entry) => entry.delayMs === 20000),
 		"20 seconds before every retry"
 	);
-	assert.equal(w.__VIDEO_PROJECTS[0].seoSets.length, 2, "the plan reached the walkthrough");
+	assert.equal(w.__VIDEO_PROJECTS[0].seoSets.length, 1, "the plan reached the walkthrough");
 });
 
 test("a plan that never works spends exactly 30 retries and then reports", async (t) => {
@@ -97,6 +97,8 @@ test("a verdict (a 4xx that can never change) is not retried 30 times", async (t
 	const log = w.__SEO_PLAN_RETRY_LOG || [];
 	assert.equal(log.filter((entry) => entry.event === "verdict").length, 1);
 	assert.equal(log.filter((entry) => entry.event === "backoff").length, 0);
+	assert.equal(w.document.getElementById("seo-wt-loading-1").style.display, "none");
+	assert.equal(w.document.getElementById("seo-wt-retry-plan-1").style.display, "");
 });
 
 test("429 and 5xx are worth another attempt", async (t) => {
@@ -111,4 +113,87 @@ test("429 and 5xx are worth another attempt", async (t) => {
 
 	assert.equal(calls.length, 2, "429 is retried");
 	assert.equal(w.__VIDEO_PROJECTS[0].seoSets.length, 1);
+});
+
+for (const stalledPhase of ["fetch", "response body"]) {
+	test(`a stalled SEO ${stalledPhase} is aborted and retried instead of freezing the walkthrough`, async (t) => {
+		const { w } = harness();
+		t.after(() => w.close());
+		editor(w);
+		w.__SEO_PLAN_RETRY_TIMING.requestTimeoutMs = 25;
+		let stalledSignal;
+		let modalProgress;
+		const calls = capturePlan(w, (attempt, init) => {
+			if (attempt === 1) {
+				stalledSignal = init.signal;
+				const stalled = new Promise(() => {});
+				return stalledPhase === "fetch" ? stalled : { ok: true, json: () => stalled };
+			}
+			modalProgress = w.document.getElementById("seo-wt-plan-status-1").textContent;
+			return json({ success: true, sets: [plan] });
+		});
+
+		await w.generateScript(1);
+
+		assert.equal(calls.length, 2);
+		assert.equal(stalledSignal.aborted, true);
+		assert.match(modalProgress, /attempt 2 of 31/);
+		assert.match(w.__SEO_PLAN_RETRY_LOG.find((entry) => entry.event === "attempt-failed").reason, /timed out/);
+		assert.equal(w.__VIDEO_PROJECTS[0].seoSets.length, 1);
+		assert.equal(w.__VIDEO_PROJECTS[0]._seoPlanController, null);
+	});
+}
+
+test("deleting a video cancels its pending SEO request without retrying", async (t) => {
+	const { w } = harness();
+	t.after(() => w.close());
+	editor(w);
+	let signal;
+	const calls = capturePlan(w, (_attempt, init) => {
+		signal = init.signal;
+		return new Promise(() => {});
+	});
+	const planning = w.generateScript(1);
+	w.deleteVideoAccordion(1);
+	await planning;
+	assert.equal(signal.aborted, true);
+	assert.equal(calls.length, 1);
+	assert.ok(!w.__SEO_PLAN_RETRY_LOG.some((entry) => entry.event === "backoff"));
+});
+
+test("the editor shows one Worker-validated keyword set and lets the user accept it", async (t) => {
+	const { handleSeoPlanGeneration } = await import("../src/modules/script-seo.ts");
+	const { w } = harness();
+	t.after(() => w.close());
+	editor(w);
+	let modelCalls = 0;
+	const calls = capturePlan(w, (_attempt, init) => handleSeoPlanGeneration(
+		new Request("https://studio.test/api/seo-plan", init),
+		{ AI: { run: async () => { modelCalls++; return { response: plan }; } } },
+		"mock-instruct"
+	));
+
+	await w.generateScript(1);
+
+	assert.equal(calls.length, 1);
+	assert.equal(modelCalls, 1);
+	const cards = w.document.querySelectorAll("#seo-wt-sets-list-1 .seo-wt-card");
+	assert.equal(cards.length, 1);
+	assert.match(cards[0].textContent, /Use this keyword set/);
+	w.selectSeoKeywordSet(1);
+	assert.equal(w.__VIDEO_PROJECTS[0].selectedSeoSet.longTail, plan.longTail);
+	assert.equal(w.document.getElementById("seo-wt-style-1").style.display, "");
+});
+
+test("the editor shows only the first set from a legacy relay response", async (t) => {
+	const { w } = harness();
+	t.after(() => w.close());
+	editor(w);
+	capturePlan(w, () => json({ success: true, sets: [plan, { ...plan, title: "Alternative Yoga" }] }));
+
+	await w.generateScript(1);
+
+	assert.equal(w.__VIDEO_PROJECTS[0].seoSets.length, 1);
+	assert.equal(w.document.querySelectorAll("#seo-wt-sets-list-1 .seo-wt-card").length, 1);
+	assert.doesNotMatch(w.document.getElementById("seo-wt-sets-list-1").textContent, /Alternative Yoga/);
 });

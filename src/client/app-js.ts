@@ -19,7 +19,7 @@ import { BROWSER_USAGE_JS } from "./usage-ledger";
 import { PROGRESSIVE_IMAGE_PIPELINE_JS } from "./progressive-image-pipeline";
 import { SCRIPT_NOTES_CLIENT_JS } from "./script-notes-client";
 import { PIPELINE_MANAGEMENT_STORE_JS } from "./pipeline-management-store";
-import { PIPELINE_RETRY_POLICY } from "../modules/retry-policy";
+import { PIPELINE_RETRY_POLICY, SEO_PLAN_CLIENT_TIMEOUT_MS } from "../modules/retry-policy";
 
 /*
  * THE RETRY NUMBERS COME FROM CODE, NOT FROM PROSE.
@@ -23039,12 +23039,12 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	//
 	// Generate SEO Script now runs a walkthrough:
 	//   1. The "Upload Image, GIF or MP4" button is disabled and
-	//      a modal asks the AI (POST /api/seo-plan) for TWO
-	//      different SEO keyword sets for the topic. The modal
+	//      a modal asks the AI (POST /api/seo-plan) for one
+	//      SEO keyword set for the topic. The modal
 	//      can be closed while the plan is generated; the work
 	//      keeps running in the background and the modal
-	//      re-opens by itself when the two sets arrive.
-	//   2. The user clicks Select on one set, then enters the
+	//      re-opens by itself when the set is ready.
+	//   2. The user accepts the set, then enters the
 	//      video image style. With both chosen the walkthrough
 	//      moves to its "writing" panel, the script section shows
 	//      a loading animation and POST /api/script writes the
@@ -23456,16 +23456,17 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'<div class="modal-title">\\u2728 Generate SEO Script \\u2014 Video ' + n + '</div>' +
 			'<div class="seo-wt-steps">' +
 			'<span class="seo-wt-step" data-step="plan">1 \\u00b7 SEO plan</span>' +
-			'<span class="seo-wt-step" data-step="sets">2 \\u00b7 Choose a keyword set</span>' +
+			'<span class="seo-wt-step" data-step="sets">2 \\u00b7 Review keyword set</span>' +
 			'<span class="seo-wt-step" data-step="style">3 \\u00b7 Video image style</span>' +
 			'<span class="seo-wt-step" data-step="script">4 \\u00b7 Script + images</span>' +
 			'</div>' +
 			'<div id="seo-wt-loading-' + n + '">' +
-			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>AI is planning two SEO keyword sets for <b id="seo-wt-topic-' + n + '"></b>\\u2026</span></div>' +
+			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>AI is planning an SEO keyword set for <b id="seo-wt-topic-' + n + '"></b>\\u2026</span></div>' +
 			'<span class="va-note">You can close this window while you wait \\u2014 the SEO plan and the script keep generating in the background, the modal re-opens itself when there is something to choose, and the finished script lands in Video ' + n + ' \\u00b7 Script. The Upload Image, GIF or MP4 button stays disabled until the Pixabay images are in the gallery.</span>' +
 			'</div>' +
+			'<div class="va-note" id="seo-wt-plan-status-' + n + '" role="status"></div>' +
 			'<div id="seo-wt-sets-' + n + '" style="display:none">' +
-			'<div class="va-note">Pick the keyword set that best targets your script topic. The script will say its long-tail keyword at least once and each short keyword at least twice. This window stays open for you \\u2014 other videos keep their own windows.</div>' +
+			'<div class="va-note">Review the planned keywords for your script topic. The script will say its long-tail keyword at least once and each short keyword at least twice. This window stays open for you \\u2014 other videos keep their own windows.</div>' +
 			'<div class="seo-wt-sets" id="seo-wt-sets-list-' + n + '"></div>' +
 			'</div>' +
 			'<div id="seo-wt-style-' + n + '" style="display:none">' +
@@ -23476,7 +23477,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'<span class="va-note">Nothing is lost if you close this window after pressing Generate: the script and its images keep running in the background for Video ' + n + '.</span>' +
 			'<div class="seo-wt-actions">' +
 			'<button type="button" class="upload-btn" onclick="confirmSeoStyleAndGenerate(' + n + ')">\\u2728 Generate Script &amp; Images</button>' +
-			'<button type="button" class="upload-btn" onclick="showSeoWalkthroughStep(' + n + ', &quot;sets&quot;)">\\u2190 Back to keyword sets</button>' +
+			'<button type="button" class="upload-btn" onclick="showSeoWalkthroughStep(' + n + ', &quot;sets&quot;)">\\u2190 Back to keyword set</button>' +
 			'</div>' +
 			'</div>' +
 			'<div id="seo-wt-script-' + n + '" style="display:none">' +
@@ -23486,6 +23487,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'</div>' +
 			'<div class="seo-wt-error" id="seo-wt-error-' + n + '"></div>' +
 			'<div class="seo-wt-actions">' +
+			'<button type="button" class="upload-btn" id="seo-wt-retry-plan-' + n + '" style="display:none" onclick="generateScript(' + n + ')">Retry SEO planning</button>' +
 			'<button type="button" class="upload-btn" onclick="closeSeoWalkthrough(' + n + ')">\\u2715 Close</button>' +
 			'</div>' +
 			'</div>';
@@ -23718,49 +23720,18 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
-	function renderSeoPlanSets(
-		n
-	) {
-
-		const project =
-			videoProjects[n - 1];
-
-		const list =
-			seoWtEl(
-				n,
-				"seo-wt-sets-list"
-			);
-
-		if (!project || !list) {
-			return;
-		}
+	function renderSeoPlanSet(n) {
+		const project = videoProjects[n - 1];
+		const list = seoWtEl(n, "seo-wt-sets-list");
+		const set = project && project.seoSets && project.seoSets[0];
+		if (!list || !set) return;
 
 		list.innerHTML =
-			"";
-
-		(project.seoSets || []).forEach(
-			(set, idx) => {
-
-				const card =
-					document.createElement(
-						"div"
-					);
-
-				card.className =
-					"seo-wt-card";
-
-				card.innerHTML =
-					'<div class="seo-wt-card-title">Keyword set ' + (idx + 1) + "</div>" +
-					seoSetChipsHTML(set) +
-					'<button type="button" class="upload-btn" onclick="selectSeoKeywordSet(' + n + ", " + idx + ')">Select this set</button>';
-
-				list.appendChild(
-					card
-				);
-
-			}
-		);
-
+			'<div class="seo-wt-card">' +
+			'<div class="seo-wt-card-title">Keyword set</div>' +
+			seoSetChipsHTML(set) +
+			'<button type="button" class="upload-btn" onclick="selectSeoKeywordSet(' + n + ')">Use this keyword set</button>' +
+			'</div>';
 	}
 
 	/*
@@ -23785,7 +23756,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	const SEO_PLAN_MAX_RETRIES = PIPELINE_RETRY.stages.seoPlan.maxRetries;
 	const SEO_PLAN_RETRY_BACKOFF_MS = PIPELINE_RETRY.stages.seoPlan.backoffMs;
 	const SEO_PLAN_TOTAL_ATTEMPTS = SEO_PLAN_MAX_RETRIES + 1;
-	const SEO_PLAN_UI_TEXT = "Planning two SEO keyword sets (AI model)\u2026";
+	const SEO_PLAN_UI_TEXT = "Planning an SEO keyword set (AI model)\u2026";
 
 	if (typeof window !== "undefined") {
 		const seoPlanTiming =
@@ -23797,6 +23768,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			maxAttempts: SEO_PLAN_TOTAL_ATTEMPTS,
 			backoffMs: SEO_PLAN_RETRY_BACKOFF_MS,
 			retryBackoffMs: SEO_PLAN_RETRY_BACKOFF_MS,
+			requestTimeoutMs: ${SEO_PLAN_CLIENT_TIMEOUT_MS},
 			owner: "browser",
 			layout: "editor-walkthrough",
 			stage: "seoPlan"
@@ -23882,10 +23854,46 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		});
 	}
 
+	async function requestSeoPlanAttempt(topic, project) {
+		const timing = window.__SEO_PLAN_RETRY_TIMING;
+		const configured = Number(timing && timing.requestTimeoutMs);
+		const timeoutMs = configured > 0 && Number.isFinite(configured) ? configured : ${SEO_PLAN_CLIENT_TIMEOUT_MS};
+		const controller = typeof AbortController === "function" ? new AbortController() : null;
+		if (controller && project) project._seoPlanController = controller;
+		let timer;
+		let onAbort;
+		try {
+			const deadline = new Promise(function (_, reject) {
+				onAbort = function () { reject(seoPlanCancelledError()); };
+				if (controller) controller.signal.addEventListener("abort", onAbort, { once: true });
+				timer = setTimeout(function () {
+					const error = new Error("SEO planning request timed out");
+					error.name = "TimeoutError";
+					reject(error);
+					if (controller) controller.abort();
+				}, timeoutMs);
+			});
+			// Race the whole attempt, including relay lookup and reading the response body.
+			const work = (async function () {
+				const response = await fetch("/api/seo-plan", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ topic: topic }),
+					signal: controller ? controller.signal : undefined
+				});
+				return { response: response, data: await response.json().catch(() => ({})) };
+			})();
+			return await Promise.race([deadline, work]);
+		} finally {
+			clearTimeout(timer);
+			if (controller) controller.signal.removeEventListener("abort", onAbort);
+			if (project && project._seoPlanController === controller) project._seoPlanController = null;
+		}
+	}
+
 	/*
 	 * ONE request per attempt; the ladder is the only retry owner. Returns
-	 * {response, data} for a usable plan (one set is enough) and throws the
-	 * last error when the ladder is spent or a verdict stops it.
+	 * the keyword set or throws the last error if there is no usable plan.
 	 */
 	async function requestSeoPlanWithClientRetries(topic, project, onProgress) {
 		const policy = seoPlanRetryPolicy();
@@ -23893,39 +23901,21 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		for (let retry = 0; retry < policy.maxAttempts; retry++) {
 			if (project && project._deleted) throw seoPlanCancelledError();
 			seoPlanRetryLog({ event: "attempt", retry: retry, attempt: retry + 1, maxRetries: policy.maxRetries });
-			if (typeof onProgress === "function" && retry > 0) {
+			if (typeof onProgress === "function") {
 				onProgress(SEO_PLAN_UI_TEXT + " (attempt " + (retry + 1) + " of " + policy.maxAttempts + ")");
 			}
 			try {
-				const controller =
-					typeof AbortController === "function" ? new AbortController() : null;
-				if (controller && project) project._seoPlanController = controller;
-				let response;
-				let data;
-				try {
-					const init = {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json"
-						},
-						body: JSON.stringify({ topic: topic })
-					};
-					if (controller) init.signal = controller.signal;
-					response = await fetch("/api/seo-plan", init);
-					data = await response.json().catch(() => ({}));
-				} finally {
-					if (project && project._seoPlanController === controller) project._seoPlanController = null;
-				}
-				/* ONE set is enough: a partial plan is still a usable plan. */
+				const { response, data } = await requestSeoPlanAttempt(topic, project);
+				// Older relay Workers may return more than one set; use only the first.
 				if (
 					response.ok &&
 					data &&
 					data.success &&
 					Array.isArray(data.sets) &&
-					data.sets.length >= 1
+					data.sets[0]
 				) {
 					seoPlanRetryLog({ event: "success", retry: retry, attempt: retry + 1 });
-					return { response: response, data: data };
+					return data.sets[0];
 				}
 				const error = new Error(
 					(data && data.error) || ("HTTP " + response.status)
@@ -24038,7 +24028,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		}
 
-		/* Sets from an earlier click are still waiting for a choice. */
+		/* Reopen the set from an earlier click without replanning. */
 		if (
 			Array.isArray(project.seoSets) &&
 			project.seoSets.length >= 1 &&
@@ -24046,7 +24036,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		) {
 
 			ensureSeoWalkthrough(n);
-			renderSeoPlanSets(n);
+			renderSeoPlanSet(n);
 			showSeoWalkthroughStep(n, "sets");
 			showSeoWalkthrough(n);
 			return;
@@ -24145,30 +24135,28 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		}
 
 		showSeoWalkthroughStep(n, "plan");
-
-		if (statusEl) {
-			statusEl.textContent =
-				"Planning two SEO keyword sets (AI model)\\u2026";
-		}
+		setSeoWalkthroughError(n, "");
+		seoWtEl(n, "seo-wt-retry-plan").style.display = "none";
 
 		try {
 
 			/*
 			 * THE PLAN LADDER: up to 30 retries, 20 s apart, owned here.
-			 * The worker performs ONE planner run per request, so a retry
-			 * is a real new plan rather than a nested ladder.
+			 * Each request has a bounded Worker planning budget.
 			 */
-			const planResult =
+			const set =
 				await requestSeoPlanWithClientRetries(
 					topic,
 					project,
 					function (text) {
-						if (statusEl) statusEl.textContent = text;
+						const liveN = videoProjects.indexOf(project) + 1;
+						if (project._deleted || liveN <= 0) return;
+						const status = document.getElementById("va-script-status-" + liveN);
+						const modalStatus = seoWtEl(liveN, "seo-wt-plan-status");
+						if (status) status.textContent = text;
+						if (modalStatus) modalStatus.textContent = text;
 					}
 				);
-
-			const data =
-				planResult.data;
 
 			// An accordion can be deleted/renumbered while the plan is in flight.
 			const liveN = videoProjects.indexOf(project) + 1;
@@ -24177,39 +24165,21 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			btn = document.getElementById("va-script-btn-" + n);
 			statusEl = document.getElementById("va-script-status-" + n);
 
-			project.seoSets =
-				data.sets;
+			project.seoSets = [set];
 
-			project._seoPlanWarning =
-				data.partial && data.warning
-					? String(data.warning)
-					: "";
-
-			/* 3. Sets arrived: (re-)open THIS video's modal even if
-			 * the user closed it while generation was running. Other
-			 * videos' windows are left exactly as they were. */
+			/* 3. Reopen this video's modal when its set is ready. */
 			ensureSeoWalkthrough(n);
 
 			setSeoWalkthroughError(n, "");
-			renderSeoPlanSets(n);
+			seoWtEl(n, "seo-wt-plan-status").textContent = "";
+			renderSeoPlanSet(n);
 			showSeoWalkthroughStep(n, "sets");
 			showSeoWalkthrough(n);
-			/* The modal can be closed while waiting for a choice; keep the
-			 * per-video trigger available so cached sets/style can reopen it. */
+			/* The modal can be closed and reopened to review the same set. */
 			if (btn) btn.disabled = false;
 
 			if (statusEl) {
-				statusEl.textContent =
-					project.seoSets.length > 1
-						? "Two SEO keyword sets are ready \\u2014 pick one in the walkthrough."
-						: "One SEO keyword set is ready \\u2014 pick it in the walkthrough.";
-			}
-
-			if (project._seoPlanWarning) {
-				setSeoWalkthroughError(
-					n,
-					project._seoPlanWarning
-				);
+				statusEl.textContent = "SEO keyword set ready \u2014 review it in the walkthrough.";
 			}
 
 		}
@@ -24252,6 +24222,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			/* Keep the window, say what happened, offer the retry. */
 			ensureSeoWalkthrough(n);
 			showSeoWalkthroughStep(n, "plan");
+			seoWtEl(n, "seo-wt-loading").style.display = "none";
+			seoWtEl(n, "seo-wt-plan-status").textContent = "";
+			seoWtEl(n, "seo-wt-retry-plan").style.display = "";
 			setSeoWalkthroughError(n, planMessage);
 
 		}
@@ -24264,24 +24237,11 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
-	function selectSeoKeywordSet(
-		n,
-		idx
-	) {
-
-		const project =
-			videoProjects[n - 1];
-
-		if (
-			!project ||
-			!Array.isArray(project.seoSets) ||
-			!project.seoSets[idx]
-		) {
-			return;
-		}
-
-		project.selectedSeoSet =
-			project.seoSets[idx];
+	function selectSeoKeywordSet(n, idx = 0) {
+		const project = videoProjects[n - 1];
+		const set = project && project.seoSets && project.seoSets[0];
+		if (idx !== 0 || !set) return;
+		project.selectedSeoSet = set;
 
 		/*
 		 * Fix for the serial planner→writer chain (#1): the pick the user just

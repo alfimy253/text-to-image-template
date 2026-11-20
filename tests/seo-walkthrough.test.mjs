@@ -31,12 +31,6 @@ const setA = {
 	longTail: "morning yoga poses for beginners in a small home studio",
 	short: ["yoga", "breathing", "stretching", "balance"]
 };
-const setB = {
-	title: "Morning Yoga Balance Guide",
-	headings: ["Morning Yoga for Stiff Beginners", "Build a Home Practice"],
-	longTail: "gentle morning yoga routine for stiff beginners at home",
-	short: ["morning yoga", "gentle stretch", "home practice", "yoga routine"]
-};
 const sentences = [
 	`Try ${setA.longTail} today.`,
 	"Let breathing settle into a steady rhythm.",
@@ -56,33 +50,6 @@ function makeSrt(lines = sentences) {
 function jsonRequest(url, body) {
 	return new Request(url, { method: "POST", body: JSON.stringify(body) });
 }
-
-test("seo-plan returns two different validated keyword sets for the topic", async () => {
-	const prompts = [];
-	const env = {
-		AI: {
-			run: async (_model, input) => {
-				prompts.push(input.prompt);
-				return { response: JSON.stringify(input.prompt.includes("DIFFERENT") ? setB : setA) };
-			}
-		}
-	};
-	const response = await handleSeoPlanGeneration(
-		jsonRequest("https://studio.test/api/seo-plan", { topic: "Morning yoga" }),
-		env,
-		"mock-instruct"
-	);
-	assert.equal(response.status, 200);
-	const data = await response.json();
-	assert.equal(data.success, true);
-	assert.equal(data.sets.length, 2);
-	assert.notDeepEqual(data.sets[0], data.sets[1]);
-	assert.notEqual(data.sets[0].longTail, data.sets[1].longTail);
-	assert.deepEqual(data.sets[0].short, setA.short);
-	assert.deepEqual(data.sets[1].short, setB.short);
-	assert.equal(prompts.length, 2);
-	assert.match(prompts[1], /DIFFERENT keyword set/);
-});
 
 test("script generation with a selected keyword set skips the planner", async () => {
 	const prompts = [];
@@ -176,7 +143,7 @@ test("e2e worker carries a selected plan through script, prompts and one batched
 	assert.equal(planned.status, 200);
 	const plan = await planned.json();
 	assert.equal(plan.success, true);
-	assert.equal(plan.sets.length, 2);
+	assert.equal(plan.sets.length, 1);
 
 	const scripted = await call("/api/script", {
 		method: "POST",
@@ -283,7 +250,7 @@ function makeBatchHarness(w, calls, options = {}) {
 		calls.push({ path, method, body: opts.body || null });
 		if (path === "/api/session") return jsonResponse({ success: true, authenticated: true, user: { username: "Test", usertype: "free" } });
 		if (path === "/api/credits") return jsonResponse({ success: true, plan: { id: "free", label: "Free", limits: { images: 50 } }, remaining: { images: 10 } });
-		if (path === "/api/seo-plan") return jsonResponse({ success: true, sets: [setA, setB] });
+		if (path === "/api/seo-plan") return jsonResponse({ success: true, sets: [setA] });
 		if (path === "/api/script") return jsonResponse({ success: true, script: sentences.join(" "), format: "plain", title: setA.title, headings: setA.headings, keywords: { longTail: setA.longTail, short: setA.short }, words: sentences.join(" ").split(/\s+/).length, durationMs: sentences.length * 4000, minutes: 1 });
 		if (path === "/api/image-prompts" && method === "POST") {
 			const batch = JSON.parse(opts.body).batch || { offset: 0, count: 10 };

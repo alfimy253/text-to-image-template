@@ -1638,3 +1638,27 @@ test("the UI Worker's share shrinks as backups are added: 1 slot in (1 + 3 x bac
 	const fallback = pickRelayEndpoint(pool, config({ localWeight: 0 }), Date.now());
 	assert.equal(fallback.id, "local", "a fully cooled pool still answers, on the UI Worker");
 });
+
+test("aborting a rotated SEO request does not report or retry the backup", async () => {
+	const controller = new AbortController();
+	let signalStarted;
+	const started = new Promise((resolve) => { signalStarted = resolve; });
+	const { win, calls, asks } = browserRuntime(
+		(_url, init) => new Promise((_, reject) => {
+			init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+			signalStarted();
+		}),
+		(path) => ({
+			success: true, path, url: "https://backup.test" + path, local: false,
+			endpointId: "worker:https://backup.test", ticket: "t", expiresAt: Date.now() + 60_000
+		})
+	);
+	const request = win.fetch("/api/seo-plan", { method: "POST", body: "{}", signal: controller.signal });
+	const aborted = assert.rejects(request, { name: "AbortError" });
+	await started;
+	controller.abort();
+	await aborted;
+	assert.equal(calls.length, 1);
+	assert.equal(asks.length, 1);
+	assert.equal(win.__yvsApiRotation.stats().failovers, 0);
+});

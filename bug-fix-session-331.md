@@ -415,7 +415,7 @@ Nobody has to guess a number; these are live in devtools:
 The `*_LOG` arrays record every `attempt`, `attempt-failed`, `backoff`, `success`, `verdict` and
 `budget-exhausted` event, which is how a support session answers "did it really try thirty times?".
 
-#### The Worker's own (much smaller) ladders — unchanged, and why
+#### The Worker's own (much smaller) ladders
 
 A single HTTP request cannot survive 600 s of sleeping, so the big ladder lives in the browser and
 the Worker keeps a **fast inner ladder inside one attempt**. These are not a second pipeline ladder
@@ -423,7 +423,7 @@ and they are not the numbers above:
 
 | Inside one request | File | Attempts | Wait |
 | --- | --- | --- | --- |
-| SEO planner transport | `script-seo.ts` | `SEO_PLAN_TRANSPORT_ATTEMPTS = 2` per model, ×3 validation attempts per model, 1 fallback model (≤12 model calls) | 400 ms, 800 ms (transport only) |
+| SEO planner transport | `script-seo.ts` | `SEO_PLAN_TRANSPORT_ATTEMPTS = 2` per model call, up to 3 validation attempts per model, 1 fallback model; one set, including retries and fallback, must fit within a 120 s deadline | 400 ms between transport attempts |
 | Script writing | `script-seo.ts` | 1 inference per request when the browser owns the ladder; legacy path 3 planner + 3 writer | none |
 | Scene prompts | `image-prompts.ts` | `IMAGE_PROMPT_ATTEMPTS = 3` | exponential 400 ms, inside a total budget |
 | Image generation | `image-batch.ts` | `IMAGE_OVERLOAD_ATTEMPTS = 4` on load-shedding, 2 otherwise | exponential 800 ms → 20 s, inside a 45 s budget |
@@ -446,8 +446,12 @@ and they are not the numbers above:
   object URLs and recorded filenames stay. No row restart, no duplicate paid batch.
 * **Editor media:** only the individual failed photo/clip is requested again; a delivered asset is
   never re-requested or revoked.
-* **SEO planning:** each attempt is a fresh plan request — the worker performs one planner run per
-  request, so a retry is a real new plan, not a nested ladder.
+* **SEO planning:** each browser attempt requests **one validated keyword set** (one long-tail,
+  four distinct short keywords, a title and headings). The Worker stops as soon as it has a
+  valid set and returns `sets: [set]`. One set is a complete plan, not a partial result. The Editor
+  shows a single card, even if an older relay Worker sends multiple sets. Accept the card with
+  **Use this keyword set**, then choose a visual style. The 120 s Worker budget, 150 s browser
+  timeout, and 30 browser retries at 20 s intervals are unchanged. Deleting the video cancels planning.
 
 #### Where to change it
 
@@ -505,7 +509,7 @@ translation. **The code is the source of truth**; if a rule here disagrees with 
 | **RULE 21** | Three studio addresses: `/free` (anyone, sets a 1-day guest cookie), `/studio` (signed-in), `/paid` (paid only). Guests get their own **10,000 image/day allowance keyed to their network address** (only a hash + masked IP are stored). No account → most data routes say `401`. |
 | **RULE 22** | One studio shell, **two views**: the Quick Batch **table** and the **Editor** accordions. Switching is memory-only (not saved). |
 | **RULE 23** | CMS, manual payments and the account dashboard reuse the shell but have their **own** password/session checks. Admin routes need the settings password. |
-| **RULE 24** | The "✨ Generate SEO Script" walkthrough: plan two keyword sets → pick one → pick a visual style → write the script → fetch the images. The modal can be closed while it works. |
+| **RULE 24** | The "✨ Generate SEO Script" walkthrough: plan one keyword set → review and accept it → pick a visual style → write the script → fetch the images. The modal can be closed while it works. |
 | **RULE 25** | The **Quick Batch table is a second editor, not a second engine**: it reuses the same renderer. Row states walk `empty → ready → voice → timing → prompts → images → animate → done` (or silently back to `ready`). |
 | **RULE 26** | `render-app/` is a **separate** local Node tool (script → MP3 via Playwright). The Worker never calls it and it is not needed to use the studio. |
 | **RULE 27** | UI decisions: no sticker button, Delete Video sits in each accordion, no "☁️ API" button, the planner retries instead of freezing. |
@@ -542,7 +546,7 @@ open "/"  ── landing page (sign up / log in links)
 
 1. **＋ Add Video** → a "Video N" card appears (max **10**). Each card holds its own files, MP3,
    title, quality and script; deleting a card renumbers the rest.
-2. **✨ Generate SEO Script** opens the 4-step walkthrough (plan → choose keywords → choose style →
+2. **✨ Generate SEO Script** opens the 4-step walkthrough (plan → review keyword set → choose style →
    write & fetch). It can be closed while it works; the result lands in the card's Script box.
 3. **📁 Upload Image, GIF or MP4** adds up to 25 stills / 5 GIFs (≤ 30 MiB each) / 5 MP4s, or
    **Add video from template** builds a 1–25 s clip from one of the 15 interactive scenes.

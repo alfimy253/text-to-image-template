@@ -9022,7 +9022,7 @@ export const APP_CSS = `
 		 * SEO WALKTHROUGH MODAL (plan -> select a keyword set
 		 * -> video image style). The overlay reuses
 		 * .modal-overlay; the box is wider than the default so
-		 * the two keyword sets can sit side by side.
+		 * the keyword set and visual style are easy to review.
 		 * ===================================================== */
 		.seo-wt-box {
 			max-width: 760px;

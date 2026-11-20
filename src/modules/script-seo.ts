@@ -52,7 +52,7 @@ import {
 	type ScriptNoteState
 } from "./script-notes";
 import { scriptEventLoop, type ScriptEventLoop } from "./script-event-loop";
-import { PIPELINE_RETRY_STAGES } from "./retry-policy";
+import { PIPELINE_RETRY_STAGES, SEO_PLAN_REQUEST_BUDGET_MS } from "./retry-policy";
 
 export const SEO_LONG_TAIL = 1;
 export const SEO_SHORT_TOTAL = 4;
@@ -1067,13 +1067,11 @@ export function keywordOverlapInstructions(
 
 /*
  * ---------------------------------------------------------------------------
- * SEO PLAN (two selectable keyword sets) — used by the video accordion's
- * "Generate SEO Script" walkthrough.
+ * SEO PLAN — used by the video accordion's "Generate SEO Script" walkthrough.
  *
- * The walkthrough first asks the planner for TWO DIFFERENT keyword sets for
- * the same topic (one long-tail + exactly four short keywords, a title and
- * headings each), the user selects one of them, and only then is the SRT
- * writer called with that selected set. `handleSeoScriptGeneration` below
+ * The walkthrough plans one keyword set (one long-tail, four shorts, title
+ * and headings) for the user to review before choosing a visual style.
+ * The script writer then uses the accepted set. `handleSeoScriptGeneration`
  * therefore accepts an optional, previously-planned `keywordSet` in its
  * request body and, when one is supplied (and re-validated with the exact
  * same `parseKeywordSet` rules), skips its own Stage-1 planner.
@@ -1097,21 +1095,8 @@ export function plannedSetToClient(set: PlannedKeywordSet): SeoPlanSetClient {
 	};
 }
 
-export function keywordSetsEqual(
-	a: PlannedKeywordSet,
-	b: PlannedKeywordSet
-): boolean {
+export function buildSeoPlannerPrompt(topic: string): string {
 	return (
-		a.longTail === b.longTail &&
-		a.shorts.join("\n") === b.shorts.join("\n")
-	);
-}
-
-export function buildSeoPlannerPrompt(
-	topic: string,
-	avoid?: PlannedKeywordSet | null
-): string {
-	let prompt =
 		"You are an SEO strategist for YouTube explainer videos. Answer with ONLY one JSON object, no prose and no code fences. " +
 		"The video topic is: " +
 		topic +
@@ -1142,16 +1127,8 @@ export function buildSeoPlannerPrompt(
 		" section HEADING(S) (2-4 headings recommended, at most " +
 		SEO_HEADING_WORDS_MAX +
 		" words each) for this explainer video; at least one heading MUST include one of the short-tail keywords verbatim (using the same short keyword as the title is allowed).\n" +
-		'Reply with ONLY this exact JSON shape: {"title":"the video title","headings":["first section heading","second section heading"],"longTail":"the one long tail keyword","short":["short one","short two","short three","short four"]}';
-	if (avoid) {
-		prompt +=
-			"\nIMPORTANT: produce a DIFFERENT keyword set from this already-planned set — do NOT reuse its long-tail keyword \"" +
-			avoid.longTail +
-			'" and do NOT reuse its short keywords (' +
-			avoid.shorts.map((s) => '"' + s + '"').join(", ") +
-			"). Choose a fresh long-tail keyword and fresh short keywords that still target the same topic.";
-	}
-	return prompt;
+		'Reply with ONLY this exact JSON shape: {"title":"the video title","headings":["first section heading","second section heading"],"longTail":"the one long tail keyword","short":["short one","short two","short three","short four"]}'
+	);
 }
 
 /*
@@ -1269,13 +1246,19 @@ export async function runPlannerModelCall(
 	prompt: string,
 	maxTokens: number,
 	temperature: number,
-	timeoutMs: number = SEO_PLAN_AI_TIMEOUT_MS
+	timeoutMs: number = SEO_PLAN_AI_TIMEOUT_MS,
+	deadline = Infinity
 ): Promise<PlannerModelResult> {
 	const startedAt = Date.now();
 	let lastError = "";
 	let attempts = 0;
 
 	for (let attempt = 1; attempt <= SEO_PLAN_TRANSPORT_ATTEMPTS; attempt++) {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) {
+			lastError = "SEO planning request timed out";
+			break;
+		}
 		attempts = attempt;
 		if (!env || !env.AI) {
 			return {
@@ -1294,7 +1277,7 @@ export async function runPlannerModelCall(
 					max_tokens: maxTokens,
 					temperature
 				}),
-				timeoutMs
+				Math.min(timeoutMs, remaining)
 			);
 			const text = aiText(result);
 
@@ -1320,7 +1303,8 @@ export async function runPlannerModelCall(
 		});
 
 		if (attempt < SEO_PLAN_TRANSPORT_ATTEMPTS) {
-			await plannerSleep(400 * attempt);
+			const delay = Math.min(400 * attempt, deadline - Date.now());
+			if (delay > 0) await plannerSleep(delay);
 		}
 	}
 
@@ -1334,23 +1318,17 @@ export async function runPlannerModelCall(
 }
 
 /*
- * One validated keyword set from the planner (max 3 validation attempts per
- * model, same retry contract as the script route's Stage 1). When `avoid` is
- * given the prompt instructs the model to produce a different set, and a
- * reply that is still identical to `avoid` is rejected and retried.
- *
- * A transport error retries the same model once and then moves to the next
- * model in `fallbackModels`, so a single failed call no longer kills the
- * whole plan.
+ * Plan one validated set, retrying transport or validation errors and trying
+ * a fallback model when necessary. No further calls are made after a valid set.
  */
 export async function planOneSeoKeywordSet(
 	env: { AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> } },
 	scriptModel: string,
 	topic: string,
-	avoid?: PlannedKeywordSet | null,
-	fallbackModels: string[] = SEO_PLAN_FALLBACK_MODELS
+	fallbackModels: string[] = SEO_PLAN_FALLBACK_MODELS,
+	deadline = Infinity
 ): Promise<PlannedKeywordSet> {
-	const basePrompt = buildSeoPlannerPrompt(topic, avoid);
+	const basePrompt = buildSeoPlannerPrompt(topic);
 
 	/* Primary first, then each fallback once (no duplicates). */
 	const models: string[] = [];
@@ -1367,6 +1345,7 @@ export async function planOneSeoKeywordSet(
 		let prevRaw = "";
 
 		for (let attempt = 1; attempt <= 3; attempt++) {
+			if (Date.now() >= deadline) throw new Error("SEO planning request timed out - try again");
 			const prompt =
 				basePrompt +
 				(attempt > 1
@@ -1383,7 +1362,9 @@ export async function planOneSeoKeywordSet(
 				model,
 				prompt,
 				1024,
-				attempt === 1 ? 0.55 : 0.4
+				attempt === 1 ? 0.55 : 0.4,
+				SEO_PLAN_AI_TIMEOUT_MS,
+				deadline
 			);
 
 			/*
@@ -1396,16 +1377,7 @@ export async function planOneSeoKeywordSet(
 			}
 
 			const check = parseKeywordSet(call.text);
-
-			if (check.ok && avoid && keywordSetsEqual(check.data, avoid)) {
-				keywordError =
-					"the keyword set is identical to the other set - choose a different long-tail keyword and different short keywords";
-				prevRaw = call.text.replace(/\s+/g, " ").trim();
-				continue;
-			}
-			if (check.ok) {
-				return check.data;
-			}
+			if (check.ok) return check.data;
 			keywordError = check.error;
 			prevRaw = call.text.replace(/\s+/g, " ").trim();
 		}
@@ -1424,19 +1396,8 @@ export async function planOneSeoKeywordSet(
 }
 
 /*
- * POST /api/seo-plan {topic} -> {success, topic, sets:[setA, setB], model}
- * Each set is {title, headings, longTail, short:[4 shorts]} and has passed
- * the same `parseKeywordSet` validation the script route enforces. When two
- * sets are returned they are guaranteed different (different long-tail or
- * different short keywords - `keywordSetsEqual`).
- *
- * DEGRADED SUCCESS (2026-10-25): only the FIRST set is mandatory. If the
- * second planner run cannot produce a distinct, valid set - the usual
- * production failure, because the 8B model tends to repeat itself when told
- * to "be different" - the route answers 200 with ONE set plus
- * `partial: true` and a `warning`, instead of failing the whole plan and
- * dead-ending the walkthrough. The client renders whatever it receives
- * (one card or two), so a topic is never left without a usable keyword set.
+ * POST /api/seo-plan {topic} -> {success, topic, sets:[set], model}
+ * The one validated set keeps the existing array response shape for clients.
  */
 export async function handleSeoPlanGeneration(
 	request: Request,
@@ -1455,54 +1416,24 @@ export async function handleSeoPlanGeneration(
 	}
 	const startedAt = Date.now();
 
-	let first: PlannedKeywordSet;
+	const deadline = startedAt + SEO_PLAN_REQUEST_BUDGET_MS;
+	let set: PlannedKeywordSet;
 
 	try {
-		first = await planOneSeoKeywordSet(env, scriptModel, topic);
+		set = await planOneSeoKeywordSet(env, scriptModel, topic, SEO_PLAN_FALLBACK_MODELS, deadline);
 	} catch (err: unknown) {
 		const message = errorMessage(err) || "SEO plan failed";
 		console.error("[seo-plan] failed", {
 			topic: topic.slice(0, 80),
-			stage: "first-set",
 			ms: Date.now() - startedAt,
 			error: message
 		});
 		return scriptJson({ success: false, error: message }, 500);
 	}
 
-	let second: PlannedKeywordSet | null = null;
-	let secondError = "";
-
-	try {
-		second = await planOneSeoKeywordSet(env, scriptModel, topic, first);
-	} catch (err: unknown) {
-		secondError = errorMessage(err) || "second set failed";
-		console.warn("[seo-plan] second set unavailable, returning one set", {
-			topic: topic.slice(0, 80),
-			stage: "second-set",
-			ms: Date.now() - startedAt,
-			error: secondError
-		});
-	}
-
-	if (!second) {
-		return scriptJson({
-			success: true,
-			partial: true,
-			topic,
-			sets: [plannedSetToClient(first)],
-			model: scriptModel,
-			warning:
-				"Only one keyword set could be planned this time; pick it to continue. (" +
-				secondError +
-				")"
-		});
-	}
-
 	console.log("[seo-plan] ok", {
 		topic: topic.slice(0, 80),
-		first: first.longTail,
-		second: second.longTail,
+		longTail: set.longTail,
 		ms: Date.now() - startedAt,
 		model: scriptModel
 	});
@@ -1510,7 +1441,7 @@ export async function handleSeoPlanGeneration(
 	return scriptJson({
 		success: true,
 		topic,
-		sets: [plannedSetToClient(first), plannedSetToClient(second)],
+		sets: [plannedSetToClient(set)],
 		model: scriptModel
 	});
 }

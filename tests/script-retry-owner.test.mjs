@@ -47,14 +47,6 @@ const plan = {
 	short: ["yoga", "breathing", "stretching", "balance"]
 };
 
-/* A different set, so a resumed plan is distinguishable from the pick. */
-const otherPlan = {
-	title: "Evening Wind Down",
-	headings: ["Settle Down", "Sleep Better"],
-	longTail: "evening wind down routine for better sleep",
-	short: ["evening", "wind down", "sleep", "calm"]
-};
-
 const sentences = [
 	`Try ${plan.longTail} today.`,
 	"Let breathing settle into a steady rhythm.",
@@ -330,7 +322,7 @@ async function walkthrough(w, scriptReplies) {
 				browserScriptRetries: 3
 			});
 		}
-		if (path === "/api/seo-plan") return json({ success: true, sets: [plan, otherPlan] });
+		if (path === "/api/seo-plan") return json({ success: true, sets: [plan] });
 		if (path === "/api/script") {
 			requests.push({ body });
 			const reply = sent.length > 1 ? sent.shift() : sent[0];
