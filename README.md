@@ -234,7 +234,7 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
 | Thing | Limit |
 | --- | --- |
 | Videos per session | 10 |
-| Assets per video | 25 images · 5 GIFs · 5 MP4s (60 s each) |
+| Assets per video | 25 images · 5 GIFs · 40 MP4s (60 s each) |
 | Slide timing | 9 s per image/GIF; MP4 clips play in full; the list repeats to cover the MP3 |
 | Captions | 10 rows, 40 characters each; last caption capped at 12 s on screen |
 | Script | 1-6 minutes, `super fast` / `fast` / `medium` / `slow`; plain narration text — no SRT, no timestamps needed |
@@ -266,7 +266,8 @@ the strings that carry the rules (the full inventory, with the constant each one
 | Video accordion, **Generate SEO Script With AI** (first block of the left column) | `SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords said at least 2× each · minimums only, extra uses are allowed · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` |
 | ✨ **Generate SEO Script** button | tooltip: *AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the plain narration script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.* |
 | SEO plan chips (after a successful run) | Title row · Headings row · `long-tail keyword — must be said at least 1×` · `short keyword — must be said at least 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading`, each keyword chip showing the measured count, e.g. `coffee brewing 2×` (a count above the minimum is valid) |
-| Video accordion, media block | `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the modal explains the selected editor's motion controls and reminds users the exported clip is silent |
+| Video accordion, media block | `Max 5 GIF · 25 images · 40 MP4 (1:00 each, silent)`; **Add video from template** tooltip says *max 25 seconds*; the modal explains the selected editor's motion controls and reminds users the exported clip is silent |
+| Quick Batch table timeline | Up to 40 video clips in Scene Media; the automatic stock plan still generates its fixed 14 scenes (6 clips + 8 photos) |
 | Template element inspector | `+ Front layer` / `- Back Layer`, `Layer N of M`, `Rotate degrees` + live `N°` readout (0–360°) |
 | Ring template, bottom accordion | `Ring images · N / 7 (min 5)`; choose 5–7 images together; inline errors preserve previous images |
 | Video accordion, **AI Images** | `2 images per submit · landscape 16:9 · 1024×576` (placeholder: *Describe the image (always landscape 16:9, 1024×576)*; also the status line for failures: `Done — landscape 16:9 · 1024×576` or `1 of 2 failed: <error>`) |

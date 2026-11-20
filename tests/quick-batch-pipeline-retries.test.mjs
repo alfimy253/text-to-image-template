@@ -52,7 +52,7 @@ function ndjson(events) {
 
 function imageBatchResponse(body, callIndex) {
 	const events = [{ type: "start", count: body.prompts.length, width: 1024, height: 576 }];
-	/* The fixed plan needs four distinct clips and eight distinct photos. */
+	/* The test's legacy fixture uses four clips and eight distinct photos. */
 	const clipSlots = [1, 4, 7, 10];
 	body.prompts.forEach((_, index) => {
 		const scene = Array.isArray(body.sceneIndexes) ? Number(body.sceneIndexes[index]) : callIndex * 3 + index;
