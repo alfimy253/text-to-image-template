@@ -204,7 +204,7 @@ test("Stage 2: parseImagePrompts repairs literal newlines inside JSON strings an
 	assert.match(salvaged[1], /Complete scene beta/);
 });
 
-test("Stage 2: handleGenerateImagePrompts stays under 4096 max_tokens, accepts pre-parsed object responses, and falls back to 70B on primary failure", async () => {
+test("Stage 2: handleGenerateImagePrompts stays under 4096 max_tokens, accepts pre-parsed object responses, and retries the single Gemma 4 instruct slug on primary failure", async () => {
 	/* 1. Verify max_tokens <= 4096 even for 6-minute (20-prompt) batches + object response shape */
 	const seenInputs = [];
 	const envStrict8k = {
@@ -213,7 +213,7 @@ test("Stage 2: handleGenerateImagePrompts stays under 4096 max_tokens, accepts p
 				seenInputs.push(input);
 				assert.ok(
 					input.max_tokens <= IMAGE_PROMPT_MAX_TOKENS && input.max_tokens <= 4096,
-					"max_tokens " + input.max_tokens + " would overflow Llama 3.1 8B 8K context"
+					"max_tokens " + input.max_tokens + " would overflow the instruct model context"
 				);
 				/* Simulate Workers AI returning an auto-parsed JSON object in `response` */
 				return {
@@ -239,27 +239,22 @@ test("Stage 2: handleGenerateImagePrompts stays under 4096 max_tokens, accepts p
 			})
 		}),
 		envStrict8k,
-		"@cf/meta/llama-3.1-8b-instruct-fp8"
+		"@cf/google/gemma-4-26b-a4b-it"
 	);
 	assert.equal(okRes.status, 200);
 	const okData = await okRes.json();
 	assert.equal(okData.count, 20);
 	assert.equal(seenInputs.length, 1);
 
-	/* 2. Verify fallback to @cf/meta/llama-3.3-70b-instruct-fp8-fast when primary throws */
+	/* 2. Single instruct model: when the ladder's call fails, no second slug
+	   is tried - every attempt stays on the Gemma 4 slug and the route reports
+	   the failure instead of silently swapping models. */
 	const modelsTried = [];
 	const envFallback = {
 		AI: {
 			run: async (model) => {
 				modelsTried.push(model);
-				if (model === "@cf/meta/llama-3.1-8b-instruct-fp8") {
-					throw new Error("AiError: context window / upstream 3043");
-				}
-				return {
-					response: JSON.stringify({
-						prompts: ["Recovered scene one", "Recovered scene two"]
-					})
-				};
+				throw new Error("AiError: context window / upstream 3043");
 			}
 		}
 	};
@@ -276,12 +271,17 @@ test("Stage 2: handleGenerateImagePrompts stays under 4096 max_tokens, accepts p
 			})
 		}),
 		envFallback,
-		"@cf/meta/llama-3.1-8b-instruct-fp8"
+		"@cf/google/gemma-4-26b-a4b-it"
 	);
-	assert.equal(fbRes.status, 200);
+	assert.equal(fbRes.status, 502);
 	const fbData = await fbRes.json();
-	assert.equal(fbData.count, 2);
-	assert.ok(modelsTried.includes("@cf/meta/llama-3.3-70b-instruct-fp8-fast"));
+	assert.equal(fbData.success, false);
+	assert.equal(fbData.prompts.length, 0);
+	assert.ok(modelsTried.length >= 1);
+	assert.ok(
+		modelsTried.every((model) => model === "@cf/google/gemma-4-26b-a4b-it"),
+		"every planner attempt stays on the Gemma 4 slug: " + modelsTried.join(",")
+	);
 });
 
 /* ------------------------------------------------------------------ */
@@ -575,7 +575,7 @@ test("End-to-end: Quick Batch Table moves row through real Worker MP3 -> Prompts
 				if (model === "@cf/myshell-ai/melotts") {
 					return { audio: bytesToBase64(mp3Bytes) };
 				}
-				if (model.includes("llama")) {
+				if (model.includes("gemma")) {
 					return {
 						response: {
 							prompts: [

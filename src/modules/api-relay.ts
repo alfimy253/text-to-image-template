@@ -598,7 +598,7 @@ export function noteRelayFailure(key: string, error: unknown, cooldownMs: number
  * classified as a *fatal model* failure: the whole fail-over chain aborted on
  * the first member, the local Worker never ran the model, the member was not
  * circuit-broken, and the caller surfaced the transport text as the model's
- * answer — `SEO planner model failed (@cf/meta/llama-3.3-70b-instruct-fp8-fast:
+ * answer — `SEO planner model failed (@cf/google/gemma-4-26b-a4b-it:
  * Relay endpoint answered 404)`.
  *
  * The distinction that matters is WHO answered:

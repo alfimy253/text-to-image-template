@@ -541,7 +541,7 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
   - Speed: `super fast | fast | medium | slow`, targeting 210/170/140/110 words per minute;
     invalid → `400`; missing AI binding → `503 "AI binding not configured"`.
   - Usage tracking happens after request validation; scripts remain unlimited on all plans.
-- **Two AI stages** on `@cf/meta/llama-3.1-8b-instruct-fp8`, **three attempts per stage**:
+- **Two AI stages** on `@cf/google/gemma-4-26b-a4b-it`, **three attempts per stage**:
   1. **Planner:** JSON `{title, headings, longTail, short:[s1,s2,s3,s4]}`; 1024 output tokens,
      temperature 0.55 first, 0.4 on retries. Output token budgeting is a model call setting,
      not a keyword word/character rule. `parseKeywordSet()` accepts string/object/array
@@ -2329,8 +2329,7 @@ A-12 (anonymous prompt-job routes/usage telemetry), A-13 (legacy caption plumbin
     perspective, anatomy, and text-free guardrails.
 - **Prompt LLM & SDXL resilience.**
   - `src/modules/image-prompts.ts` caps primary output tokens at `IMAGE_PROMPT_MAX_TOKENS = 3584`
-    (preventing 8,192-token context-window overflow on `@cf/meta/llama-3.1-8b-instruct-fp8`), falls
-    back to `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, escapes unescaped control characters inside
+    (preventing context-window overflow on `@cf/google/gemma-4-26b-a4b-it`), escapes unescaped control characters inside
     JSON string literals (`repairJsonControlChars`), and salvages complete scenes from truncated
     JSON arrays (`salvageJsonPromptArray`) so retries only request missing scenes.
   - `runImageModel()` (`src/modules/image-batch.ts`) heals non-64-multiple sub-1024 frames via
@@ -2695,7 +2694,7 @@ Full session record: `bug-fix-session-271.md`. This rule is the binding contract
   (`src/modules/api-relay.ts`, RULE 33). OpenRouter is a direct HTTPS call from the Worker that
   received the request, so it never touches the pool.
 - **Only instruct models may leave Workers AI.** `isInstructModel()` gates the provider rotation
-  (matches `instruct|chat|llama|mistral|…`, refuses
+  (matches `instruct|chat|llama|mistral|qwen|gemma|…`, refuses
   `stable-diffusion|flux|melotts|aura|tts|embedding|…`). SDXL/Flux image calls and MeloTTS/Aura
   voiceover calls are pinned to Workers AI. A relayed `POST /api/relay/ai` call and an inbound
   compute call are also pinned: they execute the **raw** binding once and never rotate again — not

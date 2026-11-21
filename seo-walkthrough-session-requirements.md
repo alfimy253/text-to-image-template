@@ -215,7 +215,7 @@ next to `/api/script`, and driven by MODULE 8b’s
   `image-prompts:<id>` with a 1-hour TTL. Without KV (tests, the e2e
   fixture) an in-isolate `Map` is used instead.
 - **Prompt instruction (SR-12, SR-14).** `buildImagePromptInstruction`
-  tells the instruct model (`SCRIPT_MODEL`, the same llama instruct model
+  tells the instruct model (`SCRIPT_MODEL`, the same Gemma 4 instruct model
   as the script) to answer with only `{"prompts":[...]}`: exactly
   `imagePromptCountForMinutes(minutes)` prompts — **1 → 10, 2–3 → 14,
   4–6 → 20** — in opening-to-closing order, each a concise text-free scene

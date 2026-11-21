@@ -47,7 +47,7 @@ A single-page **browser-side video studio** served by one Cloudflare Worker.
 | Page + all UI code | Worker (`GET /`) | Serves one ~700 KB HTML string (landing, studio, CSS + JS inlined) |
 | Video rendering | **The user's browser** (WebCodecs `VideoEncoder`/`AudioEncoder` + `mp4-muxer`) | Draws Ken-Burns slides, overlays, captions, subtitles and muxes an MP4 |
 | AI images | Workers AI `@cf/stabilityai/stable-diffusion-xl-base-1.0` | `/image/:i` (demo prompts) and `/image/gen?prompt=` (per-video AI panel) |
-| AI script (plain narration) | Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8`, **two stages** | `/api/script` — stage 1 plans the SEO keywords plus the explainer title and headings, stage 2 writes the script around them and the server hands back validated **plain text** (`format:"plain"`) |
+| AI script (plain narration) | Workers AI `@cf/google/gemma-4-26b-a4b-it`, **two stages** | `/api/script` — stage 1 plans the SEO keywords plus the explainer title and headings, stage 2 writes the script around them and the server hands back validated **plain text** (`format:"plain"`) |
 | Voiceover | Workers AI `@cf/myshell-ai/melotts` + free fallback TTS | `/api/voiceover`, proxied `/tts` |
 | Accounts | KV namespace `KV_BINDING` | `/api/session`, `/api/login`, `/api/signup`, `/api/logout` (unlimited accounts, `email:<address>` uniqueness index) |
 | CMS pages | KV `config:cms_pages` + shared theme shell | Up to 8 public flat pages; settings-only writes, public reads and top/footer links |
@@ -506,7 +506,7 @@ speed   = super fast(210 wpm) | fast(170) | medium(140) | slow(110)
   │
   ▼ POST /api/script {topic,minutes,speed}      ← still the only fields the client sends
   │
-  ├─ STAGE 1  keyword planner (llama-3.1-8b-instruct-fp8, max_tokens 1024, temp 0.55 (0.4 retry))
+  ├─ STAGE 1  keyword planner (gemma-4-26b-a4b-it, max_tokens 1024, temp 0.55 (0.4 retry))
   │      asks for one JSON object:
   │        {"title":"…","headings":["…","…"],"longTail":"one long tail keyword",
   │         "short":["s1","s2","s3","s4"]}

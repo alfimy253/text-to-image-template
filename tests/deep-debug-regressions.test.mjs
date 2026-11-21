@@ -8,8 +8,8 @@
  *      stream mid-write + stuck-write backpressure watchdog on abrupt abort.
  *   3. `handleVoiceover` bare URL sanitization, empty-output failover to Deepgram
  *      Aura, WAV->MP3 homogeneous container healing, and `request.signal` abort.
- *   4. `generateImagePrompts` non-throwing empty primary -> 70B fallback +
- *      `parseImagePrompts` bracket-preamble JSON recovery & paragraph-safe budget.
+ *   4. `generateImagePrompts` non-throwing empty primary -> error on the single Gemma 4 instruct
+ *      slug (no fallback model) + `parseImagePrompts` bracket-preamble JSON recovery & budget.
  *   5. `POST /api/image-batch` plan-aware 429 message + `POST /api/payments/upload`
  *      OOM pre-check & corrupted KV JSON safety.
  *   6. Client `exportBatchRow` Portrait/Square MP4 dimensions, `deleteVideoAccordion`
@@ -381,32 +381,25 @@ test("handleVoiceover strips bare URLs, fails over when MeloTTS returns empty ou
 	assert.equal(abortedAiCalls, 0);
 });
 
-test("generateImagePrompts falls back to 70B when primary returns empty 200 replies, and parseImagePrompts handles bracket preambles + 3-paragraph budget", async () => {
+test("generateImagePrompts propagates an empty reply from the instruct model (no second slug), and parseImagePrompts handles bracket preambles + 3-paragraph budget", async () => {
 	const modelsCalled = [];
-	const prompts = await generateImagePrompts(
-		{
-			AI: {
-				run: async (model) => {
-					modelsCalled.push(model);
-					if (model === "@cf/meta/llama-3.1-8b-instruct-fp8") {
+	await assert.rejects(
+		generateImagePrompts(
+			{
+				AI: {
+					run: async (model) => {
+						modelsCalled.push(model);
 						/* Non-throwing empty/unparseable response */
 						return { response: "" };
 					}
-					return {
-						response: JSON.stringify({
-							prompts: [
-								"Subject moves through morning mist with steady natural posture and clear foreground presence.\n\nWarm sunlit valley with layered pine ridges and coherent depth.\n\nWide 35mm lens at eye level with natural film grain and clean geometry."
-							]
-						})
-					};
 				}
-			}
-		},
-		"@cf/meta/llama-3.1-8b-instruct-fp8",
-		{ topic: "Alpine trail", minutes: 1, style: "Cinematic Film" }
+			},
+			"@cf/google/gemma-4-26b-a4b-it",
+			{ topic: "Alpine trail", minutes: 1, style: "Cinematic Film" }
+		),
+		/Scene keyword planner returned an empty reply/
 	);
-	assert.equal(prompts.length, 1);
-	assert.ok(modelsCalled.includes("@cf/meta/llama-3.3-70b-instruct-fp8-fast"));
+	assert.deepEqual(modelsCalled, ["@cf/google/gemma-4-26b-a4b-it"]);
 
 	/* Bracket preamble before JSON object + oversized 3-paragraph entry */
 	const p1 = ("Detailed foreground action with grounded posture and crisp hands. ").repeat(12);

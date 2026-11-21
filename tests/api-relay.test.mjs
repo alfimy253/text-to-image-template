@@ -307,8 +307,8 @@ test("withRelayedAi keeps the old behaviour when no backup is registered", async
 		}
 	};
 	const wrapped = withRelayedAi(env, requestFor("/api/script"));
-	assert.deepEqual(await wrapped.AI.run("@cf/meta/llama", { prompt: "hi" }), {
-		response: "local:@cf/meta/llama"
+	assert.deepEqual(await wrapped.AI.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "hi" }), {
+		response: "local:@cf/google/gemma-4-26b-a4b-it"
 	});
 	assert.equal(calls, 1);
 	assert.equal(wrapped.KV_BINDING, env.KV_BINDING, "other bindings pass through");
@@ -340,13 +340,13 @@ test("a registered backup receives the model call; the primary binding is not us
 	   the first position exactly like an overloaded primary would. */
 	noteRelayFailure("local", new Error("429 Too Many Requests"), 30_000);
 
-	const result = await runtime.ai.run("@cf/meta/llama", { prompt: "hello" });
+	const result = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "hello" });
 	assert.deepEqual(result, { response: "remote" });
 	assert.equal(localCalls, 0);
 	assert.equal(seen[0].url, "https://backup.test" + RELAY_AI_PATH);
 	assert.ok(seen[0].init.headers[RELAY_TOKEN_HEADER], "the call is signed");
 	const payload = JSON.parse(seen[0].init.body);
-	assert.equal(payload.model, "@cf/meta/llama");
+	assert.equal(payload.model, "@cf/google/gemma-4-26b-a4b-it");
 	assert.equal(payload.input.prompt, "hello");
 });
 
@@ -392,7 +392,7 @@ test("a backup failure fails over to the next member and finally to local", asyn
 	/* Local is cooling, so the dead backup is the first candidate. */
 	noteRelayFailure("local", new Error("429 Too Many Requests"), 30_000);
 	const runtime = createRelayRuntime(env, requestFor("/api/script"), { fetchImpl, selfOrigin: SELF });
-	const result = await runtime.ai.run("@cf/meta/llama", { prompt: "x" });
+	const result = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" });
 	assert.ok(attempted.some((url) => url.startsWith("https://dead.test")), "the dead worker was tried");
 	assert.ok(result.response === "alive-answer" || result.response === "local-answer");
 	assert.ok(runtime.stats().failedOver >= 1, "the failover is reported");
@@ -417,7 +417,7 @@ test("a backup failure fails over to the next member and finally to local", asyn
 		selfOrigin: SELF
 	});
 	noteRelayFailure("local", new Error("429 Too Many Requests"), 1);
-	const value = await runtime2.ai.run("@cf/meta/llama", { prompt: "x" });
+	const value = await runtime2.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" });
 	assert.deepEqual(value, { response: "local-answer" });
 	assert.ok(attempted2.length >= 1);
 });
@@ -457,7 +457,7 @@ test("rotation disabled keeps every call local even with backups registered", as
 		},
 		selfOrigin: SELF
 	});
-	assert.deepEqual(await runtime.ai.run("@cf/meta/llama", { prompt: "x" }), { response: "local" });
+	assert.deepEqual(await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" }), { response: "local" });
 	assert.equal(contacted, 0);
 });
 
@@ -473,13 +473,13 @@ test("POST /api/relay/ai requires a valid signed token and executes once", async
 	};
 
 	const anonymous = await handleRelayAiCall(
-		requestFor(RELAY_AI_PATH, { method: "POST", body: JSON.stringify({ model: "@cf/meta/llama", input: {} }) }),
+		requestFor(RELAY_AI_PATH, { method: "POST", body: JSON.stringify({ model: "@cf/google/gemma-4-26b-a4b-it", input: {} }) }),
 		env
 	);
 	assert.equal(anonymous.status, 401);
 
-	const body = JSON.stringify({ model: "@cf/meta/llama", input: { prompt: "ping" } });
-	const token = await signRelayToken(env, { v: 1, k: "ai", exp: Date.now() + 60_000, m: "@cf/meta/llama" });
+	const body = JSON.stringify({ model: "@cf/google/gemma-4-26b-a4b-it", input: { prompt: "ping" } });
+	const token = await signRelayToken(env, { v: 1, k: "ai", exp: Date.now() + 60_000, m: "@cf/google/gemma-4-26b-a4b-it" });
 	const ok = await handleRelayAiCall(
 		requestFor(RELAY_AI_PATH, {
 			method: "POST",
@@ -495,12 +495,12 @@ test("POST /api/relay/ai requires a valid signed token and executes once", async
 	/* A token bound to a body digest rejects any other body. */
 	const { createHash } = await import("node:crypto");
 	const digest = (text) => createHash("sha256").update(text).digest("hex");
-	const boundBody = JSON.stringify({ model: "@cf/meta/llama", input: { prompt: "bound" } });
+	const boundBody = JSON.stringify({ model: "@cf/google/gemma-4-26b-a4b-it", input: { prompt: "bound" } });
 	const boundToken = await signRelayToken(env, {
 		v: 1,
 		k: "ai",
 		exp: Date.now() + 60_000,
-		m: "@cf/meta/llama",
+		m: "@cf/google/gemma-4-26b-a4b-it",
 		d: digest(boundBody)
 	});
 	const boundOk = await handleRelayAiCall(
@@ -516,7 +516,7 @@ test("POST /api/relay/ai requires a valid signed token and executes once", async
 		requestFor(RELAY_AI_PATH, {
 			method: "POST",
 			headers: { [RELAY_TOKEN_HEADER]: boundToken, "Content-Type": "application/json" },
-			body: JSON.stringify({ model: "@cf/meta/llama", input: { prompt: "different" } })
+			body: JSON.stringify({ model: "@cf/google/gemma-4-26b-a4b-it", input: { prompt: "different" } })
 		}),
 		env
 	);
@@ -587,7 +587,7 @@ test("an oversized relay body is rejected", async () => {
 		requestFor(RELAY_AI_PATH, {
 			method: "POST",
 			headers: { [RELAY_TOKEN_HEADER]: token, "Content-Type": "application/json" },
-			body: JSON.stringify({ model: "@cf/meta/llama", input: { prompt: "x".repeat(RELAY_MAX_BODY_BYTES) } })
+			body: JSON.stringify({ model: "@cf/google/gemma-4-26b-a4b-it", input: { prompt: "x".repeat(RELAY_MAX_BODY_BYTES) } })
 		}),
 		env
 	);
@@ -1154,8 +1154,8 @@ test("a relayed call is never relayed a second time (no A -> B -> A loop)", asyn
 		return worker.fetch(new Request(input, init), envA, {});
 	};
 	try {
-		const body = JSON.stringify({ model: "@cf/meta/llama", input: { prompt: "x" } });
-		const token = await signRelayToken(envA, { v: 1, k: "ai", exp: Date.now() + 60_000, m: "@cf/meta/llama" });
+		const body = JSON.stringify({ model: "@cf/google/gemma-4-26b-a4b-it", input: { prompt: "x" } });
+		const token = await signRelayToken(envA, { v: 1, k: "ai", exp: Date.now() + 60_000, m: "@cf/google/gemma-4-26b-a4b-it" });
 		const response = await worker.fetch(
 			new Request(SELF + RELAY_AI_PATH, {
 				method: "POST",
@@ -1302,7 +1302,7 @@ test("a request that was rotated here runs its inference locally", async () => {
 			throw new TypeError("peer down");
 		}
 	});
-	await away.ai.run("@cf/meta/llama", { prompt: "x" });
+	await away.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" });
 	assert.equal(peerContacted, 1, "the weighted policy would have used the peer");
 
 	/* A rotated request executes here instead. */
@@ -1313,7 +1313,7 @@ test("a request that was rotated here runs its inference locally", async () => {
 			throw new Error("the peer must not be contacted for already-rotated work");
 		}
 	});
-	assert.deepEqual(await runtime.ai.run("@cf/meta/llama", { prompt: "x" }), { response: "served-here" });
+	assert.deepEqual(await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" }), { response: "served-here" });
 	assert.equal(runtime.stats().local, 1);
 	assert.equal(runtime.stats().relayed, 0);
 });
@@ -1470,7 +1470,7 @@ test("a backup that never answers times out, is cooled, and the call still lands
 	noteRelayFailure("local", new Error("429 Too Many Requests"), 30_000);
 
 	const startedAt = Date.now();
-	const value = await runtime.ai.run("@cf/meta/llama", { prompt: "x" });
+	const value = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" });
 	const elapsed = Date.now() - startedAt;
 
 	assert.deepEqual(value, { response: "local-answer" }, "the UI Worker answered the timed-out call");
@@ -1506,7 +1506,7 @@ test("a timeout is transient but a cancelled request is not: only the timeout is
 	});
 	noteRelayFailure("local", new Error("429 Too Many Requests"), 30_000);
 
-	await assert.rejects(() => runtime.ai.run("@cf/meta/llama", { prompt: "x" }), (error) => {
+	await assert.rejects(() => runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" }), (error) => {
 		assert.equal(error.name, "AbortError", "the cancellation surfaces as a cancellation");
 		return true;
 	});

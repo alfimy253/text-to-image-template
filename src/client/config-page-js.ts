@@ -959,7 +959,7 @@ export const CONFIG_PAGE_SCRIPT = `
 							'</div>' +
 							'<div>' +
 								'<label class="cfg-label" for="cfg-llm-model">OpenRouter model</label>' +
-								'<input class="cfg-input" id="cfg-llm-model" type="text" placeholder="meta-llama/llama-3.3-8b-instruct:free" />' +
+								'<input class="cfg-input" id="cfg-llm-model" type="text" placeholder="google/gemma-4-26b-a4b-it" />' +
 							'</div>' +
 							'<div>' +
 								'<label class="cfg-label" for="cfg-llm-cf-weight">Cloudflare weight</label>' +

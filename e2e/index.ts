@@ -176,7 +176,7 @@ export const mockEnv = {
 	AI: {
 		run: async (model: string, input: Record<string, unknown>) => {
 			const m = String(model || "");
-			if (m.includes("llama")) {
+			if (m.includes("gemma")) {
 				return mockLlmResponse(input || {});
 			}
 			if (m.includes("melotts") || m.includes("tts")) {

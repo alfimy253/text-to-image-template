@@ -133,7 +133,7 @@ payload with zero behaviour, so it is now gone.
 | **`kv_namespaces` → `KV_BINDING`** | required for credits/accounts | without KV the app runs unmetered and account routes answer `503`; the table itself still works |
 | Image model | `@cf/stabilityai/stable-diffusion-xl-base-1.0`, 20 steps, at the row's frame (default 1024×576 landscape; other sizes come from the Resolution/Orientation columns, short edge rounded to a multiple of 8) | `src/modules/image-batch.ts` |
 | TTS model | `@cf/myshell-ai/melotts` + free fallback URL | `/api/voiceover`, 8,000 chars, chunked at 500 |
-| Text model | `@cf/meta/llama-3.1-8b-instruct-fp8` (+ `llama-3.3-70b-instruct-fp8-fast` planner fallback) | `/api/image-prompts`, `/api/seo-plan`, `/api/script` |
+| Text model | `@cf/google/gemma-4-26b-a4b-it` | `/api/image-prompts`, `/api/seo-plan`, `/api/script` |
 | Route surface used by the table | `POST /api/voiceover`, `POST /api/image-prompts`, `POST /api/image-batch` | no job URL, no polling, no `/api/render` |
 
 ### 3.2 Browser requirements (client side)

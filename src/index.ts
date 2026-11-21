@@ -989,15 +989,14 @@ async function handleRequest(request: any, env: any, ctx: any) {
 		}
 
 		// INSTRUCT model for the
-		// narration script. The old
-		// FREE llama-3.1-8b-instruct
-		// was deprecated by
-		// Cloudflare on 2026-05-30;
-		// this fp8 build is the
-		// cheapest instruct model
-		// in the current catalog.
+		// narration script. All text
+		// generation in this app uses
+		// the same Gemma 4 instruct
+		// build; the previous llama
+		// and mistral slugs were
+		// removed from the code.
 		const SCRIPT_MODEL =
-			"@cf/meta/llama-3.1-8b-instruct-fp8";
+			"@cf/google/gemma-4-26b-a4b-it";
 
 		// MeloTTS (MyShell) -
 		// the TTS model for

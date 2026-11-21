@@ -38,7 +38,7 @@
  *
  * A note also carries the deterministic keyword repair used by the writer
  * loop: when the SRT is valid but one keyword is one or two uses short, the
- * deficit is patched into existing cues instead of asking the 8B model for a
+ * deficit is patched into existing cues instead of asking the instruct model for a
  * third full regeneration (the single biggest latency sink in the pipeline).
  * ---------------------------------------------------------------------------
  */
@@ -928,7 +928,7 @@ export function outlineToBrief(note: ScriptNote): string {
 
 /*
  * The prompt block the writer receives instead of a blank page. Kept short
- * (facts are capped) because every extra token on an 8B model costs latency
+ * (facts are capped) because every extra token on the instruct model costs latency
  * and invites the model to paraphrase instead of write subtitles.
  */
 export function buildNoteWriterBrief(note: ScriptNote): string {
