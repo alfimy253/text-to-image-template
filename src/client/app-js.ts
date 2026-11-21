@@ -22668,9 +22668,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	// MODULE 8: script (plain narration text)
 	// (AI script generation. The server route /api/script uses
 	//  an INSTRUCT model on Workers AI, set in the SCRIPT_MODEL
-	//  constant - the old free llama-3.1-8b-instruct was
-	//  deprecated by Cloudflare on 2026-05-30, so it is now the
-	//  cheap llama-3.1-8b-instruct-fp8 instruct model. Minutes
+	//  constant - the previous llama/mistral slugs were
+	//  removed, so all text generation now uses the Gemma 4
+	//  instruct build. Minutes
 	//  1-6 + speech speed: super fast / fast / medium / slow.)
 	//
 	// WHAT THE CLIENT HOLDS: plain spoken text only. The

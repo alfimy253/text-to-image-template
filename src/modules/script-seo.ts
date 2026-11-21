@@ -569,7 +569,7 @@ export function srtSpokenText(srt: string): string {
 /*
  * Lenient field lookup + list coercion for the planner reply.
  *
- * The 8B instruct model regularly answers with one of several equally
+ * The instruct model regularly answers with one of several equally
  * reasonable shapes - `long_tail`, `longtail`, `keyword`, `shorts`,
  * `shortKeywords`, a comma-separated string instead of an array, objects
  * like `{"keyword": "..."}` - and the strict `{"title","headings","longTail",
@@ -1170,14 +1170,19 @@ export function buildSeoPlannerPrompt(
  *      model cannot hold the request forever.
  *   2. `planOneSeoKeywordSet()` keeps its 3 validation attempts per model and
  *      then falls back to the next model in `SEO_PLAN_FALLBACK_MODELS`,
- *      which is what keeps planning alive when the cheapest 8B instruct
- *      model is overloaded, deprecated or answers garbage.
+ *      which is what keeps planning alive when the instruct model is
+ *      overloaded, deprecated or answers garbage.
  * ---------------------------------------------------------------------------
  */
 
-/* Tried in order after the configured script model. */
+/*
+ * Tried in order after the configured script model. All text generation in
+ * this app uses the same Gemma 4 instruct build, so the fallback is the same
+ * slug the primary uses - the dedup below collapses it to a single candidate,
+ * and the old llama fallback slug is gone.
+ */
 export const SEO_PLAN_FALLBACK_MODELS: string[] =
-	["@cf/meta/llama-3.3-70b-instruct-fp8-fast"];
+	["@cf/google/gemma-4-26b-a4b-it"];
 
 /* A hung Workers AI call must not hold a plan or script forever. */
 export const SEO_PLAN_AI_TIMEOUT_MS = 45000;
@@ -1361,7 +1366,7 @@ export async function planOneSeoKeywordSet(
 	 * the last one. The old code overwrote `transportError` on each model, so a
 	 * pool-wide fault (all models answering the same relay error) was reported
 	 * as if only the LAST fallback slug had failed — the misleading
-	 * "@cf/meta/llama-3.3-70b-instruct-fp8-fast: Relay endpoint answered 404"
+	 * "@cf/google/gemma-4-26b-a4b-it: Relay endpoint answered 404"
 	 * line in the studio. The list makes the shared cause obvious.
 	 */
 	const transportErrors: string[] = [];
@@ -1436,7 +1441,7 @@ export async function planOneSeoKeywordSet(
  *
  * DEGRADED SUCCESS (2026-10-25): only the FIRST set is mandatory. If the
  * second planner run cannot produce a distinct, valid set - the usual
- * production failure, because the 8B model tends to repeat itself when told
+ * production failure, because the instruct model tends to repeat itself when told
  * to "be different" - the route answers 200 with ONE set plus
  * `partial: true` and a `warning`, instead of failing the whole plan and
  * dead-ending the walkthrough. The client renders whatever it receives
@@ -1645,7 +1650,7 @@ const SCRIPT_URL_TOPIC = /^(?:https?:\/\/|www\.)[^\s]+$/i;
 /*
  * What a skipped model call is worth. Used only for the `timings.savedMs`
  * report written into the note; the real numbers come from current_code_latest.md
- * (planner p50 7.2 s, writer p50 21 s on the 8B instruct model).
+ * (planner p50 7.2 s, writer p50 21 s on the instruct model).
  */
 export const PLANNER_CALL_SAVED_MS = 7200;
 export const WRITER_CALL_SAVED_MS = 21000;

@@ -102,7 +102,7 @@ voiceover. Stickers are gone: there is no sticker control and nothing is drawn o
   jobs never leave the primary Worker. See [api-relay-rotation.md](api-relay-rotation.md).
 - **Two instruct-model providers, rotated.** The SEO planner, the script writer, the
   scene-prompt writer and the raw `POST /api/llm/generate` API can run the instruct model on
-  **Cloudflare Workers AI** or on **OpenRouter** (`meta-llama/llama-3.3-8b-instruct:free` by
+  **Cloudflare Workers AI** or on **OpenRouter** (`google/gemma-4-26b-a4b-it` by
   default). This rotation sits *above* the backup-worker rotation: choosing Cloudflare still
   spreads the call across every registered backup, while OpenRouter spends no Workers AI neurons
   at all. A failed provider falls through to the other one, a rejected key opens a 60 s → 10 min
@@ -328,7 +328,7 @@ Optional environment variables for the instruct-model providers (bug fix #271):
   no key the OpenRouter half of the rotation is skipped, every instruct call stays on Workers AI,
   and the admin card says so.
 - `OPENROUTER_MODEL` — override the model slug (default
-  `meta-llama/llama-3.3-8b-instruct:free`).
+  `google/gemma-4-26b-a4b-it`).
 - `OPENROUTER_ENABLED=false` — keep one deployment on Workers AI only.
 
 The settings page is password-gated and uses **`/{current-day}/config/uvxyz`**, where

@@ -37,8 +37,12 @@
 export const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 export const LLM_CONFIG_KEY = "config:llm";
 
-/** The free instruct model requested for this deployment. */
-export const DEFAULT_OPENROUTER_MODEL = "meta-llama/llama-3.3-8b-instruct:free";
+/**
+ * The instruct model requested for this deployment (the Gemma 4 build, on
+ * OpenRouter under its provider-prefixed slug). All text generation in this
+ * app uses Gemma; the previous llama/mistral slugs were removed from the code.
+ */
+export const DEFAULT_OPENROUTER_MODEL = "google/gemma-4-26b-a4b-it";
 
 /*
  * There is deliberately NO API key in this file.
@@ -618,7 +622,7 @@ export async function describeLlmProviders(env: any, now = Date.now()): Promise<
 			{
 				id: "cloudflare",
 				label: "Cloudflare Workers AI",
-				model: "configured per route (llama-3.1-8b-instruct-fp8)",
+				model: "configured per route (@cf/google/gemma-4-26b-a4b-it)",
 				state: "ready",
 				note: "runs through the Worker pool rotation"
 			},

@@ -1,6 +1,6 @@
 /*
  * Session 332 — "SEO plan failed: SEO planner model failed
- * (@cf/meta/llama-3.3-70b-instruct-fp8-fast: Relay endpoint answered 404)".
+ * (@cf/google/gemma-4-26b-a4b-it: Relay endpoint answered 404)".
  *
  * Root cause (see `bug-fix-session-332.md`): a relayed member's HTTP answer was
  * classified with `classifyImageFailure()`, whose FATAL_PATTERNS match
@@ -8,7 +8,7 @@
  * deployment, a typo, a paused Worker, a different app) therefore looked like a
  * FATAL MODEL error: the fail-over chain aborted on that member, the local
  * Worker never ran the inference, the member was never circuit-broken, and the
- * studio showed the transport text as if the 70B model had rejected the prompt.
+ * studio showed the transport text as if the instruct model had rejected the prompt.
  *
  * This suite pins the corrected contract:
  *
@@ -115,7 +115,7 @@ test("a backup that answers 404 without a JSON body fails over to the local Work
 	);
 	coolLocal();
 
-	const result = await runtime.ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", { prompt: "plan" });
+	const result = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "plan" });
 
 	assert.deepEqual(result, { response: "local-answer" }, "the model ran on the UI Worker");
 	assert.equal(local.calls, 1, "the local AI binding answered the call");
@@ -138,7 +138,7 @@ test("an empty-bodied 404 fails over too (no JSON error field to soften it)", as
 	);
 	coolLocal();
 
-	const result = await runtime.ai.run("@cf/meta/llama-3.1-8b-instruct-fp8", { prompt: "write" });
+	const result = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "write" });
 	assert.deepEqual(result, { response: "local-answer" });
 });
 
@@ -153,7 +153,7 @@ test("a 401/405/410 from a member is transient as well, but a model rejection is
 		}
 	);
 	coolLocal();
-	assert.deepEqual(await runtime.ai.run("@cf/meta/llama", { prompt: "x" }), { response: "local-answer" });
+	assert.deepEqual(await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" }), { response: "local-answer" });
 
 	resetIsolate();
 	const strict = createRelayRuntime(
@@ -170,7 +170,7 @@ test("a 401/405/410 from a member is transient as well, but a model rejection is
 	);
 	coolLocal();
 	await assert.rejects(
-		() => strict.ai.run("@cf/meta/llama", { prompt: "x" }),
+		() => strict.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" }),
 		/invalid prompt/,
 		"a kind:\"model\" answer stays authoritative and stops the chain"
 	);
@@ -304,7 +304,7 @@ test("the relay result header is still how a healthy relayed answer is recognise
 		}
 	);
 	coolLocal();
-	const result = await runtime.ai.run("@cf/meta/llama", { prompt: "x" });
+	const result = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" });
 	assert.deepEqual(result, { response: "relayed-answer" });
 	assert.equal(RELAY_AI_PATH, "/api/relay/ai");
 });

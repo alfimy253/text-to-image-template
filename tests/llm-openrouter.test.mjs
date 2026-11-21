@@ -123,9 +123,8 @@ function openRouterFetch(text = "hello from openrouter", seen = []) {
 
 test("#271 only instruct models are routed to OpenRouter", () => {
 	for (const model of [
-		"@cf/meta/llama-3.1-8b-instruct-fp8",
-		"@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-		"@cf/mistralai/mistral-small-3.1-24b-instruct",
+		"@cf/google/gemma-4-26b-a4b-it",
+		"google/gemma-4-26b-a4b-it",
 		"@hf/thebloke/deepseek-coder-6.7b-instruct-awq"
 	]) {
 		assert.equal(isInstructModel(model), true, model);
@@ -340,7 +339,7 @@ test("#271 an instruct call is answered by OpenRouter and keeps the env.AI.run s
 		selfOrigin: SELF,
 		fetchImpl: openRouterFetch("router answer", seen)
 	});
-	const result = await runtime.ai.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
+	const result = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", {
 		prompt: "plan keywords",
 		max_tokens: 1024,
 		temperature: 0.65
@@ -387,7 +386,7 @@ test("#271 a failing OpenRouter falls back to Cloudflare instead of failing the 
 		selfOrigin: SELF,
 		fetchImpl: async () => new Response("nope", { status: 429 })
 	});
-	const result = await runtime.ai.run("@cf/meta/llama-3.1-8b-instruct-fp8", { prompt: "x" });
+	const result = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" });
 	assert.deepEqual(result, { response: "cloudflare-answer" });
 	assert.equal(runtime.stats().providerFallback, 1);
 });
@@ -409,7 +408,7 @@ test("#271 a failing Cloudflare falls back to OpenRouter", async () => {
 		fetchImpl: openRouterFetch("router rescue", seen)
 	});
 	/* cloudflare has weight 10, so it is tried first and must fail over. */
-	const first = await runtime.ai.run("@cf/meta/llama-3.1-8b-instruct-fp8", { prompt: "x" });
+	const first = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" });
 	assert.equal(first.response, "router rescue");
 	assert.ok(seen.length >= 1);
 });
@@ -440,7 +439,7 @@ test("#271 the pool rotation still runs underneath the provider rotation", async
 			return json({ ok: true, result: { response: "backup-answer" } }, 200);
 		}
 	});
-	const result = await runtime.ai.run("@cf/meta/llama-3.1-8b-instruct-fp8", { prompt: "x" });
+	const result = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" });
 	assert.equal(result.response, "backup-answer");
 	assert.ok(seen[0].url.startsWith("https://backup.test"), "the pool hop still happens");
 	assert.equal(localCalls, 0);
@@ -475,7 +474,7 @@ test("#271 the LLM policy is validated, stored and password-gated", async () => 
 			body: JSON.stringify({
 				pw: "#123admin%",
 				provider: "openrouter",
-				model: "meta-llama/llama-3.3-8b-instruct:free",
+				model: "google/gemma-4-26b-a4b-it",
 				openrouterWeight: 3,
 				timeoutMs: 30_000,
 				apiKey: "sk-or-saved-key-123456"
@@ -698,12 +697,12 @@ test("#271 a relayed compute call never reaches OpenRouter", async () => {
 			OPENROUTER_API_KEY: "sk-or-test",
 			AI: { run: async () => ({ response: "executed here" }) }
 		};
-		const body = JSON.stringify({ model: "@cf/meta/llama-3.1-8b-instruct-fp8", input: { prompt: "x" } });
+		const body = JSON.stringify({ model: "@cf/google/gemma-4-26b-a4b-it", input: { prompt: "x" } });
 		const token = await signRelayToken(env, {
 			v: 1,
 			k: "ai",
 			exp: Date.now() + 60_000,
-			m: "@cf/meta/llama-3.1-8b-instruct-fp8"
+			m: "@cf/google/gemma-4-26b-a4b-it"
 		});
 		const response = await worker.fetch(
 			new Request(SELF + "/api/relay/ai", {
@@ -763,7 +762,7 @@ test("#271 the settings page shows the LLM card, loads the policy and tests both
 				success: true,
 				config: {
 					provider: "rotate",
-					model: "meta-llama/llama-3.3-8b-instruct:free",
+					model: "google/gemma-4-26b-a4b-it",
 					cloudflareWeight: 1,
 					openrouterWeight: 2,
 					timeoutMs: 90000,
@@ -779,7 +778,7 @@ test("#271 the settings page shows the LLM card, loads the policy and tests both
 			return reply({
 				success: true,
 				providers: [
-					{ id: "cloudflare", label: "Cloudflare Workers AI", state: "ready", model: "llama" },
+					{ id: "cloudflare", label: "Cloudflare Workers AI", state: "ready", model: "google/gemma-4-26b-a4b-it" },
 					{ id: "openrouter", label: "OpenRouter", state: "ready", successes: 3, failures: 0, ewmaMs: 900, keySource: "kv", keyTail: "99-9999" }
 				],
 				openRouter: { keyConfigured: true }
@@ -798,7 +797,7 @@ test("#271 the settings page shows the LLM card, loads the policy and tests both
 		await new Promise((resolve) => setTimeout(resolve, 250));
 
 		assert.equal(w.document.getElementById("cfg-llm-provider").value, "rotate");
-		assert.equal(w.document.getElementById("cfg-llm-model").value, "meta-llama/llama-3.3-8b-instruct:free");
+		assert.equal(w.document.getElementById("cfg-llm-model").value, "google/gemma-4-26b-a4b-it");
 		assert.equal(w.document.getElementById("cfg-llm-or-weight").value, "2");
 		assert.match(w.document.getElementById("cfg-llm-key").placeholder, /99-9999/);
 		assert.match(w.document.getElementById("cfg-llm-providers").textContent, /OpenRouter/);
@@ -881,7 +880,7 @@ test("#271 without a key every instruct call stays on Workers AI", async () => {
 			throw new Error("no key, no call");
 		}
 	});
-	const result = await runtime.ai.run("@cf/meta/llama-3.1-8b-instruct-fp8", { prompt: "x" });
+	const result = await runtime.ai.run("@cf/google/gemma-4-26b-a4b-it", { prompt: "x" });
 	assert.deepEqual(result, { response: "cloudflare-only" });
 	assert.equal(contacted, 0);
 	assert.equal(runtime.stats().cloudflare, 1);

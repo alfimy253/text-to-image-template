@@ -28,10 +28,12 @@ export type ImageStyle = (typeof IMAGE_STYLES)[number];
 export const DEFAULT_IMAGE_STYLE: ImageStyle = "Cinematic Film";
 
 /*
- * `@cf/meta/llama-3.1-8b-instruct-fp8` has an ~8K token context window, so
- * `max_tokens` must stay comfortably below `8192 - prompt_tokens`. If the
- * primary model throws transport/context errors and produces zero prompts,
- * fall back to the 70B fast instruct model (same fallback slug as `script-seo.ts`).
+ * The instruct model that plans the scenes runs inside Workers AI with a
+ * bounded context window, so `max_tokens` must stay comfortably below the
+ * window minus the prompt tokens: IMAGE_PROMPT_MAX_TOKENS = 3584. The planner
+ * retries on the SAME gemma-4-26b-a4b-it model (see the ladder in
+ * `handleGenerateImagePrompts`); the old llama 8B/70B fallback slugs were
+ * removed from the code.
  */
 export const IMAGE_PROMPT_MAX_TOKENS = 3584;
 export const IMAGE_PROMPT_BATCH_TIMEOUT_MS = 45000;
@@ -1328,7 +1330,7 @@ function unwrapPreviousQueries(previous: readonly string[] | undefined): string[
  *
  * The old selector only accepted a reply whose length was exactly `count` or
  * exactly `total` (or whose explicit `.scene` numbers happened to line up).
- * An 8B model that returned the WHOLE plan with one scene too many or too few
+ * A model that returned the WHOLE plan with one scene too many or too few
  * (6, 7, 9, 11 scenes for a 10-scene video) therefore landed in no branch and
  * the request died with `Scene keyword planner returned the wrong scene count`
  * — even though every entry carried a usable search term.
@@ -1909,8 +1911,8 @@ export async function generateImagePrompts(
 	const attempt = Math.min(2, Math.max(browserAttempt, Number(input.retry?.attempt) || 0));
 	/*
 	 * After a bad reply the same request is re-asked with explicit JSON + exact
-	 * slot-count/type coaching and a shifted sampling temperature so 8B models do
-	 * not repeat the same miss.
+	 * slot-count/type coaching and a shifted sampling temperature so the instruct
+	 * model does not repeat the same miss.
 	 */
 	const previousError = input.retry?.previousError || input.batch?.previousError || "";
 	const retryReason = previousError ? " Previous attempt failed with: " + previousError + "." : "";
@@ -1929,7 +1931,7 @@ export async function generateImagePrompts(
 	const planned = extractPlannedScenes(parsed);
 	if (!Array.isArray(planned)) throw new Error("Scene keyword planner returned the wrong scene count");
 	/*
-	 * Recover cleanly when an 8B model planned the complete video or appended
+	 * Recover cleanly when the model planned the complete video or appended
 	 * extra slots around the requested chunk. Every selected entry is still
 	 * strictly checked for slot type and keyword bounds below.
 	 */
