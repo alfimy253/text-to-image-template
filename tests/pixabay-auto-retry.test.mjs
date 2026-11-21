@@ -107,10 +107,7 @@ test('a 429 with Retry-After is waited out and retried automatically', async (t)
   const { w, calls, state } = studioWindow({ rateLimit: 1 });
   t.after(() => { try { w.close(); } catch (_) {} });
   w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
-	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
-	w.__PIPELINE_RETRY_SPEED = 20000;
   await settle(40);
   const project = seedFlow(w, ['garden flowers', 'sunny garden']);
 
@@ -144,10 +141,7 @@ test('the automatic retry is capped and then hands control back to the button', 
   const { w, calls } = studioWindow();
   t.after(() => { try { w.close(); } catch (_) {} });
   w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
-	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
-	w.__PIPELINE_RETRY_SPEED = 20000;
   await settle(40);
   const project = seedFlow(w, ['garden flowers']);
 
@@ -163,10 +157,7 @@ test('an idle batch is planned as an automatic retry instead of a verdict', asyn
   const { w, dom } = studioWindow();
   try {
     w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
-	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
-	w.__PIPELINE_RETRY_SPEED = 20000;
     await settle(40);
     const project = seedFlow(w, ['garden flowers', 'sunny garden']);
 
@@ -193,10 +184,7 @@ test('a rejected credential is a verdict, not a retryable stop', async () => {
   const { w, dom } = studioWindow();
   try {
     w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
-	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
-	w.__PIPELINE_RETRY_SPEED = 20000;
     await settle(40);
     const project = seedFlow(w, ['garden flowers']);
 
@@ -212,10 +200,7 @@ test('the clip probe retries before reporting "The clip took too long to load."'
   const { w, dom } = studioWindow();
   try {
     w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
-	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
-	w.__PIPELINE_RETRY_SPEED = 20000;
     await settle(40);
 
     /* One transient failure, then success: the clip is kept, not dropped. */
@@ -250,10 +235,7 @@ test('a batch stream that goes silent trips the idle guard, which plans a retry 
   const { w } = studioWindow();
   t.after(() => { try { w.close(); } catch (_) {} });
   w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]'));
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
-	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
-	w.__PIPELINE_RETRY_SPEED = 20000;
   await settle(40);
 
   /* 30 ms instead of the production 120 s, so the guard is observable. */

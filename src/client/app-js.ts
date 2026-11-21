@@ -19,17 +19,6 @@ import { BROWSER_USAGE_JS } from "./usage-ledger";
 import { PROGRESSIVE_IMAGE_PIPELINE_JS } from "./progressive-image-pipeline";
 import { SCRIPT_NOTES_CLIENT_JS } from "./script-notes-client";
 import { PIPELINE_MANAGEMENT_STORE_JS } from "./pipeline-management-store";
-import { PIPELINE_RETRY_POLICY, SEO_PLAN_CLIENT_TIMEOUT_MS } from "../modules/retry-policy";
-
-/*
- * THE RETRY NUMBERS COME FROM CODE, NOT FROM PROSE.
- *
- * `src/modules/retry-policy.ts` is the only place a pipeline retry limit or
- * backoff is written down. It is injected into the page script here, and the
- * Worker advertises the very same object in /api/capabilities, so the editor,
- * the Quick Batch table and the API can never disagree.
- */
-const PIPELINE_RETRY_LITERAL = JSON.stringify(PIPELINE_RETRY_POLICY);
 
 export const APP_JS = `
 ${PIXABAY_DIRECT_JS}
@@ -38,29 +27,6 @@ ${BROWSER_USAGE_JS}
 ${PROGRESSIVE_IMAGE_PIPELINE_JS}
 ${SCRIPT_NOTES_CLIENT_JS}
 ${PIPELINE_MANAGEMENT_STORE_JS}
-	/*
-	 * PIPELINE RETRY POLICY (single source of truth:
-	 * src/modules/retry-policy.ts). 30 retries per step, 20 s between them,
-	 * owned by this browser for both layouts.
-	 */
-	const PIPELINE_RETRY = ${PIPELINE_RETRY_LITERAL};
-
-	/*
-	 * THE WAIT, NOT THE POLICY.
-	 *
-	 * window.__PIPELINE_RETRY_SPEED is a test/debug multiplier for the wait
-	 * between attempts only. Production leaves it unset (speed 1), so every
-	 * ladder sleeps the full 20 000 ms the policy advertises; a jsdom suite sets
-	 * it to 20000 so a 31-attempt ladder runs in milliseconds. Keeping it here
-	 * (instead of rewriting setTimeout) means a request timeout that happens to
-	 * be 20 s is never shortened by accident.
-	 */
-	function pipelineRetryWaitMs(ms) {
-		const wait = Math.max(0, Number(ms) || 0);
-		const speed = Math.max(1, Number(window.__PIPELINE_RETRY_SPEED) || 1);
-		return Math.round(wait / speed);
-	}
-
 	/*
 	 * Browser-side note memory (localStorage → cookie → in-page map).
 	 * See src/client/script-notes-client.ts and current_code_latest.md.
@@ -2676,21 +2642,15 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 
 	const MAX_MP4_UPLOADS =
-		40;
+		5;
 
 	/* FINAL MEDIA CAP: both layouts plan the same 14 automatic scenes. */
 	const AUTO_MEDIA_TOTAL = 14;
 	const AUTO_VIDEO_SCENES = 6;
 	const AUTO_IMAGE_SCENES = 8;
-	/*
-	 * FINAL MEDIA RULE: one failed photo/clip is retried by client JS 30
-	 * times, 20 s apart, and a successful asset is never reset. The numbers
-	 * come from src/modules/retry-policy.ts (stage: media), so this ladder and
-	 * /api/capabilities cannot disagree.
-	 */
-	const MEDIA_ITEM_MAX_RETRIES = PIPELINE_RETRY.stages.media.maxRetries;
+	const MEDIA_ITEM_MAX_RETRIES = 7;
 	const MEDIA_ITEM_TOTAL_ATTEMPTS = MEDIA_ITEM_MAX_RETRIES + 1;
-	const MEDIA_ITEM_RETRY_BACKOFF_MS = PIPELINE_RETRY.stages.media.backoffMs;
+	const MEDIA_ITEM_RETRY_BACKOFF_MS = 40000;
 	const MEDIA_ITEM_UI_CHECK_MS = 250;
 	const MEDIA_MAX_PIXABAY_PAGES = 2;
 	const MEDIA_TRANSITION_STORAGE_PREFIX = "ytvs.transition-project.v1.";
@@ -9874,10 +9834,10 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				'<div class="va-section">' +
 				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
 				'<button type="button" class="upload-btn" id="va-upload-btn-' + n + '" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
-				'<span class="va-note">Max 5 GIF (30 MB max) \u00b7 25 images \u00b7 40 MP4 (1:00 each, silent)</span>' +
+				'<span class="va-note">Max 5 GIF (30 MB max) \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
 				'<a href="#" class="va-template-link" id="va-template-link-' + n + '" data-video-index="' + n + '" onclick="if (!event.defaultPrevented && window.openTemplateModal) window.openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
-				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include 6 stock video clips and 8 distinct photos.</span>' +
+				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include 4 stock video clips and 8 distinct photos.</span>' +
 				'<div class="va-seo-keywords" id="va-image-keywords-' + n + '" style="display:none"></div>' +
 				'<button type="button" class="upload-btn small" id="va-image-retry-' + n + '" onclick="retryImagePromptFlow(' + n + ')" style="display:none" title="Search Pixabay again using the keywords shown below and add the matching photos and clips to this gallery">Retry Pixabay search</button>' +
 				'<div class="va-gallery" id="va-gallery-' + n + '"></div>' +
@@ -10495,9 +10455,9 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	/*
 	 * FINAL RULE - QUICK BATCH TABLE LAYOUT: a failed stage is retried by
-	 * client JavaScript up to thirty times, each after a 20-second backoff.
+	 * client JavaScript up to seven times, each after a 40-second backoff.
 	 * Nothing about a retry reaches the screen: the row keeps its normal
-	 * stage label, script textarea and spinner for all 31 attempts.
+	 * stage label, script textarea and spinner for all eight attempts.
 	 */
 	const BATCH_STEP_ATTEMPTS =
 		4;
@@ -10513,18 +10473,15 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	 * FINAL RULE - QUICK BATCH TABLE LAYOUT (client-side pipeline retries).
 	 *
 	 * JavaScript in the browser owns every failed pipeline stage in this
-	 * layout. One initial attempt is followed by up to THIRTY retries, and
-	 * every retry waits 20 seconds first. Only the failed stage is reset and
+	 * layout. One initial attempt is followed by at most SEVEN retries, and
+	 * every retry waits 40 seconds first. Only the failed stage is reset and
 	 * repeated; successful earlier stages are kept. A missing scene plan,
 	 * a partial image set, a missing clip pair or a local animation failure
 	 * all remain silent: the same row cells, status spinner and script
 	 * textarea stay on screen and no error/retry wording is painted.
-	 *
-	 * The numbers come from src/modules/retry-policy.ts (stage:
-	 * batchPipeline) — code, not prose, is the source of truth.
 	 */
-	const BATCH_PIPELINE_MAX_RETRIES = PIPELINE_RETRY.stages.batchPipeline.maxRetries;
-	const BATCH_PIPELINE_RETRY_BACKOFF_MS = PIPELINE_RETRY.stages.batchPipeline.backoffMs;
+	const BATCH_PIPELINE_MAX_RETRIES = 7;
+	const BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000;
 	const BATCH_PIPELINE_UI_CHECK_MS = 250;
 	const BATCH_PIPELINE_TOTAL_ATTEMPTS = BATCH_PIPELINE_MAX_RETRIES + 1;
 
@@ -10658,7 +10615,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		}
 	}
 
-	/* One cancellable 20-second timer per retry, with a quiet UI watchdog. */
+	/* One cancellable 40-second timer per retry, with a quiet UI watchdog. */
 	function batchPipelineRetryDelay(ms, row, stage) {
 		return new Promise(function (resolve) {
 			const policy = batchPipelineRetryPolicy();
@@ -10736,7 +10693,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					throw error;
 				}
 				batchPipelineRetryLog({ event: "backoff", rowId: row.id, stage: stage, delayMs: policy.backoffMs, nextRetry: retry + 1 });
-				const proceed = await batchPipelineRetryDelay(pipelineRetryWaitMs(policy.backoffMs), row, stage);
+				const proceed = await batchPipelineRetryDelay(policy.backoffMs, row, stage);
 				if (!proceed || row.stopRequested || !getBatchRow(row.id)) throw batchError("The row was stopped", "AbortError");
 			}
 		}
@@ -12182,7 +12139,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	 * FINAL RULE - QUICK BATCH TABLE LAYOUT: these working stages paint the
 	 * editor's script-section animation (.va-spinner + va-loading-pulse).
 	 * The animation stays for the whole stage, from the first attempt through
-	 * the last silent retry, so a retry changes nothing on screen.
+	 * the seventh silent retry, so a retry changes nothing on screen.
 	 */
 	const BATCH_ACTIVE_STAGES = [
 		"writing",
@@ -13480,7 +13437,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	/*
 	 * FINAL RULE - QUICK BATCH TABLE LAYOUT: the voice stage is also owned
 	 * by client JavaScript. A failed voice pipeline is reset and retried
-	 * silently up to thirty times, each retry after a 20-second backoff.
+	 * silently up to seven times, each retry after a 40-second backoff.
 	 */
 	async function batchRunVoiceStep(row, stage, detail, step, options) {
 		return batchRunPipelineStage(row, stage, detail, async function (retry) {
@@ -13726,22 +13683,15 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			backoffMs: MEDIA_ITEM_RETRY_BACKOFF_MS,
 			uiCheckMs: MEDIA_ITEM_UI_CHECK_MS
 		};
-		/*
-		 * Order matters: the LAST source that carries a value wins. The
-		 * media-specific hooks therefore come last, so a test (or a future
-		 * admin knob) that pins the media ladder cannot be overwritten by
-		 * the generic script / batch timing objects — which is exactly what
-		 * used to turn a 30-retry media ladder back into 7.
-		 */
 		var overrides = [
-			window.__BATCH_PIPELINE_RETRY_TIMING,
-			window.__SCRIPT_RETRY_TIMING,
-			window.__BATCH_RETRY,
-			window.__MEDIA_RETRY_TIMING,
-			window.__QUICK_BATCH_MEDIA_RETRY_TIMING,
 			window.__MEDIA_ITEM_RETRY_TIMING,
 			window.__MEDIA_ITEM_RETRY_POLICY,
-			window.__MEDIA_ITEM_RETRY
+			window.__MEDIA_ITEM_RETRY,
+			window.__MEDIA_RETRY_TIMING,
+			window.__QUICK_BATCH_MEDIA_RETRY_TIMING,
+			window.__BATCH_PIPELINE_RETRY_TIMING,
+			window.__SCRIPT_RETRY_TIMING,
+			window.__BATCH_RETRY
 		];
 		for (var i = 0; i < overrides.length; i++) {
 			var value = overrides[i];
@@ -13946,7 +13896,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					backoffMs: policy.backoffMs,
 					failed: pending.map(function (item) { return item.scene; })
 				});
-				var proceed = await mediaItemRetryDelay(pipelineRetryWaitMs(policy.backoffMs), owner, stage);
+				var proceed = await mediaItemRetryDelay(policy.backoffMs, owner, stage);
 				if (!proceed) break;
 			}
 			var pendingPrompts = [];
@@ -18555,7 +18505,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		if (project._requiresStockClips) {
 			const clips = project.assets.filter(function (a) { return a.imagePromptFlowId && a.kind === "mp4"; });
 			if (clips.length !== AUTO_VIDEO_SCENES || new Set(clips.map(function (a) { return a.stockSource && a.stockSource.id; })).size !== AUTO_VIDEO_SCENES) {
-				throw new Error("This planned video requires six distinct Pixabay clips. Retry only the missing scenes before export.");
+				throw new Error("This planned video requires four distinct Pixabay clips. Retry only the missing scenes before export.");
 			}
 		}
 
@@ -23039,18 +22989,18 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	//
 	// Generate SEO Script now runs a walkthrough:
 	//   1. The "Upload Image, GIF or MP4" button is disabled and
-	//      a modal asks the AI (POST /api/seo-plan) for one
-	//      SEO keyword set for the topic. The modal
+	//      a modal asks the AI (POST /api/seo-plan) for TWO
+	//      different SEO keyword sets for the topic. The modal
 	//      can be closed while the plan is generated; the work
 	//      keeps running in the background and the modal
-	//      re-opens by itself when the set is ready.
-	//   2. The user accepts the set, then enters the
+	//      re-opens by itself when the two sets arrive.
+	//   2. The user clicks Select on one set, then enters the
 	//      video image style. With both chosen the walkthrough
 	//      moves to its "writing" panel, the script section shows
 	//      a loading animation and POST /api/script writes the
 	//      plain narration script from the selected set. The
-	//      browser retries any writing error thirty times, waits
-	//      20 seconds before each retry, and keeps the textbox,
+	//      browser retries any writing error seven times, waits
+	//      40 seconds before each retry, and keeps the textbox,
 	//      spinner and writing state continuously visible.
 	//   3. The browser requests at most THREE scene prompts, starts their
 	//      image stream, and requests the next prompt batch concurrently.
@@ -23456,17 +23406,16 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'<div class="modal-title">\\u2728 Generate SEO Script \\u2014 Video ' + n + '</div>' +
 			'<div class="seo-wt-steps">' +
 			'<span class="seo-wt-step" data-step="plan">1 \\u00b7 SEO plan</span>' +
-			'<span class="seo-wt-step" data-step="sets">2 \\u00b7 Review keyword set</span>' +
+			'<span class="seo-wt-step" data-step="sets">2 \\u00b7 Choose a keyword set</span>' +
 			'<span class="seo-wt-step" data-step="style">3 \\u00b7 Video image style</span>' +
 			'<span class="seo-wt-step" data-step="script">4 \\u00b7 Script + images</span>' +
 			'</div>' +
 			'<div id="seo-wt-loading-' + n + '">' +
-			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>AI is planning an SEO keyword set for <b id="seo-wt-topic-' + n + '"></b>\\u2026</span></div>' +
+			'<div class="seo-wt-loading"><span class="va-spinner" aria-hidden="true"></span><span>AI is planning two SEO keyword sets for <b id="seo-wt-topic-' + n + '"></b>\\u2026</span></div>' +
 			'<span class="va-note">You can close this window while you wait \\u2014 the SEO plan and the script keep generating in the background, the modal re-opens itself when there is something to choose, and the finished script lands in Video ' + n + ' \\u00b7 Script. The Upload Image, GIF or MP4 button stays disabled until the Pixabay images are in the gallery.</span>' +
 			'</div>' +
-			'<div class="va-note" id="seo-wt-plan-status-' + n + '" role="status"></div>' +
 			'<div id="seo-wt-sets-' + n + '" style="display:none">' +
-			'<div class="va-note">Review the planned keywords for your script topic. The script will say its long-tail keyword at least once and each short keyword at least twice. This window stays open for you \\u2014 other videos keep their own windows.</div>' +
+			'<div class="va-note">Pick the keyword set that best targets your script topic. The script will say its long-tail keyword at least once and each short keyword at least twice. This window stays open for you \\u2014 other videos keep their own windows.</div>' +
 			'<div class="seo-wt-sets" id="seo-wt-sets-list-' + n + '"></div>' +
 			'</div>' +
 			'<div id="seo-wt-style-' + n + '" style="display:none">' +
@@ -23477,7 +23426,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'<span class="va-note">Nothing is lost if you close this window after pressing Generate: the script and its images keep running in the background for Video ' + n + '.</span>' +
 			'<div class="seo-wt-actions">' +
 			'<button type="button" class="upload-btn" onclick="confirmSeoStyleAndGenerate(' + n + ')">\\u2728 Generate Script &amp; Images</button>' +
-			'<button type="button" class="upload-btn" onclick="showSeoWalkthroughStep(' + n + ', &quot;sets&quot;)">\\u2190 Back to keyword set</button>' +
+			'<button type="button" class="upload-btn" onclick="showSeoWalkthroughStep(' + n + ', &quot;sets&quot;)">\\u2190 Back to keyword sets</button>' +
 			'</div>' +
 			'</div>' +
 			'<div id="seo-wt-script-' + n + '" style="display:none">' +
@@ -23487,7 +23436,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			'</div>' +
 			'<div class="seo-wt-error" id="seo-wt-error-' + n + '"></div>' +
 			'<div class="seo-wt-actions">' +
-			'<button type="button" class="upload-btn" id="seo-wt-retry-plan-' + n + '" style="display:none" onclick="generateScript(' + n + ')">Retry SEO planning</button>' +
 			'<button type="button" class="upload-btn" onclick="closeSeoWalkthrough(' + n + ')">\\u2715 Close</button>' +
 			'</div>' +
 			'</div>';
@@ -23720,266 +23668,49 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
-	function renderSeoPlanSet(n) {
-		const project = videoProjects[n - 1];
-		const list = seoWtEl(n, "seo-wt-sets-list");
-		const set = project && project.seoSets && project.seoSets[0];
-		if (!list || !set) return;
+	function renderSeoPlanSets(
+		n
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		const list =
+			seoWtEl(
+				n,
+				"seo-wt-sets-list"
+			);
+
+		if (!project || !list) {
+			return;
+		}
 
 		list.innerHTML =
-			'<div class="seo-wt-card">' +
-			'<div class="seo-wt-card-title">Keyword set</div>' +
-			seoSetChipsHTML(set) +
-			'<button type="button" class="upload-btn" onclick="selectSeoKeywordSet(' + n + ')">Use this keyword set</button>' +
-			'</div>';
-	}
+			"";
 
-	/*
-	 * STEP 1 OF THE EDITOR PIPELINE — SEO PLANNING.
-	 *
-	 * POST /api/seo-plan used to be a SINGLE shot: one failed planner call and
-	 * the walkthrough dead-ended on "SEO plan failed: …" with a manual click
-	 * as the only retry. Planning is a pipeline step like script writing, so
-	 * it now owns the same browser-owned ladder:
-	 *
-	 *   - one initial request plus up to THIRTY retries;
-	 *   - 20 seconds between attempts;
-	 *   - both numbers come from src/modules/retry-policy.ts (stage: seoPlan),
-	 *     the same object /api/capabilities advertises, so code is the only
-	 *     source of truth;
-	 *   - the walkthrough stays open on its "plan" step and shows the attempt
-	 *     count, so a long ladder never looks like a hang;
-	 *   - a deleted video, or any 4xx that is a verdict (bad topic, no AI
-	 *     binding, rejected credential), stops immediately: retrying it 30
-	 *     times could only waste ten minutes.
-	 */
-	const SEO_PLAN_MAX_RETRIES = PIPELINE_RETRY.stages.seoPlan.maxRetries;
-	const SEO_PLAN_RETRY_BACKOFF_MS = PIPELINE_RETRY.stages.seoPlan.backoffMs;
-	const SEO_PLAN_TOTAL_ATTEMPTS = SEO_PLAN_MAX_RETRIES + 1;
-	const SEO_PLAN_UI_TEXT = "Planning an SEO keyword set (AI model)\u2026";
+		(project.seoSets || []).forEach(
+			(set, idx) => {
 
-	if (typeof window !== "undefined") {
-		const seoPlanTiming =
-			window.__SEO_PLAN_RETRY_TIMING && typeof window.__SEO_PLAN_RETRY_TIMING === "object"
-				? window.__SEO_PLAN_RETRY_TIMING
-				: {};
-		const seoPlanDefaults = {
-			maxRetries: SEO_PLAN_MAX_RETRIES,
-			maxAttempts: SEO_PLAN_TOTAL_ATTEMPTS,
-			backoffMs: SEO_PLAN_RETRY_BACKOFF_MS,
-			retryBackoffMs: SEO_PLAN_RETRY_BACKOFF_MS,
-			requestTimeoutMs: ${SEO_PLAN_CLIENT_TIMEOUT_MS},
-			owner: "browser",
-			layout: "editor-walkthrough",
-			stage: "seoPlan"
-		};
-		for (const key in seoPlanDefaults) {
-			if (!(key in seoPlanTiming)) seoPlanTiming[key] = seoPlanDefaults[key];
-		}
-		window.__SEO_PLAN_RETRY_TIMING = seoPlanTiming;
-		window.__SEO_PLAN_RETRY_POLICY = seoPlanTiming;
-		window.__SEO_PLAN_RETRY_LOG = Array.isArray(window.__SEO_PLAN_RETRY_LOG) ? window.__SEO_PLAN_RETRY_LOG : [];
-	}
-
-	/* A test / debugging hook may shrink the ladder; production reads code. */
-	function seoPlanRetryPolicy() {
-		const policy = {
-			maxRetries: SEO_PLAN_MAX_RETRIES,
-			backoffMs: SEO_PLAN_RETRY_BACKOFF_MS
-		};
-		if (typeof window === "undefined") {
-			policy.maxAttempts = policy.maxRetries + 1;
-			return policy;
-		}
-		const sources = [
-			window.__SEO_PLAN_RETRY_TIMING,
-			window.__SEO_PLAN_RETRY_POLICY,
-			window.__SEO_PLAN_RETRY
-		];
-		for (const source of sources) {
-			if (!source || typeof source !== "object") continue;
-			const retries = Number(source.maxRetries);
-			if (isFinite(retries) && retries >= 0) policy.maxRetries = Math.floor(retries);
-			else {
-				const attempts = Number(source.maxAttempts);
-				if (isFinite(attempts) && attempts >= 1) policy.maxRetries = Math.floor(attempts) - 1;
-			}
-			const backoff = Number(source.backoffMs);
-			if (isFinite(backoff) && backoff >= 0) policy.backoffMs = Math.floor(backoff);
-		}
-		policy.maxAttempts = Math.max(1, policy.maxRetries + 1);
-		return policy;
-	}
-
-	function seoPlanRetryLog(entry) {
-		if (typeof window === "undefined") return;
-		const log = Array.isArray(window.__SEO_PLAN_RETRY_LOG) ? window.__SEO_PLAN_RETRY_LOG : [];
-		log.push(Object.assign({ at: Date.now(), stage: "seoPlan", owner: "browser" }, entry || {}));
-		/* One full 31-attempt ladder leaves ~95 entries; never drop the head. */
-		while (log.length > 240) log.shift();
-		window.__SEO_PLAN_RETRY_LOG = log;
-	}
-
-	function seoPlanCancelledError() {
-		const cancelled = new Error("SEO planning was cancelled");
-		cancelled.name = "AbortError";
-		cancelled.code = "SEO_PLAN_CANCELLED";
-		return cancelled;
-	}
-
-	/* One cancellable 20-second wait, checking the project every 250 ms. */
-	function seoPlanRetryDelay(ms, project) {
-		return new Promise(function (resolve) {
-			let settled = false;
-			let timer = null;
-			let ticker = null;
-			const finish = function (proceed) {
-				if (settled) return;
-				settled = true;
-				if (timer !== null) clearTimeout(timer);
-				if (ticker !== null) clearTimeout(ticker);
-				resolve(Boolean(proceed));
-			};
-			const tick = function () {
-				if (settled) return;
-				if (project && project._deleted) return finish(false);
-				ticker = setTimeout(tick, 250);
-			};
-			if (project && project._deleted) return finish(false);
-			if (ms <= 0) return finish(true);
-			ticker = setTimeout(tick, 250);
-			timer = setTimeout(function () {
-				finish(!(project && project._deleted));
-			}, ms);
-		});
-	}
-
-	async function requestSeoPlanAttempt(topic, project) {
-		const timing = window.__SEO_PLAN_RETRY_TIMING;
-		const configured = Number(timing && timing.requestTimeoutMs);
-		const timeoutMs = configured > 0 && Number.isFinite(configured) ? configured : ${SEO_PLAN_CLIENT_TIMEOUT_MS};
-		const controller = typeof AbortController === "function" ? new AbortController() : null;
-		if (controller && project) project._seoPlanController = controller;
-		let timer;
-		let onAbort;
-		try {
-			const deadline = new Promise(function (_, reject) {
-				onAbort = function () { reject(seoPlanCancelledError()); };
-				if (controller) controller.signal.addEventListener("abort", onAbort, { once: true });
-				timer = setTimeout(function () {
-					const error = new Error("SEO planning request timed out");
-					error.name = "TimeoutError";
-					reject(error);
-					if (controller) controller.abort();
-				}, timeoutMs);
-			});
-			// Race the whole attempt, including relay lookup and reading the response body.
-			const work = (async function () {
-				const response = await fetch("/api/seo-plan", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ topic: topic }),
-					signal: controller ? controller.signal : undefined
-				});
-				return { response: response, data: await response.json().catch(() => ({})) };
-			})();
-			return await Promise.race([deadline, work]);
-		} finally {
-			clearTimeout(timer);
-			if (controller) controller.signal.removeEventListener("abort", onAbort);
-			if (project && project._seoPlanController === controller) project._seoPlanController = null;
-		}
-	}
-
-	/*
-	 * ONE request per attempt; the ladder is the only retry owner. Returns
-	 * the keyword set or throws the last error if there is no usable plan.
-	 */
-	async function requestSeoPlanWithClientRetries(topic, project, onProgress) {
-		const policy = seoPlanRetryPolicy();
-		let lastError = null;
-		for (let retry = 0; retry < policy.maxAttempts; retry++) {
-			if (project && project._deleted) throw seoPlanCancelledError();
-			seoPlanRetryLog({ event: "attempt", retry: retry, attempt: retry + 1, maxRetries: policy.maxRetries });
-			if (typeof onProgress === "function") {
-				onProgress(SEO_PLAN_UI_TEXT + " (attempt " + (retry + 1) + " of " + policy.maxAttempts + ")");
-			}
-			try {
-				const { response, data } = await requestSeoPlanAttempt(topic, project);
-				// Older relay Workers may return more than one set; use only the first.
-				if (
-					response.ok &&
-					data &&
-					data.success &&
-					Array.isArray(data.sets) &&
-					data.sets[0]
-				) {
-					seoPlanRetryLog({ event: "success", retry: retry, attempt: retry + 1 });
-					return data.sets[0];
-				}
-				const error = new Error(
-					(data && data.error) || ("HTTP " + response.status)
-				);
-				error.status = response.status;
-				/*
-				 * A verdict (bad topic, no AI binding, rejected credential,
-				 * a missing route) answers the same way every time: stop.
-				 * 408, 409, 425, 429 and 5xx are worth another attempt.
-				 */
-				error.retryable =
-					!(response.status >= 400 &&
-						response.status < 500 &&
-						[408, 409, 425, 429].indexOf(response.status) === -1);
-				throw error;
-			} catch (error) {
-				lastError = error;
-				if (project && project._deleted) throw seoPlanCancelledError();
-				if (error && error.name === "AbortError") throw error;
-				const reason = String(error && (error.message || error) || "unknown").slice(0, 200);
-				seoPlanRetryLog({
-					event: "attempt-failed",
-					retry: retry,
-					attempt: retry + 1,
-					status: error && error.status,
-					retryable: error ? error.retryable !== false : true,
-					reason: reason
-				});
-				if (error && error.retryable === false) {
-					seoPlanRetryLog({ event: "verdict", attempt: retry + 1, reason: reason });
-					throw error;
-				}
-				if (retry >= policy.maxRetries) {
-					try {
-						error.clientRetries = retry;
-						error.clientAttempts = retry + 1;
-					} catch (decorateError) { }
-					seoPlanRetryLog({ event: "budget-exhausted", attempts: retry + 1, maxRetries: policy.maxRetries });
-					throw error;
-				}
-				seoPlanRetryLog({
-					event: "backoff",
-					retry: retry,
-					delayMs: policy.backoffMs,
-					nextRetry: retry + 1,
-					maxRetries: policy.maxRetries
-				});
-				if (typeof onProgress === "function") {
-					onProgress(
-						SEO_PLAN_UI_TEXT +
-						" \u2014 retrying in " +
-						Math.round(policy.backoffMs / 1000) +
-						"s (attempt " +
-						(retry + 2) +
-						" of " +
-						policy.maxAttempts +
-						")"
+				const card =
+					document.createElement(
+						"div"
 					);
-				}
-				const proceed = await seoPlanRetryDelay(pipelineRetryWaitMs(policy.backoffMs), project);
-				if (!proceed) throw seoPlanCancelledError();
+
+				card.className =
+					"seo-wt-card";
+
+				card.innerHTML =
+					'<div class="seo-wt-card-title">Keyword set ' + (idx + 1) + "</div>" +
+					seoSetChipsHTML(set) +
+					'<button type="button" class="upload-btn" onclick="selectSeoKeywordSet(' + n + ", " + idx + ')">Select this set</button>';
+
+				list.appendChild(
+					card
+				);
+
 			}
-		}
-		throw lastError || new Error("SEO plan failed");
+		);
+
 	}
 
 	async function generateScript(
@@ -24028,7 +23759,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		}
 
-		/* Reopen the set from an earlier click without replanning. */
+		/* Sets from an earlier click are still waiting for a choice. */
 		if (
 			Array.isArray(project.seoSets) &&
 			project.seoSets.length >= 1 &&
@@ -24036,7 +23767,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		) {
 
 			ensureSeoWalkthrough(n);
-			renderSeoPlanSet(n);
+			renderSeoPlanSets(n);
 			showSeoWalkthroughStep(n, "sets");
 			showSeoWalkthrough(n);
 			return;
@@ -24135,28 +23866,38 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		}
 
 		showSeoWalkthroughStep(n, "plan");
-		setSeoWalkthroughError(n, "");
-		seoWtEl(n, "seo-wt-retry-plan").style.display = "none";
+
+		if (statusEl) {
+			statusEl.textContent =
+				"Planning two SEO keyword sets (AI model)\\u2026";
+		}
 
 		try {
 
-			/*
-			 * THE PLAN LADDER: up to 30 retries, 20 s apart, owned here.
-			 * Each request has a bounded Worker planning budget.
-			 */
-			const set =
-				await requestSeoPlanWithClientRetries(
-					topic,
-					project,
-					function (text) {
-						const liveN = videoProjects.indexOf(project) + 1;
-						if (project._deleted || liveN <= 0) return;
-						const status = document.getElementById("va-script-status-" + liveN);
-						const modalStatus = seoWtEl(liveN, "seo-wt-plan-status");
-						if (status) status.textContent = text;
-						if (modalStatus) modalStatus.textContent = text;
+			const response =
+				await fetch(
+					"/api/seo-plan",
+					{
+						method: "POST",
+						headers: {
+							"Content-Type":
+								"application/json"
+						},
+						body:
+							JSON.stringify(
+								{
+									topic: topic
+								}
+							)
 					}
 				);
+
+			const data =
+				await response
+					.json()
+					.catch(
+						() => ({})
+					);
 
 			// An accordion can be deleted/renumbered while the plan is in flight.
 			const liveN = videoProjects.indexOf(project) + 1;
@@ -24165,21 +23906,59 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			btn = document.getElementById("va-script-btn-" + n);
 			statusEl = document.getElementById("va-script-status-" + n);
 
-			project.seoSets = [set];
+			/*
+			 * ONE set is enough to continue: the worker answers
+			 * partial: true with a single validated set when the
+			 * second planner run could not produce a different one.
+			 * Only a reply with no set at all is a failure.
+			 */
+			if (
+				!response.ok ||
+				!data.success ||
+				!Array.isArray(data.sets) ||
+				data.sets.length < 1
+			) {
 
-			/* 3. Reopen this video's modal when its set is ready. */
+				throw new Error(
+					(data && data.error) ||
+					("HTTP " + response.status)
+				);
+
+			}
+
+			project.seoSets =
+				data.sets;
+
+			project._seoPlanWarning =
+				data.partial && data.warning
+					? String(data.warning)
+					: "";
+
+			/* 3. Sets arrived: (re-)open THIS video's modal even if
+			 * the user closed it while generation was running. Other
+			 * videos' windows are left exactly as they were. */
 			ensureSeoWalkthrough(n);
 
 			setSeoWalkthroughError(n, "");
-			seoWtEl(n, "seo-wt-plan-status").textContent = "";
-			renderSeoPlanSet(n);
+			renderSeoPlanSets(n);
 			showSeoWalkthroughStep(n, "sets");
 			showSeoWalkthrough(n);
-			/* The modal can be closed and reopened to review the same set. */
+			/* The modal can be closed while waiting for a choice; keep the
+			 * per-video trigger available so cached sets/style can reopen it. */
 			if (btn) btn.disabled = false;
 
 			if (statusEl) {
-				statusEl.textContent = "SEO keyword set ready \u2014 review it in the walkthrough.";
+				statusEl.textContent =
+					project.seoSets.length > 1
+						? "Two SEO keyword sets are ready \\u2014 pick one in the walkthrough."
+						: "One SEO keyword set is ready \\u2014 pick it in the walkthrough.";
+			}
+
+			if (project._seoPlanWarning) {
+				setSeoWalkthroughError(
+					n,
+					project._seoPlanWarning
+				);
 			}
 
 		}
@@ -24222,9 +24001,6 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			/* Keep the window, say what happened, offer the retry. */
 			ensureSeoWalkthrough(n);
 			showSeoWalkthroughStep(n, "plan");
-			seoWtEl(n, "seo-wt-loading").style.display = "none";
-			seoWtEl(n, "seo-wt-plan-status").textContent = "";
-			seoWtEl(n, "seo-wt-retry-plan").style.display = "";
 			setSeoWalkthroughError(n, planMessage);
 
 		}
@@ -24237,11 +24013,24 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	}
 
-	function selectSeoKeywordSet(n, idx = 0) {
-		const project = videoProjects[n - 1];
-		const set = project && project.seoSets && project.seoSets[0];
-		if (idx !== 0 || !set) return;
-		project.selectedSeoSet = set;
+	function selectSeoKeywordSet(
+		n,
+		idx
+	) {
+
+		const project =
+			videoProjects[n - 1];
+
+		if (
+			!project ||
+			!Array.isArray(project.seoSets) ||
+			!project.seoSets[idx]
+		) {
+			return;
+		}
+
+		project.selectedSeoSet =
+			project.seoSets[idx];
 
 		/*
 		 * Fix for the serial planner→writer chain (#1): the pick the user just
@@ -24442,20 +24231,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	 *     bounded (IMAGE_AUTO_RETRY_LIMIT attempts per flow), after which the
 	 *     old "press Retry" behaviour is the fallback.
 	 */
-	/*
-	 * Up to THIRTY automatic re-runs per flow, 20 s apart, from
-	 * src/modules/retry-policy.ts (stage: imageFlow). A server hint
-	 * (Retry-After) still wins inside [MIN, MAX]; the fallback spacing is
-	 * the 20 s pipeline backoff.
-	 */
 	const IMAGE_AUTO_RETRY_LIMIT =
-		PIPELINE_RETRY.stages.imageFlow.maxRetries;
+		2;
 	const IMAGE_AUTO_RETRY_MIN_MS =
 		2000;
 	const IMAGE_AUTO_RETRY_MAX_MS =
 		120000;
 	const IMAGE_AUTO_RETRY_FALLBACK_MS =
-		PIPELINE_RETRY.stages.imageFlow.backoffMs;
+		15000;
 	const IMAGE_AUTO_RETRY_TICK_MS =
 		500;
 
@@ -24474,27 +24257,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 	/* Exposed so tests / debugging can see and shrink the budgets. */
 	if (typeof window !== "undefined") {
-		/*
-		 * Merge, never replace: a test (or a debugging page) that pins one
-		 * value before the script runs keeps it. Replacing the object used to
-		 * make every pre-set override silently read as the production default.
-		 */
-		const autoRetryTiming =
-			window.__IMAGE_AUTO_RETRY_TIMING && typeof window.__IMAGE_AUTO_RETRY_TIMING === "object"
-				? window.__IMAGE_AUTO_RETRY_TIMING
-				: {};
-		const autoRetryDefaults = {
+		window.__IMAGE_AUTO_RETRY_TIMING = {
 			limit: IMAGE_AUTO_RETRY_LIMIT,
 			minDelayMs: IMAGE_AUTO_RETRY_MIN_MS,
 			maxDelayMs: IMAGE_AUTO_RETRY_MAX_MS,
 			fallbackDelayMs: IMAGE_AUTO_RETRY_FALLBACK_MS,
 			tickMs: IMAGE_AUTO_RETRY_TICK_MS
 		};
-		for (const key in autoRetryDefaults) {
-			if (!(key in autoRetryTiming)) autoRetryTiming[key] = autoRetryDefaults[key];
-		}
-		window.__IMAGE_AUTO_RETRY_TIMING = autoRetryTiming;
-		window.__IMAGE_AUTO_RETRY_LOG = Array.isArray(window.__IMAGE_AUTO_RETRY_LOG) ? window.__IMAGE_AUTO_RETRY_LOG : [];
+		window.__IMAGE_AUTO_RETRY_LOG = [];
 	}
 
 	function imageAutoRetryLimits() {
@@ -24594,12 +24364,8 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 		const hint =
 			marker && Number(marker.hintMs) > 0 ? Number(marker.hintMs) : 0;
-		/*
-		 * A flat 20 s between attempts (the pipeline backoff). A server hint
-		 * still wins when it has one, clamped to [min, max] below.
-		 */
 		const raw =
-			hint > 0 ? hint : limits.fallback;
+			hint > 0 ? hint : limits.fallback * (used + 1);
 		const delayMs =
 			Math.round(Math.max(limits.min, Math.min(limits.max, raw)));
 
@@ -24744,7 +24510,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					console.error("[seo-image-flow] auto retry failed", String(error && error.message || error).slice(0, 300));
 				});
 
-		}, pipelineRetryWaitMs(plan.delayMs));
+		}, plan.delayMs);
 
 		imageAutoRetryLog({
 			event: "scheduled",
@@ -25905,7 +25671,7 @@ async function retryImagePromptFlow(n) {
  * CLIENT-OWNED SCRIPT RETRIES.
  *
  * Script writing is deliberately owned by the browser. A failed write
- * is retried up to thirty times, with a 20-second backoff before every
+ * is retried up to seven times, with a 40-second backoff before every
  * retry. The shared requester keeps the initial textbox and loading
  * animation alive for the entire ladder and a UI checker removes any
  * failure or retry wording before it can reach either layout. The
@@ -25972,18 +25738,14 @@ async function retryImagePromptFlow(n) {
 	 *
 	 * A script-writing error is handled here, in the browser, before either
 	 * layout can paint a failure. The initial write is followed by at most
-	 * THIRTY retries; every retry waits 20 seconds first. Throughout the whole
+	 * SEVEN retries; every retry waits 40 seconds first. Throughout the whole
 	 * ladder the UI checker keeps the script textbox and its spinner on screen
 	 * and replaces any accidental failure/retry wording with the normal
 	 * "Writing your SEO script..." state. Console/global diagnostics never
 	 * become UI text.
 	 */
-	/*
-	 * THIRTY retries, 20 s each, from src/modules/retry-policy.ts (stage:
-	 * scriptWrite). The ladder is owned by this browser in BOTH layouts.
-	 */
-	const SCRIPT_WRITE_MAX_RETRIES = PIPELINE_RETRY.stages.scriptWrite.maxRetries;
-	const SCRIPT_WRITE_RETRY_BACKOFF_MS = PIPELINE_RETRY.stages.scriptWrite.backoffMs;
+	const SCRIPT_WRITE_MAX_RETRIES = 7;
+	const SCRIPT_WRITE_RETRY_BACKOFF_MS = 40000;
 	const SCRIPT_WRITE_UI_TEXT = "Writing your SEO script...";
 	const SCRIPT_WRITE_UI_CHECK_MS = 250;
 	const SCRIPT_WRITE_TOTAL_ATTEMPTS = SCRIPT_WRITE_MAX_RETRIES + 1;
@@ -26126,7 +25888,7 @@ async function retryImagePromptFlow(n) {
 	}
 
 	/*
-	 * One full 20-second timer per retry. A deletion / Stop can cancel the
+	 * One full 40-second timer per retry. A deletion / Stop can cancel the
 	 * pending wait immediately instead of leaving a timer behind.
 	 */
 	function scriptWriteRetryDelay(ms, context) {
@@ -26269,7 +26031,7 @@ async function retryImagePromptFlow(n) {
 						nextRetry: retry + 1,
 						maxRetries: policy.maxRetries
 					});
-					const proceed = await scriptWriteRetryDelay(pipelineRetryWaitMs(policy.backoffMs), context);
+					const proceed = await scriptWriteRetryDelay(policy.backoffMs, context);
 					if (!proceed || isCancelled()) {
 						const cancelledDuringBackoff = new Error("Script generation was cancelled");
 						cancelledDuringBackoff.name = "AbortError";
@@ -26709,7 +26471,7 @@ async function retryImagePromptFlow(n) {
 		/*
 		 * WHO OWNS SCRIPT RETRIES: THIS PAGE.
 		 *
-		 * requestScriptWritingWithClientRetries owns the thirty silent retries.
+		 * requestScriptWritingWithClientRetries owns the seven silent retries.
 		 * browserRetries tells the Worker to spend exactly one inference per
 		 * stage for each request, so a browser retry is a real new script write
 		 * rather than a second ladder nested inside the Worker's own ladder.
@@ -27384,7 +27146,7 @@ async function retryImagePromptFlow(n) {
 			topic: topic,
 			minutes: minutes,
 			speed: speed,
-			/* Thirty silent browser retries, each preceded by 20 seconds. */
+			/* Seven silent browser retries, each preceded by 40 seconds. */
 			maxRetries: SCRIPT_WRITE_MAX_RETRIES,
 			maxRequests: SCRIPT_WRITE_TOTAL_ATTEMPTS,
 			retryBackoffMs: SCRIPT_WRITE_RETRY_BACKOFF_MS,
@@ -27791,159 +27553,6 @@ async function retryImagePromptFlow(n) {
 		);
 	}
 
-	/*
-	 * STEP 5 OF THE EDITOR PIPELINE — THE VOICEOVER.
-	 *
-	 * The editor used to hand the voice to the Worker's in-request ladder and
-	 * then give up: a busy TTS fleet produced "Voiceover failed: …" on the
-	 * first bad answer. It now owns the same browser ladder as every other
-	 * step: one request plus up to THIRTY retries, 20 seconds apart, from
-	 * src/modules/retry-policy.ts (stage: voiceover).
-	 *
-	 * What is NOT retried: a deleted video, a cancellation, and a verdict
-	 * the Worker marked non-retryable (a missing key, a rejected credential,
-	 * a script the model refuses). Those answer the same way every time.
-	 */
-	const VOICE_MAX_RETRIES = PIPELINE_RETRY.stages.voiceover.maxRetries;
-	const VOICE_RETRY_BACKOFF_MS = PIPELINE_RETRY.stages.voiceover.backoffMs;
-	const VOICE_TOTAL_ATTEMPTS = VOICE_MAX_RETRIES + 1;
-
-	if (typeof window !== "undefined") {
-		const voiceTiming =
-			window.__VOICE_RETRY_TIMING && typeof window.__VOICE_RETRY_TIMING === "object"
-				? window.__VOICE_RETRY_TIMING
-				: {};
-		const voiceDefaults = {
-			maxRetries: VOICE_MAX_RETRIES,
-			maxAttempts: VOICE_TOTAL_ATTEMPTS,
-			backoffMs: VOICE_RETRY_BACKOFF_MS,
-			retryBackoffMs: VOICE_RETRY_BACKOFF_MS,
-			owner: "browser",
-			layout: "editor",
-			stage: "voiceover"
-		};
-		for (const key in voiceDefaults) {
-			if (!(key in voiceTiming)) voiceTiming[key] = voiceDefaults[key];
-		}
-		window.__VOICE_RETRY_TIMING = voiceTiming;
-		window.__VOICE_RETRY_POLICY = voiceTiming;
-		window.__VOICE_RETRY_LOG = Array.isArray(window.__VOICE_RETRY_LOG) ? window.__VOICE_RETRY_LOG : [];
-	}
-
-	function voiceRetryPolicy() {
-		const policy = {
-			maxRetries: VOICE_MAX_RETRIES,
-			backoffMs: VOICE_RETRY_BACKOFF_MS
-		};
-		if (typeof window === "undefined") {
-			policy.maxAttempts = policy.maxRetries + 1;
-			return policy;
-		}
-		const sources = [
-			window.__VOICE_RETRY_TIMING,
-			window.__VOICE_RETRY_POLICY,
-			window.__VOICE_RETRY
-		];
-		for (const source of sources) {
-			if (!source || typeof source !== "object") continue;
-			const retries = Number(source.maxRetries);
-			if (isFinite(retries) && retries >= 0) policy.maxRetries = Math.floor(retries);
-			const backoff = Number(source.backoffMs);
-			if (isFinite(backoff) && backoff >= 0) policy.backoffMs = Math.floor(backoff);
-		}
-		policy.maxAttempts = Math.max(1, policy.maxRetries + 1);
-		return policy;
-	}
-
-	function voiceRetryLog(entry) {
-		if (typeof window === "undefined") return;
-		const log = Array.isArray(window.__VOICE_RETRY_LOG) ? window.__VOICE_RETRY_LOG : [];
-		log.push(Object.assign({ at: Date.now(), stage: "voiceover", owner: "browser" }, entry || {}));
-		while (log.length > 240) log.shift();
-		window.__VOICE_RETRY_LOG = log;
-	}
-
-	/* One request per attempt, then the returned audio blob. */
-	async function requestEditorVoiceoverWithClientRetries(project, text, lang, onProgress) {
-		const policy = voiceRetryPolicy();
-		let lastError = null;
-		for (let retry = 0; retry < policy.maxAttempts; retry++) {
-			if (project && project._deleted) {
-				const cancelled = new Error("Voiceover generation was cancelled");
-				cancelled.name = "AbortError";
-				throw cancelled;
-			}
-			voiceRetryLog({ event: "attempt", retry: retry, attempt: retry + 1, maxRetries: policy.maxRetries });
-			if (typeof onProgress === "function" && retry > 0) {
-				onProgress("Speaking your script (MeloTTS)\u2026 attempt " + (retry + 1) + " of " + policy.maxAttempts);
-			}
-			try {
-				const response = await requestEditorVoiceover(project, text, lang);
-				if (!response || !response.ok) {
-					const data = response && typeof response.json === "function"
-						? await response.json().catch(function () { return {}; })
-						: {};
-					const error = new Error(voiceFailureText(data, response ? response.status : 0));
-					error.status = response ? response.status : 0;
-					error.stage = (data && data.stage) || "voiceover";
-					error.attempts = Number(data && data.attempts) || 0;
-					error.retryable = data ? data.retryable !== false : true;
-					throw error;
-				}
-				const blob = await response.blob();
-				if (!blob || !blob.size) throw new Error("The voiceover model returned no audio");
-				voiceRetryLog({ event: "success", retry: retry, attempt: retry + 1 });
-				return blob;
-			} catch (error) {
-				lastError = error;
-				if (project && project._deleted) throw error;
-				if (error && error.name === "AbortError") throw error;
-				const reason = String(error && (error.message || error) || "unknown").slice(0, 200);
-				voiceRetryLog({
-					event: "attempt-failed",
-					retry: retry,
-					attempt: retry + 1,
-					status: error && error.status,
-					retryable: error ? error.retryable !== false : true,
-					reason: reason
-				});
-				if (error && error.retryable === false) {
-					voiceRetryLog({ event: "verdict", attempt: retry + 1, reason: reason });
-					throw error;
-				}
-				if (retry >= policy.maxRetries) {
-					try {
-						error.clientRetries = retry;
-						error.clientAttempts = retry + 1;
-					} catch (decorateError) { }
-					voiceRetryLog({ event: "budget-exhausted", attempts: retry + 1, maxRetries: policy.maxRetries });
-					throw error;
-				}
-				voiceRetryLog({
-					event: "backoff",
-					retry: retry,
-					delayMs: policy.backoffMs,
-					nextRetry: retry + 1,
-					maxRetries: policy.maxRetries
-				});
-				if (typeof onProgress === "function") {
-					onProgress(
-						"Voiceover busy \u2014 retrying in " +
-						Math.round(policy.backoffMs / 1000) +
-						"s (attempt " +
-						(retry + 2) +
-						" of " +
-						policy.maxAttempts +
-						")"
-					);
-				}
-				const proceed = await seoPlanRetryDelay(pipelineRetryWaitMs(policy.backoffMs), project);
-				if (!proceed) throw error;
-			}
-		}
-		throw lastError || new Error("Voiceover failed");
-	}
-
 	async function generateVoiceover(
 		n
 	) {
@@ -28006,21 +27615,27 @@ async function retryImagePromptFlow(n) {
 					"Speaking your script (MeloTTS)...";
 			}
 
-			/*
-			 * The editor owns the voice ladder: 30 retries, 20 s apart.
-			 * The Worker still performs its small in-request ladder for
-			 * each chunk; this is the pipeline step's own budget.
-			 */
-			const blob =
-				await requestEditorVoiceoverWithClientRetries(
-					project,
-					text,
-					voiceSel ? voiceSel.value : "en",
-					function (text) {
-						if (statusEl) statusEl.textContent = text;
-					}
-				);
+			const response = await requestEditorVoiceover(project, text, voiceSel ? voiceSel.value : "en");
 			if (project._deleted) return;
+
+			if (
+				!response.ok
+			) {
+
+				const data =
+					await response
+						.json()
+						.catch(
+							() => ({})
+						);
+
+				throw new Error(voiceFailureText(data, response.status));
+
+			}
+
+			const blob =
+				await response.blob();
+			if (!blob || !blob.size) throw new Error("The voiceover model returned no audio");
 			if (project._deleted || videoProjects.indexOf(project) < 0) return;
 
 			recordStudioUsage("voiceovers", "ok", 1);

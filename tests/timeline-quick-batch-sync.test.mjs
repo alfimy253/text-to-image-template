@@ -140,7 +140,6 @@ function bootWindow({ url, localStorage, sessionStorage, cookieJar, indexedDB, l
 	if (localStorage) Object.defineProperty(w.navigator, "locks", { configurable: true, value: testBrowserLocks(localStorage) });
 	if (prepare) prepare(w);
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	if (loadTimeline) {
 		w.eval(TIMELINE_EDITOR_JS);
 	}

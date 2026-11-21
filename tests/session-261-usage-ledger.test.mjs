@@ -150,10 +150,7 @@ test("#261 editor records generated media locally and shows a clearable notice",
 	w.URL.createObjectURL = () => "blob:test/local"; w.URL.revokeObjectURL = () => {};
 	w.fetch = async () => new Response(JSON.stringify({ success: true, remaining: {} }), { headers: { "Content-Type": "application/json" } });
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]")); await tick();
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
-	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	w.eval(`applyCredits({ plan: { id: "guest", label: "Guest", limits: { images: 10 } }, remaining: { images: 6 } });
 		recordStudioUsage("images", "ok", 3); recordStudioUsage("scripts", "ok");
 		const popover = document.getElementById("credit-popover");

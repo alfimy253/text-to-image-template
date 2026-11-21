@@ -47,6 +47,14 @@ const plan = {
 	short: ["yoga", "breathing", "stretching", "balance"]
 };
 
+/* A different set, so a resumed plan is distinguishable from the pick. */
+const otherPlan = {
+	title: "Evening Wind Down",
+	headings: ["Settle Down", "Sleep Better"],
+	longTail: "evening wind down routine for better sleep",
+	short: ["evening", "wind down", "sleep", "calm"]
+};
+
 const sentences = [
 	`Try ${plan.longTail} today.`,
 	"Let breathing settle into a steady rhythm.",
@@ -243,8 +251,8 @@ test("capabilities advertise the browser as the script retry owner", async () =>
 	assert.equal(caps.retryOwner, "worker", "all other stages stay worker-owned");
 	assert.equal(caps.scriptRetryOwner, "browser");
 	assert.equal(caps.workerScriptRetries, 3);
-	assert.equal(caps.browserScriptRetries, 30);
-	assert.equal(caps.scriptRetryBackoffMs, 20000);
+	assert.equal(caps.browserScriptRetries, 7);
+	assert.equal(caps.scriptRetryBackoffMs, 40000);
 });
 
 /* ------------------------------------------------------------------------- */
@@ -322,7 +330,7 @@ async function walkthrough(w, scriptReplies) {
 				browserScriptRetries: 3
 			});
 		}
-		if (path === "/api/seo-plan") return json({ success: true, sets: [plan] });
+		if (path === "/api/seo-plan") return json({ success: true, sets: [plan, otherPlan] });
 		if (path === "/api/script") {
 			requests.push({ body });
 			const reply = sent.length > 1 ? sent.shift() : sent[0];

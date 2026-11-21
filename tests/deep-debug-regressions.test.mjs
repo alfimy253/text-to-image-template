@@ -718,10 +718,7 @@ test("Client deep-debug fixes: exportBatchRow uses row's Portrait/Square dimensi
 	};
 
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	(() => { const raw = w.setTimeout.bind(w); w.setTimeout = (cb, ms, ...a) => raw(cb, Number(ms) === 40000 ? 0 : ms, ...a); })();
-	/* Retry waits are compressed by the app, never by rewriting setTimeout. */
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	await new Promise((r) => setTimeout(r, 40));
 
 	/* 1. Quick Batch Table row with 720px Portrait 9:16 exports at 408x720 (NOT 1280x720) */
