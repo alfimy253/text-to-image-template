@@ -1356,7 +1356,16 @@ export async function planOneSeoKeywordSet(
 	}
 
 	let keywordError = "";
-	let transportError = "";
+	/*
+	 * Session 332: EVERY candidate model's transport failure is kept, not just
+	 * the last one. The old code overwrote `transportError` on each model, so a
+	 * pool-wide fault (all models answering the same relay error) was reported
+	 * as if only the LAST fallback slug had failed — the misleading
+	 * "@cf/meta/llama-3.3-70b-instruct-fp8-fast: Relay endpoint answered 404"
+	 * line in the studio. The list makes the shared cause obvious.
+	 */
+	const transportErrors: string[] = [];
+	const transportSummary = (): string => transportErrors.join("; ");
 
 	for (const model of models) {
 		let prevRaw = "";
@@ -1386,7 +1395,7 @@ export async function planOneSeoKeywordSet(
 			 * stop spending attempts on this slug and try the next one.
 			 */
 			if (!call.ok) {
-				transportError = model + ": " + call.error;
+				transportErrors.push(model + ": " + call.error);
 				break;
 			}
 
@@ -1406,14 +1415,14 @@ export async function planOneSeoKeywordSet(
 		}
 	}
 
-	if (!keywordError && transportError) {
-		throw new Error("SEO planner model failed (" + transportError + ") - try again");
+	if (!keywordError && transportErrors.length) {
+		throw new Error("SEO planner model failed (" + transportSummary() + ") - try again");
 	}
 
 	throw new Error(
 		"SEO keywords invalid (" +
 			(keywordError || "no usable reply") +
-			(transportError ? "; model error: " + transportError : "") +
+			(transportErrors.length ? "; model error: " + transportSummary() : "") +
 			") - try again"
 	);
 }

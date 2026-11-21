@@ -2854,3 +2854,36 @@ This is the final, code-backed rule for the **Quick Batch table layout** and the
 6. In the **Editor layout**, the script textbox is pinned while script writing/retries run: no state paint, toggle or accordion renumber may hide it over time.
 7. The **last table column is `Actions`** with icons for **Preview** (same existing function), **Process Export** and **Edit**. Edit opens a new page with a **transition-only project JSON** payload carrying the row's basic settings from `batchProjectJson()`; `applyTransitionProject()` consumes it for the transition only. The rows have **no AI enhancer button**.
 8. `src/client/app-js.ts` is the source of truth. `AUTO_MEDIA_TOTAL = 12`, `AUTO_VIDEO_SCENES = 4`, `AUTO_IMAGE_SCENES = 8`, `MEDIA_ITEM_MAX_RETRIES = 7`, `MEDIA_ITEM_RETRY_BACKOFF_MS = 40000`, `retryFailedMediaOnly()`, `requestBatchImagesWithIndividualRetries()`, `runEditorMediaWithIndividualRetries()`, `batchActionCell()`, `batchProjectJson()` and `applyTransitionProject()` define the live contract. Worker capabilities advertise `mediaSceneCap: 12`, `mediaVideoScenes: 4`, `mediaImageScenes: 8`, `mediaItemRetryOwner: "browser"`, `mediaItemRetries: 7`, `mediaItemRetryBackoffMs: 40000`, `mediaFilenameDedupe: "per-video"` and `quickBatchActionsColumn: "preview-process-export-edit"`. `BATCH_PIPELINE_MAX_RETRIES = 7` and `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000` still govern the non-media stage ladder. Older Quick Batch table statements in this file are superseded wherever they conflict.
+
+---
+
+## RULE 36 — A relayed member's HTTP answer is never a model verdict (2026-11-21, FIXED IN CODE)
+
+The API relay (`src/modules/api-relay.ts`, RULE 33) calls exactly one path on a pool member:
+`POST <member>/api/relay/ai`. That endpoint never answers `404`; it answers `400` (bad JSON or model
+slug), `401` (token/digest), `405` (not POST), `410` (visual model slug), `413` (body too large),
+`502` (model failed), `503` (no AI binding) or `504` (deadline) — all with a JSON body, and a model
+rejection carries `kind:"model"`.
+
+Therefore:
+
+1. **`ModelError` is authoritative and fatal.** It means the member executed the model and the model
+   rejected the request; another member would spend the same paid call on the same answer, so the
+   chain stops and the planner/route reports a model error.
+2. **`RelayError` is always transient.** A status line, a missing route (404/405/501), a token
+   mismatch (401), a network failure, a deadline or an overload says everything about *that
+   deployment* and nothing about the request: the call fails over to the next member, finally to the
+   local Worker, and the member is circuit-broken (`noteRelayFailure`).
+3. Relay statuses must never be fed to `classifyImageFailure()` as if they were provider answers —
+   its FATAL pattern `/\b404\b/` is correct for an image provider and wrong for a member's envelope.
+4. Every member that failed is named in the caller's error. The planner joins one
+   `"<model>: <error>"` entry per candidate instead of keeping only the last one, so a pool-wide fault
+   cannot be misreported as a single fallback model failing.
+5. The browser rotation (`src/client/api-rotation.ts`) treats `404/405/501` from a handed-out backup
+   like `502/503/504`: it reports the URL once (`GET /api/relay/endpoint?…&failed=<id>`, with the
+   ticket) and calls the next answer. `400/401/403/429` are never retried there.
+6. A `404`/`405`/`501` message appends `" (<url> does not serve /api/relay/ai - an older or non-relay
+   deployment)"` so a misconfigured backup URL is visible in the studio.
+
+Regression contract: `tests/session-332-relay-404.test.mjs`. Investigation and runbook:
+[`bug-fix-session-332.md`](bug-fix-session-332.md#9-the-investigation-relay-endpoint-answered-404).

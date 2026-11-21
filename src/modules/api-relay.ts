@@ -588,6 +588,29 @@ export function noteRelayFailure(key: string, error: unknown, cooldownMs: number
  * rejected prompt) as a pool failure: the endpoint is healthy, the request was
  * not. Overload/transient/unknown errors open the circuit so the next call
  * goes elsewhere. Network errors are always transient.
+ *
+ * Session 332 — `RelayError` is ALWAYS transient (a pool problem).
+ *
+ * Before this rule a relayed member's HTTP status was fed to
+ * `classifyImageFailure()`, whose FATAL_PATTERNS contain `/\b404\b/`. A backup
+ * that answered `404` on `POST /api/relay/ai` (an older deployment that never
+ * had the route, a typo'd URL, a paused Worker, a different app) was therefore
+ * classified as a *fatal model* failure: the whole fail-over chain aborted on
+ * the first member, the local Worker never ran the model, the member was not
+ * circuit-broken, and the caller surfaced the transport text as the model's
+ * answer — `SEO planner model failed (@cf/meta/llama-3.3-70b-instruct-fp8-fast:
+ * Relay endpoint answered 404)`.
+ *
+ * The distinction that matters is WHO answered:
+ *   - `ModelError` = the receiving Worker executed the model and the model
+ *     rejected the request (`kind:"model"` in the endpoint's JSON). Fatal:
+ *     every other member would spend the same paid call on the same answer.
+ *   - `RelayError` = the envelope failed (status line, token, route, network,
+ *     deadline). The model was never asked, so the answer says nothing about
+ *     the request and everything about that deployment: fail over and cool it.
+ * `/api/relay/ai` only ever answers 400 / 401 / 405 / 410 / 413 / 502 / 503 /
+ * 504 with a JSON body, so a plain 404/405/501 always means "this URL does not
+ * serve the relay route".
  */
 function isTransientRelayFailure(error: unknown): boolean {
 	if (!error) return true;
@@ -598,6 +621,8 @@ function isTransientRelayFailure(error: unknown): boolean {
 	/* A backup that answered "this model call is invalid" is authoritative:
 	 * another member would spend the same paid call on the same answer. */
 	if (name === "ModelError") return false;
+	/* A member's own envelope/HTTP answer is never the model's verdict. */
+	if (name === "RelayError") return true;
 	const message = error instanceof Error ? error.message : String(error);
 	/* A member with no AI binding is a pool problem, not a model problem. */
 	if (/binding not configured/i.test(message)) return true;
@@ -1080,7 +1105,20 @@ async function runRemoteModel(
 			} catch {
 				/* keep the status message */
 			}
+			/*
+			 * Session 332: name the member when the status can only mean "this
+			 * URL does not serve the relay route" (a 404/405/501 is never an
+			 * answer of `/api/relay/ai` itself). The text survives into the
+			 * caller's error, so a misconfigured backup URL is visible in the
+			 * studio instead of looking like a model problem.
+			 */
+			if (!errorKind && (response.status === 404 || response.status === 405 || response.status === 501)) {
+				message += " (" + entry.url + " does not serve " + RELAY_AI_PATH + " - an older or non-relay deployment)";
+			}
 			const error = new Error(message);
+			/* Diagnostics only: the fail-over decision is made on `name`. */
+			(error as any).relayStatus = response.status;
+			(error as any).relayUrl = entry.url;
 			if (errorKind === "model" || response.status === 400) error.name = "ModelError";
 			else error.name = "RelayError";
 			throw error;

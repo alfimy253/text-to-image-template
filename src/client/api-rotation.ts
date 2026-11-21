@@ -135,8 +135,23 @@ export const API_ROTATION_JS = String.raw`
 		return false;
 	}
 
+	/*
+	 * Which answers mean "the URL I was handed cannot run this call":
+	 *   404/405 - the backup does not serve this route at all (an older
+	 *             deployment, a typo, a paused Worker, a different app);
+	 *   501     - not implemented there;
+	 *   502/503/504 - it answered but its upstream/provider failed.
+	 * Session 332 added 404/405/501: a backup from before the AI routes
+	 * existed used to surface to the user as "SEO plan failed: HTTP 404",
+	 * because a missing route is not a 5xx. A 4xx that IS the route's own
+	 * answer (400 validation, 401/403 auth, 429 rate limit) is never
+	 * retried here: it would fail identically on this Worker.
+	 */
 	function shouldFailover(response) {
-		return !response || response.status === 502 || response.status === 503 || response.status === 504;
+		if (!response) return true;
+		var status = response.status;
+		return status === 404 || status === 405 || status === 501 ||
+			status === 502 || status === 503 || status === 504;
 	}
 
 	function fullUrl(given, search) {
