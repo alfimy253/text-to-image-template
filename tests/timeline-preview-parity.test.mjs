@@ -27,7 +27,6 @@ test('edited table preview paints the saved timeline with the editor painter, in
   w.Audio = class { constructor(src='') { this.src=src; this.currentTime=0; this.paused=true; } addEventListener() {} play() { this.paused=false; return Promise.resolve(); } pause() { this.paused=true; } };
   const ctx = spyCanvas(); w.HTMLCanvasElement.prototype.getContext = () => ctx;
   w.eval(APP_JS.replace('__PROMPTS_JSON__', '[]')); w.eval(TIMELINE_EDITOR_JS);
-	w.__PIPELINE_RETRY_SPEED = 20000;
   w.setStudioLayout('table');
   const row = w.__BATCH_ROWS[0];
   row.script = 'This script has more than ten words and makes a completed test row.';

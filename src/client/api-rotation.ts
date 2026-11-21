@@ -223,11 +223,9 @@ export const API_ROTATION_JS = String.raw`
 			search = parsed.search || "";
 		} catch (_) { search = ""; }
 
-		var signal = init && init.signal;
 		function attempt(given, depth) {
-			if (signal && signal.aborted) throw signal.reason || new DOMException("Request aborted", "AbortError");
 			return callGiven(given, input, init, search).then(function (response) {
-				if ((signal && signal.aborted) || given.local || !shouldFailover(response) || depth >= MAX_ASK_ATTEMPTS || !bodyCanRetry(init)) {
+				if (given.local || !shouldFailover(response) || depth >= MAX_ASK_ATTEMPTS || !bodyCanRetry(init)) {
 					return response;
 				}
 				state.failovers += 1;
@@ -236,7 +234,7 @@ export const API_ROTATION_JS = String.raw`
 					return next ? attempt(next, depth + 1) : nativeFetch(input, init);
 				});
 			}, function (error) {
-				if ((signal && signal.aborted) || given.local || depth >= MAX_ASK_ATTEMPTS || !bodyCanRetry(init)) throw error;
+				if (given.local || depth >= MAX_ASK_ATTEMPTS || !bodyCanRetry(init)) throw error;
 				state.failovers += 1;
 				state.lastError = (error && error.message) || "relay call failed";
 				return askForUrl(path, given.endpointId).then(function (next) {

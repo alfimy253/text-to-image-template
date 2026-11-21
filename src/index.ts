@@ -35,17 +35,6 @@ import {
 	SCRIPT_BROWSER_RETRY_BACKOFF_MS,
 	SCRIPT_BROWSER_RETRY_LIMIT
 } from "./modules/script-seo";
-/*
- * The ONE retry table. Every retry number advertised below comes from
- * src/modules/retry-policy.ts — the same object the page script is built
- * with — so code is the only source of truth and the page, the API and the
- * docs cannot drift.
- */
-import {
-	PIPELINE_RETRY_MAX,
-	PIPELINE_RETRY_BACKOFF_MS,
-	PIPELINE_RETRY_STAGES
-} from "./modules/retry-policy";
 import { scriptEventLoop } from "./modules/script-event-loop";
 import {
 	handleScriptNoteWrite,
@@ -349,24 +338,19 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				workerScriptRetries: 3,
 				browserScriptRetries: SCRIPT_BROWSER_RETRY_LIMIT,
 				scriptRetryBackoffMs: SCRIPT_BROWSER_RETRY_BACKOFF_MS,
-				seoPlanRetryOwner: PIPELINE_RETRY_STAGES.seoPlan.owner,
-				seoPlanRetries: PIPELINE_RETRY_STAGES.seoPlan.maxRetries,
-				seoPlanRetryBackoffMs: PIPELINE_RETRY_STAGES.seoPlan.backoffMs,
 				quickBatchPipelineRetryOwner: "browser",
 				batchPipelineRetryOwner: "browser",
-				quickBatchPipelineRetries: PIPELINE_RETRY_STAGES.batchPipeline.maxRetries,
-				batchPipelineRetries: PIPELINE_RETRY_STAGES.batchPipeline.maxRetries,
-				quickBatchPipelineRetryBackoffMs: PIPELINE_RETRY_STAGES.batchPipeline.backoffMs,
-				batchPipelineRetryBackoffMs: PIPELINE_RETRY_STAGES.batchPipeline.backoffMs,
-				/* The whole retry table, so a client can read it in one object. */
-				pipelineRetryPolicy: { maxRetries: PIPELINE_RETRY_MAX, backoffMs: PIPELINE_RETRY_BACKOFF_MS, stages: PIPELINE_RETRY_STAGES },
+				quickBatchPipelineRetries: 7,
+				batchPipelineRetries: 7,
+				quickBatchPipelineRetryBackoffMs: 40000,
+				batchPipelineRetryBackoffMs: 40000,
 		/* Fixed 14-scene media cap (six clips + eight photos), per-item media retries and unique filenames. */
 		mediaSceneCap: 14,
 				mediaVideoScenes: 6,
 				mediaImageScenes: 8,
 				mediaItemRetryOwner: "browser",
-				mediaItemRetries: PIPELINE_RETRY_STAGES.media.maxRetries,
-				mediaItemRetryBackoffMs: PIPELINE_RETRY_STAGES.media.backoffMs,
+				mediaItemRetries: 7,
+				mediaItemRetryBackoffMs: 40000,
 				mediaFilenameDedupe: "per-video",
 				quickBatchActionsColumn: "preview-process-export-edit",
 				/* Session 331: per-tab pages, four cookie chunks, no TTL. */
@@ -389,10 +373,6 @@ async function handleRequest(request: any, env: any, ctx: any) {
 				serverVoiceChunks: VOICEOVER_SERVER_CHUNKS,
 				workerVoiceAttempts: VOICEOVER_CHUNK_ATTEMPTS,
 				voiceBudgetMs: VOICEOVER_TOTAL_BUDGET_MS,
-				/* The editor's own voice step ladder (browser-owned). */
-				editorVoiceRetryOwner: PIPELINE_RETRY_STAGES.voiceover.owner,
-				editorVoiceRetries: PIPELINE_RETRY_STAGES.voiceover.maxRetries,
-				editorVoiceRetryBackoffMs: PIPELINE_RETRY_STAGES.voiceover.backoffMs,
 				promptRetryOwner: "worker",
 				workerPromptAttempts: IMAGE_PROMPT_ATTEMPTS,
 				promptBudgetMs: IMAGE_PROMPT_TOTAL_BUDGET_MS,
@@ -1349,66 +1329,23 @@ async function handleRequest(request: any, env: any, ctx: any) {
 			*     file.
 		*/
 		/*
-		 * SEO PLAN for the accordion walkthrough: POST /api/seo-plan
-		 * {topic} plans one validated set (1 long-tail + exactly 4 shorts,
-		 * title and headings). Once accepted it is sent as `keywordSet`
-		 * to POST /api/script, which skips its own planner.
-		 * The response keeps the existing sets array with one entry.
-		 * Validation and retries still run when the model reply is invalid.
+		 * SEO PLAN (two selectable keyword sets) for the accordion
+		 * walkthrough: POST /api/seo-plan {topic} plans TWO different
+		 * validated sets (1 long-tail + exactly 4 shorts, title and
+		 * headings each); the client shows both, the user selects one,
+		 * and that set is then sent back as `keywordSet` to
+		 * POST /api/script, which skips its own planner.
 		 */
 		if (
 			request.method === "POST" &&
 			url.pathname === "/api/seo-plan"
 		) {
 
-			/*
-			 * SEO-PLAN DIAGNOSTICS (2026-11-20).
-			 *
-			 * A production `POST /api/seo-plan` answered 500 while the only
-			 * log line was `[seo-plan] model call failed ... "Relay endpoint
-			 * answered 404"`. These two lines bracket the handler so the
-			 * Cloudflare event for the request can be matched to the handler
-			 * log: who called (rotation ticket / origin / colo), that the
-			 * route was reached at all, and what status it finally returned.
-			 * They are written BEFORE and AFTER the handler runs - never
-			 * instead of it.
-			 */
-			const seoPlanStartedAt =
-				Date.now();
-
-			console.log(
-				"[seo-plan] route",
-				{
-					route: "/api/seo-plan",
-					method: request.method,
-					origin: request.headers.get("origin") || null,
-					referer: request.headers.get("referer") || null,
-					rotated: !!request.headers.get("x-yvs-relay-ticket"),
-					cfRay: request.headers.get("cf-ray") || null,
-					country: request.headers.get("cf-ipcountry") || null,
-					contentLength: request.headers.get("content-length") || null,
-					scriptModel: SCRIPT_MODEL
-				}
+			return handleSeoPlanGeneration(
+				request,
+				env,
+				SCRIPT_MODEL
 			);
-
-			const seoPlanResponse =
-				await handleSeoPlanGeneration(
-					request,
-					env,
-					SCRIPT_MODEL
-				);
-
-			console.log(
-				"[seo-plan] route answer",
-				{
-					route: "/api/seo-plan",
-					status: seoPlanResponse.status,
-					ok: seoPlanResponse.ok,
-					ms: Date.now() - seoPlanStartedAt
-				}
-			);
-
-			return seoPlanResponse;
 
 		}
 

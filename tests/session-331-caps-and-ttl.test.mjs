@@ -609,7 +609,6 @@ test("Timeline editor caps GIF uploads and storeAsset at 30 MiB while leaving re
 		createRadialGradient: () => ({ addColorStop() {} })
 	});
 	w.eval(APP_JS.replace("__PROMPTS_JSON__", "[]"));
-	w.__PIPELINE_RETRY_SPEED = 20000;
 	w.eval(TIMELINE_EDITOR_JS);
 	try {
 		for (let i = 0; i < 60 && !w.__TIMELINE_EDITOR_STATE__; i++) {

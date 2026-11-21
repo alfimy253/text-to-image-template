@@ -104,8 +104,8 @@ test("#279 capabilities name the worker as the retry owner of every stage", asyn
 
 	/* Compatibility, not ownership: a cached pre-279 page still gets its routes. */
 	assert.equal(caps.chunkVoiceover, true, "the browser chunk endpoint stays for cached pages");
-	assert.equal(caps.browserScriptRetries, 30, "30 client-owned script retries");
-	assert.equal(caps.scriptRetryBackoffMs, 20000, "20 seconds before each retry");
+	assert.equal(caps.browserScriptRetries, 7, "seven client-owned script retries");
+	assert.equal(caps.scriptRetryBackoffMs, 40000, "40 seconds before each retry");
 });
 
 /* ------------------------------------------------------- splitting/joining -- */

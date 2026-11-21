@@ -93,7 +93,7 @@ export function composerHarness() {
 	w.alert = (message) => alerts.push(message);
 	w.videoProjects = [{ assets: [] }, { assets: [] }];
 	w.videoCounts = (project) => ({ clips: project.assets.filter((asset) => asset.kind === "mp4").length });
-	w.MAX_MP4_UPLOADS = 40;
+	w.MAX_MP4_UPLOADS = 5;
 	w.MP4_MAX_DURATION_S = 60;
 	w.formatSeconds = (seconds) => `${seconds}s`;
 	w.buildVaCard = (_n, asset) => { asset.card = {}; };

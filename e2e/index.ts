@@ -78,8 +78,29 @@ function mockLlmResponse(input: Record<string, unknown>): { response: string } {
 		};
 	}
 
-	// Stage 1: SEO Keyword, Title & Heading Planner.
+	// Stage 1: SEO Keyword, Title & Heading Planner. The two-set SEO plan
+	// asks for a DIFFERENT second set, answered with the alternate fixture
+	// (same shorts so the Stage-2 fixture script still validates, but a
+	// different long-tail keyword and title).
 	if (prompt.includes("SEO strategist") || prompt.includes('"longTail"')) {
+		if (prompt.includes("DIFFERENT keyword set")) {
+			return {
+				response: JSON.stringify({
+					title: "Key Light Setup Guide for Beginners",
+					headings: [
+						"Choosing Your Key Light Position",
+						"Dialing In Color Balance Fast"
+					],
+					longTail: "budget home video studio setup with a key light for beginners",
+					short: [
+						"key light",
+						"soft shadow",
+						"color balance",
+						"clean backdrop"
+					]
+				})
+			};
+		}
 		return {
 			response: JSON.stringify({
 				title: "Smart Key Light Setup Guide for Creators",

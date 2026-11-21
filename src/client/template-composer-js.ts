@@ -41,7 +41,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 	// wrapped in a VideoFrame, encoded to H.264 and muxed
 	// in memory. The MP4 downloads to disk and can also be
 	// added to the accordion's Images / MP4s gallery as a
-	// normal MP4 asset (same 40-clip / 60-second caps apply).
+	// normal MP4 asset (same 5-clip / 60-second caps apply).
 	//
 	// Everything lives inside an IIFE so none of the
 	// composer's names (VARIATIONS, drawScene, layers, ...)
@@ -2261,7 +2261,7 @@ export const TEMPLATE_COMPOSER_JS = `	// =======================================
 		// window.__TIMELINE_TEMPLATE_CLIP__ (and only ever on
 		// layout=timeline), which makes this function hand the
 		// clip over instead of pushing it into the accordion:
-		// no editor-gallery cap, no hidden card, and the clip is
+		// no 5-clip gallery cap, no hidden card, and the clip is
 		// appended at the right-most end of the Scene Media layer.
 		// With no sink registered — the editor layout — every
 		// line below behaves exactly as it always did.

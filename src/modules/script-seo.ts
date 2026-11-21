@@ -52,17 +52,6 @@ import {
 	type ScriptNoteState
 } from "./script-notes";
 import { scriptEventLoop, type ScriptEventLoop } from "./script-event-loop";
-import { PIPELINE_RETRY_STAGES, SEO_PLAN_REQUEST_BUDGET_MS } from "./retry-policy";
-/*
- * RELAY DIAGNOSTICS (2026-11-20).
- *
- * `env.AI` is the rotation proxy built by `withRelayedAi()` (src/modules/
- * api-relay.ts), so "model call failed ... Relay endpoint answered 404" is a
- * POOL error, not a model error. These two helpers let the seo-plan logs show
- * which pool members were tried and which one refused the call, using the same
- * fields the relay layer attaches (`relayStatus`, `relayEndpoint`, `relayUrl`).
- */
-import { relayErrorDetail, relayRuntimeOf } from "./api-relay";
 
 export const SEO_LONG_TAIL = 1;
 export const SEO_SHORT_TOTAL = 4;
@@ -1077,11 +1066,13 @@ export function keywordOverlapInstructions(
 
 /*
  * ---------------------------------------------------------------------------
- * SEO PLAN — used by the video accordion's "Generate SEO Script" walkthrough.
+ * SEO PLAN (two selectable keyword sets) — used by the video accordion's
+ * "Generate SEO Script" walkthrough.
  *
- * The walkthrough plans one keyword set (one long-tail, four shorts, title
- * and headings) for the user to review before choosing a visual style.
- * The script writer then uses the accepted set. `handleSeoScriptGeneration`
+ * The walkthrough first asks the planner for TWO DIFFERENT keyword sets for
+ * the same topic (one long-tail + exactly four short keywords, a title and
+ * headings each), the user selects one of them, and only then is the SRT
+ * writer called with that selected set. `handleSeoScriptGeneration` below
  * therefore accepts an optional, previously-planned `keywordSet` in its
  * request body and, when one is supplied (and re-validated with the exact
  * same `parseKeywordSet` rules), skips its own Stage-1 planner.
@@ -1105,8 +1096,21 @@ export function plannedSetToClient(set: PlannedKeywordSet): SeoPlanSetClient {
 	};
 }
 
-export function buildSeoPlannerPrompt(topic: string): string {
+export function keywordSetsEqual(
+	a: PlannedKeywordSet,
+	b: PlannedKeywordSet
+): boolean {
 	return (
+		a.longTail === b.longTail &&
+		a.shorts.join("\n") === b.shorts.join("\n")
+	);
+}
+
+export function buildSeoPlannerPrompt(
+	topic: string,
+	avoid?: PlannedKeywordSet | null
+): string {
+	let prompt =
 		"You are an SEO strategist for YouTube explainer videos. Answer with ONLY one JSON object, no prose and no code fences. " +
 		"The video topic is: " +
 		topic +
@@ -1137,8 +1141,16 @@ export function buildSeoPlannerPrompt(topic: string): string {
 		" section HEADING(S) (2-4 headings recommended, at most " +
 		SEO_HEADING_WORDS_MAX +
 		" words each) for this explainer video; at least one heading MUST include one of the short-tail keywords verbatim (using the same short keyword as the title is allowed).\n" +
-		'Reply with ONLY this exact JSON shape: {"title":"the video title","headings":["first section heading","second section heading"],"longTail":"the one long tail keyword","short":["short one","short two","short three","short four"]}'
-	);
+		'Reply with ONLY this exact JSON shape: {"title":"the video title","headings":["first section heading","second section heading"],"longTail":"the one long tail keyword","short":["short one","short two","short three","short four"]}';
+	if (avoid) {
+		prompt +=
+			"\nIMPORTANT: produce a DIFFERENT keyword set from this already-planned set — do NOT reuse its long-tail keyword \"" +
+			avoid.longTail +
+			'" and do NOT reuse its short keywords (' +
+			avoid.shorts.map((s) => '"' + s + '"').join(", ") +
+			"). Choose a fresh long-tail keyword and fresh short keywords that still target the same topic.";
+	}
+	return prompt;
 }
 
 /*
@@ -1195,15 +1207,11 @@ export const SEO_PLAN_TRANSPORT_ATTEMPTS = 2;
 
 /*
  * The browser owns the script-writing retry ladder: one initial write plus
- * PIPELINE_RETRY_MAX (30) retries, PIPELINE_RETRY_BACKOFF_MS (20 s) apart.
- * A singleAttempt request may therefore carry any attempt number in that
- * range; the Worker performs one inference for it.
- *
- * The numbers are NOT written here: src/modules/retry-policy.ts is the only
- * source of truth, and the page script is built from the same object.
+ * seven 40-second-spaced retries. A singleAttempt request may therefore carry
+ * any attempt number in that range; the Worker performs one inference for it.
  */
-export const SCRIPT_BROWSER_RETRY_LIMIT = PIPELINE_RETRY_STAGES.scriptWrite.maxRetries;
-export const SCRIPT_BROWSER_RETRY_BACKOFF_MS = PIPELINE_RETRY_STAGES.scriptWrite.backoffMs;
+export const SCRIPT_BROWSER_RETRY_LIMIT = 7;
+export const SCRIPT_BROWSER_RETRY_BACKOFF_MS = 40000;
 
 function plannerSleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1237,44 +1245,6 @@ function errorMessage(err: unknown): string {
 	return String(err || "model call failed");
 }
 
-/**
- * What the relay layer did for this request so far: how many calls were
- * relayed, how many ran locally, how many failed over and on which endpoints.
- *
- * `env.AI` is the rotation proxy, so a model call is really a pool call. When
- * a plan fails, this is the difference between "the model said no" and "no
- * member could serve the call". Null on an env without a relay runtime (tests,
- * a direct handler call), which is why every log site tolerates it.
- */
-function relayPoolSnapshot(env: unknown): Record<string, unknown> | null {
-	try {
-		const runtime = relayRuntimeOf(env);
-		if (!runtime) return null;
-		return runtime.stats() as unknown as Record<string, unknown>;
-	} catch {
-		return null;
-	}
-}
-
-/**
- * True when the failure came from the relay POOL rather than from the model.
- *
- * api-relay.ts attaches `relayStatus` / `relayEndpoint` / `relayUrl` to every
- * HTTP refusal from a pool member, and names member-level failures
- * `RelayUnavailableError`; those are the cases the browser must treat as
- * "try again later" (the Worker's own 500 already does, via the 30 x 20 s
- * ladder), never as "the topic is bad".
- */
-export function isRelayPoolError(error: unknown): boolean {
-	const record = error as Record<string, unknown> | null;
-	if (record && (record.relayStatus !== undefined || record.relayUrl !== undefined || record.relayEndpoint !== undefined)) {
-		return true;
-	}
-	const name = error instanceof Error ? error.name : "";
-	if (name === "RelayUnavailableError" || name === "RelayError" || name === "TimeoutError") return true;
-	return /^Relay endpoint /i.test(errorMessage(error));
-}
-
 export interface PlannerModelResult {
 	ok: boolean;
 	text: string;
@@ -1294,33 +1264,15 @@ export async function runPlannerModelCall(
 	prompt: string,
 	maxTokens: number,
 	temperature: number,
-	timeoutMs: number = SEO_PLAN_AI_TIMEOUT_MS,
-	deadline = Infinity
+	timeoutMs: number = SEO_PLAN_AI_TIMEOUT_MS
 ): Promise<PlannerModelResult> {
 	const startedAt = Date.now();
 	let lastError = "";
 	let attempts = 0;
 
 	for (let attempt = 1; attempt <= SEO_PLAN_TRANSPORT_ATTEMPTS; attempt++) {
-		const remaining = deadline - Date.now();
-		if (remaining <= 0) {
-			lastError = "SEO planning request timed out";
-			console.warn("[seo-plan] transport attempt skipped", {
-				model,
-				attempt,
-				reason: "deadline reached",
-				remainingMs: remaining
-			});
-			break;
-		}
 		attempts = attempt;
 		if (!env || !env.AI) {
-			console.error("[seo-plan] transport attempt skipped", {
-				model,
-				attempt,
-				reason: "no AI binding on this deployment",
-				hasEnv: !!env
-			});
 			return {
 				ok: false,
 				text: "",
@@ -1330,20 +1282,6 @@ export async function runPlannerModelCall(
 			};
 		}
 
-		const attemptStartedAt = Date.now();
-		/* Written BEFORE `env.AI.run()`: the relay runtime may spend the whole
-		 * attempt in the pool, so every fact the later error needs is here. */
-		console.log("[seo-plan] model call", {
-			model,
-			attempt,
-			of: SEO_PLAN_TRANSPORT_ATTEMPTS,
-			promptChars: prompt.length,
-			maxTokens,
-			temperature,
-			attemptTimeoutMs: Math.min(timeoutMs, remaining),
-			deadlineInMs: remaining,
-			relay: relayPoolSnapshot(env)
-		});
 		try {
 			const result = await runAiCallWithTimeout(
 				env.AI.run(model, {
@@ -1351,30 +1289,13 @@ export async function runPlannerModelCall(
 					max_tokens: maxTokens,
 					temperature
 				}),
-				Math.min(timeoutMs, remaining)
+				timeoutMs
 			);
 			const text = aiText(result);
 
 			if (!text) {
 				lastError = "the model returned an empty reply";
-				console.warn("[seo-plan] model returned no text", {
-					model,
-					attempt,
-					ms: Date.now() - attemptStartedAt,
-					resultShape:
-						result && typeof result === "object"
-							? Object.keys(result as Record<string, unknown>).slice(0, 10)
-							: typeof result,
-					relay: relayPoolSnapshot(env)
-				});
 			} else {
-				console.log("[seo-plan] model call ok", {
-					model,
-					attempt,
-					textChars: text.length,
-					ms: Date.now() - attemptStartedAt,
-					relay: relayPoolSnapshot(env)
-				});
 				return {
 					ok: true,
 					text,
@@ -1385,31 +1306,16 @@ export async function runPlannerModelCall(
 			}
 		} catch (err: unknown) {
 			lastError = errorMessage(err);
-			/*
-			 * The old line had only { model, attempt, error }. A pool error
-			 * ("Relay endpoint answered 404") is indistinguishable there from a
-			 * model error, and the endpoint that refused the call was lost.
-			 * `relayErrorDetail` carries the name, the URL, the HTTP status and
-			 * the endpoint id that api-relay.ts attaches to the error.
-			 */
-			console.warn("[seo-plan] model call failed", Object.assign(relayErrorDetail(err), {
-				model,
-				attempt,
-				of: SEO_PLAN_TRANSPORT_ATTEMPTS,
-				error: lastError,
-				ms: Date.now() - attemptStartedAt,
-				remainingDeadlineMs: deadline - Date.now(),
-				poolError: isRelayPoolError(err),
-				relay: relayPoolSnapshot(env)
-			}));
 		}
 
+		console.warn("[seo-plan] model call failed", {
+			model,
+			attempt,
+			error: lastError
+		});
+
 		if (attempt < SEO_PLAN_TRANSPORT_ATTEMPTS) {
-			const delay = Math.min(400 * attempt, deadline - Date.now());
-			if (delay > 0) {
-				console.log("[seo-plan] transport backoff", { model, attempt, delayMs: delay });
-				await plannerSleep(delay);
-			}
+			await plannerSleep(400 * attempt);
 		}
 	}
 
@@ -1423,17 +1329,23 @@ export async function runPlannerModelCall(
 }
 
 /*
- * Plan one validated set, retrying transport or validation errors and trying
- * a fallback model when necessary. No further calls are made after a valid set.
+ * One validated keyword set from the planner (max 3 validation attempts per
+ * model, same retry contract as the script route's Stage 1). When `avoid` is
+ * given the prompt instructs the model to produce a different set, and a
+ * reply that is still identical to `avoid` is rejected and retried.
+ *
+ * A transport error retries the same model once and then moves to the next
+ * model in `fallbackModels`, so a single failed call no longer kills the
+ * whole plan.
  */
 export async function planOneSeoKeywordSet(
 	env: { AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> } },
 	scriptModel: string,
 	topic: string,
-	fallbackModels: string[] = SEO_PLAN_FALLBACK_MODELS,
-	deadline = Infinity
+	avoid?: PlannedKeywordSet | null,
+	fallbackModels: string[] = SEO_PLAN_FALLBACK_MODELS
 ): Promise<PlannedKeywordSet> {
-	const basePrompt = buildSeoPlannerPrompt(topic);
+	const basePrompt = buildSeoPlannerPrompt(topic, avoid);
 
 	/* Primary first, then each fallback once (no duplicates). */
 	const models: string[] = [];
@@ -1446,36 +1358,10 @@ export async function planOneSeoKeywordSet(
 	let keywordError = "";
 	let transportError = "";
 
-	/* Written BEFORE the model list is walked: primary + fallbacks, budget left. */
-	console.log("[seo-plan] plan start", {
-		topic: topic.slice(0, 80),
-		models,
-		deadlineInMs: deadline === Infinity ? null : deadline - Date.now(),
-		relay: relayPoolSnapshot(env)
-	});
-
 	for (const model of models) {
 		let prevRaw = "";
 
-		/* Written BEFORE the first call on this slug. */
-		console.log("[seo-plan] model", {
-			model,
-			index: models.indexOf(model) + 1,
-			of: models.length,
-			deadlineInMs: deadline === Infinity ? null : deadline - Date.now()
-		});
-
 		for (let attempt = 1; attempt <= 3; attempt++) {
-			if (Date.now() >= deadline) {
-				console.warn("[seo-plan] validation attempt skipped", {
-					model,
-					attempt,
-					reason: "deadline reached",
-					keywordError,
-					transportError
-				});
-				throw new Error("SEO planning request timed out - try again");
-			}
 			const prompt =
 				basePrompt +
 				(attempt > 1
@@ -1492,9 +1378,7 @@ export async function planOneSeoKeywordSet(
 				model,
 				prompt,
 				1024,
-				attempt === 1 ? 0.55 : 0.4,
-				SEO_PLAN_AI_TIMEOUT_MS,
-				deadline
+				attempt === 1 ? 0.55 : 0.4
 			);
 
 			/*
@@ -1503,42 +1387,26 @@ export async function planOneSeoKeywordSet(
 			 */
 			if (!call.ok) {
 				transportError = model + ": " + call.error;
-				/* Written BEFORE moving to the next slug (or giving up). */
-				console.warn("[seo-plan] model abandoned", {
-					model,
-					attempt,
-					attemptsUsed: call.attempts,
-					ms: call.ms,
-					error: call.error,
-					poolError: isRelayPoolError(call.error),
-					nextModel: models[models.indexOf(model) + 1] || null,
-					relay: relayPoolSnapshot(env)
-				});
 				break;
 			}
 
 			const check = parseKeywordSet(call.text);
-			if (check.ok) return check.data;
+
+			if (check.ok && avoid && keywordSetsEqual(check.data, avoid)) {
+				keywordError =
+					"the keyword set is identical to the other set - choose a different long-tail keyword and different short keywords";
+				prevRaw = call.text.replace(/\s+/g, " ").trim();
+				continue;
+			}
+			if (check.ok) {
+				return check.data;
+			}
 			keywordError = check.error;
 			prevRaw = call.text.replace(/\s+/g, " ").trim();
-			/* Written BEFORE the next validation attempt reuses this slug. */
-			console.warn("[seo-plan] keyword set rejected", {
-				model,
-				attempt,
-				reason: check.error,
-				replyChars: call.text.length,
-				replyPreview: call.text.replace(/\s+/g, " ").trim().slice(0, 240)
-			});
 		}
 	}
 
 	if (!keywordError && transportError) {
-		console.error("[seo-plan] no model produced a reply", {
-			topic: topic.slice(0, 80),
-			models,
-			transportError,
-			relay: relayPoolSnapshot(env)
-		});
 		throw new Error("SEO planner model failed (" + transportError + ") - try again");
 	}
 
@@ -1551,15 +1419,25 @@ export async function planOneSeoKeywordSet(
 }
 
 /*
- * POST /api/seo-plan {topic} -> {success, topic, sets:[set], model}
- * The one validated set keeps the existing array response shape for clients.
+ * POST /api/seo-plan {topic} -> {success, topic, sets:[setA, setB], model}
+ * Each set is {title, headings, longTail, short:[4 shorts]} and has passed
+ * the same `parseKeywordSet` validation the script route enforces. When two
+ * sets are returned they are guaranteed different (different long-tail or
+ * different short keywords - `keywordSetsEqual`).
+ *
+ * DEGRADED SUCCESS (2026-10-25): only the FIRST set is mandatory. If the
+ * second planner run cannot produce a distinct, valid set - the usual
+ * production failure, because the 8B model tends to repeat itself when told
+ * to "be different" - the route answers 200 with ONE set plus
+ * `partial: true` and a `warning`, instead of failing the whole plan and
+ * dead-ending the walkthrough. The client renders whatever it receives
+ * (one card or two), so a topic is never left without a usable keyword set.
  */
 export async function handleSeoPlanGeneration(
 	request: Request,
 	env: { AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> } },
 	scriptModel: string
 ): Promise<Response> {
-	const startedAt = Date.now();
 	const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
 	const rawTopic = String(body.topic ?? "")
 		.replace(/[\u0000-\u001F]+/g, " ")
@@ -1567,62 +1445,67 @@ export async function handleSeoPlanGeneration(
 		.trim()
 		.slice(0, 160);
 	const topic = rawTopic || "my video";
-	/*
-	 * Written BEFORE anything else runs: the topic that was received, the
-	 * model the settings chose, the budget, and whether this request arrived
-	 * through the relay rotation (a ticket header means it was handed to this
-	 * Worker by /api/relay/endpoint).
-	 */
-	console.log("[seo-plan] request", {
-		topic: topic.slice(0, 80),
-		topicChars: rawTopic.length,
-		scriptModel,
-		fallbacks: SEO_PLAN_FALLBACK_MODELS,
-		budgetMs: SEO_PLAN_REQUEST_BUDGET_MS,
-		bodyKeys: Object.keys(body).slice(0, 10),
-		rotated: !!request.headers.get("x-yvs-relay-ticket"),
-		hasAiBinding: !!(env && env.AI),
-		relay: relayPoolSnapshot(env)
-	});
 	if (!env || !env.AI) {
-		console.error("[seo-plan] no AI binding", { topic: topic.slice(0, 80) });
 		return scriptJson({ success: false, error: "AI binding not configured" }, 503);
 	}
+	const startedAt = Date.now();
 
-	const deadline = startedAt + SEO_PLAN_REQUEST_BUDGET_MS;
-	let set: PlannedKeywordSet;
+	let first: PlannedKeywordSet;
 
 	try {
-		set = await planOneSeoKeywordSet(env, scriptModel, topic, SEO_PLAN_FALLBACK_MODELS, deadline);
+		first = await planOneSeoKeywordSet(env, scriptModel, topic);
 	} catch (err: unknown) {
 		const message = errorMessage(err) || "SEO plan failed";
-		/* Written BEFORE the 500 is returned. The extra fields say whether the
-		 * failure was the model or the pool, and which endpoints were used. */
-		console.error("[seo-plan] failed", Object.assign(relayErrorDetail(err), {
+		console.error("[seo-plan] failed", {
 			topic: topic.slice(0, 80),
+			stage: "first-set",
 			ms: Date.now() - startedAt,
-			budgetMs: SEO_PLAN_REQUEST_BUDGET_MS,
-			error: message,
-			poolError: isRelayPoolError(err),
-			httpStatus: 500,
-			relay: relayPoolSnapshot(env)
-		}));
+			error: message
+		});
 		return scriptJson({ success: false, error: message }, 500);
+	}
+
+	let second: PlannedKeywordSet | null = null;
+	let secondError = "";
+
+	try {
+		second = await planOneSeoKeywordSet(env, scriptModel, topic, first);
+	} catch (err: unknown) {
+		secondError = errorMessage(err) || "second set failed";
+		console.warn("[seo-plan] second set unavailable, returning one set", {
+			topic: topic.slice(0, 80),
+			stage: "second-set",
+			ms: Date.now() - startedAt,
+			error: secondError
+		});
+	}
+
+	if (!second) {
+		return scriptJson({
+			success: true,
+			partial: true,
+			topic,
+			sets: [plannedSetToClient(first)],
+			model: scriptModel,
+			warning:
+				"Only one keyword set could be planned this time; pick it to continue. (" +
+				secondError +
+				")"
+		});
 	}
 
 	console.log("[seo-plan] ok", {
 		topic: topic.slice(0, 80),
-		longTail: set.longTail,
-		shorts: set.shorts,
+		first: first.longTail,
+		second: second.longTail,
 		ms: Date.now() - startedAt,
-		model: scriptModel,
-		relay: relayPoolSnapshot(env)
+		model: scriptModel
 	});
 
 	return scriptJson({
 		success: true,
 		topic,
-		sets: [plannedSetToClient(set)],
+		sets: [plannedSetToClient(first), plannedSetToClient(second)],
 		model: scriptModel
 	});
 }
@@ -1949,7 +1832,7 @@ export async function handleSeoScriptGeneration(
 	 * WHO OWNS THE RETRIES? THE BROWSER, FOR SCRIPT WRITING.
 	 *
 	 * The shipped page sends `browserRetries: true` and owns one initial
-	 * write plus thirty 20-second-spaced retries in
+	 * write plus seven 40-second-spaced retries in
 	 * requestScriptWritingWithClientRetries(). This route therefore makes
 	 * exactly one planner and one writer inference for that request, rotates
 	 * its model using the browser's `attempt`, and returns a verdict for
@@ -1989,7 +1872,7 @@ export async function handleSeoScriptGeneration(
 		? alternateModel : scriptModel;
 	/*
 	 * A retry on the same slug with the same prompt is a replay. The shipped
-	 * page sends `attempt` for its thirty browser-owned retries and rotates the
+	 * page sends `attempt` for its seven browser-owned retries and rotates the
 	 * slug before calling this route through `browserAttempt`; `modelForAttempt`
 	 * preserves the legacy worker-owned ladder's own rotation for callers that
 	 * do not send `browserRetries`.

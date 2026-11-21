@@ -49,7 +49,7 @@ still prohibited.** No SDXL/FLUX/Qwen-image inference or generated-image fallbac
 
 ### Script and keyword debug (current implementation)
 
-- The editor writes an SEO script; Quick Batch accepts a typed or pasted script. Both pass the full narration to the stock planner. Browser and Worker count Unicode words with the same punctuation/emoji rules; editor renumbering keeps in-flight work tied to its project. Quick Batch table rows follow FINAL RULE: client JS retries each failed pipeline stage **30 times after a 20 s backoff** (`src/modules/retry-policy.ts`, stage `batchPipeline` — the only place these numbers live). See [script-image-debug-audit.md](script-image-debug-audit.md) and the FINAL RULE section for fixes, retry behavior, tests and remaining risks.
+- The editor writes an SEO script; Quick Batch accepts a typed or pasted script. Both pass the full narration to the stock planner. Browser and Worker count Unicode words with the same punctuation/emoji rules; editor renumbering keeps in-flight work tied to its project. Quick Batch table rows follow FINAL RULE: client JS retries each failed pipeline stage seven times after a 40 s backoff. See [script-image-debug-audit.md](script-image-debug-audit.md) and the FINAL RULE section for fixes, retry behavior, tests and remaining risks.
 
 ### Pixabay API, infrastructure and safety
 
@@ -673,14 +673,13 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
 - Per-video caps (enforced in the accordion uploader and reused by the AI panel):
   - `MAX_IMAGE_UPLOADS = 25` still images (`app-js.ts:60`).
   - `MAX_GIF_UPLOADS = 5` GIFs (`app-js.ts:56`).
-  - `MAX_MP4_UPLOADS = 40` MP4 clips, each `MP4_MAX_DURATION_S = 60` s, probed at upload time.
+  - `MAX_MP4_UPLOADS = 5` MP4 clips (`app-js.ts:64`), each `MP4_MAX_DURATION_S = 60` s
+    (`app-js.ts:68`), probed at upload time.
     - Any file that is neither GIF nor MP4 is treated as a still image.
     - Hitting a cap raises an `alert` **and stops processing the rest of that upload batch**
       (`break`), so later files in the same pick are silently dropped.
   - A template-composed MP4 is inserted as a normal MP4 asset and counts against the same
-    40-clip cap (it is ≤ 25 s, so the 60 s rule never bites).
-  - The Quick Batch table timeline also accepts up to 40 MP4 clips in its Scene Media lane;
-    its automatic Pixabay plan remains fixed at 14 scenes (six clips and eight photos).
+    5-clip cap (it is ≤ 25 s, so the 60 s rule never bites).
 - Video length rule: **the MP3 is the timeline.**
   - Stills and GIFs occupy `SLIDE_SECONDS_MIN = SLIDE_SECONDS_MAX = 9` s each
     (`app-js.ts:1251`), i.e. always exactly 9 s.
@@ -1013,7 +1012,7 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
 | `SEO rule (explainer): 1 long-tail keyword said at least 1× · exactly 4 short keywords said at least 2× each · minimums only, extra uses are allowed · one short keyword is in the title · one is in a heading · short/long-tail overlap is allowed and shared uses count for both · no long-tail length rule` | video accordion, SEO section (`.va-note`, always visible) | `SEO_LONG_TAIL = 1`, `SEO_SHORT_TOTAL = 4`, `SEO_LONG_FREQ_MIN = 1`, `SEO_SHORT_FREQ_MIN = 2` (no `*_FREQ_MAX`; RULE 7) |
 | `AI plans 1 long-tail keyword (said at least once), exactly 4 short keywords (each said at least twice) plus the explainer title and headings, then writes the plain narration script around them. Extra uses are allowed. Short keywords may overlap the long-tail (shared uses count for both); no long-tail length rule.` | **✨ Generate SEO Script** button tooltip | the same SEO constants |
 | `Long-tail keyword — must be said at least 1×` · `Short keyword — must be said at least 2×; shared occurrences inside the long-tail count too; one short keyword is in the title and one in a heading` · `Explainer title — includes at least one short keyword` · `Section heading — at least one heading includes a short keyword` | SEO plan chips, `renderSeoKeywords()` tooltips (the `N×` shown is the measured count, which may exceed the minimum) | `SEO_LONG_FREQ_MIN = 1`, `SEO_SHORT_FREQ_MIN = 2`, title/heading inclusion rules (RULE 7) |
-| `Max 5 GIF · 25 images · 40 MP4 (1:00 each, silent)` | video accordion, media section (`.va-note`) | `MAX_GIF_UPLOADS = 5`, `MAX_IMAGE_UPLOADS = 25`, `MAX_MP4_UPLOADS = 40`, `MP4_MAX_DURATION_S = 60` |
+| `Max 5 GIF · 25 images · 5 MP4 (1:00 each, silent)` | video accordion, media section (`.va-note`) | `MAX_GIF_UPLOADS = 5`, `MAX_IMAGE_UPLOADS = 25`, `MAX_MP4_UPLOADS = 5`, `MP4_MAX_DURATION_S = 60` |
 | `2 images per submit · landscape 16:9 · 1024×576` (placeholder: `Describe the image (always landscape 16:9, 1024×576)`; success line: `Done — landscape 16:9 · 1024×576`) | video accordion, AI images section (`.va-note`, doubles as the status line) | two `GET /image/gen` requests of one image each, rendered by `runImageModel()` at `IMAGE_WIDTH = 1024` / `IMAGE_HEIGHT = 576` (the old `480px landscape` copy was wrong — `toberesolved.md` A2/A3) |
 | `Add a video (up to 10)` | `+ Add Video` button tooltip | `VIDEO_MAX_VIDEOS = 10` |
 | `Caption text (max 40 characters)` | caption row placeholder (accordion + main panel) | `CAPTION_MAX_CHARS = 40` |
@@ -1071,7 +1070,7 @@ authorization, server-side downloads, caching, the Durable Object budget and dep
   `Render failed: <error>`.
 - Composer: `The MP4 muxer failed to load. Reload the page and try again.`,
   `Your browser does not support WebCodecs. Please use modern Chrome, Edge, or Safari.`,
-  `Video export failed: <error>`, `Video N: you can add at most 40 MP4 clips.`,
+  `Video export failed: <error>`, `Video N: you can add at most 5 MP4 clips.`,
   `The composed file could not be read as an MP4 clip.`,
   `The composed file is <n>s long. Each MP4 clip must be at most 1:00.`
 - Restriction: **the AI script never alerts.** A failed script is retried and only then writes
@@ -2847,11 +2846,11 @@ all documentation … fix the entire system."
 
 This is the final, code-backed rule for the **Quick Batch table layout** and the **shared Editor media pipeline**. It supersedes every older Markdown/session note about one-request tables, Worker-owned media retries, variable scene totals, separate Preview/Export columns, or row script buttons.
 
-1. Client JavaScript owns retries for every failed **non-media** pipeline stage in this layout: voice, scene plan / prompts and animation. One initial attempt is followed by at most **30 retries** (31 total attempts); every retry waits **20 seconds** first. Both numbers come from `src/modules/retry-policy.ts` (stage `batchPipeline`) and are advertised by `/api/pipeline-capabilities`; no other file may restate them. Only the failed stage is reset and repeated. Earlier successful stages are kept; there is no whole-row restart and no duplicate paid batch.
-2. **Image and video imports are the exception in BOTH layouts.** Only the individually failed photo or clip is retried from client JavaScript, using the same 30-retry / 20-second ladder per item (`retry-policy.ts`, stage `media`). Successful media, object URLs and recorded filenames are preserved. There is no whole-stage, whole-batch or whole-row media restart, and a failed stage-level retry must not revoke a successful image.
+1. Client JavaScript owns retries for every failed **non-media** pipeline stage in this layout: voice, scene plan / prompts and animation. One initial attempt is followed by at most **7 retries** (8 total attempts); every retry waits **40 seconds** first. Only the failed stage is reset and repeated. Earlier successful stages are kept; there is no whole-row restart and no duplicate paid batch.
+2. **Image and video imports are the exception in BOTH layouts.** Only the individually failed photo or clip is retried from client JavaScript, using the same 7-retry / 40-second ladder per item. Successful media, object URLs and recorded filenames are preserved. There is no whole-stage, whole-batch or whole-row media restart, and a failed stage-level retry must not revoke a successful image.
 3. Every automatic video in **both** the Editor and Quick Batch table plans exactly **12 Pixabay scenes for every script length and duration**: **4 silent videos + 8 photos**. Scene planning and Pixabay searches always target those same 12 results (8 image results and 4 video results). Client JS records the filename of every selected scene and rejects duplicate filenames in one video; alternate Pixabay result indexes/pages are searched for the failed item so no similar image repeats in one video. A duplicate or missing scene is retried individually and must not strand the row.
 4. Retries are silent. The row keeps its script textarea, working stage label and `.va-spinner` continuously; no error, retry, attempt, warning or abort wording is painted in the table UI. After an exhausted ladder the row returns silently to `ready`.
 5. A missing scene plan must be retried by client JS, and the row must continue to the next pipeline once a plan arrives.
 6. In the **Editor layout**, the script textbox is pinned while script writing/retries run: no state paint, toggle or accordion renumber may hide it over time.
 7. The **last table column is `Actions`** with icons for **Preview** (same existing function), **Process Export** and **Edit**. Edit opens a new page with a **transition-only project JSON** payload carrying the row's basic settings from `batchProjectJson()`; `applyTransitionProject()` consumes it for the transition only. The rows have **no AI enhancer button**.
-8. `src/client/app-js.ts` is the source of truth. `AUTO_MEDIA_TOTAL = 12`, `AUTO_VIDEO_SCENES = 4`, `AUTO_IMAGE_SCENES = 8`, `MEDIA_ITEM_MAX_RETRIES = PIPELINE_RETRY.stages.media.maxRetries` (30), `MEDIA_ITEM_RETRY_BACKOFF_MS = PIPELINE_RETRY.stages.media.backoffMs` (20 000), `retryFailedMediaOnly()`, `requestBatchImagesWithIndividualRetries()`, `runEditorMediaWithIndividualRetries()`, `batchActionCell()`, `batchProjectJson()` and `applyTransitionProject()` define the live contract. Worker capabilities advertise `mediaSceneCap: 12`, `mediaVideoScenes: 4`, `mediaImageScenes: 8`, `mediaItemRetryOwner: "browser"`, `mediaItemRetries: 30`, `mediaItemRetryBackoffMs: 20000`, `mediaFilenameDedupe: "per-video"` and `quickBatchActionsColumn: "preview-process-export-edit"`. `BATCH_PIPELINE_MAX_RETRIES` (30) and `BATCH_PIPELINE_RETRY_BACKOFF_MS` (20 000) govern the non-media stage ladder, and both read `src/modules/retry-policy.ts`. Older Quick Batch table statements in this file are superseded wherever they conflict.
+8. `src/client/app-js.ts` is the source of truth. `AUTO_MEDIA_TOTAL = 12`, `AUTO_VIDEO_SCENES = 4`, `AUTO_IMAGE_SCENES = 8`, `MEDIA_ITEM_MAX_RETRIES = 7`, `MEDIA_ITEM_RETRY_BACKOFF_MS = 40000`, `retryFailedMediaOnly()`, `requestBatchImagesWithIndividualRetries()`, `runEditorMediaWithIndividualRetries()`, `batchActionCell()`, `batchProjectJson()` and `applyTransitionProject()` define the live contract. Worker capabilities advertise `mediaSceneCap: 12`, `mediaVideoScenes: 4`, `mediaImageScenes: 8`, `mediaItemRetryOwner: "browser"`, `mediaItemRetries: 7`, `mediaItemRetryBackoffMs: 40000`, `mediaFilenameDedupe: "per-video"` and `quickBatchActionsColumn: "preview-process-export-edit"`. `BATCH_PIPELINE_MAX_RETRIES = 7` and `BATCH_PIPELINE_RETRY_BACKOFF_MS = 40000` still govern the non-media stage ladder. Older Quick Batch table statements in this file are superseded wherever they conflict.

@@ -6,7 +6,9 @@
  *     instead of aborting the plan on the first failure;
  *  2. when one model keeps failing, the planner falls back to the next
  *     slug in SEO_PLAN_FALLBACK_MODELS;
- *  3. the route returns exactly one validated set and stops once it has it;
+ *  3. when only the FIRST set can be planned the route still answers 200
+ *     with one validated set (`partial: true` + `warning`), so the
+ *     walkthrough can continue instead of dead-ending;
  *  4. the lenient reply shapes (`long_tail`, `shorts`, objects, delimited
  *     strings, five shorts) are accepted by `parseKeywordSet` while every
  *     RULE 7 rule is still enforced;
@@ -15,7 +17,6 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SEO_PLAN_REQUEST_BUDGET_MS } from "../src/modules/retry-policy.ts";
 import {
 	SEO_PLAN_FALLBACK_MODELS,
 	handleSeoPlanGeneration,
@@ -23,18 +24,19 @@ import {
 	parseKeywordSet,
 	planOneSeoKeywordSet
 } from "../src/modules/script-seo.ts";
-import {
-	invalidateRelayCache,
-	noteRelayFailure,
-	resetRelayHealth,
-	withRelayedAi
-} from "../src/modules/api-relay.ts";
 
 const setA = {
 	title: "Yoga for a Calmer Morning",
 	headings: ["Start with Yoga", "Find Your Balance"],
 	longTail: "morning yoga poses for beginners in a small home studio",
 	short: ["yoga", "breathing", "stretching", "balance"]
+};
+
+const setB = {
+	title: "Morning Yoga Balance Guide",
+	headings: ["Morning Yoga for Stiff Beginners", "Build a Home Practice"],
+	longTail: "gentle morning yoga routine for stiff beginners at home",
+	short: ["morning yoga", "gentle stretch", "home practice", "yoga routine"]
 };
 
 function jsonRequest(url, body) {
@@ -55,7 +57,7 @@ test("a thrown model error is retried on the same model instead of failing the p
 		}
 	};
 
-	const planned = await planOneSeoKeywordSet(env, "primary-model", "Morning yoga", []);
+	const planned = await planOneSeoKeywordSet(env, "primary-model", "Morning yoga", null, []);
 	assert.equal(planned.longTail, setA.longTail);
 	assert.deepEqual(planned.shorts, setA.short);
 	/* First call threw, second call succeeded on the SAME model. */
@@ -81,6 +83,7 @@ test("the planner falls back to the next model when the primary keeps failing", 
 		env,
 		"primary-model",
 		"Morning yoga",
+		null,
 		["fallback-model"]
 	);
 
@@ -101,27 +104,34 @@ test("an empty model reply consumes an attempt instead of returning nothing", as
 		}
 	};
 
-	const planned = await planOneSeoKeywordSet(env, "mock-instruct", "Morning yoga", []);
+	const planned = await planOneSeoKeywordSet(env, "mock-instruct", "Morning yoga", null, []);
 	assert.equal(planned.longTail, setA.longTail);
 	assert.equal(calls, 2);
 });
 
-test("seo-plan stops after one valid set and returns it as a complete plan", async () => {
-	const prompts = [];
-	const env = { AI: { run: async (_model, { prompt }) => {
-		prompts.push(prompt);
-		return { response: setA };
-	} } };
+test("seo-plan returns one validated set (200, partial) when the second set cannot differ", async () => {
+	const env = {
+		AI: {
+			run: async (_model, input) => {
+				/* Always the same set, even when asked to be different. */
+				return { response: JSON.stringify(setA) };
+			}
+		}
+	};
+
 	const response = await handleSeoPlanGeneration(
 		jsonRequest("https://studio.test/api/seo-plan", { topic: "Morning yoga" }),
 		env,
 		"mock-instruct"
 	);
+
 	assert.equal(response.status, 200);
-	assert.deepEqual(await response.json(), { success: true, topic: "Morning yoga", sets: [setA], model: "mock-instruct" });
-	assert.equal(prompts.length, 1);
-	assert.match(prompts[0], /ONLY one JSON object/);
-	assert.doesNotMatch(prompts[0], /"sets"|alternative/i);
+	const data = await response.json();
+	assert.equal(data.success, true);
+	assert.equal(data.partial, true);
+	assert.equal(data.sets.length, 1);
+	assert.deepEqual(data.sets[0].short, setA.short);
+	assert.match(data.warning, /Only one keyword set/);
 });
 
 test("seo-plan still answers 500 when no set at all can be planned", async () => {
@@ -231,97 +241,4 @@ test("the /api/script planner retries a model error instead of returning 500", a
 	assert.equal(data.success, true);
 	assert.equal(data.keywords.longTail.keyword, setA.longTail);
 	assert.ok(prompts.length >= 2);
-});
-
-test("a hanging planner cannot outlast the Worker request budget", async (t) => {
-	t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
-	let signalStarted;
-	const started = new Promise((resolve) => { signalStarted = resolve; });
-	const models = [];
-	const planning = handleSeoPlanGeneration(
-		jsonRequest("https://studio.test/api/seo-plan", { topic: "Morning yoga" }),
-		{ AI: { run: async (model) => {
-			models.push(model);
-			signalStarted();
-			return new Promise(() => {});
-		} } },
-		"mock-instruct"
-	);
-	await started;
-	for (const ms of [45_000, 400, 45_000, SEO_PLAN_REQUEST_BUDGET_MS - 90_400]) {
-		t.mock.timers.tick(ms);
-		await new Promise(setImmediate);
-	}
-	const response = await planning;
-	assert.equal(response.status, 500);
-	const data = await response.json();
-	assert.equal(data.success, false);
-	assert.match(data.error, /timed out/);
-	assert.deepEqual(models, ["mock-instruct", "mock-instruct", SEO_PLAN_FALLBACK_MODELS[0]]);
-});
-
-/*
- * PRODUCTION REGRESSION (2026-11-20, worker-api-two):
- *
- *   POST /api/seo-plan -> 500
- *   [seo-plan] model call failed { attempt: 2, error: "Relay endpoint answered 404" }
- *
- * `env.AI` is the rotation proxy, so that message came from the POOL: a
- * registered backup did not serve `/api/relay/ai` (older deployment / typo /
- * path prefix). "404" matched FATAL_PATTERNS in image-load.ts, the chain
- * re-threw, and the browser got a 500 for a plan the local Worker could have
- * produced. This test runs the WHOLE route through a relayed env with one
- * stale backup: it must end at the local Worker with one validated set.
- */
-test("a stale backup that 404s /api/relay/ai does not fail the plan: local answers", async () => {
-	invalidateRelayCache();
-	resetRelayHealth();
-	const store = new Map([
-		["config:workers", JSON.stringify(["https://stale.test"])],
-		["config:llm", JSON.stringify({ provider: "cloudflare" })]
-	]);
-	const env = {
-		AI: { run: async () => ({ response: JSON.stringify(setA) }) },
-		KV_BINDING: {
-			async get(key) {
-				return store.has(key) ? store.get(key) : null;
-			},
-			async put(key, value) {
-				store.set(key, String(value));
-			},
-			async delete(key) {
-				store.delete(key);
-			},
-			async list() {
-				return { keys: [], list_complete: true };
-			}
-		},
-		RELAY_SECRET: "seo-plan-stale-backup"
-	};
-	/* Local is cooling, so the stale backup is the first candidate - exactly
-	 * the order that produced the 404 in production. */
-	noteRelayFailure("local", new Error("429 Too Many Requests"), 30_000);
-	const requested = [];
-	const relayed = withRelayedAi(env, jsonRequest("https://primary.test/api/seo-plan", { topic: "Morning yoga" }), {
-		selfOrigin: "https://primary.test",
-		fetchImpl: async (url) => {
-			requested.push(String(url));
-			/* An older deployment: the main router's plain 404. */
-			return new Response("Not Found", { status: 404 });
-		}
-	});
-
-	const response = await handleSeoPlanGeneration(
-		jsonRequest("https://primary.test/api/seo-plan", { topic: "Morning yoga" }),
-		relayed,
-		"@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-	);
-	assert.equal(response.status, 200, "the plan is served by the local Worker");
-	const payload = await response.json();
-	assert.equal(payload.success, true);
-	assert.equal(payload.sets.length, 1);
-	assert.equal(payload.sets[0].longTail, setA.longTail);
-	assert.deepEqual(requested, ["https://stale.test/api/relay/ai"]);
-	invalidateRelayCache();
-	resetRelayHealth();
 });

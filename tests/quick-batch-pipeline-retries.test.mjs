@@ -52,7 +52,7 @@ function ndjson(events) {
 
 function imageBatchResponse(body, callIndex) {
 	const events = [{ type: "start", count: body.prompts.length, width: 1024, height: 576 }];
-	/* The test's legacy fixture uses four clips and eight distinct photos. */
+	/* The fixed plan needs four distinct clips and eight distinct photos. */
 	const clipSlots = [1, 4, 7, 10];
 	body.prompts.forEach((_, index) => {
 		const scene = Array.isArray(body.sceneIndexes) ? Number(body.sceneIndexes[index]) : callIndex * 3 + index;
@@ -80,13 +80,13 @@ test("the final Quick Batch rule advertises browser-owned 7-retry / 40 s stage l
 	)).json();
 	assert.equal(caps.quickBatchPipelineRetryOwner, "browser");
 	assert.equal(caps.batchPipelineRetryOwner, "browser");
-	assert.equal(caps.quickBatchPipelineRetries, 30);
-	assert.equal(caps.batchPipelineRetries, 30);
-	assert.equal(caps.quickBatchPipelineRetryBackoffMs, 20000);
-	assert.equal(caps.batchPipelineRetryBackoffMs, 20000);
+	assert.equal(caps.quickBatchPipelineRetries, 7);
+	assert.equal(caps.batchPipelineRetries, 7);
+	assert.equal(caps.quickBatchPipelineRetryBackoffMs, 40000);
+	assert.equal(caps.batchPipelineRetryBackoffMs, 40000);
 	assert.equal(caps.scriptRetryOwner, "browser");
-	assert.equal(caps.browserScriptRetries, 30);
-	assert.equal(caps.scriptRetryBackoffMs, 20000);
+	assert.equal(caps.browserScriptRetries, 7);
+	assert.equal(caps.scriptRetryBackoffMs, 40000);
 });
 
 test("the editor script textbox stays visible across delayed state paints and renumbering", async (t) => {

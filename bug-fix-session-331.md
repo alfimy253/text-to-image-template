@@ -205,7 +205,7 @@ These rules describe the current code and supersede earlier session notes where 
 5. **Intentionally kept unchanged:** `/api/config/workers`, `/api/render*`, `/api/worker/*`, `putBlobStore`/`getBlobStore`, `workerRunJob`, `apiRenderVideo`, the admin Background Worker Mode card, archived `src/index.ts.original`, and standalone `render-app/`.
 
 6. **Verified accompanying rules (code-checked):**
-   - **RULE 8 (MeloTTS voiceover):** Server (`src/modules/voiceover.ts`) owns all text cleaning (`sanitizeVoiceoverText`), 8,000-char slicing (`VOICEOVER_MAX_CHARS`), `<= 400`-char chunking (`splitVoiceoverChunks`), 3-lane synthesis within a 90 s budget, per-chunk 3× `@cf/myshell-ai/melotts` retries, English Deepgram fallbacks (`@cf/deepgram/aura-2-en`, `@cf/deepgram/aura-1`), external fallback (`https://tts-api.netlify.app`), and WAV/MP3 joining. Browser (`src/client/app-js.ts`, `src/client/browser-offload.ts`) sends one full-text `POST /api/voiceover` (165 s timeout); Quick Batch retries a failed voice stage up to 30× at 20 s intervals, and the Editor owns the same 30 x 20 s ladder for its own voice step (`requestEditorVoiceoverWithClientRetries`). Both read `src/modules/retry-policy.ts` (stage `voiceover`).
+   - **RULE 8 (MeloTTS voiceover):** Server (`src/modules/voiceover.ts`) owns all text cleaning (`sanitizeVoiceoverText`), 8,000-char slicing (`VOICEOVER_MAX_CHARS`), `<= 400`-char chunking (`splitVoiceoverChunks`), 3-lane synthesis within a 90 s budget, per-chunk 3× `@cf/myshell-ai/melotts` retries, English Deepgram fallbacks (`@cf/deepgram/aura-2-en`, `@cf/deepgram/aura-1`), external fallback (`https://tts-api.netlify.app`), and WAV/MP3 joining. Browser (`src/client/app-js.ts`, `src/client/browser-offload.ts`) sends one full-text `POST /api/voiceover` (165 s timeout); Quick Batch retries a failed voice stage up to 7× at 40 s intervals while the Editor runs a single request per click.
    - **RULE 11 (Video output & presets):** No codec picker anywhere. Editor accordions encode 30 fps H.264 (`avc1.4d002a`) + AAC (`mp4a.40.2`, 128/160/192 kbps; silent when no audio) at the exact three presets (`854×480` @ 1.2 Mbps, `1280×720` @ 2.5 Mbps, `1280×720` @ 5 Mbps). Quick Batch reuses `generateMP4()` at 30 fps across `[480, 540, 720, 1024] × [1:1, 16:9, 9:16]` frame sizes; timeline editor exports `state.frame` at 30 fps H.264 + 160 kbps AAC (2.5/5 Mbps auto, with a `MediaRecorder` fallback when WebCodecs/`Mp4Muxer` is unavailable); template composer exports silent 30 fps 1080p H.264 @ 6 Mbps.
 
 **Verification:** `tests/session-331-caps-and-ttl.test.mjs` passed 7/7; existing suites `account-rows` (6/6), `public-entry-points` (9/9), `browser-local-render` (3/3), `session-264-editor-render` (10/10), `session-331-fixes` (11/11), `timeline-preview-parity` (2/2), `timeline-quick-batch-sync` (11/11), `timeline-tab-recovery` (6/6), targeted `timeline-editor` upload/export/media checks (6/6), `template-composer` (22/22), `retry-offload-worker` (9/9), and `api-relay` (40/40) all passed (142/142 total). All inline client bundles parsed cleanly, `npx wrangler deploy --dry-run` succeeded, `git diff --check` passed, and `tsc --noEmit` added zero new errors.
@@ -358,127 +358,6 @@ render-app/ ............... a SEPARATE Node+Playwright script→MP3 helper (neve
 wrangler.json ............. bindings: AI, KV_BINDING, PIXABAY_RATE_LIMITER
 ```
 
-### D-2. Retry mechanics — 30 retries per pipeline step, 20 s apart (2026-11-20)
-
-**Why this section exists.** Every retry number used to be typed into prose (README, session notes,
-comments, `/api/capabilities`) and into three different places in the page script. They disagreed.
-Since 2026-11-20 there is exactly **one** place a retry limit or backoff is written down:
-[`src/modules/retry-policy.ts`](src/modules/retry-policy.ts). Everything else reads it.
-
-> **Code wins.** If any sentence below ever disagrees with `src/modules/retry-policy.ts`, the file
-> is right and the sentence is a bug in this document.
-
-#### The rule in one line
-
-**Every pipeline step retries up to 30 times (31 attempts in total), waits 20 seconds before each
-retry, and the browser owns the ladder.**
-
-```
-attempt 1 ──fail──► wait 20 s ──► attempt 2 ──fail──► wait 20 s ──► … ──► attempt 31 ──fail──► verdict
-```
-
-30 retries x 20 s = **600 s (10 minutes) of patience per step**, on top of the time each attempt
-itself takes. That is deliberate: the studio would rather wait out a busy fleet than hand the user a
-failure they cannot act on.
-
-#### The table (the live numbers)
-
-| Pipeline step | Ladder owner | Retries after the first attempt | Wait before each retry | Stage key in `retry-policy.ts` |
-| --- | --- | --- | --- | --- |
-| SEO planning — `POST /api/seo-plan`, editor walkthrough | browser | **30** | **20 s** | `seoPlan` |
-| Script writing — `POST /api/script`, Editor and Quick Batch | browser | **30** | **20 s** | `scriptWrite` |
-| Photos and clips — Pixabay import, **per failed item** | browser | **30** | **20 s** | `media` |
-| Voiceover — `POST /api/voiceover`, editor | browser | **30** | **20 s** | `voiceover` |
-| Quick Batch — any failed non-media stage (prompts, voice, animate) | browser | **30** | **20 s** | `batchPipeline` |
-| Editor image flow — scene plan + missing scenes after a retryable stop | browser | **30** | **20 s** (a server `Retry-After` hint wins, clamped 2 s–120 s) | `imageFlow` |
-| Render / export (canvas + WebCodecs) | — | **none** | — | — |
-
-`maxAttempts` is always `maxRetries + 1` (31). The object is injected into the page script
-(`APP_JS` embeds `PIPELINE_RETRY_POLICY`) and advertised by `/api/pipeline-capabilities`, so the page,
-the API and this document can no longer drift.
-
-#### What the browser exposes (reading the live policy)
-
-Nobody has to guess a number; these are live in devtools:
-
-| Global | Meaning |
-| --- | --- |
-| `window.PIPELINE_RETRY` (inside the page) | the whole table — `stages.<step>.maxRetries / maxAttempts / backoffMs / owner` |
-| `window.__SCRIPT_RETRY_TIMING` | script-writing ladder (`maxRetries: 30`, `backoffMs: 20000`, `owner: "browser"`) |
-| `window.__SEO_PLAN_RETRY_TIMING` + `__SEO_PLAN_RETRY_LOG` | SEO planning ladder and its per-attempt log |
-| `window.__BATCH_PIPELINE_RETRY_TIMING` + `__BATCH_PIPELINE_RETRY_LOG` | Quick Batch stage ladder |
-| `window.__MEDIA_ITEM_RETRY_TIMING` + `__MEDIA_ITEM_RETRY_LOG` | per-item photo/clip ladder |
-| `window.__VOICE_RETRY_TIMING` + `__VOICE_RETRY_LOG` | editor voiceover ladder |
-| `window.__IMAGE_AUTO_RETRY_TIMING` + `__IMAGE_AUTO_RETRY_LOG` | editor image-flow auto-retry |
-| `GET /api/pipeline-capabilities` | `browserScriptRetries`, `seoPlanRetries`, `batchPipelineRetries`, `mediaItemRetries`, `editorVoiceRetries`, `pipelineRetryPolicy` — all from the same file |
-
-The `*_LOG` arrays record every `attempt`, `attempt-failed`, `backoff`, `success`, `verdict` and
-`budget-exhausted` event, which is how a support session answers "did it really try thirty times?".
-
-#### The Worker's own (much smaller) ladders
-
-A single HTTP request cannot survive 600 s of sleeping, so the big ladder lives in the browser and
-the Worker keeps a **fast inner ladder inside one attempt**. These are not a second pipeline ladder
-and they are not the numbers above:
-
-| Inside one request | File | Attempts | Wait |
-| --- | --- | --- | --- |
-| SEO planner transport | `script-seo.ts` | `SEO_PLAN_TRANSPORT_ATTEMPTS = 2` per model call, up to 3 validation attempts per model, 1 fallback model; one set, including retries and fallback, must fit within a 120 s deadline | 400 ms between transport attempts |
-| Script writing | `script-seo.ts` | 1 inference per request when the browser owns the ladder; legacy path 3 planner + 3 writer | none |
-| Scene prompts | `image-prompts.ts` | `IMAGE_PROMPT_ATTEMPTS = 3` | exponential 400 ms, inside a total budget |
-| Image generation | `image-batch.ts` | `IMAGE_OVERLOAD_ATTEMPTS = 4` on load-shedding, 2 otherwise | exponential 800 ms → 20 s, inside a 45 s budget |
-| Voiceover | `voiceover.ts` | `VOICEOVER_CHUNK_ATTEMPTS = 3` per chunk, then fallback models | 400 ms x attempt |
-| Relay failover | `api-relay.ts` | `maxAttempts = 3` endpoints | none, 180 s chain budget |
-
-#### What is deliberately NOT retried
-
-* **A verdict.** A 4xx that cannot change (bad topic, missing AI binding, rejected credential, a
-  refused script) stops the ladder immediately — 30 retries of a request that is wrong by
-  construction would only waste ten minutes. 408, 409, 425, 429 and 5xx are retried.
-* **A cancellation.** Deleting the video, Stop, or closing the flow cancels the pending 20 s wait
-  and the in-flight request. Nothing is painted as a failure afterwards.
-* **A stop with a spent budget.** When the 31st attempt fails, the ladder reports one quiet verdict
-  (`budget-exhausted`) instead of a silently spinning UI.
-
-#### What each retry keeps
-
-* **Quick Batch:** only the failed *stage* is reset. Successful earlier stages, delivered media,
-  object URLs and recorded filenames stay. No row restart, no duplicate paid batch.
-* **Editor media:** only the individual failed photo/clip is requested again; a delivered asset is
-  never re-requested or revoked.
-* **SEO planning:** each browser attempt requests **one validated keyword set** (one long-tail,
-  four distinct short keywords, a title and headings). The Worker stops as soon as it has a
-  valid set and returns `sets: [set]`. One set is a complete plan, not a partial result. The Editor
-  shows a single card, even if an older relay Worker sends multiple sets. Accept the card with
-  **Use this keyword set**, then choose a visual style. The 120 s Worker budget, 150 s browser
-  timeout, and 30 browser retries at 20 s intervals are unchanged. Deleting the video cancels planning.
-
-#### Where to change it
-
-One file, two constants:
-
-```ts
-export const PIPELINE_RETRY_MAX = 30;          // retries after the first attempt
-export const PIPELINE_RETRY_BACKOFF_MS = 20_000; // wait before each retry
-```
-
-Change them and the editor, the Quick Batch table, the page globals and `/api/capabilities` all move
-together. `.md` files that still quote the old **7 retries / 40 s** rule are historical session
-notes, not instructions.
-
-#### Verification
-
-* `tests/pipeline-retry-policy.test.mjs` — asserts the code table is 30 / 20 000, that `APP_JS` is
-  built from it, that no step ladder falls back to a hand-written number, and that
-  `/api/pipeline-capabilities` agrees.
-* `tests/seo-plan-client-retries.test.mjs` — 4 attempts when the plan recovers on the fourth,
-  exactly **31** when it never does, a 4xx verdict not retried, a 429 retried.
-* `tests/script-writing-client-retries.test.mjs`, `tests/script-retry-owner.test.mjs`,
-  `tests/retry-offload-worker.test.mjs`, `tests/final-media-cap-actions.test.mjs`,
-  `tests/pixabay-auto-retry.test.mjs` — the same numbers through the UI.
-* jsdom suites compress the **wait only** via `window.__PIPELINE_RETRY_SPEED`; the advertised
-  `backoffMs` is still 20 000, and a real 20 s request timeout is never shortened.
-
 ### E. All the system rules, one line each
 
 The full rules live in `system-rules.md` (very long, very technical). This is the oversimplified
@@ -493,7 +372,7 @@ translation. **The code is the source of truth**; if a rule here disagrees with 
 | **RULE 4–5** | An old "render on the server" queue still exists in code but no button uses it. Everything renders in the browser now. |
 | **RULE 6** | Pixabay replaces the old AI image generator. Photos must be JPEG/PNG/WebP ≤ 8 MB; clips MP4 ≤ 60 s and ≤ 16 MB; the file's first bytes are checked so an error page can never be saved as "an image". |
 | **RULE 7** | The AI script must contain **exactly 1 long-tail keyword said at least once** and **exactly 4 short keywords each said at least twice**. Extra mentions are always fine. One short keyword must appear in the title and one in a heading. |
-| **RULE 8** | The voice is MeloTTS. The browser sends the full script in one request (Quick Batch retries a failed stage **30× at 20 s intervals**, and the editor retries its own voice step 30× at 20 s intervals); the Worker cleans the text, cuts it into ≤ 400-character pieces (≤ 8,000 characters total), retries up to 3× per chunk, falls back to Deepgram Aura (English) and an external TTS service if needed, and stitches the audio back together. |
+| **RULE 8** | The voice is MeloTTS. The browser sends the full script in one request (Quick Batch retries a failed stage up to 7× at 40 s intervals); the Worker cleans the text, cuts it into ≤ 400-character pieces (≤ 8,000 characters total), retries up to 3× per chunk, falls back to Deepgram Aura (English) and an external TTS service if needed, and stitches the audio back together. |
 | **RULE 9** | Per video: **25 images, 5 GIFs, 5 MP4s (≤ 60 s each)**. A still picture stays on screen **9 seconds**. **The MP3 decides the video length** — slides repeat until the audio is covered. |
 | **RULE 10** | Title and captions are painted per frame at fixed positions (title top-left, captions 4/7 up from the bottom). Up to **10 captions of 40 characters**; the last one stops showing after ~10 s. |
 | **RULE 11** | Output is always **30 fps H.264 video + AAC audio**. Only three quality presets: 480p/1.2 Mbps, 720p/2.5 Mbps, 720p/5 Mbps. No codec picker. |
@@ -509,7 +388,7 @@ translation. **The code is the source of truth**; if a rule here disagrees with 
 | **RULE 21** | Three studio addresses: `/free` (anyone, sets a 1-day guest cookie), `/studio` (signed-in), `/paid` (paid only). Guests get their own **10,000 image/day allowance keyed to their network address** (only a hash + masked IP are stored). No account → most data routes say `401`. |
 | **RULE 22** | One studio shell, **two views**: the Quick Batch **table** and the **Editor** accordions. Switching is memory-only (not saved). |
 | **RULE 23** | CMS, manual payments and the account dashboard reuse the shell but have their **own** password/session checks. Admin routes need the settings password. |
-| **RULE 24** | The "✨ Generate SEO Script" walkthrough: plan one keyword set → review and accept it → pick a visual style → write the script → fetch the images. The modal can be closed while it works. |
+| **RULE 24** | The "✨ Generate SEO Script" walkthrough: plan two keyword sets → pick one → pick a visual style → write the script → fetch the images. The modal can be closed while it works. |
 | **RULE 25** | The **Quick Batch table is a second editor, not a second engine**: it reuses the same renderer. Row states walk `empty → ready → voice → timing → prompts → images → animate → done` (or silently back to `ready`). |
 | **RULE 26** | `render-app/` is a **separate** local Node tool (script → MP3 via Playwright). The Worker never calls it and it is not needed to use the studio. |
 | **RULE 27** | UI decisions: no sticker button, Delete Video sits in each accordion, no "☁️ API" button, the planner retries instead of freezing. |
@@ -519,7 +398,7 @@ translation. **The code is the source of truth**; if a rule here disagrees with 
 | **RULE 33** | Up to **5 backup Workers** can be registered. AI calls are spread **round-robin**, with health checks, a cooldown when one misbehaves, and only AI paths ever leave the primary. |
 | **RULE 34** | The text model itself rotates between **Cloudflare Workers AI** and **OpenRouter**; a broken key is benched for a while and the call falls through to the other provider. |
 | **RULE 35** | **Script details never touch the server's database.** The durable copy is the visitor's `localStorage` + a compact cookie, compared by digest/timestamp/length. The Worker keeps only a throwaway in-memory copy. |
-| **FINAL RULE (Quick Batch layout)** | Non-media stages fail → the browser retries **30 times, 20 s apart, silently**. Photos/clips fail → only the **individual failed item** is retried on the same ladder. Every video plans **14 scenes = 8 photos + 6 clips**, whatever the script length. The last table column is **Actions** (Preview ▶, Process export ⚙, Edit ✎). |
+| **FINAL RULE (Quick Batch layout)** | Non-media stages fail → the browser retries **7 times, 40 s apart, silently**. Photos/clips fail → only the **individual failed item** is retried on the same ladder. Every video plans **14 scenes = 8 photos + 6 clips**, whatever the script length. The last table column is **Actions** (Preview ▶, Process export ⚙, Edit ✎). |
 
 ### F. The user flows, step by step
 
@@ -546,7 +425,7 @@ open "/"  ── landing page (sign up / log in links)
 
 1. **＋ Add Video** → a "Video N" card appears (max **10**). Each card holds its own files, MP3,
    title, quality and script; deleting a card renumbers the rest.
-2. **✨ Generate SEO Script** opens the 4-step walkthrough (plan → review keyword set → choose style →
+2. **✨ Generate SEO Script** opens the 4-step walkthrough (plan → choose keywords → choose style →
    write & fetch). It can be closed while it works; the result lands in the card's Script box.
 3. **📁 Upload Image, GIF or MP4** adds up to 25 stills / 5 GIFs (≤ 30 MiB each) / 5 MP4s, or
    **Add video from template** builds a 1–25 s clip from one of the 15 interactive scenes.
@@ -772,7 +651,7 @@ downloads the pictures, paints the slides, and encodes the MP4 locally.*
 
 ### M. Documentation drift found while writing this appendix (code wins)
 
-Old numbers in the prose documents no longer match the code. They are listed here instead of
+Three old numbers in the prose documents no longer match the code. They are listed here instead of
 being silently repeated, because a beginner reading the wrong number would design the wrong thing:
 
 | Where the old number lives | Old claim | What the code actually does |
@@ -780,89 +659,57 @@ being silently repeated, because a beginner reading the wrong number would desig
 | `README.md` "Limits worth knowing" → Voiceover | "chunked at 500" | `VOICEOVER_MAX_CHUNK = 400` in `src/modules/voiceover.ts`; `/api/voiceover` rejects a chunk over 400 characters |
 | `README.md` "Limits worth knowing" → Captions, and the quoted on-screen hint in `system-rules.md` RULE 18 | "last caption capped at 12 s" | `CAPTION_MAX_VISIBLE_MS = 10 000` (10 s) in `src/client/app-js.ts` — the *hint text* still says 12 s, so the copy and the constant disagree |
 | `system-rules.md` RULE 33, opening line | "up to four backup Worker URLs" | `MAX_RELAY_WORKERS = 5` (`src/modules/api-relay.ts`) and the `config/workers` validator slices to 5 (`src/index.ts`); the settings page accepts five |
-| Retry prose in `THIRD_PARTY_NOTICES.md`, `api-relay-rotation.md`, `bug-audit.md`, `bug-fix-session-*.md`, `IMAGE_FETCH_BROWSER_MIGRATION.md`, `PIXABAY_IMAGE_PIPELINE_REQUIREMENTS.md`, `RULE-35-client-side-script-notes.md` | "7 retries, 40 s apart" | `PIPELINE_RETRY_MAX = 30` and `PIPELINE_RETRY_BACKOFF_MS = 20 000` in `src/modules/retry-policy.ts` (see §D-2). Those files are dated session records; the code and §D-2 win. |
 
 None of these is a new bug — they are documentation lag. The quickest fix is to correct the prose
-(500 → 400, 12 s → 10 s, four → five, 7 / 40 s → 30 / 20 s) or, for the caption hint, to decide which
-number is intended and change the constant or the copy so they match. This appendix uses the **code**
-values throughout.
+(500 → 400, 12 s → 10 s, four → five) or, for the caption hint, to decide which number is intended and
+change the constant or the copy so they match. This appendix uses the **code** values throughout.
 
-### O. Relay 404 diagnosis and relay/seo-plan observability (2026-11-20)
+## Code plan — Editor layout MP4/video-clip cap 5 → 25 (2026-11-21)
 
-**The two production events.** A browser on the studio sent `POST /api/seo-plan` to
-`worker-api-two` (the request carried `x-yvs-relay-ticket`, so `/api/relay/endpoint` had rotated it
-there). The Worker answered **500**, and the only handler line in the log was:
+**Goal:** In the studio **Editor** layout (the per-video accordion and its gallery), remove the rule that
+rejects the 6th–25th uploaded video/video clip. The new ceiling is **25 MP4 clips per video**, not five.
+This is a plan only; no source code is changed here. The timeline editor's own `MAX_MEDIA_FILES = 100`
+in `src/client/timeline-editor.ts` is a separate limit and is out of scope.
 
-```
-[seo-plan] model call failed { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-                               attempt: 2, error: "Relay endpoint answered 404" }
-```
+**Where the five-clip rule lives now**
 
-**What that message actually means.** `env.AI` is the rotation proxy built by `withRelayedAi()`
-(`src/modules/api-relay.ts`), so the planner's `env.AI.run()` is a *pool* call, not a model call.
-"Relay endpoint answered 404" is produced by `runRemoteModel()` when some pool member answered a
-non-2xx to `POST <member>/api/relay/ai`. It is never produced by the compute endpoint itself
-(`handleRelayAiCall()` answers only 400/401/405/410/413/502/503/504), so a **404 means the URL did
-not reach a relay-capable deployment at all** — an older deployment of this source, a typo'd Worker
-URL in `config:workers`, a paused Worker, or a path prefix. `/api/relay/ai` is a route of this
-codebase; a worker that predates it, or no worker at all, answers the main router's plain
-`Not Found` 404 (or the edge's own 404 for a name that does not exist).
+- `src/client/app-js.ts` — `const MAX_MP4_UPLOADS = 5;` (near the `MAX_IMAGE_UPLOADS` block). This is the
+  single source of truth for the Editor's MP4 limit.
+- `src/client/app-js.ts`, the `#file-upload` change handler: counts MP4s in `activeSlides`, then alerts
+  `"You can add at most " + MAX_MP4_UPLOADS + " MP4 clips."` and `break`s once
+  `uploadedMp4s >= MAX_MP4_UPLOADS`.
+- `src/client/app-js.ts`, `onVideoFiles(n, event)`: counts `videoCounts(project).clips` and applies the
+  same `"Video N: you can add at most … MP4 clips."` alert and `break` at `MAX_MP4_UPLOADS`.
+- `src/client/app-js.ts`, `.va-note` in the video accordion: hard-coded text `5 MP4 (1:00 each, silent)`.
+- `src/client/markup.ts`, the `Upload Image, GIF or MP4 …` label: hard-coded `5 MP4`.
+- `src/client/app-js.ts`, the automatic Pixabay clip guards (`Math.max(0, MAX_MP4_UPLOADS -
+  AUTO_VIDEO_SCENES)` and both `videoCounts(project).clips >= MAX_MP4_UPLOADS` checks): these already
+  derive from the constant, so they follow the new value without separate edits. With
+  `AUTO_VIDEO_SCENES = 6`, they must still leave room for the six automatic clips inside 25.
 
-**Why one bad member returned a 500 instead of failing over.** `isTransientRelayFailure()` used
-`classifyImageFailure()`, whose `FATAL_PATTERNS` in `src/modules/image-load.ts` contains `/\b404\b/`.
-The bare status inside the message therefore matched "fatal" and the chain re-threw on the first
-member that 404'd, skipping the remaining members **and the local backstop** — contradicting this
-module's own invariant ("a failing backup is circuit-broken … and never blocks the request: the call
-falls through to the next member and finally to local"). The browser saw the pool's error as if it
-were the model's verdict, retried 30 x 20 s, and never learned the real cause.
+**Implementation steps**
 
-**The fix (behaviour).** `runRemoteModel()` now names a non-2xx relay answer explicitly:
-
-| Relay answer | Name | Treated as | Why |
-| --- | --- | --- | --- |
-| `kind: "model"` in the body, or a `400` | `ModelError` | final, no failover | the compute endpoint judged *the request*; another member would repeat the same paid call |
-| anything else (401/403/404/405/410/413/429/5xx) | `RelayUnavailableError` | transient: cool that member, fail over | the member could not serve the call; this says nothing about the model |
-
-`isTransientRelayFailure()` returns `true` for `RelayUnavailableError` before the generic
-classifier runs, so the 404 path is a pool failure again. The error also carries `relayEndpoint`,
-`relayUrl`, `relayStatus` and `relayErrorKind`, so the caller's log names the culprit.
-
-**The fix (observability).** Every log is written *before* the line it describes, so `wrangler tail`
-reads as a trace:
-
-| Line | Written before | Key fields |
-| --- | --- | --- |
-| `[seo-plan] route` / `[seo-plan] route answer` (`src/index.ts`) | the handler runs / the response returns | `origin`, `referer`, `rotated`, `cfRay`, `country`, `status`, `ms` |
-| `[seo-plan] request` | the body is parsed | `topic`, `scriptModel`, `fallbacks`, `budgetMs`, `rotated`, `hasAiBinding` |
-| `[seo-plan] plan start` / `[seo-plan] model` | the model list is walked | primary + fallbacks, deadline left |
-| `[seo-plan] model call` | `env.AI.run()` | `attempt`, `promptChars`, `attemptTimeoutMs`, `deadlineInMs`, `relay` stats |
-| `[seo-plan] model call failed` | the retry/`break` | `name`, `message`, `status`, `endpoint`, `url`, `errorKind`, `poolError`, `relay` stats |
-| `[seo-plan] failed` | the 500 is returned | the same relay fields plus `httpStatus: 500` |
-| `[relay] provider` | a provider is chosen | `cloudflare-workers-ai` / `openrouter`, key source |
-| `[relay] model call` | the first member is contacted | `pool`, `order`, `attempts`, `preferLocal`, `chainBudgetMs` |
-| `[relay] attempt` | each member is contacted | `attempt n/of`, `endpoint`, `url`, `timeoutMs` |
-| `[relay] http request` / `[relay] http answer` | the `fetch()` / the ok branch | `url`, `model`, `bodyBytes`, `status`, `resultKind`, `errorKind`, `servedBy`, `cfRay`, `ms` |
-| `[relay] endpoint refused the call` | the error is built | `status`, `errorKind`, `modelVerdict`, `bodyChars`, `bodyPreview`, `hint` |
-| `[relay] attempt failed` / `[relay] remote call failed` | the throw | `name`, `message`, `transient`, `action`, `remainingAttempts` |
-| `[relay] call failed` | the error leaves the relay layer | `tried`, `pool`, `chainBudgetMs`, `elapsedMs` |
-| `[relay] inbound refused` / `inbound ok` / `inbound model failure` | the receiving side answers | reason code (`token`, `digest`, `model-slug`, `not-a-text-or-voice-model`, `no-binding`), `model`, `ms` |
-| `[relay] relay route not recognised` | the main router 404s a near-miss | `pathname`, `known` |
-
-Reading the incident with these lines: `[relay] http answer { status: 404 }` + `[relay] endpoint
-refused the call { endpoint: "worker:<url>", url: "<url>/api/relay/ai", hint: "this URL does not
-serve /api/relay/ai …" }` identifies the offending member; `[relay] local call failed` shows the
-real local model error; `[relay] attempt` / `[relay] attempt failed` show the order and the decision.
-
-**Verification.** `tests/api-relay.test.mjs` gained two cases — a 404 member is cooled and the call
-lands on local, and a fully-404 pool keeps `relayStatus`/`relayUrl` on the error — and the suite
-passes 43/43. `seo-plan-resilience`, `seo-plan-client-retries`, `script-seo`,
-`pipeline-retry-policy`, `session-331-fixes`, `retry-offload-worker`, `script-retry-owner`,
-`public-entry-points` and `script-writing-client-retries` pass unchanged. `npx wrangler deploy
---dry-run` succeeds; `tsc --noEmit` reports only the pre-existing `src/index.ts` errors. The
-`deep-debug-regressions` / `final-media-cap-actions` failures reproduce identically on the
-unmodified baseline.
-
-**Still unknown (needs one production tail, not a guess):** *which* URL is registered as a backup on
-`worker-api-two`, and whether that deployment predates `/api/relay/ai`. The pool is read from
-`config:workers` (KV) plus `RELAY_WORKERS`; the new `[relay] model call` line prints it, and a stale
-member is now cooled after its first 404 instead of failing the plan.
+1. Change `MAX_MP4_UPLOADS` in `src/client/app-js.ts` from `5` to `25` and add a short comment that this
+   is the Editor-layout ceiling for manually added MP4s, including clips composed by "Add video from
+   template". Leave `MAX_IMAGE_UPLOADS = 25`, `MAX_GIF_UPLOADS = 5`, `MP4_MAX_DURATION_S = 60`, and
+   `AUTO_VIDEO_SCENES = 6` untouched.
+2. **Remove the five-clip rule, not the cap itself.** Keep exactly one ceiling check in each Editor
+   upload path (`#file-upload` and `onVideoFiles`), and make sure neither contains a separate
+   hard-coded `5` or an extra early `break`. Both should compare against `MAX_MP4_UPLOADS` only, so the
+   6th through 25th clip is accepted and only the 26th is refused. Because the alert text is built from
+   the constant, it will automatically say 25; verify no literal `"5 MP4 clips"` message survives.
+3. Update the hard-coded UI copy to match RULE 18 (every display number must equal the constant):
+   the `.va-note` string in `src/client/app-js.ts` and the upload label in `src/client/markup.ts` become
+   `25 MP4`. Then sweep the docs that quote the old Editor limit: `README.md` (assets-per-video row and
+   video-accordion copy), `system-rules.md` (RULE 11 limits, the constant listing, the UI-string table,
+   and the `"you can add at most … MP4 clips"` message table), and this file's limits table if it is
+   edited in a later pass. `5 GIF` and `25 images` stay as they are.
+4. Tests: add or update jsdom coverage for both Editor upload paths — accept 25 MP4s, then assert the
+   26th is skipped with an alert built from `MAX_MP4_UPLOADS`. Check that the automatic Pixabay guard
+   still refuses a project without room for six video scenes. Update `tests/composer-harness.mjs`
+   (currently stubs `w.MAX_MP4_UPLOADS = 5`) and the `5-clip gallery cap` wording in
+   `tests/timeline-editor.test.mjs` if those tests are meant to mirror the Editor ceiling. Do not
+   weaken the timeline editor's separate 100-media-file rule.
+5. Verification: `npm test`, `npx tsc --noEmit` (pre-existing `src/index.ts` errors are documented),
+   `npm run check`, and `git diff --check`. Finally grep the Editor-facing sources for `5 MP4`,
+   `5 MP4 clips`, and `MAX_MP4_UPLOADS = 5` so no stale five-clip promise remains.

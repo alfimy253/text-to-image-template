@@ -422,77 +422,6 @@ test("a backup failure fails over to the next member and finally to local", asyn
 	assert.ok(attempted2.length >= 1);
 });
 
-/*
- * REGRESSION (2026-11-20, from a production `POST /api/seo-plan` 500):
- *
- *   [seo-plan] model call failed { model: "@cf/meta/llama-3.3-70b...",
- *                                  attempt: 2, error: "Relay endpoint
- *                                  answered 404" }
- *
- * A registered backup that does not serve `/api/relay/ai` - an older
- * deployment, a typo'd Worker URL, a paused Worker - answers 404. That is a
- * POOL failure, not a model verdict, so it must cool the member and fail the
- * call over to the local Worker instead of aborting the whole chain. Before
- * the fix, "404" matched FATAL_PATTERNS and the call died on the first member.
- */
-test("a member that does not serve /api/relay/ai (404) is cooled and the call fails over to local", async () => {
-	resetIsolate();
-	const env = {
-		AI: { run: async () => ({ response: "local-answer" }) },
-		KV_BINDING: cloudflareOnly(makeKv({ "config:workers": JSON.stringify(["https://old-deployment.test"]) })),
-		RELAY_SECRET: "stale-deployment-secret"
-	};
-	/* Local is cooling, so the stale backup is the first candidate. */
-	noteRelayFailure("local", new Error("429 Too Many Requests"), 30_000);
-	const requested = [];
-	const runtime = createRelayRuntime(env, requestFor("/api/seo-plan"), {
-		selfOrigin: SELF,
-		fetchImpl: async (url) => {
-			requested.push(url);
-			/* An older deployment: the main router answers a plain 404. */
-			return new Response("Not Found", { status: 404 });
-		}
-	});
-	const value = await runtime.ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", { prompt: "x" });
-	assert.deepEqual(value, { response: "local-answer" }, "local answered instead of failing the plan");
-	assert.deepEqual(requested, ["https://old-deployment.test/api/relay/ai"]);
-	const health = relayHealthSnapshot()["worker:https://old-deployment.test"];
-	assert.equal(health.failures, 1, "the stale member was cooled");
-	assert.ok(health.openedUntil > Date.now(), "the stale member is on cooldown");
-	assert.ok(runtime.stats().failedOver >= 1, "the failover is reported");
-});
-
-test("a 404 from every member keeps the endpoint, url and status on the error", async () => {
-	resetIsolate();
-	const env = {
-		/* Rotated here by the browser: local runs first (preferLocal). */
-		AI: {
-			run: async () => {
-				throw new Error("AiError: capacity exceeded");
-			}
-		},
-		KV_BINDING: cloudflareOnly(makeKv({ "config:workers": JSON.stringify(["https://old.test"]) })),
-		RELAY_SECRET: "exhausted-secret"
-	};
-	const runtime = createRelayRuntime(env, requestFor("/api/seo-plan"), {
-		selfOrigin: SELF,
-		preferLocal: true,
-		fetchImpl: async () => new Response("Not Found", { status: 404 })
-	});
-	await assert.rejects(
-		() => runtime.ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", { prompt: "x" }),
-		(error) => {
-			/* The error names the culprit, so `[seo-plan] model call failed`
-			 * can no longer be mistaken for a model verdict. */
-			assert.equal(error.name, "RelayUnavailableError");
-			assert.equal(error.relayStatus, 404);
-			assert.equal(error.relayUrl, "https://old.test/api/relay/ai");
-			assert.match(error.message, /Relay endpoint answered 404/);
-			return true;
-		}
-	);
-});
-
 test("an invalid model slug is rejected before any endpoint is contacted", async () => {
 	resetIsolate();
 	let contacted = 0;
@@ -1708,28 +1637,4 @@ test("the UI Worker's share shrinks as backups are added: 1 slot in (1 + 3 x bac
 	for (const entry of pool.slice(1)) noteRelayFailure(entry.id, new Error("503"), 30_000);
 	const fallback = pickRelayEndpoint(pool, config({ localWeight: 0 }), Date.now());
 	assert.equal(fallback.id, "local", "a fully cooled pool still answers, on the UI Worker");
-});
-
-test("aborting a rotated SEO request does not report or retry the backup", async () => {
-	const controller = new AbortController();
-	let signalStarted;
-	const started = new Promise((resolve) => { signalStarted = resolve; });
-	const { win, calls, asks } = browserRuntime(
-		(_url, init) => new Promise((_, reject) => {
-			init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
-			signalStarted();
-		}),
-		(path) => ({
-			success: true, path, url: "https://backup.test" + path, local: false,
-			endpointId: "worker:https://backup.test", ticket: "t", expiresAt: Date.now() + 60_000
-		})
-	);
-	const request = win.fetch("/api/seo-plan", { method: "POST", body: "{}", signal: controller.signal });
-	const aborted = assert.rejects(request, { name: "AbortError" });
-	await started;
-	controller.abort();
-	await aborted;
-	assert.equal(calls.length, 1);
-	assert.equal(asks.length, 1);
-	assert.equal(win.__yvsApiRotation.stats().failovers, 0);
 });
