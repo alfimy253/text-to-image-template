@@ -361,7 +361,6 @@ function createStudioOffloadRuntime(win) {
 							if (!scene || !scene.blob || !scene.blob.size) throw new Error("Empty Pixabay scene");
 							blob = scene.blob;
 							blob.stockSource = scene.source || null;
-							directState.delivered += 1;
 							transport = "browser";
 						} catch (error) {
 							if (error && error.name === "AbortError") throw error;
@@ -398,6 +397,7 @@ function createStudioOffloadRuntime(win) {
 						if (options.onError) options.onError(error, index);
 						return { ok: false, error: error, index: index };
 					}
+					if (transport === "browser" && directState) directState.delivered += 1;
 					if (win.console && win.console.info) win.console.info("[studio-image] scene delivered", { sceneIndex: index, bytes: blob.size, mediaType: blob.type, transport: transport, sourceId: blob.stockSource && blob.stockSource.id || null });
 					return { ok: true, blob: blob, index: index, transport: transport };
 				}, Object.assign({}, g.options, { kind: "image", slots: slots })).catch(function (error) { return { ok: false, error: error, index: index }; });
