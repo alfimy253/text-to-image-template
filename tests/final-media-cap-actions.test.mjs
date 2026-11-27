@@ -668,3 +668,122 @@ test("a newer edit published while the table is open is picked up without touchi
 	assert.equal(row.script, "A quiet garden story");
 	assert.equal(w.reconcileTimelineEdits(), 0, "the same edit is not applied twice");
 });
+
+test("MAX_MP4_UPLOADS = 25 allows all 6 automatic Pixabay video clips + 8 photos in Editor without gallery-full error", async () => {
+	assert.match(PAGE_MARKUP, /25 images \u00b7 5 GIF \u2264 30 MB \u00b7 25 MP4/);
+	assert.match(APP_JS, /MAX_IMAGE_UPLOADS =\s*25/);
+	assert.match(APP_JS, /MAX_MP4_UPLOADS =\s*25/);
+	assert.doesNotMatch(APP_JS, /The media gallery is full or the flow was cancelled/, "gallery-full and flow-cancelled states are no longer conflated");
+
+	const pngBytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
+	const mp4Bytes = Uint8Array.from([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
+	let nextId = 500;
+
+	const { dom, w } = makeApp("https://studio.test/free", (win) => {
+		win.HTMLMediaElement.prototype.play = () => Promise.resolve();
+		win.HTMLMediaElement.prototype.pause = () => {};
+		win.HTMLMediaElement.prototype.load = () => {};
+		win.Image.prototype.decode = () => Promise.resolve();
+		win.fetch = async (input, init = {}) => {
+			const url = new URL(String(input && input.url ? input.url : input), "https://studio.test");
+			if (url.pathname === "/api/pipeline-capabilities") {
+				return Response.json({ version: 261, binaryImages: true, compactPrompts: true, imageChunks: 2, imageSlots: 6, mediaProvider: "pixabay" });
+			}
+			if (url.pathname === "/api/credits") {
+				return Response.json({ plan: { id: "free", label: "Free", limits: { images: 10000 } }, remaining: { images: 10000 } });
+			}
+			if (url.pathname === "/api/image") {
+				const body = JSON.parse(String(init.body || "{}"));
+				const parsed = JSON.parse(String(body.prompt || "").slice(8));
+				const isVideo = parsed.type === "video";
+				const id = ++nextId;
+				return new Response(isVideo ? mp4Bytes : pngBytes, {
+					status: 200,
+					headers: {
+						"Content-Type": isVideo ? "video/mp4" : "image/png",
+						"X-Pixabay-Source": encodeURIComponent(JSON.stringify({
+							provider: "pixabay",
+							id,
+							type: parsed.type,
+							duration: isVideo ? 5 : 0
+						}))
+					}
+				});
+			}
+			return Response.json({}, { status: 404 });
+		};
+	});
+	test.after(() => dom.window.close());
+
+	assert.equal(w.__MAX_IMAGE_UPLOADS, 25);
+	assert.equal(w.__MAX_MP4_UPLOADS, 25);
+	w.probeMp4DurationWithRetry = async () => 5;
+
+	/* Video 1 is open on load in Editor layout; invoke startImagePromptFlow directly. */
+	const project = w.__VIDEO_PROJECTS[0];
+	assert.ok(project, "editor accordion exists");
+	assert.match(w.document.getElementById("va-body-1").textContent, /25 images \u00b7 25 MP4/);
+
+	project.script = "Solar panels harvest clean sunlight across rooftops while batteries store energy overnight for neighborhoods and local microgrids.";
+	await w.startImagePromptFlow(1);
+
+	assert.equal(project._imageFlowActive, false, "flow finalized cleanly");
+	assert.equal(project._imageFlowStopReason, "", "no stop error recorded");
+	assert.equal(project.assets.length, 14, "all 14 automatic scenes landed in the gallery");
+	assert.equal(project.assets.filter((a) => a.kind === "mp4").length, 6, "all 6 MP4 clips were inserted");
+	assert.equal(project.assets.filter((a) => a.kind === "image").length, 8, "all 8 still images were inserted");
+	assert.deepEqual(
+		Array.from(project.assets, (a) => a.sceneIndex),
+		Array.from({ length: 14 }, (_, i) => i),
+		"all 14 scenes are ordered 0..13"
+	);
+	assert.match(w.document.getElementById("va-ai-status-1").textContent, /14 image\(s\) in the gallery/);
+});
+
+test("gallery-full verdicts do not leak filenames or spin 7 retries, and mid-probe cancellations exit cleanly", async () => {
+	const { dom, w } = makeApp();
+	test.after(() => dom.window.close());
+
+	const project = w.__VIDEO_PROJECTS[0];
+	project.script = "Quiet rooftop gardens bring fresh air and greenery to dense city blocks.";
+
+	/* 1. Pre-flight check rejects when fewer than 6 MP4 slots remain out of 25 (e.g. 20 manual clips). */
+	project.assets = Array.from({ length: 20 }, (_, i) => ({ kind: "mp4", duration: 3, file: { name: `manual-${i}.mp4` } }));
+	await w.startImagePromptFlow(1);
+	assert.match(
+		w.document.getElementById("va-ai-status-1").textContent,
+		/Make room for eight distinct Pixabay photos and six Pixabay video clips/,
+		"20 manual clips + 6 auto clips > 25 cap is caught before searching"
+	);
+
+	/* 2. Mid-flow full gallery (25 clips) reports explicit verdict, leaks no filename, and skips 7 retries. */
+	project.assets = Array.from({ length: 25 }, (_, i) => ({ kind: "mp4", duration: 3, file: { name: `full-${i}.mp4` } }));
+	project.mediaFilenames = [];
+	project._imageFlowActive = true;
+	project._imageFlowSeq = 42;
+	const mp4Blob = new w.Blob([Uint8Array.from([0, 0, 0, 24])], { type: "video/mp4" });
+	mp4Blob.stockSource = { provider: "pixabay", id: 9991, type: "video", duration: 4 };
+
+	const insertedFull = await w.insertStockScene(1, mp4Blob, "flow-cap", 13, () => false);
+	assert.equal(insertedFull, false);
+	assert.match(project._lastMediaError, /The media gallery is full \(max 25 MP4 clips\)/);
+	assert.equal(project.mediaFilenames.length, 0, "rejected full-gallery clip did not pollute mediaFilenames");
+	assert.equal(w.imageAutoRetryPlan(project, project._lastMediaError), null, "gallery-full verdict never schedules auto-retry");
+
+	/* 3. Cancelling during async MP4 probe releases the reserved filename and leaves no gallery-full error. */
+	project.assets = [];
+	project.mediaFilenames = [];
+	project._lastMediaError = "";
+	let cancelled = false;
+	w.probeMp4DurationWithRetry = async () => {
+		cancelled = true;
+		return 5;
+	};
+	const cancelBlob = new w.Blob([Uint8Array.from([0, 0, 0, 24])], { type: "video/mp4" });
+	cancelBlob.stockSource = { provider: "pixabay", id: 9992, type: "video", duration: 5 };
+	const insertedCancelled = await w.insertStockScene(1, cancelBlob, "flow-cancel", 1, () => cancelled);
+	assert.equal(insertedCancelled, false);
+	assert.equal(project._lastMediaError, "", "cancellation does not set a fake gallery-full error");
+	assert.equal(project.mediaFilenames.length, 0, "cancelled probe rolled back its filename reservation");
+});
+

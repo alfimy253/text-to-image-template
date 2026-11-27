@@ -770,7 +770,7 @@ export const PAGE_MARKUP = `
 
 			<label class="upload-btn">
 
-				\ud83d\udcc1 Upload Image, GIF or MP4 (25 images \u00b7 5 GIF \u2264 30 MB \u00b7 5 MP4)
+				\ud83d\udcc1 Upload Image, GIF or MP4 (25 images \u00b7 5 GIF \u2264 30 MB \u00b7 25 MP4)
 
 				<input
 					type="file"

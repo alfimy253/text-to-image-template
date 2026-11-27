@@ -2642,7 +2642,13 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 
 
 	const MAX_MP4_UPLOADS =
-		5;
+		25;
+
+	window.__MAX_IMAGE_UPLOADS =
+		MAX_IMAGE_UPLOADS;
+
+	window.__MAX_MP4_UPLOADS =
+		MAX_MP4_UPLOADS;
 
 	/* FINAL MEDIA CAP: both layouts plan the same 14 automatic scenes. */
 	const AUTO_MEDIA_TOTAL = 14;
@@ -9834,7 +9840,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				'<div class="va-section">' +
 				'<div class="va-section-title">Images / MP4s \u2014 drag cards to reorder</div>' +
 				'<button type="button" class="upload-btn" id="va-upload-btn-' + n + '" onclick="clickVaFiles(' + n + ')">\ud83d\udcc1 Upload Image, GIF or MP4</button>' +
-				'<span class="va-note">Max 5 GIF (30 MB max) \u00b7 25 images \u00b7 5 MP4 (1:00 each, silent)</span>' +
+				'<span class="va-note">Max 5 GIF (30 MB max) \u00b7 25 images \u00b7 25 MP4 (1:00 each, silent)</span>' +
 				'<a href="#" class="va-template-link" id="va-template-link-' + n + '" data-video-index="' + n + '" onclick="if (!event.defaultPrevented && window.openTemplateModal) window.openTemplateModal(' + n + '); return false;" title="Compose a portrait or landscape MP4 (max 25 seconds) from a design template and add it to this video">Add video from template</a>' +
 				'<button type="button" class="va-scroll-toggle" id="va-gallery-toggle-' + n + '" onclick="toggleGalleryScroll(' + n + ')" title="Show / hide the image gallery">\u25b2 Images / MP4s</button>' +
 				'<span class="va-note" id="va-ai-status-' + n + '">Automatic Pixabay scenes include 6 stock video clips and 8 distinct photos.</span>' +
@@ -13748,6 +13754,12 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		return true;
 	}
 
+	function releaseMediaFilename(owner, filename) {
+		if (!owner || !filename || !Array.isArray(owner.mediaFilenames)) return;
+		var idx = owner.mediaFilenames.lastIndexOf(filename);
+		if (idx !== -1) owner.mediaFilenames.splice(idx, 1);
+	}
+
 	/*
 	 * Session 331: how many duplicate filenames this scene has already been
 	 * handed back. Each duplicate is one Pixabay result page the next retry
@@ -13915,11 +13927,12 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			}
 			if (result && Array.isArray(result.images)) collected.push.apply(collected, result.images);
 			var failedSet = new Set((result && result.failed) || []);
+			var nonRetryableSet = new Set((result && result.nonRetryable) || []);
 			var next = [];
 			for (var j = 0; j < pending.length; j++) {
 				var item = pending[j];
 				if (!failedSet.has(item.scene)) continue;
-				if (item.attempt < policy.maxRetries) {
+				if (!nonRetryableSet.has(item.scene) && item.attempt < policy.maxRetries) {
 					item.attempt += 1;
 					next.push(item);
 				}
@@ -18505,7 +18518,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		if (project._requiresStockClips) {
 			const clips = project.assets.filter(function (a) { return a.imagePromptFlowId && a.kind === "mp4"; });
 			if (clips.length !== AUTO_VIDEO_SCENES || new Set(clips.map(function (a) { return a.stockSource && a.stockSource.id; })).size !== AUTO_VIDEO_SCENES) {
-				throw new Error("This planned video requires four distinct Pixabay clips. Retry only the missing scenes before export.");
+				throw new Error("This planned video requires six distinct Pixabay clips. Retry only the missing scenes before export.");
 			}
 		}
 
@@ -24249,7 +24262,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 	 * Retrying them would hide the real cause behind a countdown.
 	 */
 	const IMAGE_VERDICT_REASON =
-		/not configured|misconfigur|configuration|api key|unauthori[sz]ed|forbidden|invalid key|permission|gallery is full|allowance|not enough|credit|quota/i;
+		/not configured|misconfigur|configuration|api key|unauthori[sz]ed|forbidden|invalid key|permission|gallery is full|gallery reached its|gallery limit reached|allowance|not enough|credit|quota/i;
 
 	/* Reasons that deserve another attempt rather than a verdict. */
 	const IMAGE_RETRYABLE_REASON =
@@ -24579,6 +24592,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		let lastMediaFailure = "";
 		const result = await retryFailedMediaOnly(project, prompts, scenes, async function (pendingPrompts, pendingScenes) {
 			const failed = [];
+			const nonRetryable = [];
 			for (let i = 0; i < pendingPrompts.length; i++) {
 				const scene = pendingScenes[i];
 				if (await editorSceneDelivered(project, flowId, scene)) continue;
@@ -24598,9 +24612,14 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 					mediaItemRetryLog({ event: "item-error", stage: "editor-media", scene: scene, message: lastMediaFailure.slice(0, 200) });
 				}
 				if (project._imageFlowStopReason) lastMediaFailure = project._imageFlowStopReason;
-				if (!(await editorSceneDelivered(project, flowId, scene))) failed.push(scene);
+				if (!(await editorSceneDelivered(project, flowId, scene))) {
+					failed.push(scene);
+					if (/gallery is full|gallery reached its|gallery limit reached/i.test(String(project._lastMediaError || lastMediaFailure || ""))) {
+						nonRetryable.push(scene);
+					}
+				}
 			}
-			return { images: [], failed: failed };
+			return { images: [], failed: failed, nonRetryable: nonRetryable };
 		}, "editor-media");
 		project._imageFlowStopReason = result.failed.length
 			? (lastMediaFailure || "The fixed 14-scene plan needs six distinct Pixabay clips and eight distinct photos.")
@@ -24629,6 +24648,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 				"va-ai-status-" + n
 			);
 		// Replace only prior automatic scenes on rerun; preserve manual uploads.
+		project._imageFlowActive = true;
 		project._imageFlowSeq = (project._imageFlowSeq || 0) + 1;
 		project._requiresStockClips = true;
 		/* Lock this accordion's own script/upload controls while its flow renders. */
@@ -24642,11 +24662,19 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 			if (asset.url) releaseStudioObjectUrl(asset.url);
 		}
 		project.assets = project.assets.filter(function (a) { return !a.imagePromptFlowId; });
+		const counts =
+			videoCounts(project);
 		const availableImages =
 			Math.max(
 				0,
 				MAX_IMAGE_UPLOADS -
-					videoCounts(project).stills
+					counts.stills
+			);
+		const availableClips =
+			Math.max(
+				0,
+				MAX_MP4_UPLOADS -
+					counts.clips
 			);
 		const style =
 			project.videoImageStyle ||
@@ -24688,7 +24716,7 @@ ${PIPELINE_MANAGEMENT_STORE_JS}
 		project._imageAutoRetries = 0;
 		project._imageFlowRetry = null;
 
-	if (availableImages < AUTO_IMAGE_SCENES || videoCounts(project).clips > Math.max(0, MAX_MP4_UPLOADS - AUTO_VIDEO_SCENES)) {
+	if (availableImages < AUTO_IMAGE_SCENES || availableClips < AUTO_VIDEO_SCENES) {
 		await finalizeImagePromptFlow(
 			n,
 			"Make room for eight distinct Pixabay photos and six Pixabay video clips in this gallery."
@@ -24785,33 +24813,79 @@ if (flowRetry) flowRetry.style.display = "none";
 	 */
 	async function insertStockScene(n, blob, flowId, sceneIndex, stale) {
 		const project = videoProjects[n - 1];
-		if (!project || stale()) return false;
+		if (!project || project._deleted || stale()) return false;
 		if (project.assets.some(function (a) { return a.imagePromptFlowId === flowId && a.sceneIndex === sceneIndex; })) return true;
+		const initialCounts = videoCounts(project);
+		if (blob.type !== "video/mp4") {
+			if (initialCounts.stills >= MAX_IMAGE_UPLOADS) {
+				project._lastMediaError = "The media gallery is full (max " + MAX_IMAGE_UPLOADS + " images).";
+				project._imageFlowRetry = { kind: "gallery", retryable: false, hintMs: 0, reason: project._lastMediaError };
+				return false;
+			}
+		} else if (initialCounts.clips >= MAX_MP4_UPLOADS) {
+			project._lastMediaError = "The media gallery is full (max " + MAX_MP4_UPLOADS + " MP4 clips).";
+			project._imageFlowRetry = { kind: "gallery", retryable: false, hintMs: 0, reason: project._lastMediaError };
+			return false;
+		}
 		if (!acceptMediaBlob(project, blob, sceneIndex)) {
 			project._lastMediaError = "Duplicate Pixabay filename rejected for scene " + sceneIndex + "; searching a different result.";
 			return false;
 		}
-		const file = new File([blob], blob.stockFilename || mediaFilenameFromBlob(blob, sceneIndex), { type: blob.type });
+		const reservedFilename = blob.stockFilename;
+		const file = new File([blob], reservedFilename || mediaFilenameFromBlob(blob, sceneIndex), { type: blob.type });
 		file.stockSource = blob.stockSource || null;
-		file.stockFilename = blob.stockFilename;
+		file.stockFilename = reservedFilename;
 		if (blob.type !== "video/mp4") {
-			const inserted = addAiToVideo(n, file, blob, flowId, true);
-			if (inserted) project.assets[project.assets.length - 1].sceneIndex = sceneIndex;
-			return inserted;
+			const liveN = videoProjects.indexOf(project) + 1;
+			if (liveN <= 0 || project._deleted || stale()) {
+				releaseMediaFilename(project, reservedFilename);
+				return false;
+			}
+			let inserted = false;
+			try {
+				inserted = addAiToVideo(liveN, file, blob, flowId, true);
+			} catch (error) {
+				releaseMediaFilename(project, reservedFilename);
+				throw error;
+			}
+			if (!inserted) {
+				releaseMediaFilename(project, reservedFilename);
+				project._lastMediaError = "The media gallery is full (max " + MAX_IMAGE_UPLOADS + " images).";
+				project._imageFlowRetry = { kind: "gallery", retryable: false, hintMs: 0, reason: project._lastMediaError };
+				return false;
+			}
+			project.assets[project.assets.length - 1].sceneIndex = sceneIndex;
+			return true;
 		}
-		if (videoCounts(project).clips >= MAX_MP4_UPLOADS) return false;
 		const url = createStudioObjectUrl(blob), video = document.createElement("video");
 		try {
 			const duration = await probeMp4DurationWithRetry(url, 2, video);
-			if (stale() || project._deleted || videoCounts(project).clips >= MAX_MP4_UPLOADS) { releaseStudioObjectUrl(url); video.removeAttribute("src"); video.load(); return false; }
+			if (stale() || project._deleted) {
+				releaseMediaFilename(project, reservedFilename);
+				releaseStudioObjectUrl(url); video.removeAttribute("src"); video.load();
+				return false;
+			}
+			if (videoCounts(project).clips >= MAX_MP4_UPLOADS) {
+				releaseMediaFilename(project, reservedFilename);
+				releaseStudioObjectUrl(url); video.removeAttribute("src"); video.load();
+				project._lastMediaError = "The media gallery is full (max " + MAX_MP4_UPLOADS + " MP4 clips).";
+				project._imageFlowRetry = { kind: "gallery", retryable: false, hintMs: 0, reason: project._lastMediaError };
+				return false;
+			}
 			if (!Number.isFinite(duration) || duration <= 0 || duration > MP4_MAX_DURATION_S) throw new Error("Unsupported Pixabay clip duration");
+			const liveN = videoProjects.indexOf(project) + 1;
+			if (liveN <= 0) {
+				releaseMediaFilename(project, reservedFilename);
+				releaseStudioObjectUrl(url); video.removeAttribute("src"); video.load();
+				return false;
+			}
 			const asset = { kind: "mp4", file: file, stockSource: blob.stockSource, stockFilename: blob.stockFilename,
 				videoEl: video, duration: duration, url: url, card: null, imagePromptFlowId: flowId, sceneIndex: sceneIndex };
 			project.assets.push(asset);
-			const liveN = videoProjects.indexOf(project) + 1;
 			buildVaCard(liveN, asset); updateVideoStatus(liveN);
 			return true;
 		} catch (error) {
+			releaseMediaFilename(project, reservedFilename);
 			project.assets = project.assets.filter(function (a) { if (a.url !== url) return true; if (a.card && a.card.parentNode) a.card.parentNode.removeChild(a.card); return false; });
 			releaseStudioObjectUrl(url); video.removeAttribute("src"); video.load(); throw error;
 		}
@@ -24831,7 +24905,13 @@ if (flowRetry) flowRetry.style.display = "none";
 					const liveN = videoProjects.indexOf(project) + 1;
 					if (liveN <= 0) return;
 					const scene = (Number(sceneOffset) || 0) + index;
-					if (!await insertStockScene(liveN, blob, flowId, scene, stale)) throw new Error(project._lastMediaError || "The media gallery is full or the flow was cancelled");
+					const inserted = await insertStockScene(liveN, blob, flowId, scene, stale);
+					if (!inserted) {
+						if (stale() || project._deleted || videoProjects.indexOf(project) < 0) return;
+						const insertError = new Error(project._lastMediaError || "The media gallery is full.");
+						if (IMAGE_VERDICT_REASON.test(insertError.message)) insertError.retryable = false;
+						throw insertError;
+					}
 					project.aiImagesDone = (project.aiImagesDone || 0) + 1;
 					recordStudioUsage("images", "ok", 1);
 					setImagePromptState(project, scene, "imported", blob.type === "video/mp4" ? "clip added to gallery" : "photo added to gallery");
@@ -25021,12 +25101,12 @@ if (flowRetry) flowRetry.style.display = "none";
 										recordStudioUsage("images", "ok", 1);
 
 									}
-									else {
+									else if (!isStaleFlow() && !project._deleted) {
 										skipped++;
-										setImagePromptState(project, eventIndex, "failed", project._lastMediaError || "gallery limit reached or scene skipped");
-										project._imageFlowStopReason =
-											"The video gallery reached its " + MAX_IMAGE_UPLOADS + "-image limit.";
-										if (controller) {
+										const skipReason = project._lastMediaError || ("The video gallery reached its " + MAX_IMAGE_UPLOADS + "-image limit.");
+										setImagePromptState(project, eventIndex, "failed", skipReason);
+										project._imageFlowStopReason = skipReason;
+										if (/gallery is full|gallery reached its|gallery limit reached/i.test(skipReason) && controller) {
 											try { controller.abort(); } catch (abortError) { }
 										}
 									}
@@ -25570,7 +25650,11 @@ async function retryImagePromptFlow(n) {
 				}
 				if (stale()) break sceneLoop;
 				const at = liveIndex();
-				if (at <= 0 || !await insertStockScene(at, blob, flowId, i, stale)) throw new Error("Could not add the downloaded asset to the gallery");
+				if (at <= 0) break sceneLoop;
+				if (!await insertStockScene(at, blob, flowId, i, stale)) {
+					if (stale() || project._deleted || liveIndex() <= 0) break sceneLoop;
+					throw new Error(project._lastMediaError || "Could not add the downloaded asset to the gallery");
+				}
 				imported++;
 				/* Add to the scenes already in the gallery, never reset the count. */
 				project.aiImagesDone = (project.aiImagesDone || 0) + 1;
